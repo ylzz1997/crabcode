@@ -1,0 +1,73 @@
+"""Core type definitions for CrabCode."""
+
+from crabcode_core.types.message import (
+    AssistantMessage,
+    ContentBlock,
+    Message,
+    MessageRole,
+    SystemMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
+from crabcode_core.types.tool import (
+    PermissionBehavior,
+    PermissionResult,
+    Tool,
+    ToolContext,
+    ToolResult,
+)
+from crabcode_core.types.event import (
+    CompactEvent,
+    CoreEvent,
+    ErrorEvent,
+    PermissionRequestEvent,
+    PermissionResponseEvent,
+    StreamTextEvent,
+    ThinkingEvent,
+    ToolResultEvent,
+    ToolUseEvent,
+    TurnCompleteEvent,
+)
+from crabcode_core.types.config import (
+    ApiConfig,
+    CrabCodeSettings,
+    McpServerConfig,
+    PermissionRule,
+    PermissionsSettings,
+)
+
+__all__ = [
+    "AssistantMessage",
+    "ContentBlock",
+    "Message",
+    "MessageRole",
+    "SystemMessage",
+    "TextBlock",
+    "ThinkingBlock",
+    "ToolResultBlock",
+    "ToolUseBlock",
+    "UserMessage",
+    "PermissionBehavior",
+    "PermissionResult",
+    "Tool",
+    "ToolContext",
+    "ToolResult",
+    "CompactEvent",
+    "CoreEvent",
+    "ErrorEvent",
+    "PermissionRequestEvent",
+    "PermissionResponseEvent",
+    "StreamTextEvent",
+    "ThinkingEvent",
+    "ToolResultEvent",
+    "ToolUseEvent",
+    "TurnCompleteEvent",
+    "ApiConfig",
+    "CrabCodeSettings",
+    "McpServerConfig",
+    "PermissionRule",
+    "PermissionsSettings",
+]
