@@ -78,6 +78,7 @@ Or configure in `~/.crabcode/settings.json`:
 | `thinking_enabled` | Enable extended thinking (set `false` for models that don't support it) | `true` |
 | `thinking_budget` | Thinking token budget | `10000` |
 | `max_tokens` | Maximum output tokens | `16384` |
+| `timeout` | API call timeout in seconds (prevents hanging on slow/unresponsive APIs) | `300` |
 
 The `env` map lets you define environment variables directly in the config file — they are injected at startup so you don't need to `export` them in your shell.
 

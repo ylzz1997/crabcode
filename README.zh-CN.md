@@ -78,6 +78,7 @@ crabcode --provider router --base-url https://my-router.example.com --api-format
 | `thinking_enabled` | 是否启用思考模式（不支持该功能的模型需设为 `false`） | `true` |
 | `thinking_budget` | 思考 token 预算 | `10000` |
 | `max_tokens` | 最大输出 token 数 | `16384` |
+| `timeout` | API 调用超时时间（秒），防止网络卡住时无限等待 | `300` |
 
 `env` 字段用于直接在配置文件中定义环境变量，启动时会自动注入，无需在 shell 中 `export`。
 

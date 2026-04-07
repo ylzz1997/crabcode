@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
@@ -108,10 +109,22 @@ class AgentTool(Tool):
         )
 
         result_parts: list[str] = []
-        async for event in query_loop(params):
-            from crabcode_core.types.event import StreamTextEvent
-            if isinstance(event, StreamTextEvent):
-                result_parts.append(event.text)
+
+        # Sub-agent timeout: 5 minutes total
+        SUB_AGENT_TIMEOUT = 300
+
+        async def _collect_results():
+            async for event in query_loop(params):
+                from crabcode_core.types.event import StreamTextEvent, ErrorEvent
+                if isinstance(event, StreamTextEvent):
+                    result_parts.append(event.text)
+                elif isinstance(event, ErrorEvent):
+                    result_parts.append(f"\n[Error: {event.message}]")
+
+        try:
+            await asyncio.wait_for(_collect_results(), timeout=SUB_AGENT_TIMEOUT)
+        except asyncio.TimeoutError:
+            result_parts.append(f"\n[Sub-agent timed out after {SUB_AGENT_TIMEOUT}s]")
 
         result = "".join(result_parts)
         if not result:

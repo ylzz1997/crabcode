@@ -18,6 +18,7 @@ class ModelConfig:
     thinking_budget: int = 10000
     temperature: float | None = None
     stop_sequences: list[str] | None = None
+    timeout: int = 300  # seconds
 
 
 @dataclass

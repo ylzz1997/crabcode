@@ -40,6 +40,7 @@ class ApiConfig(BaseModel):
     max_tokens: int = 16384
     thinking_enabled: bool = True
     thinking_budget: int = 10000
+    timeout: int = 300  # seconds, for API calls
 
 
 class CrabCodeSettings(BaseModel):

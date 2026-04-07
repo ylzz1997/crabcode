@@ -214,6 +214,7 @@ async def query_loop(
         model_config = ModelConfig(
             model=params.api_adapter.config.model if hasattr(params.api_adapter, 'config') else "claude-sonnet-4-20250514",
             max_tokens=16384,
+            timeout=getattr(params.api_adapter.config, 'timeout', 300) if hasattr(params.api_adapter, 'config') else 300,
         )
 
         assistant_content: list[ContentBlock] = []
@@ -225,12 +226,32 @@ async def query_loop(
         yield StreamModeEvent(mode="requesting")
 
         try:
-            async for chunk in params.api_adapter.stream_message(
-                messages=messages_for_api,
-                system=full_system,
-                tools=tool_schemas,
-                config=model_config,
-            ):
+            # Wrap stream with timeout to avoid hanging indefinitely
+            async def _stream_with_timeout():
+                async for chunk in params.api_adapter.stream_message(
+                    messages=messages_for_api,
+                    system=full_system,
+                    tools=tool_schemas,
+                    config=model_config,
+                ):
+                    yield chunk
+
+            stream = _stream_with_timeout()
+            chunk = None
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        stream.__anext__(),
+                        timeout=model_config.timeout,
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    yield ErrorEvent(
+                        message=f"API request timed out after {model_config.timeout}s",
+                        recoverable=True,
+                    )
+                    return
                 if chunk.type == "text":
                     if emitted_mode != "responding":
                         yield StreamModeEvent(mode="responding")
