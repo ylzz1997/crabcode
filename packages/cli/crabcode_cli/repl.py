@@ -62,6 +62,50 @@ def _force_exit(code: int = 130) -> None:
         os._exit(code)
 
 
+_CTRL_C_EXIT_WINDOW_S = 5.0
+
+
+class _CtrlCDoubleExit:
+    """First Ctrl+C interrupts; a second within the window exits; otherwise reset."""
+
+    __slots__ = ("_window_s", "_first_at")
+
+    def __init__(self, window_s: float = _CTRL_C_EXIT_WINDOW_S) -> None:
+        self._window_s = window_s
+        self._first_at: float | None = None
+
+    def should_exit_now(self) -> bool:
+        """Record this Ctrl+C; return True if the user should exit (second tap in window)."""
+        now = time.monotonic()
+        if self._first_at is not None and (now - self._first_at) <= self._window_s:
+            return True
+        self._first_at = now
+        return False
+
+    def clear(self) -> None:
+        self._first_at = None
+
+
+# asyncio.run() installs a SIGINT handler: first Ctrl+C cancels the main task
+# (CancelledError), the second raises KeyboardInterrupt. REPL must handle both.
+_REPL_INTERRUPT_EXCS: tuple[type[BaseException], ...] = (
+    KeyboardInterrupt,
+    asyncio.CancelledError,
+)
+
+
+def _clear_sigint_cancel() -> None:
+    """After handling first SIGINT under asyncio.run(), drop pending cancel so the REPL continues."""
+    task = asyncio.current_task()
+    if task is None:
+        return
+    uncancel = getattr(task, "uncancel", None)
+    if uncancel is None:
+        return
+    while uncancel() > 0:
+        pass
+
+
 def _read_log_tail(path: Path, max_lines: int = 80) -> str:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -143,7 +187,8 @@ async def _follow_log(path: Path, name: str) -> None:
                     sys.stdout.flush()
                 else:
                     await asyncio.sleep(0.5)
-    except KeyboardInterrupt:
+    except _REPL_INTERRUPT_EXCS:
+        _clear_sigint_cancel()
         console.print("\n[dim]Stopped log follow.[/]")
 
 
@@ -239,6 +284,34 @@ def _tool_summary(name: str, inp: dict) -> str:
     import json
     raw = json.dumps(inp, ensure_ascii=False)
     return (raw[:200] + "…") if len(raw) > 200 else raw
+
+
+def _render_saved_partial_reply(text: str) -> None:
+    """Echo assistant text that was persisted after interrupt (visible in scrollback)."""
+    body = text.rstrip()
+    if not body:
+        return
+    preview = body if len(body) <= 12000 else body[:12000] + "\n… (truncated in preview; full text is in context)"
+    console.print(
+        Panel(
+            Text(preview, style="dim"),
+            title="[dim]Assistant · partial (saved to context)[/]",
+            border_style="dim",
+            expand=False,
+        )
+    )
+
+
+def _persist_partial_assistant_for_interrupt(session: CoreSession, raw: str) -> None:
+    """Write streamed assistant text into the session and show it in the terminal."""
+    console.print()
+    if raw.strip():
+        session.record_partial_assistant_output(raw)
+        _render_saved_partial_reply(raw)
+    else:
+        console.print(
+            "[dim](Interrupted before any assistant reply text; only your user message is in context.)[/]"
+        )
 
 
 def _render_tool_use(event: ToolUseEvent) -> None:
@@ -436,7 +509,12 @@ async def run_repl(
             "Set [bold]api.model[/] or [bold]models[/] in ~/.crabcode/settings.json or use [bold]-m[/] flag.",
             style="dim",
         )
-    console.print("  Type /help for commands, Ctrl+C to interrupt, Ctrl+D to exit", style="dim")
+    console.print(
+        "  Type /help for commands. "
+        f"Ctrl+C interrupts; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit. "
+        "Ctrl+D exits.",
+        style="dim",
+    )
 
     if settings and settings.permissions.run_everything:
         console.print()
@@ -502,6 +580,8 @@ async def run_repl(
         history=InMemoryHistory(),
     )
 
+    ctrl_c_exit = _CtrlCDoubleExit()
+
     # Keep Rich ANSI rendering only for interactive terminals; plain outputs
     # and recorder-friendly environments should not leak escape sequences.
     with patch_stdout(raw=_ANSI_ENABLED):
@@ -510,17 +590,36 @@ async def run_repl(
                 user_input = await prompt_session.prompt_async(
                     HTML("<b><ansicyan>❯ </ansicyan></b>"),
                 )
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 console.print("\nGoodbye!", style="dim")
                 try:
                     await session.interrupt()
                 except Exception:
                     pass
                 _force_exit()
+            except _REPL_INTERRUPT_EXCS:
+                if ctrl_c_exit.should_exit_now():
+                    console.print("\nGoodbye!", style="dim")
+                    try:
+                        await session.interrupt()
+                    except Exception:
+                        pass
+                    _force_exit()
+                _clear_sigint_cancel()
+                try:
+                    await session.interrupt()
+                except Exception:
+                    pass
+                console.print(
+                    f"\n[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
+                )
+                continue
 
             user_input = user_input.strip()
             if not user_input:
                 continue
+
+            ctrl_c_exit.clear()
 
             if user_input.startswith("/"):
                 result = await _handle_command(user_input, session, settings)
@@ -538,6 +637,7 @@ async def run_repl(
                 continue
 
             streamed_text = ""
+            streamed_text_for_context = ""
             spinner = _Spinner(ansi_enabled=_ANSI_ENABLED)
             thinking_start: float = 0.0
             is_thinking = False
@@ -583,6 +683,7 @@ async def run_repl(
                         sys.stdout.write(event.text)
                         sys.stdout.flush()
                         streamed_text += event.text
+                        streamed_text_for_context += event.text
 
                     elif isinstance(event, ToolUseEvent):
                         _stop_spinner_with_thinking()
@@ -618,14 +719,29 @@ async def run_repl(
                     elif isinstance(event, TurnCompleteEvent):
                         _stop_spinner_with_thinking()
 
-            except KeyboardInterrupt:
+            except _REPL_INTERRUPT_EXCS:
                 spinner.stop()
-                console.print("\n[dim]Interrupted, exiting...[/]")
+                if ctrl_c_exit.should_exit_now():
+                    console.print("\nGoodbye!", style="dim")
+                    try:
+                        await session.interrupt()
+                    except Exception:
+                        pass
+                    _persist_partial_assistant_for_interrupt(
+                        session, streamed_text_for_context
+                    )
+                    _force_exit()
+                _clear_sigint_cancel()
                 try:
                     await session.interrupt()
                 except Exception:
                     pass
-                _force_exit()
+                _persist_partial_assistant_for_interrupt(
+                    session, streamed_text_for_context
+                )
+                console.print(
+                    f"[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
+                )
 
             if streamed_text:
                 sys.stdout.write("\n")
@@ -687,6 +803,7 @@ async def _handle_command(
             "[bold]/sessions[/] — list recent sessions\n"
             "[bold]/resume <id>[/] — resume a previous session\n"
             "[bold]/exit[/] — exit CrabCode\n"
+            f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
             "\n"
             "[bold]! <cmd>[/] — run a shell command"
             + skills_section,

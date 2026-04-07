@@ -184,6 +184,7 @@ class CoreSession:
     ) -> AsyncGenerator[CoreEvent, None]:
         """Send a user message and stream back events."""
         await self.initialize()
+        self._abort_controller.clear()
 
         from crabcode_core.compact.compact import should_auto_compact, compact_conversation
         from crabcode_core.prompts.context import get_system_context, get_user_context
@@ -274,6 +275,17 @@ class CoreSession:
 
     async def interrupt(self) -> None:
         self._abort_controller.set()
+
+    def record_partial_assistant_output(self, text: str) -> None:
+        """Append assistant text when a turn stops mid-stream so the next round keeps context."""
+        if not text or not text.strip():
+            return
+        from crabcode_core.types.message import TextBlock, create_assistant_message
+
+        assistant_msg = create_assistant_message(content=[TextBlock(text=text)])
+        self.messages.append(assistant_msg)
+        if self._session_storage:
+            self._session_storage.append_message(assistant_msg)
 
     def new_session(self) -> str:
         """Start a fresh session, preserving tools and config. Returns the new session ID."""
