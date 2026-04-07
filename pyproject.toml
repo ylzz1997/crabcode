@@ -2,7 +2,7 @@
 name = "crabcode"
 version = "0.1.0"
 description = "CrabCode - AI coding assistant in the terminal"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 
 [tool.uv.workspace]
 members = ["packages/*"]

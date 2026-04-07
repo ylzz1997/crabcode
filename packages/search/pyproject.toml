@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "crabcode-search"
 version = "0.1.0"
 description = "Semantic codebase search for CrabCode"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "crabcode-core>=0.1.0",
     "usearch>=2.12.0",
