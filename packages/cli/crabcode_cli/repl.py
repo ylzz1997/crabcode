@@ -84,13 +84,15 @@ class _CrabCodeCompleter(Completer):
         parts = text.split()
         cmd = parts[0].lower() if parts else ""
 
-        # Complete command names when typing the first word
+        # First token must include leading "/"; get_word_before_cursor(WORD=False)
+        # treats "/" as a separator, so "/sta" was only replacing "sta" -> "//status".
         if len(parts) <= 1 and not text.endswith(" "):
+            replace_len = len(parts[0])
             for name in _SLASH_COMMANDS:
                 if name.startswith(cmd):
                     yield Completion(
                         name,
-                        start_position=-len(word_before_cursor),
+                        start_position=-replace_len,
                         display=name,
                         display_meta=self._get_command_description(name),
                     )
@@ -102,7 +104,7 @@ class _CrabCodeCompleter(Completer):
                     if skill_cmd.startswith(cmd):
                         yield Completion(
                             skill_cmd,
-                            start_position=-len(word_before_cursor),
+                            start_position=-replace_len,
                             display=skill_cmd,
                             display_meta=skill.description or skill.when_to_use or "skill",
                         )
