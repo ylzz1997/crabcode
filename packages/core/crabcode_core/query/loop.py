@@ -220,8 +220,16 @@ async def query_loop(
         assistant_content: list[ContentBlock] = []
         tool_use_blocks: list[ToolUseBlock] = []
         current_text = ""
+        current_thinking = ""
         current_tool: dict[str, str] = {}
         emitted_mode: str = ""
+
+        def _flush_thinking_block() -> None:
+            nonlocal current_thinking
+            if not current_thinking:
+                return
+            assistant_content.append(ThinkingBlock(thinking=current_thinking))
+            current_thinking = ""
 
         yield StreamModeEvent(mode="requesting")
 
@@ -253,6 +261,7 @@ async def query_loop(
                     )
                     return
                 if chunk.type == "text":
+                    _flush_thinking_block()
                     if emitted_mode != "responding":
                         yield StreamModeEvent(mode="responding")
                         emitted_mode = "responding"
@@ -264,8 +273,10 @@ async def query_loop(
                         yield StreamModeEvent(mode="thinking")
                         emitted_mode = "thinking"
                     yield ThinkingEvent(text=chunk.text)
+                    current_thinking += chunk.text
 
                 elif chunk.type == "tool_use_start":
+                    _flush_thinking_block()
                     if current_text:
                         assistant_content.append(TextBlock(text=current_text))
                         current_text = ""
@@ -325,6 +336,7 @@ async def query_loop(
             yield ErrorEvent(message=str(e), recoverable=False)
             return
 
+        _flush_thinking_block()
         if current_text:
             assistant_content.append(TextBlock(text=current_text))
 

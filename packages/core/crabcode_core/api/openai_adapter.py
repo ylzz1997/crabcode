@@ -66,6 +66,9 @@ def _messages_to_openai(
             entry: dict[str, Any] = {"role": "assistant"}
             if text_parts:
                 entry["content"] = "".join(text_parts)
+            elif tool_calls:
+                # OpenAI expects explicit null when the turn is tool-only.
+                entry["content"] = None
             if tool_calls:
                 entry["tool_calls"] = tool_calls
             result.append(entry)

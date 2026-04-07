@@ -115,9 +115,20 @@ class AgentTool(Tool):
 
         async def _collect_results():
             async for event in query_loop(params):
-                from crabcode_core.types.event import StreamTextEvent, ErrorEvent
+                from crabcode_core.types.event import (
+                    ErrorEvent,
+                    StreamTextEvent,
+                    ToolResultEvent,
+                )
                 if isinstance(event, StreamTextEvent):
                     result_parts.append(event.text)
+                elif isinstance(event, ToolResultEvent):
+                    body = (event.result or "").strip()
+                    if len(body) > 12_000:
+                        body = body[:12_000] + "\n… (truncated)"
+                    result_parts.append(
+                        f"\n\n[Tool {event.tool_name} →]\n{body or '(empty)'}\n"
+                    )
                 elif isinstance(event, ErrorEvent):
                     result_parts.append(f"\n[Error: {event.message}]")
 

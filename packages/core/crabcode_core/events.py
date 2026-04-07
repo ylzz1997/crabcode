@@ -100,7 +100,11 @@ class CoreSession:
             for name, cfg in file_settings.tool_settings.items():
                 merged.tool_settings.setdefault(name, {}).update(cfg)
 
-        self._current_model_name: str | None = merged.default_model
+        # Keep a /model switch that ran before the first initialize() (late init).
+        chosen = self._current_model_name
+        if chosen is None or chosen not in merged.models:
+            chosen = merged.default_model
+        self._current_model_name = chosen
         active_api_config = merged.get_api_config(self._current_model_name)
         self._api_adapter = create_adapter(active_api_config)
 
