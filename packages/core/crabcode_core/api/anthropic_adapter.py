@@ -113,8 +113,7 @@ class AnthropicAdapter(APIAdapter):
             "model": model,
             "max_tokens": config.max_tokens,
             "system": system_blocks,
-            "messages": _messages_to_api(messages),
-            "stream": True,
+            "messages": _messages_to_api(messages)
         }
 
         api_tools = _tools_to_api(tools)
