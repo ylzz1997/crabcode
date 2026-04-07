@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -48,6 +49,135 @@ def _supports_ansi_output() -> bool:
 
 _ANSI_ENABLED = _supports_ansi_output()
 console = Console(no_color=not _ANSI_ENABLED, force_terminal=_ANSI_ENABLED)
+
+
+# Slash commands with their arguments for auto-completion
+_SLASH_COMMANDS: dict[str, list[str]] = {
+    "/help": [],
+    "/status": [],
+    "/logs": ["-f", "--follow", "--clear", "--tail"],
+    "/model": [],  # Dynamic: model names
+    "/new": [],
+    "/compact": [],
+    "/clear": [],
+    "/sessions": [],
+    "/resume": [],  # Dynamic: session IDs
+    "/exit": [],
+    "/quit": [],
+}
+
+
+class _CrabCodeCompleter(Completer):
+    """Auto-completer for slash commands and their arguments."""
+
+    def __init__(self, session: "CoreSession" | None = None) -> None:
+        self._session = session
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor.lstrip()
+        word_before_cursor = document.get_word_before_cursor(WORD=False)
+
+        # Only complete after /
+        if not text.startswith("/"):
+            return
+
+        parts = text.split()
+        cmd = parts[0].lower() if parts else ""
+
+        # Complete command names when typing the first word
+        if len(parts) <= 1 and not text.endswith(" "):
+            for name in _SLASH_COMMANDS:
+                if name.startswith(cmd):
+                    yield Completion(
+                        name,
+                        start_position=-len(word_before_cursor),
+                        display=name,
+                        display_meta=self._get_command_description(name),
+                    )
+            # Also complete skill names
+            if self._session:
+                skills = getattr(self._session, "skills", [])
+                for skill in skills:
+                    skill_cmd = f"/{skill.name}"
+                    if skill_cmd.startswith(cmd):
+                        yield Completion(
+                            skill_cmd,
+                            start_position=-len(word_before_cursor),
+                            display=skill_cmd,
+                            display_meta=skill.description or skill.when_to_use or "skill",
+                        )
+            return
+
+        # Complete arguments for specific commands
+        if len(parts) >= 2 or text.endswith(" "):
+            # /model <name> — complete model names
+            if cmd == "/model":
+                if self._session:
+                    models = self._session.list_models()
+                    for name in models:
+                        if name.startswith(word_before_cursor):
+                            yield Completion(
+                                name,
+                                start_position=-len(word_before_cursor),
+                                display=name,
+                            )
+                return
+
+            # /logs <name> — complete log names
+            if cmd == "/logs":
+                try:
+                    from crabcode_search.background import list_background_logs
+                    logs = list_background_logs(self._session.cwd if self._session else ".")
+                except Exception:
+                    logs = {}
+                for name in logs:
+                    if name.startswith(word_before_cursor):
+                        yield Completion(
+                            name,
+                            start_position=-len(word_before_cursor),
+                            display=name,
+                        )
+                # Also complete flags
+                for flag in _SLASH_COMMANDS.get("/logs", []):
+                    if flag.startswith(word_before_cursor):
+                        yield Completion(
+                            flag,
+                            start_position=-len(word_before_cursor),
+                            display=flag,
+                        )
+                return
+
+            # /resume <id> — complete session IDs
+            if cmd == "/resume":
+                from crabcode_core.session.storage import SessionStorage
+                sessions = SessionStorage.list_sessions(self._session.cwd if self._session else ".")
+                for s in sessions[:20]:
+                    sid = s["session_id"]
+                    if sid.startswith(word_before_cursor):
+                        yield Completion(
+                            sid,
+                            start_position=-len(word_before_cursor),
+                            display=sid[:12] + "…",
+                            display_meta=s.get("preview", "")[:40],
+                        )
+                return
+
+    def _get_command_description(self, cmd: str) -> str:
+        descriptions = {
+            "/help": "show help",
+            "/status": "show session status",
+            "/logs": "show background logs",
+            "/model": "show/switch model",
+            "/new": "start new session",
+            "/compact": "compact conversation",
+            "/clear": "clear history",
+            "/sessions": "list sessions",
+            "/resume": "resume session",
+            "/exit": "exit CrabCode",
+            "/quit": "exit CrabCode",
+        }
+        return descriptions.get(cmd, "")
+
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _VERBS = ["Thinking", "Reasoning", "Analyzing", "Processing", "Understanding"]
@@ -578,6 +708,8 @@ async def run_repl(
 
     prompt_session: PromptSession[str] = PromptSession(
         history=InMemoryHistory(),
+        completer=_CrabCodeCompleter(session),
+        complete_while_typing=True,
     )
 
     ctrl_c_exit = _CtrlCDoubleExit()
