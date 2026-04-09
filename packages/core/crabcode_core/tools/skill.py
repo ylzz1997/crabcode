@@ -60,6 +60,18 @@ class SkillTool(Tool):
                     lines.append(f"Description: {skill.description}")
                 if skill.when_to_use:
                     lines.append(f"When to use: {skill.when_to_use}")
+                # Show auto-trigger patterns
+                triggers: list[str] = []
+                if skill.pathPatterns:
+                    triggers.append(f"pathPatterns: {', '.join(skill.pathPatterns)}")
+                if skill.bashPatterns:
+                    triggers.append(f"bashPatterns: {', '.join(skill.bashPatterns)}")
+                if skill.importPatterns:
+                    triggers.append(f"importPatterns: {', '.join(skill.importPatterns)}")
+                if skill.chainTo:
+                    triggers.append(f"chainTo: {', '.join(skill.chainTo)}")
+                if triggers:
+                    lines.append("Auto-trigger: " + "; ".join(triggers))
                 lines.append("")
 
         lines.append(

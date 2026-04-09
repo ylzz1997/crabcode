@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 from crabcode_core.types.config import CrabCodeSettings
@@ -114,6 +115,13 @@ class CoreSession:
         self.session_id = generate_session_id()
         self._session_storage = SessionStorage(self.cwd, self.session_id)
 
+        # Write session meta to JSONL + SQLite
+        active_cfg = merged.get_api_config(self._current_model_name)
+        self._session_storage.write_meta(
+            model=active_cfg.model or "",
+            provider=active_cfg.provider or "",
+        )
+
         self._permission_manager = PermissionManager(
             settings=merged.permissions,
         )
@@ -186,6 +194,60 @@ class CoreSession:
 
         self._initialized = True
 
+    # --- Context extraction helpers for skill auto-trigger ---
+
+    @staticmethod
+    def _extract_file_paths(text: str) -> list[str]:
+        """Extract potential file paths from user message text.
+
+        Looks for quoted paths, paths with extensions, and common path patterns.
+        """
+        import re
+
+        paths: list[str] = []
+        # Quoted paths: "src/foo.py" or 'src/foo.py'
+        for m in re.finditer(r'["\']([^\s"\']+\.[\w]+)["\']', text):
+            paths.append(m.group(1))
+        # Unquoted paths with extensions: src/foo.py
+        for m in re.finditer(r'(?<!["\w])([\w./\\-]+\.[\w]{1,10})(?!["\w])', text):
+            candidate = m.group(1)
+            if not candidate.startswith(("http://", "https://")):
+                paths.append(candidate)
+        return paths
+
+    @staticmethod
+    def _extract_bash_commands(text: str) -> list[str]:
+        """Extract potential bash commands from user message text.
+
+        Looks for backtick-wrapped commands and common command patterns.
+        """
+        import re
+
+        commands: list[str] = []
+        # Backtick-wrapped commands: `git commit -m "..."`
+        for m in re.finditer(r'`([^`]+)`', text):
+            commands.append(m.group(1))
+        # Lines starting with common command prefixes
+        for m in re.finditer(r'(?:^|\n)\s*(git|npm|yarn|pip|python|cargo|make|docker|kubectl)\s+(\S.*)', text):
+            commands.append(f"{m.group(1)} {m.group(2)}".strip())
+        return commands
+
+    @staticmethod
+    def _extract_import_lines(text: str) -> list[str]:
+        """Extract import/require lines from user message text."""
+        import re
+
+        lines: list[str] = []
+        # Python: import X / from X import Y
+        for m in re.finditer(r'(?<!\w)(import\s+[\w.]+|from\s+[\w.]+\s+import\s+[\w.*]+)', text):
+            lines.append(m.group(0).strip())
+        # JS/TS: require('X') / import X from 'Y'
+        for m in re.finditer(r"(?<!\w)require\s*\(['\"][^'\"]+['\"]\)", text):
+            lines.append(m.group(0).strip())
+        for m in re.finditer(r"(?<!\w)import\s+[\w{} ,]+\s+from\s+['\"][^'\"]+['\"]", text):
+            lines.append(m.group(0).strip())
+        return lines
+
     async def send_message(
         self,
         text: str,
@@ -207,8 +269,52 @@ class CoreSession:
         user_msg = create_user_message(content=text)
         self.messages.append(user_msg)
 
+        # --- Skill auto-trigger ---
+        if self.skills:
+            from crabcode_core.skills.matcher import auto_match
+
+            file_paths = self._extract_file_paths(text)
+            bash_commands = self._extract_bash_commands(text)
+            import_lines = self._extract_import_lines(text)
+
+            auto_skills = auto_match(
+                self.skills,
+                file_paths=file_paths,
+                bash_commands=bash_commands,
+                import_lines=import_lines,
+            )
+
+            if auto_skills:
+                skill_parts = []
+                for skill in auto_skills:
+                    header = f"[Auto-triggered skill: {skill.name}]"
+                    if skill.description:
+                        header += f" {skill.description}"
+                    skill_parts.append(f"{header}\n{skill.content}")
+                skill_context = "\n\n---\n\n".join(skill_parts)
+
+                context_msg = create_user_message(
+                    content=(
+                        "<system-reminder>\n"
+                        "The following skills were automatically triggered based on "
+                        "your current context. Follow their instructions when relevant "
+                        "to the user's request.\n\n"
+                        f"{skill_context}\n"
+                        "</system-reminder>"
+                    ),
+                )
+                self.messages.append(context_msg)
+
         if self._session_storage:
             self._session_storage.append_message(user_msg)
+            # Update first_user_message in meta on the first real user message
+            if not self._session_storage.meta.get("first_user_message"):
+                active_api_cfg = self.settings.get_api_config(self._current_model_name)
+                self._session_storage.write_meta(
+                    model=active_api_cfg.model or "",
+                    provider=active_api_cfg.provider or "",
+                    first_user_message=text,
+                )
 
         compact_kwargs: dict[str, Any] = {}
         if self.settings.max_context_length is not None:
@@ -276,6 +382,11 @@ class CoreSession:
                 if self._session_storage:
                     for msg in self.messages[pre_loop_count:]:
                         self._session_storage.append_message(msg)
+                    # Record token usage and message count
+                    total_tokens = event.usage.get("input_tokens", 0) + event.usage.get("output_tokens", 0)
+                    if total_tokens > 0:
+                        self._session_storage.record_tokens(total_tokens)
+                    self._session_storage.record_message_count(len(self.messages))
 
             yield event
 
@@ -303,6 +414,13 @@ class CoreSession:
         self.messages.clear()
         self.session_id = generate_session_id()
         self._session_storage = SessionStorage(self.cwd, self.session_id)
+        # Write meta for the new session
+        if self._initialized:
+            active_api_cfg = self.settings.get_api_config(self._current_model_name)
+            self._session_storage.write_meta(
+                model=active_api_cfg.model or "",
+                provider=active_api_cfg.provider or "",
+            )
         return self.session_id
 
     async def compact(self) -> None:
@@ -371,6 +489,46 @@ class CoreSession:
         self.session_id = session_id
         self._session_storage = storage
         self.messages.clear()
+
+        # Sync meta to SQLite if it was read from JSONL but missing in DB
+        if storage.meta and self._initialized:
+            try:
+                from crabcode_core.session.meta_db import SessionMetaStore
+                store = SessionMetaStore()
+                existing = store.get(session_id)
+                if not existing:
+                    meta = storage.meta
+                    created_at = meta.get("created_at", "")
+                    updated_at = meta.get("updated_at", "")
+                    # Parse ISO timestamps to unix if needed
+                    def _to_unix(ts: Any) -> int:
+                        if isinstance(ts, (int, float)):
+                            return int(ts)
+                        if isinstance(ts, str) and ts:
+                            try:
+                                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                return int(dt.timestamp())
+                            except Exception:
+                                pass
+                        return int(datetime.now(timezone.utc).timestamp())
+                    sqlite_meta = {
+                        "id": session_id,
+                        "title": meta.get("title", ""),
+                        "cwd": self.cwd,
+                        "model": meta.get("model", ""),
+                        "provider": meta.get("provider", ""),
+                        "first_user_message": meta.get("first_user_message", ""),
+                        "tokens_used": meta.get("tokens_used", 0),
+                        "git_branch": meta.get("git_branch"),
+                        "git_sha": meta.get("git_sha"),
+                        "created_at": _to_unix(created_at),
+                        "updated_at": _to_unix(updated_at),
+                        "message_count": meta.get("message_count", len(raw_messages)),
+                    }
+                    store.upsert(sqlite_meta)
+                store.close()
+            except Exception:
+                pass
 
         for raw in raw_messages:
             role = raw.get("type", "user")

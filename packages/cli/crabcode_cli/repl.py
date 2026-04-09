@@ -1202,18 +1202,24 @@ async def _handle_command(
         from rich.table import Table
         table = Table(title="Recent Sessions", border_style="blue", expand=False)
         table.add_column("#", style="dim", width=3)
-        table.add_column("Session ID", style="cyan", width=10)
-        table.add_column("Modified", style="dim")
+        table.add_column("ID", style="cyan", width=8)
+        table.add_column("Model", style="dim", width=16)
+        table.add_column("Tokens", style="dim", width=8, justify="right")
+        table.add_column("Modified", style="dim", width=16)
         table.add_column("Preview")
         for i, s in enumerate(sessions[:20], 1):
             sid = s["session_id"]
             is_current = sid == session.session_id
             marker = " *" if is_current else ""
+            tokens = s.get("tokens_used", 0)
+            tokens_str = f"{tokens // 1000}k" if tokens >= 1000 else str(tokens)
             table.add_row(
                 str(i),
-                sid[:8] + "…" + marker,
-                s.get("modified", "")[:19],
-                s.get("preview", "")[:60],
+                sid[:8] + marker,
+                s.get("model", "")[:16],
+                tokens_str,
+                s.get("modified", "")[:16],
+                s.get("preview", "")[:50],
             )
         console.print(table)
         return True
