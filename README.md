@@ -372,6 +372,73 @@ Skills with the same name are merged in order (later entries override earlier on
 3. `.claude/skills/` — project-level, searched upward from cwd (compatibility)
 4. `.crabcode/skills/` — project-level, searched upward from cwd (highest priority)
 
+### Auto-trigger
+
+Skills can be **automatically triggered** based on the user's current context — no manual `/command` needed. When a user message matches a skill's patterns, the skill's instructions are injected into the conversation as a system reminder.
+
+Add pattern fields to the frontmatter:
+
+```markdown
+---
+name: python-dev
+description: "Python development workflow"
+pathPatterns: "**/*.py, **/*.pyi"
+bashPatterns:
+  - "pytest .*"
+  - "ruff .*"
+importPatterns:
+  - "from django"
+  - "import flask"
+chainTo: "python-test"
+---
+
+Follow PEP 8 conventions and use type hints.
+```
+
+Pattern fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pathPatterns` | Comma-separated or YAML list | Glob patterns matched against file paths in the user's message (e.g. `"**/*.py"`, `"src/**/*.ts"`) |
+| `bashPatterns` | Comma-separated or YAML list | Regex patterns matched against shell commands in the user's message (e.g. `"pytest .*"`, `"git commit.*"`) |
+| `importPatterns` | Comma-separated or YAML list | Regex patterns matched against import/require lines in the user's message (e.g. `"from django"`, `"import React"`) |
+| `chainTo` | Comma-separated or YAML list | Skill names to automatically chain after this skill (e.g. `"lint"` triggers the `lint` skill next) |
+
+**How it works:**
+
+1. When a user sends a message, CrabCode extracts file paths, bash commands, and import lines from the text.
+2. Each skill's `pathPatterns`, `bashPatterns`, and `importPatterns` are checked against the extracted context.
+3. Matching skills are activated — their content is injected as a `<system-reminder>` message.
+4. If a matched skill has `chainTo`, the chained skills are also activated (circular chains are safely broken).
+
+**Example chain:**
+
+```markdown
+# .crabcode/skills/python-dev/SKILL.md
+---
+name: python-dev
+pathPatterns: "**/*.py"
+chainTo: "python-test"
+---
+Follow PEP 8 and use type hints.
+
+# .crabcode/skills/python-test/SKILL.md
+---
+name: python-test
+bashPatterns: "pytest .*"
+chainTo: "python-lint"
+---
+Run pytest with verbose output.
+
+# .crabcode/skills/python-lint/SKILL.md
+---
+name: python-lint
+---
+Run ruff check and mypy.
+```
+
+When a user mentions `src/app.py`, all three skills activate in order: `python-dev` → `python-test` → `python-lint`.
+
 ## Agent Settings
 
 The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its behavior can be configured via the `agent` field in `settings.json`:
@@ -609,7 +676,7 @@ crabcode/
 │   │   ├── api/                # API adapters (Anthropic, OpenAI, Router)
 │   │   ├── query/              # Agentic turn loop
 │   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, Lint, Memory)
-│   │   ├── skills/             # Skill loading (SkillDefinition, load_skills)
+│   │   ├── skills/             # Skill loading + auto-trigger matching (SkillDefinition, load_skills, auto_match)
 │   │   ├── prompts/            # System prompt construction
 │   │   ├── mcp/                # MCP server integration
 │   │   ├── compact/            # Conversation compaction

@@ -373,6 +373,73 @@ frontmatter 字段说明：
 3. `.claude/skills/`（从项目目录向上逐级查找，兼容 Claude Code）
 4. `.crabcode/skills/`（从项目目录向上逐级查找，最高优先级）
 
+### 自动触发
+
+Skills 可以根据用户当前上下文**自动触发**——无需手动输入 `/命令`。当用户消息匹配到技能的模式时，技能指令会以系统提醒的形式注入对话。
+
+在 frontmatter 中添加模式匹配字段：
+
+```markdown
+---
+name: python-dev
+description: "Python 开发工作流"
+pathPatterns: "**/*.py, **/*.pyi"
+bashPatterns:
+  - "pytest .*"
+  - "ruff .*"
+importPatterns:
+  - "from django"
+  - "import flask"
+chainTo: "python-test"
+---
+
+遵循 PEP 8 规范，使用类型注解。
+```
+
+模式匹配字段说明：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `pathPatterns` | 逗号分隔或 YAML 列表 | 与用户消息中的文件路径匹配的 glob 模式（如 `"**/*.py"`、`"src/**/*.ts"`） |
+| `bashPatterns` | 逗号分隔或 YAML 列表 | 与用户消息中的 shell 命令匹配的正则表达式（如 `"pytest .*"`、`"git commit.*"`） |
+| `importPatterns` | 逗号分隔或 YAML 列表 | 与用户消息中的 import/require 语句匹配的正则表达式（如 `"from django"`、`"import React"`） |
+| `chainTo` | 逗号分隔或 YAML 列表 | 当前技能触发后自动链接的后续技能名（如 `"lint"` 会接着触发 `lint` 技能） |
+
+**工作原理：**
+
+1. 用户发送消息时，CrabCode 从文本中提取文件路径、bash 命令和 import 语句。
+2. 依次检查每个技能的 `pathPatterns`、`bashPatterns` 和 `importPatterns` 是否匹配。
+3. 匹配的技能会被激活——其内容以 `<system-reminder>` 消息注入对话。
+4. 如果被匹配的技能设置了 `chainTo`，链式技能也会一并激活（循环链会被安全截断）。
+
+**链式触发示例：**
+
+```markdown
+# .crabcode/skills/python-dev/SKILL.md
+---
+name: python-dev
+pathPatterns: "**/*.py"
+chainTo: "python-test"
+---
+遵循 PEP 8 规范，使用类型注解。
+
+# .crabcode/skills/python-test/SKILL.md
+---
+name: python-test
+bashPatterns: "pytest .*"
+chainTo: "python-lint"
+---
+以 verbose 模式运行 pytest。
+
+# .crabcode/skills/python-lint/SKILL.md
+---
+name: python-lint
+---
+运行 ruff check 和 mypy。
+```
+
+当用户提到 `src/app.py` 时，三个技能会按顺序全部激活：`python-dev` → `python-test` → `python-lint`。
+
 ## Agent 配置
 
 内置 `Agent` 工具用于生成子 agent 以并行或隔离执行任务。其行为可通过 `settings.json` 中的 `agent` 字段配置：
@@ -610,7 +677,7 @@ crabcode/
 │   │   ├── api/                # API 适配器（Anthropic、OpenAI、Router）
 │   │   ├── query/              # Agent 对话循环
 │   │   ├── tools/              # 内置工具（Bash、Read、Edit、Write、Grep、Glob、Lint、Memory）
-│   │   ├── skills/             # Skill 加载（SkillDefinition、load_skills）
+│   │   ├── skills/             # Skill 加载 + 自动触发匹配（SkillDefinition、load_skills、auto_match）
 │   │   ├── prompts/            # 系统提示词构造
 │   │   ├── mcp/                # MCP 服务器集成
 │   │   ├── compact/            # 对话压缩
