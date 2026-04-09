@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sys
 import time
@@ -13,7 +14,6 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -349,12 +349,14 @@ class _Spinner:
         self._message = message
         self._start_time = time.monotonic()
 
-    def stop(self) -> float:
-        """Stop spinner, clear line, return elapsed seconds."""
+    async def stop(self) -> float:
+        """Stop spinner, wait for animation task, clear line, return elapsed seconds."""
         elapsed = time.monotonic() - self._start_time if self._running else 0.0
         self._running = False
         if self._task:
             self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
             self._task = None
         self._clear_line()
         sys.stdout.flush()
@@ -716,156 +718,152 @@ async def run_repl(
 
     ctrl_c_exit = _CtrlCDoubleExit()
 
-    # Keep Rich ANSI rendering only for interactive terminals; plain outputs
-    # and recorder-friendly environments should not leak escape sequences.
-    with patch_stdout(raw=_ANSI_ENABLED):
-        while True:
+    while True:
+        try:
+            user_input = await prompt_session.prompt_async(
+                HTML("<b><ansicyan>❯ </ansicyan></b>"),
+            )
+        except EOFError:
+            console.print("\nGoodbye!", style="dim")
             try:
-                user_input = await prompt_session.prompt_async(
-                    HTML("<b><ansicyan>❯ </ansicyan></b>"),
-                )
-            except EOFError:
+                await session.interrupt()
+            except Exception:
+                pass
+            _force_exit()
+        except _REPL_INTERRUPT_EXCS:
+            if ctrl_c_exit.should_exit_now():
                 console.print("\nGoodbye!", style="dim")
                 try:
                     await session.interrupt()
                 except Exception:
                     pass
                 _force_exit()
-            except _REPL_INTERRUPT_EXCS:
-                if ctrl_c_exit.should_exit_now():
-                    console.print("\nGoodbye!", style="dim")
-                    try:
-                        await session.interrupt()
-                    except Exception:
-                        pass
-                    _force_exit()
-                _clear_sigint_cancel()
-                try:
-                    await session.interrupt()
-                except Exception:
-                    pass
-                console.print(
-                    f"\n[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
-                )
+            _clear_sigint_cancel()
+            try:
+                await session.interrupt()
+            except Exception:
+                pass
+            console.print(
+                f"\n[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
+            )
+            continue
+
+        user_input = user_input.strip()
+        if not user_input:
+            continue
+
+        ctrl_c_exit.clear()
+
+        if user_input.startswith("/"):
+            result = await _handle_command(user_input, session, settings)
+            if result is False:
+                break
+            if isinstance(result, str):
+                user_input = result
+            else:
                 continue
 
-            user_input = user_input.strip()
-            if not user_input:
-                continue
+        if user_input.startswith("! "):
+            cmd = user_input[2:]
+            import subprocess
+            result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=False)
+            continue
 
-            ctrl_c_exit.clear()
+        streamed_text = ""
+        streamed_text_for_context = ""
+        spinner = _Spinner(ansi_enabled=_ANSI_ENABLED)
+        thinking_start: float = 0.0
+        is_thinking = False
 
-            if user_input.startswith("/"):
-                result = await _handle_command(user_input, session, settings)
-                if result is False:
-                    break
-                if isinstance(result, str):
-                    user_input = result
-                else:
-                    continue
-
-            if user_input.startswith("! "):
-                cmd = user_input[2:]
-                import subprocess
-                result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=False)
-                continue
-
-            streamed_text = ""
-            streamed_text_for_context = ""
-            spinner = _Spinner(ansi_enabled=_ANSI_ENABLED)
-            thinking_start: float = 0.0
+        async def _stop_spinner_with_thinking() -> None:
+            nonlocal is_thinking
+            if not spinner.is_running:
+                return
+            await spinner.stop()
+            if is_thinking and thinking_start:
+                duration = time.monotonic() - thinking_start
+                if duration >= 1:
+                    console.print(
+                        f"  [dim italic]∴ Thought for {max(1, round(duration))}s[/]"
+                    )
             is_thinking = False
 
-            def _stop_spinner_with_thinking() -> None:
-                nonlocal is_thinking
-                if not spinner.is_running:
-                    return
-                spinner.stop()
-                if is_thinking and thinking_start:
-                    duration = time.monotonic() - thinking_start
-                    if duration >= 1:
-                        console.print(
-                            f"  [dim italic]∴ Thought for {max(1, round(duration))}s[/]"
-                        )
-                is_thinking = False
+        try:
+            async for event in session.send_message(user_input):
+                if isinstance(event, StreamModeEvent):
+                    if event.mode == "requesting":
+                        spinner.start()
+                        is_thinking = False
+                        thinking_start = 0.0
+                    elif event.mode == "thinking":
+                        thinking_start = time.monotonic()
+                        is_thinking = True
+                        spinner.update("Thinking")
+                    elif event.mode == "responding":
+                        await _stop_spinner_with_thinking()
+                    elif event.mode == "tool-input":
+                        await _stop_spinner_with_thinking()
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        spinner.start("Generating")
+                    elif event.mode == "tool-running":
+                        await _stop_spinner_with_thinking()
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        spinner.start("Running")
 
-            try:
-                async for event in session.send_message(user_input):
-                    if isinstance(event, StreamModeEvent):
-                        if event.mode == "requesting":
-                            spinner.start()
-                            is_thinking = False
-                            thinking_start = 0.0
-                        elif event.mode == "thinking":
-                            thinking_start = time.monotonic()
-                            is_thinking = True
-                            spinner.update("Thinking")
-                        elif event.mode == "responding":
-                            _stop_spinner_with_thinking()
-                        elif event.mode == "tool-input":
-                            _stop_spinner_with_thinking()
-                            spinner.start("Generating")
-                        elif event.mode == "tool-running":
-                            _stop_spinner_with_thinking()
-                            spinner.start("Running")
+                elif isinstance(event, ThinkingEvent):
+                    pass
 
-                    elif isinstance(event, ThinkingEvent):
-                        pass
+                elif isinstance(event, StreamTextEvent):
+                    await _stop_spinner_with_thinking()
+                    sys.stdout.write(event.text)
+                    sys.stdout.flush()
+                    streamed_text += event.text
+                    streamed_text_for_context += event.text
 
-                    elif isinstance(event, StreamTextEvent):
-                        _stop_spinner_with_thinking()
-                        sys.stdout.write(event.text)
+                elif isinstance(event, ToolUseEvent):
+                    await _stop_spinner_with_thinking()
+                    if streamed_text:
+                        sys.stdout.write("\n")
                         sys.stdout.flush()
-                        streamed_text += event.text
-                        streamed_text_for_context += event.text
+                        streamed_text = ""
+                    _render_tool_use(event)
 
-                    elif isinstance(event, ToolUseEvent):
-                        _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
-                        _render_tool_use(event)
+                elif isinstance(event, PermissionRequestEvent):
+                    await _stop_spinner_with_thinking()
+                    if streamed_text:
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        streamed_text = ""
+                    await _prompt_permission(event, session)
 
-                    elif isinstance(event, PermissionRequestEvent):
-                        _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
-                        await _prompt_permission(event, session)
+                elif isinstance(event, ToolResultEvent):
+                    await _stop_spinner_with_thinking()
+                    _render_tool_result(event)
 
-                    elif isinstance(event, ToolResultEvent):
-                        _stop_spinner_with_thinking()
-                        _render_tool_result(event)
-
-                    elif isinstance(event, CompactEvent):
-                        console.print(
-                            f"\n[dim italic]Conversation compacted: {event.summary}[/]"
-                        )
-
-                    elif isinstance(event, ErrorEvent):
-                        _stop_spinner_with_thinking()
-                        console.print(f"\n[bold red]Error: {event.message}[/]")
-                        if not event.recoverable:
-                            break
-
-                    elif isinstance(event, TurnCompleteEvent):
-                        _stop_spinner_with_thinking()
-
-            except _REPL_INTERRUPT_EXCS:
-                spinner.stop()
-                if ctrl_c_exit.should_exit_now():
-                    console.print("\nGoodbye!", style="dim")
-                    try:
-                        await session.interrupt()
-                    except Exception:
-                        pass
-                    _persist_partial_assistant_for_interrupt(
-                        session, streamed_text_for_context
+                elif isinstance(event, CompactEvent):
+                    console.print(
+                        f"\n[dim italic]Conversation compacted: {event.summary}[/]"
                     )
-                    _force_exit()
-                _clear_sigint_cancel()
+
+                elif isinstance(event, ErrorEvent):
+                    await _stop_spinner_with_thinking()
+                    console.print(f"\n[bold red]Error: {event.message}[/]")
+                    if not event.recoverable:
+                        break
+
+                elif isinstance(event, TurnCompleteEvent):
+                    await _stop_spinner_with_thinking()
+
+        except _REPL_INTERRUPT_EXCS:
+            await spinner.stop()
+            if ctrl_c_exit.should_exit_now():
+                console.print("\nGoodbye!", style="dim")
                 try:
                     await session.interrupt()
                 except Exception:
@@ -873,15 +871,24 @@ async def run_repl(
                 _persist_partial_assistant_for_interrupt(
                     session, streamed_text_for_context
                 )
-                console.print(
-                    f"[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
-                )
+                _force_exit()
+            _clear_sigint_cancel()
+            try:
+                await session.interrupt()
+            except Exception:
+                pass
+            _persist_partial_assistant_for_interrupt(
+                session, streamed_text_for_context
+            )
+            console.print(
+                f"[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
+            )
 
-            if streamed_text:
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+        if streamed_text:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
-            console.print()
+        console.print()
 
 
 async def _handle_command(
