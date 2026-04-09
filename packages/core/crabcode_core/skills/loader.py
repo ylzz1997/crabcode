@@ -22,7 +22,7 @@ class SkillDefinition:
     content: str
     source_path: str
     when_to_use: str | None = None
-    paths: list[str] = field(default_factory=list)
+    paths: list[str] = field(default_factory=list)  # gating: only activate when user paths match
     # Auto-trigger patterns
     pathPatterns: list[str] = field(default_factory=list)  # glob: file paths
     bashPatterns: list[str] = field(default_factory=list)  # regex: bash commands

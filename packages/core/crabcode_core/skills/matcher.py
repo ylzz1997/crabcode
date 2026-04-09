@@ -4,6 +4,8 @@ Matches user context (file paths, bash commands, import lines) against
 skill patterns and returns a list of skills to auto-invoke, in order.
 
 Pattern types:
+  - paths: glob patterns used as a gating filter — when declared, the skill
+    only activates if at least one user-mentioned file path matches
   - pathPatterns: glob patterns matched against file paths the user is
     working with (from conversation context, git status, etc.)
   - bashPatterns: regex patterns matched against bash commands the user
@@ -26,34 +28,49 @@ if TYPE_CHECKING:
     from crabcode_core.skills.loader import SkillDefinition
 
 
+def _fnmatch_any(fpath: str, patterns: list[str]) -> bool:
+    """Return True if *fpath* matches any glob in *patterns* (case-insensitive)."""
+    for pattern in patterns:
+        if fnmatch.fnmatch(fpath, pattern) or fnmatch.fnmatch(fpath.lower(), pattern.lower()):
+            return True
+    return False
+
+
 def match_path_patterns(
     skills: list[SkillDefinition], file_paths: list[str],
 ) -> list[SkillDefinition]:
-    """Return skills whose pathPatterns match any of the given file paths."""
+    """Return skills whose pathPatterns or paths match any of the given file paths.
+
+    ``pathPatterns`` is a positive match — the skill triggers when a user-mentioned
+    file path matches.  ``paths`` is a gating filter — when declared, the skill
+    only triggers if at least one user-mentioned file path falls under one of the
+    declared paths.
+    """
     matched: list[SkillDefinition] = []
     for skill in skills:
+        # If `paths` is declared, at least one user file must match it
+        if skill.paths and not any(_fnmatch_any(fp, skill.paths) for fp in file_paths):
+            continue
         if not skill.pathPatterns:
             continue
-        for pattern in skill.pathPatterns:
-            for fpath in file_paths:
-                if fnmatch.fnmatch(fpath, pattern):
-                    matched.append(skill)
-                    break
-                if fnmatch.fnmatch(fpath.lower(), pattern.lower()):
-                    matched.append(skill)
-                    break
-            else:
-                continue
-            break
+        if any(_fnmatch_any(fp, skill.pathPatterns) for fp in file_paths):
+            matched.append(skill)
     return matched
 
 
 def match_bash_patterns(
     skills: list[SkillDefinition], bash_commands: list[str],
+    file_paths: list[str] | None = None,
 ) -> list[SkillDefinition]:
-    """Return skills whose bashPatterns match any of the given bash commands."""
+    """Return skills whose bashPatterns match any of the given bash commands.
+
+    If a skill declares ``paths``, at least one user-mentioned file path must
+    match (same gating logic as ``match_path_patterns``).
+    """
     matched: list[SkillDefinition] = []
     for skill in skills:
+        if skill.paths and not any(_fnmatch_any(fp, skill.paths) for fp in (file_paths or [])):
+            continue
         if not skill.bashPatterns:
             continue
         for pattern in skill.bashPatterns:
@@ -73,10 +90,17 @@ def match_bash_patterns(
 
 def match_import_patterns(
     skills: list[SkillDefinition], import_lines: list[str],
+    file_paths: list[str] | None = None,
 ) -> list[SkillDefinition]:
-    """Return skills whose importPatterns match any of the given import lines."""
+    """Return skills whose importPatterns match any of the given import lines.
+
+    If a skill declares ``paths``, at least one user-mentioned file path must
+    match (same gating logic as ``match_path_patterns``).
+    """
     matched: list[SkillDefinition] = []
     for skill in skills:
+        if skill.paths and not any(_fnmatch_any(fp, skill.paths) for fp in (file_paths or [])):
+            continue
         if not skill.importPatterns:
             continue
         for pattern in skill.importPatterns:
@@ -151,8 +175,8 @@ def auto_match(
     # Collect direct matches
     direct_matches: list[SkillDefinition] = []
     direct_matches.extend(match_path_patterns(skills, file_paths))
-    direct_matches.extend(match_bash_patterns(skills, bash_commands))
-    direct_matches.extend(match_import_patterns(skills, import_lines))
+    direct_matches.extend(match_bash_patterns(skills, bash_commands, file_paths=file_paths))
+    direct_matches.extend(match_import_patterns(skills, import_lines, file_paths=file_paths))
 
     # Add matched skills + their chains, deduplicating
     for skill in direct_matches:
