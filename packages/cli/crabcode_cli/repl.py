@@ -99,11 +99,14 @@ class _CrabCodeCompleter(Completer):
                         display=name,
                         display_meta=self._get_command_description(name),
                     )
-            # Also complete skill names
+            # Also complete skill names (skip names that clash with built-in commands)
             if self._session:
                 skills = getattr(self._session, "skills", [])
+                builtin_names = set(_SLASH_COMMANDS)
                 for skill in skills:
                     skill_cmd = f"/{skill.name}"
+                    if skill_cmd in builtin_names:
+                        continue
                     if skill_cmd.startswith(cmd):
                         yield Completion(
                             skill_cmd,
@@ -928,18 +931,8 @@ async def _handle_command(
     cmd = parts[0].lower()
     arg = parts[1].strip() if len(parts) > 1 else ""
 
-    # --- Skill invocation: /<skill-name> [user input] ---
-    skill_name = cmd.lstrip("/")
+    # --- Built-in commands take priority over skill names ---
     skills = getattr(session, "skills", [])
-    matched_skill = next((s for s in skills if s.name == skill_name), None)
-    if matched_skill:
-        prompt = matched_skill.content
-        if arg:
-            if "$USER_INPUT" in prompt:
-                prompt = prompt.replace("$USER_INPUT", arg)
-            else:
-                prompt = f"{prompt}\n\nUser input: {arg}"
-        return prompt
 
     if cmd == "/help":
         skills_section = ""
@@ -1264,6 +1257,18 @@ async def _handle_command(
 
     if cmd in ("/exit", "/quit"):
         return False
+
+    # --- Skill invocation: /<skill-name> [user input] ---
+    skill_name = cmd.lstrip("/")
+    matched_skill = next((s for s in skills if s.name == skill_name), None)
+    if matched_skill:
+        prompt = matched_skill.content
+        if arg:
+            if "$USER_INPUT" in prompt:
+                prompt = prompt.replace("$USER_INPUT", arg)
+            else:
+                prompt = f"{prompt}\n\nUser input: {arg}"
+        return prompt
 
     console.print(f"[dim]Unknown command: {command}. Type /help for available commands.[/]")
     return True
