@@ -43,6 +43,13 @@ class ApiConfig(BaseModel):
     timeout: int = 300  # seconds, for API calls
 
 
+class AgentSettings(BaseModel):
+    """Settings for the built-in Agent (sub-agent) tool."""
+    max_turns: int = 10
+    timeout: int = 300
+    max_output_chars: int = 12000
+
+
 class CrabCodeSettings(BaseModel):
     """Full settings.json schema."""
     permissions: PermissionsSettings = Field(default_factory=PermissionsSettings)
@@ -59,6 +66,7 @@ class CrabCodeSettings(BaseModel):
     prompt_profile: dict[str, Any] | None = None
     extra_tools: list[str] = Field(default_factory=list)
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
 
     model_config = {"extra": "allow"}
 

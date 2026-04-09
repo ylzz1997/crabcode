@@ -343,6 +343,28 @@ frontmatter 字段说明：
 3. `.claude/skills/`（从项目目录向上逐级查找，兼容 Claude Code）
 4. `.crabcode/skills/`（从项目目录向上逐级查找，最高优先级）
 
+## Agent 配置
+
+内置 `Agent` 工具用于生成子 agent 以并行或隔离执行任务。其行为可通过 `settings.json` 中的 `agent` 字段配置：
+
+```json
+{
+  "agent": {
+    "max_turns": 10,
+    "timeout": 300,
+    "max_output_chars": 12000
+  }
+}
+```
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `max_turns` | 每次子 agent 调用的最大 agentic 轮次 | `10` |
+| `timeout` | 子 agent 的总超时时间（秒） | `300` |
+| `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
+
+子 agent 是并发安全的，当主模型在同一轮中发起多个 `Agent` 调用时，它们会并行执行。每个子 agent 拥有独立的消息历史，并使用与主 agent 相同的工具集。
+
 ## 额外工具（Extra Tools）
 
 `extra_tools` 允许你将额外的工具包挂载到 agent，无需修改核心代码。每个条目是指向某个 `Tool` 子类的 Python 导入路径。

@@ -342,6 +342,28 @@ Skills with the same name are merged in order (later entries override earlier on
 3. `.claude/skills/` — project-level, searched upward from cwd (compatibility)
 4. `.crabcode/skills/` — project-level, searched upward from cwd (highest priority)
 
+## Agent Settings
+
+The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its behavior can be configured via the `agent` field in `settings.json`:
+
+```json
+{
+  "agent": {
+    "max_turns": 10,
+    "timeout": 300,
+    "max_output_chars": 12000
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `max_turns` | Maximum agentic turns per sub-agent invocation | `10` |
+| `timeout` | Total wall-clock timeout in seconds for a sub-agent | `300` |
+| `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
+
+Sub-agents are concurrency-safe and run in parallel when the parent model issues multiple `Agent` calls in the same turn. Each sub-agent gets an isolated message history and the same tool set as the parent.
+
 ## Extra Tools
 
 `extra_tools` lets you attach additional tool packages to the agent without modifying the core. Each entry is a Python import path to a `Tool` subclass.

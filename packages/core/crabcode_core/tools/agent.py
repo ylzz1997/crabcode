@@ -34,10 +34,16 @@ class AgentTool(Tool):
         api_adapter: Any = None,
         tools: list[Tool] | None = None,
         prompt_profile: Any = None,
+        max_turns: int = 10,
+        timeout: int = 300,
+        max_output_chars: int = 12_000,
     ):
         self._api_adapter = api_adapter
         self._sub_tools = tools
         self._prompt_profile = prompt_profile
+        self._max_turns = max_turns
+        self._timeout = timeout
+        self._max_output_chars = max_output_chars
 
     async def get_prompt(self, **kwargs: Any) -> str:
         return (
@@ -105,13 +111,10 @@ class AgentTool(Tool):
             tools=tools,
             tool_context=sub_context,
             api_adapter=self._api_adapter,
-            max_turns=10,
+            max_turns=self._max_turns,
         )
 
         result_parts: list[str] = []
-
-        # Sub-agent timeout: 5 minutes total
-        SUB_AGENT_TIMEOUT = 300
 
         async def _collect_results():
             async for event in query_loop(params):
@@ -124,8 +127,8 @@ class AgentTool(Tool):
                     result_parts.append(event.text)
                 elif isinstance(event, ToolResultEvent):
                     body = (event.result or "").strip()
-                    if len(body) > 12_000:
-                        body = body[:12_000] + "\n… (truncated)"
+                    if len(body) > self._max_output_chars:
+                        body = body[:self._max_output_chars] + "\n… (truncated)"
                     result_parts.append(
                         f"\n\n[Tool {event.tool_name} →]\n{body or '(empty)'}\n"
                     )
@@ -133,9 +136,9 @@ class AgentTool(Tool):
                     result_parts.append(f"\n[Error: {event.message}]")
 
         try:
-            await asyncio.wait_for(_collect_results(), timeout=SUB_AGENT_TIMEOUT)
+            await asyncio.wait_for(_collect_results(), timeout=self._timeout)
         except asyncio.TimeoutError:
-            result_parts.append(f"\n[Sub-agent timed out after {SUB_AGENT_TIMEOUT}s]")
+            result_parts.append(f"\n[Sub-agent timed out after {self._timeout}s]")
 
         result = "".join(result_parts)
         if not result:

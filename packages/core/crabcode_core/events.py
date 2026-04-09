@@ -164,10 +164,14 @@ class CoreSession:
         has_agent = any(isinstance(t, AgentTool) for t in self.tools)
         if not has_agent:
             sub_tools = list(self.tools)
+            agent_cfg = merged.agent
             self.tools.append(AgentTool(
                 api_adapter=self._api_adapter,
                 tools=sub_tools,
                 prompt_profile=self._prompt_profile,
+                max_turns=agent_cfg.max_turns,
+                timeout=agent_cfg.timeout,
+                max_output_chars=agent_cfg.max_output_chars,
             ))
 
         from crabcode_core.skills.loader import load_skills
