@@ -25,7 +25,7 @@ class CodebaseSearchTool(Tool):
     """Semantic codebase search powered by embeddings and FAISS."""
 
     name = "CodebaseSearch"
-    description = "Search the codebase using natural language queries."
+    description = "Search the codebase using natural language queries. Returns semantically relevant code snippets with file paths and line numbers. Use this when you need to find code by meaning rather than exact text. For exact text/regex matching, use Grep instead."
     is_read_only = True
     is_concurrency_safe = True
     input_schema = {
@@ -162,7 +162,10 @@ class CodebaseSearchTool(Tool):
             "Search the codebase using natural language queries. "
             "Returns semantically relevant code snippets with file paths and line numbers. "
             "Use this when you need to find code by meaning rather than exact text. "
-            "For exact text/regex matching, use Grep instead."
+            "For example: 'where is authentication handled', 'how does the build system work', "
+            "'find the payment processing logic'. "
+            "For exact text/regex matching, use Grep instead. "
+            "For finding files by name, use Glob instead."
         )
 
     async def call(

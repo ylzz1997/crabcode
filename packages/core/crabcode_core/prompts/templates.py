@@ -56,4 +56,5 @@ TOOL_NAMES = {
     "todo_write": "TodoWrite",
     "ask_user": "AskUserQuestion",
     "skill": "Skill",
+    "codebase_search": "CodebaseSearch",
 }
