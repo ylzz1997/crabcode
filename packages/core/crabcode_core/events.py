@@ -172,6 +172,7 @@ class CoreSession:
                 max_turns=agent_cfg.max_turns,
                 timeout=agent_cfg.timeout,
                 max_output_chars=agent_cfg.max_output_chars,
+                max_display_lines=merged.display.get_max_lines("Agent"),
             ))
 
         from crabcode_core.skills.loader import load_skills

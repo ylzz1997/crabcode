@@ -37,6 +37,7 @@ class AgentTool(Tool):
         max_turns: int = 10,
         timeout: int = 300,
         max_output_chars: int = 12_000,
+        max_display_lines: int = 120,
     ):
         self._api_adapter = api_adapter
         self._sub_tools = tools
@@ -44,6 +45,7 @@ class AgentTool(Tool):
         self._max_turns = max_turns
         self._timeout = timeout
         self._max_output_chars = max_output_chars
+        self._max_display_lines = max_display_lines
 
     async def get_prompt(self, **kwargs: Any) -> str:
         return (
@@ -144,7 +146,15 @@ class AgentTool(Tool):
         if not result:
             result = "Sub-agent completed but produced no text output."
 
+        # Build a display-friendly version: keep more content but cap by line count
+        display = result
+        lines = display.split("\n")
+        if len(lines) > self._max_display_lines:
+            kept = "\n".join(lines[:self._max_display_lines])
+            display = kept + f"\n… ({len(lines) - self._max_display_lines} more lines truncated)"
+
         return ToolResult(
             data={"agent_output": result},
             result_for_model=result,
+            result_for_display=display,
         )

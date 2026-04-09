@@ -369,6 +369,46 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
 | `timeout` | Total wall-clock timeout in seconds for a sub-agent | `300` |
 | `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
 
+## Display Settings
+
+The number of lines shown for tool results in the terminal can be configured via the `display` field in `settings.json`:
+
+```json
+{
+  "display": {
+    "default_max_lines": 50,
+    "max_chars": 50000,
+    "tool_max_lines": {
+      "Agent": 120,
+      "Bash": 60,
+      "Read": 80,
+      "Grep": 50
+    }
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `default_max_lines` | Default maximum display lines for tool results | `50` |
+| `max_chars` | Character count safety cap for display content | `50000` |
+| `tool_max_lines` | Override `default_max_lines` per tool name; only configure tools you want to adjust | See below |
+
+Built-in tool line limits:
+
+| Tool | Default lines |
+|------|---------------|
+| `Agent` | `120` |
+| `Bash` | `60` |
+| `Grep` | `50` |
+| `Glob` | `30` |
+| `Read` | `80` |
+| `Lint` | `60` |
+| `CodebaseSearch` | `50` |
+| Others | `50` (i.e. `default_max_lines`) |
+
+Content exceeding the line limit is truncated with a note showing how many lines were omitted. Content exceeding `max_chars` is also truncated.
+
 Sub-agents are concurrency-safe and run in parallel when the parent model issues multiple `Agent` calls in the same turn. Each sub-agent gets an isolated message history and the same tool set as the parent.
 
 ## Extra Tools

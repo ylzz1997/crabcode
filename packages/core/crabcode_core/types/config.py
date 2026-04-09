@@ -50,6 +50,30 @@ class AgentSettings(BaseModel):
     max_output_chars: int = 12000
 
 
+class DisplaySettings(BaseModel):
+    """Settings for tool result display in the terminal."""
+    default_max_lines: int = 50
+    tool_max_lines: dict[str, int] = {}
+    max_chars: int = 50_000
+
+    # Built-in defaults merged under tool_max_lines overrides
+    _TOOL_DEFAULTS: dict[str, int] = {
+        "Agent": 120,
+        "Bash": 60,
+        "Grep": 50,
+        "Glob": 30,
+        "Read": 80,
+        "Lint": 60,
+        "CodebaseSearch": 50,
+    }
+
+    def get_max_lines(self, tool_name: str) -> int:
+        """Return max display lines for a tool, considering overrides."""
+        if tool_name in self.tool_max_lines:
+            return self.tool_max_lines[tool_name]
+        return self._TOOL_DEFAULTS.get(tool_name, self.default_max_lines)
+
+
 class CrabCodeSettings(BaseModel):
     """Full settings.json schema."""
     permissions: PermissionsSettings = Field(default_factory=PermissionsSettings)
@@ -67,6 +91,7 @@ class CrabCodeSettings(BaseModel):
     extra_tools: list[str] = Field(default_factory=list)
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    display: DisplaySettings = Field(default_factory=DisplaySettings)
 
     model_config = {"extra": "allow"}
 

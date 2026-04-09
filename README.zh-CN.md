@@ -370,6 +370,46 @@ frontmatter 字段说明：
 | `timeout` | 子 agent 的总超时时间（秒） | `300` |
 | `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
 
+## 显示配置
+
+工具结果在终端中的显示行数可通过 `settings.json` 中的 `display` 字段配置：
+
+```json
+{
+  "display": {
+    "default_max_lines": 50,
+    "max_chars": 50000,
+    "tool_max_lines": {
+      "Agent": 120,
+      "Bash": 60,
+      "Read": 80,
+      "Grep": 50
+    }
+  }
+}
+```
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `default_max_lines` | 工具结果的默认最大显示行数 | `50` |
+| `max_chars` | 显示内容的字符数安全上限 | `50000` |
+| `tool_max_lines` | 按工具名覆盖 `default_max_lines`，仅配置需要调整的工具即可 | 见下表 |
+
+内置工具的默认行数上限：
+
+| 工具 | 默认行数 |
+|------|----------|
+| `Agent` | `120` |
+| `Bash` | `60` |
+| `Grep` | `50` |
+| `Glob` | `30` |
+| `Read` | `80` |
+| `Lint` | `60` |
+| `CodebaseSearch` | `50` |
+| 其他 | `50`（即 `default_max_lines`） |
+
+超出行数上限的内容会被截断，并提示剩余行数。超出 `max_chars` 的内容同样会被截断。
+
 子 agent 是并发安全的，当主模型在同一轮中发起多个 `Agent` 调用时，它们会并行执行。每个子 agent 拥有独立的消息历史，并使用与主 agent 相同的工具集。
 
 ## 额外工具（Extra Tools）

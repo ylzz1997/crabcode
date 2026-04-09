@@ -20,7 +20,7 @@ from rich.text import Text
 
 from crabcode_cli.banner import print_banner
 from crabcode_core.events import CoreSession
-from crabcode_core.types.config import CrabCodeSettings
+from crabcode_core.types.config import CrabCodeSettings, DisplaySettings
 from crabcode_core.types.message import Message, MessageRole
 from crabcode_core.types.event import (
     CompactEvent,
@@ -34,6 +34,9 @@ from crabcode_core.types.event import (
     ToolUseEvent,
     TurnCompleteEvent,
 )
+
+# Module-level display settings, set during run_repl()
+_display_settings: DisplaySettings | None = None
 
 
 def _supports_ansi_output() -> bool:
@@ -461,6 +464,18 @@ def _render_tool_use(event: ToolUseEvent) -> None:
     )
 
 
+def _truncate_display(display: str, max_lines: int = 50, max_chars: int = 50_000) -> str:
+    """Truncate display text by line count and character count."""
+    # Line-based truncation first
+    lines = display.split("\n")
+    if len(lines) > max_lines:
+        display = "\n".join(lines[:max_lines]) + f"\n… ({len(lines) - max_lines} more lines truncated)"
+    # Character-based safety cap
+    if len(display) > max_chars:
+        display = display[:max_chars] + "\n... (truncated)"
+    return display
+
+
 def _render_tool_result(event: ToolResultEvent) -> None:
     """Render a tool result."""
     display = event.result_for_display or event.result
@@ -469,8 +484,11 @@ def _render_tool_result(event: ToolResultEvent) -> None:
         _render_diff_result(event.tool_name, display)
         return
 
-    if len(display) > 2000:
-        display = display[:2000] + "\n... (truncated)"
+    # Read display limits from settings if available
+    ds = _display_settings
+    max_lines = ds.get_max_lines(event.tool_name) if ds else 50
+    max_chars = ds.max_chars if ds else 50_000
+    display = _truncate_display(display, max_lines=max_lines, max_chars=max_chars)
 
     style = "red" if event.is_error else "green"
     title = f"{'Error' if event.is_error else 'Result'}: {event.tool_name}"
@@ -661,6 +679,9 @@ async def run_repl(
     console.print()
 
     session = CoreSession(cwd=cwd, settings=settings)
+
+    global _display_settings
+    _display_settings = settings.display if settings else None
 
     _progress_line_len = 0
 
