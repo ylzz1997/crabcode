@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.types.message import Message
+from crabcode_core.utf8_sanitize import safe_utf8_json_tree
 
 
 def get_config_home() -> Path:
@@ -30,6 +31,10 @@ def _sanitize_path(path: str) -> str:
     if len(sanitized) > 200:
         sanitized = sanitized[:200]
     return sanitized
+
+
+def _dump_jsonl_line(obj: Any) -> str:
+    return json.dumps(safe_utf8_json_tree(obj), ensure_ascii=False) + "\n"
 
 
 def get_project_dir(cwd: str) -> Path:
@@ -159,8 +164,8 @@ class SessionStorage:
         # Write session_meta line to JSONL
         self._ensure_dir()
         meta_entry = {"type": "session_meta", **self._meta}
-        with open(self._transcript_path, "a") as f:
-            f.write(json.dumps(meta_entry, ensure_ascii=False) + "\n")
+        with open(self._transcript_path, "a", encoding="utf-8") as f:
+            f.write(_dump_jsonl_line(meta_entry))
 
         # Upsert into SQLite
         try:
@@ -203,8 +208,8 @@ class SessionStorage:
                 block.model_dump() for block in message.content
             ],
         }
-        with open(self._transcript_path, "a") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        with open(self._transcript_path, "a", encoding="utf-8") as f:
+            f.write(_dump_jsonl_line(entry))
 
     def load_messages(self) -> list[dict[str, Any]]:
         """Load all messages from the session transcript (deduped by uuid).
@@ -218,7 +223,7 @@ class SessionStorage:
         seen: set[str] = set()
         meta: dict[str, Any] = {}
         try:
-            with open(self._transcript_path) as f:
+            with open(self._transcript_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

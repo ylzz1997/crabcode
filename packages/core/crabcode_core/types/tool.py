@@ -50,6 +50,8 @@ class ToolContext:
     env: dict[str, str] = field(default_factory=dict)
     on_event: ToolEventCallback | None = None
     tool_config: dict[str, Any] = field(default_factory=dict)
+    choice_queue: Any | None = None  # asyncio.Queue[ChoiceResponseEvent]
+    tool_event_queue: Any | None = None  # asyncio.Queue[CoreEvent] — for tools to emit events mid-execution
 
 
 CanUseToolFn = Callable[

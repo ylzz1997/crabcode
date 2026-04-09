@@ -12,6 +12,7 @@ from typing import Any, AsyncGenerator
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
 from crabcode_core.types.config import ApiConfig
+from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
     Message,
     MessageRole,
@@ -92,7 +93,7 @@ def _messages_to_responses_input(
                     "content": "".join(text_parts),
                 })
 
-    return result
+    return safe_utf8_json_tree(result)
 
 
 def _tools_to_responses(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -107,7 +108,7 @@ def _tools_to_responses(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "parameters": schema,
             "strict": False,
         })
-    return result
+    return safe_utf8_json_tree(result)
 
 
 def _response_to_stream_chunks(response: Any) -> list[StreamChunk]:
@@ -128,7 +129,9 @@ def _response_to_stream_chunks(response: Any) -> list[StreamChunk]:
             for part in getattr(item, "content", None) or []:
                 part_type = getattr(part, "type", "")
                 if part_type == "output_text" and getattr(part, "text", ""):
-                    chunks.append(StreamChunk(type="text", text=part.text))
+                    chunks.append(
+                        StreamChunk(type="text", text=safe_utf8_str(part.text))
+                    )
 
         elif item_type == "function_call":
             call_id = getattr(item, "call_id", "") or getattr(item, "id", "")
@@ -160,7 +163,7 @@ def _response_to_stream_chunks(response: Any) -> list[StreamChunk]:
 
     if not chunks and getattr(response, "error", None):
         err = response.error
-        error_msg = getattr(err, "message", str(err))
+        error_msg = safe_utf8_str(getattr(err, "message", str(err)))
         chunks.append(StreamChunk(type="error", error=error_msg or "Response failed"))
         return chunks
 
@@ -208,7 +211,10 @@ class CodexAdapter(APIAdapter):
         model = config.model or self.config.model or "codex-mini-latest"
 
         # Responses API uses 'instructions' for system prompt
-        instructions = "\n\n".join(s for s in system if s) or None
+        instructions_raw = "\n\n".join(s for s in system if s) or None
+        instructions = (
+            safe_utf8_str(instructions_raw) if instructions_raw else None
+        )
 
         params: dict[str, Any] = {
             "model": model,
@@ -252,7 +258,7 @@ class CodexAdapter(APIAdapter):
 
                 # Text delta
                 if event_type == "response.output_text.delta":
-                    yield StreamChunk(type="text", text=event.delta)
+                    yield StreamChunk(type="text", text=safe_utf8_str(event.delta))
 
                 # Function call arguments delta
                 elif event_type == "response.function_call_arguments.delta":
@@ -326,7 +332,7 @@ class CodexAdapter(APIAdapter):
 
                 # Reasoning summary text delta — treat as thinking
                 elif event_type == "response.reasoning_summary_text.delta":
-                    yield StreamChunk(type="thinking", text=event.delta)
+                    yield StreamChunk(type="thinking", text=safe_utf8_str(event.delta))
 
                 # Response completed
                 elif event_type == "response.completed":
@@ -351,7 +357,9 @@ class CodexAdapter(APIAdapter):
                         err = event.response.error
                         if err:
                             error_msg = getattr(err, "message", str(err))
-                    yield StreamChunk(type="error", error=error_msg or "Response failed")
+                    yield StreamChunk(
+                        type="error", error=safe_utf8_str(error_msg or "Response failed")
+                    )
 
                 elif event_type == "response.incomplete":
                     yield StreamChunk(type="error", error="Response incomplete (max output tokens or content filter)")
@@ -362,7 +370,9 @@ class CodexAdapter(APIAdapter):
                     if hasattr(event, "error"):
                         err = event.error
                         error_msg = getattr(err, "message", str(err)) if err else ""
-                    yield StreamChunk(type="error", error=error_msg or "Unknown error")
+                    yield StreamChunk(
+                        type="error", error=safe_utf8_str(error_msg or "Unknown error")
+                    )
         except json.JSONDecodeError:
             if emitted_stream_event:
                 raise

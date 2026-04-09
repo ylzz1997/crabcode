@@ -10,6 +10,7 @@ import anthropic
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
 from crabcode_core.types.config import ApiConfig
+from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
     ContentBlock,
     Message,
@@ -59,7 +60,7 @@ def _messages_to_api(messages: list[Message]) -> list[dict[str, Any]]:
         if blocks:
             result.append({"role": msg.role.value, "content": blocks})
 
-    return result
+    return safe_utf8_json_tree(result)
 
 
 def _tools_to_api(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -72,7 +73,7 @@ def _tools_to_api(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "input_schema": tool.get("input_schema", {"type": "object", "properties": {}}),
         }
         result.append(api_tool)
-    return result
+    return safe_utf8_json_tree(result)
 
 
 class AnthropicAdapter(APIAdapter):
@@ -107,13 +108,15 @@ class AnthropicAdapter(APIAdapter):
                 "No model configured. Set api.model in ~/.crabcode/settings.json or use the -m flag."
             )
 
-        system_blocks = [{"type": "text", "text": s} for s in system if s]
+        system_blocks = safe_utf8_json_tree(
+            [{"type": "text", "text": s} for s in system if s]
+        )
 
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": config.max_tokens,
             "system": system_blocks,
-            "messages": _messages_to_api(messages)
+            "messages": _messages_to_api(messages),
         }
 
         api_tools = _tools_to_api(tools)
@@ -158,9 +161,11 @@ class AnthropicAdapter(APIAdapter):
                     delta = event.delta
                     if hasattr(delta, "type"):
                         if delta.type == "text_delta":
-                            yield StreamChunk(type="text", text=delta.text)
+                            yield StreamChunk(type="text", text=safe_utf8_str(delta.text))
                         elif delta.type == "thinking_delta":
-                            yield StreamChunk(type="thinking", text=delta.thinking)
+                            yield StreamChunk(
+                                type="thinking", text=safe_utf8_str(delta.thinking)
+                            )
                         elif delta.type == "input_json_delta":
                             tool_input_buffer += delta.partial_json
                             yield StreamChunk(

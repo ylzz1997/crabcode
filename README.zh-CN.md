@@ -168,6 +168,7 @@ crabcode --model-profile smart    # 简写：-M smart
 | `Grep` | 读 | 用正则表达式搜索文件内容 |
 | `Lint` | 读 | 运行代码检查器和类型检查器 |
 | `Memory` | 写 | 存储和读取持久化笔记 |
+| `AskUser` | 读 | 向用户展示选项并等待选择 |
 
 ### Lint（代码检查）
 
@@ -192,6 +193,38 @@ crabcode --model-profile smart    # 简写：-M smart
 - **项目记忆** — 存储在 `<项目>/.crabcode/memory.json`
 
 记忆内容会在每次对话开始时自动注入。agent 用它来记住用户偏好、常用约定、项目专有知识，无需每次重新说明。
+
+### AskUser（用户选择）
+
+`AskUser` 工具让 agent 在拿不准下一步时，向用户展示选项并等待选择。
+
+**agent 调用该工具时**，终端会弹出交互式选择界面：
+
+```
+  你更倾向哪种方案？
+
+    ○ 重构为 class
+  ❯ ● 添加错误处理
+    ○ 先写测试
+
+  ↑↓ 导航 · enter 选择 · esc 取消
+```
+
+- **单选**（默认）：↑↓ 移动光标，Enter 确认
+- **多选**（`multiple: true`）：Space 切换勾选，Enter 确认
+- **Esc** / **Ctrl+C**：取消选择
+
+**适用场景：**
+- 存在多种可行方案，需要用户偏好决定
+- 做重大改动前确认方向
+- 用户可能掌握 agent 不了解的上下文
+
+**不适用场景：**
+- 答案显而易见，或存在明确最优解
+- 用户已经告诉你要怎么做
+- 只需要简单的是/否确认（agent 直接文字询问即可）
+
+在 **管道模式**（非交互）下，会自动选择第一个选项。
 
 ### Diff 显示
 
@@ -676,7 +709,7 @@ crabcode/
 │   │   ├── types/              # Pydantic 类型定义（Message、Tool、Event、Config）
 │   │   ├── api/                # API 适配器（Anthropic、OpenAI、Router）
 │   │   ├── query/              # Agent 对话循环
-│   │   ├── tools/              # 内置工具（Bash、Read、Edit、Write、Grep、Glob、Lint、Memory）
+│   │   ├── tools/              # 内置工具（Bash、Read、Edit、Write、Grep、Glob、Lint、Memory、AskUser）
 │   │   ├── skills/             # Skill 加载 + 自动触发匹配（SkillDefinition、load_skills、auto_match）
 │   │   ├── prompts/            # 系统提示词构造
 │   │   ├── mcp/                # MCP 服务器集成

@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator
 
 from crabcode_core.types.config import CrabCodeSettings
 from crabcode_core.types.event import (
+    ChoiceResponseEvent,
     CompactEvent,
     CoreEvent,
     PermissionResponseEvent,
@@ -37,6 +38,7 @@ class CoreSession:
         self.tools: list[Tool] = tools or []
         self.session_id: str = ""
         self._permission_queue: asyncio.Queue[PermissionResponseEvent] = asyncio.Queue()
+        self._choice_queue: asyncio.Queue[ChoiceResponseEvent] = asyncio.Queue()
         self._abort_controller: asyncio.Event = asyncio.Event()
 
         self.skills: list = []
@@ -358,6 +360,8 @@ class CoreSession:
             messages=self.messages,
             session_id=self.session_id,
             env=self.settings.env,
+            choice_queue=self._choice_queue,
+            tool_event_queue=asyncio.Queue(),
         )
 
         params = QueryParams(
@@ -392,6 +396,9 @@ class CoreSession:
 
     async def respond_permission(self, response: PermissionResponseEvent) -> None:
         await self._permission_queue.put(response)
+
+    async def respond_choice(self, response: ChoiceResponseEvent) -> None:
+        await self._choice_queue.put(response)
 
     async def interrupt(self) -> None:
         self._abort_controller.set()

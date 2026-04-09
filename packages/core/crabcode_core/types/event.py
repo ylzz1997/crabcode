@@ -81,6 +81,23 @@ class TurnCompleteEvent:
 
 
 @dataclass
+class ChoiceRequestEvent:
+    """Core is requesting the user to make a choice from a list of options."""
+    tool_use_id: str
+    question: str
+    options: list[str]
+    multiple: bool = False
+
+
+@dataclass
+class ChoiceResponseEvent:
+    """Frontend's response to a choice request."""
+    tool_use_id: str
+    selected: list[str]
+    cancelled: bool = False
+
+
+@dataclass
 class StreamModeEvent:
     """Signals a phase transition in the streaming lifecycle.
 
@@ -98,6 +115,7 @@ CoreEvent = Union[
     ToolUseEvent,
     ToolResultEvent,
     PermissionRequestEvent,
+    ChoiceRequestEvent,
     CompactEvent,
     ErrorEvent,
     TurnCompleteEvent,

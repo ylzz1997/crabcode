@@ -168,6 +168,7 @@ Switching does not clear conversation history — you can mix models freely with
 | `Grep` | read | Search file contents with regex |
 | `Lint` | read | Run linters and type-checkers |
 | `Memory` | write | Store and retrieve persistent notes |
+| `AskUser` | read | Present choices to the user and wait for selection |
 
 ### Lint
 
@@ -192,6 +193,38 @@ The `Memory` tool gives the agent persistent notes that survive across sessions.
 - **Project memory** — stored in `<project>/.crabcode/memory.json`
 
 Memories are automatically injected at the top of each conversation. The agent uses them to remember user preferences, recurring conventions, and project-specific facts without re-explaining them every session.
+
+### AskUser
+
+The `AskUser` tool lets the agent present a question with multiple options and wait for the user's selection. This is useful when the agent is unsure about the best approach and wants the user's input before proceeding.
+
+**When the agent calls it**, an interactive selection UI appears in the terminal:
+
+```
+  Which approach do you prefer?
+
+    ○ Refactor to a class
+  ❯ ● Add error handling
+    ○ Write tests first
+
+  ↑↓ navigate · enter select · esc cancel
+```
+
+- **Single select** (default): use ↑↓ to navigate, Enter to confirm
+- **Multi select** (`multiple: true`): use Space to toggle options, Enter to confirm
+- **Esc** / **Ctrl+C**: cancel the selection
+
+**When the agent should use it:**
+- Multiple reasonable approaches exist and user preference matters
+- Confirming direction before making significant changes
+- The user may have context the agent doesn't
+
+**When NOT to use it:**
+- The answer is obvious or there's a clear best approach
+- The user already told you what to do
+- A simple yes/no is enough (the agent can just ask in text)
+
+In **pipe mode** (non-interactive), the first option is auto-selected.
 
 ### Diff Display
 
@@ -675,7 +708,7 @@ crabcode/
 │   │   ├── types/              # Pydantic types (Message, Tool, Event, Config)
 │   │   ├── api/                # API adapters (Anthropic, OpenAI, Router)
 │   │   ├── query/              # Agentic turn loop
-│   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, Lint, Memory)
+│   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, Lint, Memory, AskUser)
 │   │   ├── skills/             # Skill loading + auto-trigger matching (SkillDefinition, load_skills, auto_match)
 │   │   ├── prompts/            # System prompt construction
 │   │   ├── mcp/                # MCP server integration

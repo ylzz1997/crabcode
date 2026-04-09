@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Coroutine
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
 from crabcode_core.types.event import (
@@ -104,14 +104,19 @@ async def _run_tools(
     assistant_msg: AssistantMessage,
     tools: list[Tool],
     context: ToolContext,
-) -> list[tuple[Message, CoreEvent]]:
-    """Execute tool calls and return (result_message, event) pairs.
+) -> AsyncGenerator[tuple[Message, CoreEvent] | CoreEvent, None]:
+    """Execute tool calls, yielding result events and mid-execution events.
 
     Runs concurrency-safe tools in parallel, others sequentially.
+    Yields either (message, ToolResultEvent) tuples or standalone
+    CoreEvents (e.g. ChoiceRequestEvent) emitted by tools during execution.
+
+    When a tool puts events into context.tool_event_queue (e.g. AskUserTool
+    emitting a ChoiceRequestEvent), this function monitors the queue concurrently
+    with the tool execution and yields those events immediately so the frontend
+    can respond (e.g. show a choice UI) while the tool is still awaiting input.
     """
     import asyncio
-
-    results: list[tuple[Message, CoreEvent]] = []
 
     safe: list[ToolUseBlock] = []
     unsafe: list[ToolUseBlock] = []
@@ -178,15 +183,67 @@ async def _run_tools(
         )
         return msg, event
 
+    async def _run_with_event_drain(
+        coro: Coroutine[Any, Any, tuple[Message, CoreEvent]],
+    ) -> AsyncGenerator[tuple[Message, CoreEvent] | CoreEvent, None]:
+        """Run a tool coroutine while draining mid-execution events from the queue.
+
+        This solves the deadlock: a tool like AskUserTool puts a ChoiceRequestEvent
+        into tool_event_queue, then blocks on choice_queue. Without draining, the
+        event would never reach the frontend and the tool would wait forever.
+        """
+        task = asyncio.ensure_future(coro)
+        queue = context.tool_event_queue
+
+        if not queue:
+            result = await task
+            yield result
+            return
+
+        while not task.done():
+            # Wait for either the tool to finish or an event to arrive
+            get_event = asyncio.ensure_future(queue.get())
+            done, _ = await asyncio.wait(
+                {task, get_event},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if get_event in done:
+                yield get_event.result()
+            else:
+                get_event.cancel()
+                try:
+                    await get_event
+                except asyncio.CancelledError:
+                    pass
+
+            # Drain any remaining events before checking task
+            while True:
+                try:
+                    yield queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+        result = task.result()
+        # Final drain
+        while True:
+            try:
+                yield queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        yield result
+
+    # Safe tools run in parallel (they shouldn't emit mid-execution events)
     if safe:
         safe_results = await asyncio.gather(*(execute_one(b) for b in safe))
-        results.extend(safe_results)
+        for item in safe_results:
+            yield item
 
+    # Unsafe tools run sequentially with event draining
     for block in unsafe:
-        result = await execute_one(block)
-        results.append(result)
-
-    return results
+        async for item in _run_with_event_drain(execute_one(block)):
+            yield item
 
 
 async def query_loop(
@@ -425,12 +482,16 @@ async def query_loop(
 
         if approved_blocks:
             yield StreamModeEvent(mode="tool-running")
-            tool_results = await _run_tools(
+            async for item in _run_tools(
                 approved_blocks, assistant_msg, params.tools, params.tool_context
-            )
-            for msg, event in tool_results:
-                messages.append(msg)
-                yield event
+            ):
+                if isinstance(item, tuple):
+                    msg, event = item
+                    messages.append(msg)
+                    yield event
+                else:
+                    # Mid-execution event (e.g. ChoiceRequestEvent)
+                    yield item
 
         if params.max_turns and turn_count >= params.max_turns:
             yield TurnCompleteEvent(

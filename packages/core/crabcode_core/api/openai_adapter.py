@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
 from crabcode_core.types.config import ApiConfig
+from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
     Message,
     MessageRole,
@@ -78,7 +79,7 @@ def _messages_to_openai(
             elif text_parts:
                 result.append({"role": "user", "content": "".join(text_parts)})
 
-    return result
+    return safe_utf8_json_tree(result)
 
 
 def _tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -94,7 +95,7 @@ def _tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "parameters": schema,
             },
         })
-    return result
+    return safe_utf8_json_tree(result)
 
 
 class OpenAIAdapter(APIAdapter):
@@ -152,7 +153,7 @@ class OpenAIAdapter(APIAdapter):
             finish_reason = chunk.choices[0].finish_reason
 
             if delta.content:
-                yield StreamChunk(type="text", text=delta.content)
+                yield StreamChunk(type="text", text=safe_utf8_str(delta.content))
 
             if delta.tool_calls:
                 for tc in delta.tool_calls:

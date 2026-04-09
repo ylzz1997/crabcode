@@ -5,6 +5,7 @@ from crabcode_core.types.tool import Tool, ToolResult, ToolContext
 
 def get_default_tools() -> list[Tool]:
     """Return the default set of built-in tools."""
+    from crabcode_core.tools.ask_user import AskUserTool
     from crabcode_core.tools.bash import BashTool
     from crabcode_core.tools.file_read import FileReadTool
     from crabcode_core.tools.file_edit import FileEditTool
@@ -23,6 +24,7 @@ def get_default_tools() -> list[Tool]:
         GlobTool(),
         LintTool(),
         MemoryTool(),
+        AskUserTool(),
     ]
 
 

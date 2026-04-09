@@ -22,7 +22,10 @@ from crabcode_cli.banner import print_banner
 from crabcode_core.events import CoreSession
 from crabcode_core.types.config import CrabCodeSettings, DisplaySettings
 from crabcode_core.types.message import Message, MessageRole
+from crabcode_core.utf8_sanitize import safe_utf8_str
 from crabcode_core.types.event import (
+    ChoiceRequestEvent,
+    ChoiceResponseEvent,
     CompactEvent,
     ErrorEvent,
     PermissionRequestEvent,
@@ -421,6 +424,13 @@ def _tool_summary(name: str, inp: dict) -> str:
     if name == "Agent":
         prompt = inp.get("prompt", "")
         return (prompt[:100] + "…") if len(prompt) > 100 else prompt
+    if name == "AskUser":
+        question = inp.get("question", "")
+        options = inp.get("options", [])
+        lines = [question]
+        for i, opt in enumerate(options, 1):
+            lines.append(f"  {i}. {opt}")
+        return "\n".join(lines)
     import json
     raw = json.dumps(inp, ensure_ascii=False)
     return (raw[:200] + "…") if len(raw) > 200 else raw
@@ -639,6 +649,212 @@ async def _prompt_permission(
             console.print("  [dim]Please enter y, n, or a[/]")
 
 
+async def _interactive_select(question: str, options: list[str], multiple: bool = False) -> list[str]:
+    """Interactive single/multi select using keyboard navigation.
+
+    Returns a list of selected option strings.
+    """
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, HSplit, Window, FormattedTextControl
+    from prompt_toolkit.formatted_text import FormattedText
+    from prompt_toolkit.styles import Style
+
+    current = 0
+    selected: set[int] = set() if multiple else set()
+
+    def get_text() -> FormattedText:
+        fragments: list[tuple[str, str]] = []
+        # Question
+        fragments.append(("class:question", f"  {safe_utf8_str(question)}\n\n"))
+
+        for i, opt in enumerate(options):
+            if multiple:
+                checked = "◉" if i in selected else "○"
+            else:
+                checked = "●" if i == current and not selected else "○"
+                if i in selected:
+                    checked = "◉"
+
+            if i == current:
+                prefix = f"  ❯ {checked} "
+                style = "class:selected"
+            else:
+                prefix = f"    {checked} "
+                style = "class:option"
+
+            fragments.append((style, f"{prefix}{safe_utf8_str(opt)}\n"))
+
+        fragments.append(("", "\n"))
+        if multiple:
+            hint = "  ↑↓ navigate · space select · enter confirm · esc cancel"
+        else:
+            hint = "  ↑↓ navigate · enter select · esc cancel"
+        fragments.append(("class:hint", hint))
+        return fragments
+
+    class SelectControl(FormattedTextControl):
+        def __init__(self) -> None:
+            super().__init__(text=get_text, focusable=True)
+
+        def move_cursor_down(self) -> None:
+            nonlocal current
+            current = min(current + 1, len(options) - 1)
+
+        def move_cursor_up(self) -> None:
+            nonlocal current
+            current = max(current - 1, 0)
+
+    control = SelectControl()
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _up(event: Any) -> None:
+        control.move_cursor_up()
+
+    @kb.add("down")
+    def _down(event: Any) -> None:
+        control.move_cursor_down()
+
+    @kb.add("j")
+    def _j(event: Any) -> None:
+        control.move_cursor_up()
+
+    @kb.add("k")
+    def _k(event: Any) -> None:
+        control.move_cursor_down()
+
+    if multiple:
+        @kb.add("space")
+        def _toggle(event: Any) -> None:
+            if current in selected:
+                selected.discard(current)
+            else:
+                selected.add(current)
+
+    @kb.add("enter")
+    def _confirm(event: Any) -> None:
+        if multiple:
+            if not selected:
+                selected.add(current)
+        else:
+            selected.clear()
+            selected.add(current)
+        event.app.exit(result=list(selected))
+
+    @kb.add("escape")
+    @kb.add("c-c")
+    def _cancel(event: Any) -> None:
+        event.app.exit(result=None)
+
+    style_dict = {
+        "question": "bold ansicyan",
+        "selected": "bold",
+        "option": "",
+        # prompt_toolkit has no "dim"; use subdued palette color for hints.
+        "hint": "ansibrightblack",
+    }
+
+    layout = Layout(HSplit([Window(content=control, height=len(options) + 4)]))
+
+    app = Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=False,
+        style=Style.from_dict(style_dict),
+    )
+
+    result = await app.run_async()
+
+    if result is None:
+        return []
+
+    return [options[i] for i in sorted(result)]
+
+
+async def _prompt_choice(
+    event: ChoiceRequestEvent,
+    session: CoreSession,
+) -> None:
+    """Present an interactive choice to the user and push response to session."""
+    loop = asyncio.get_event_loop()
+
+    if _ANSI_ENABLED and sys.stdin.isatty():
+        try:
+            selected = await _interactive_select(
+                event.question,
+                event.options,
+                event.multiple,
+            )
+        except (EOFError, KeyboardInterrupt):
+            selected = []
+
+        if not selected:
+            await session.respond_choice(
+                ChoiceResponseEvent(
+                    tool_use_id=event.tool_use_id,
+                    selected=[],
+                    cancelled=True,
+                )
+            )
+        else:
+            await session.respond_choice(
+                ChoiceResponseEvent(
+                    tool_use_id=event.tool_use_id,
+                    selected=selected,
+                )
+            )
+    else:
+        # Fallback for non-interactive terminals: numbered text selection
+        console.print(f"\n  [bold cyan]? {event.question}[/]")
+        for i, opt in enumerate(event.options, 1):
+            console.print(f"    [dim]{i}.[/] {opt}")
+
+        try:
+            default = "1"
+            raw = await loop.run_in_executor(
+                None,
+                lambda: input(f"  Enter choice [{default}]: ").strip() or default,
+            )
+        except (EOFError, KeyboardInterrupt):
+            await session.respond_choice(
+                ChoiceResponseEvent(
+                    tool_use_id=event.tool_use_id,
+                    selected=[],
+                    cancelled=True,
+                )
+            )
+            return
+
+        if event.multiple:
+            indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
+            indices = [i for i in indices if 0 <= i < len(event.options)]
+            selected = [event.options[i] for i in indices] if indices else []
+        else:
+            try:
+                idx = int(raw) - 1
+                selected = [event.options[idx]] if 0 <= idx < len(event.options) else []
+            except (ValueError, IndexError):
+                selected = []
+
+        if not selected:
+            await session.respond_choice(
+                ChoiceResponseEvent(
+                    tool_use_id=event.tool_use_id,
+                    selected=[],
+                    cancelled=True,
+                )
+            )
+        else:
+            await session.respond_choice(
+                ChoiceResponseEvent(
+                    tool_use_id=event.tool_use_id,
+                    selected=selected,
+                )
+            )
+
+
 async def run_repl(
     settings: CrabCodeSettings | None = None,
     cwd: str = ".",
@@ -845,18 +1061,23 @@ async def run_repl(
 
                 elif isinstance(event, StreamTextEvent):
                     await _stop_spinner_with_thinking()
-                    sys.stdout.write(event.text)
+                    chunk = safe_utf8_str(event.text)
+                    sys.stdout.write(chunk)
                     sys.stdout.flush()
-                    streamed_text += event.text
+                    streamed_text += chunk
                     streamed_text_for_context += event.text
 
                 elif isinstance(event, ToolUseEvent):
-                    await _stop_spinner_with_thinking()
-                    if streamed_text:
-                        sys.stdout.write("\n")
-                        sys.stdout.flush()
-                        streamed_text = ""
-                    _render_tool_use(event)
+                    if event.tool_name == "AskUser":
+                        # Skip the ToolUse panel — ChoiceRequestEvent handles display
+                        pass
+                    else:
+                        await _stop_spinner_with_thinking()
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        _render_tool_use(event)
 
                 elif isinstance(event, PermissionRequestEvent):
                     await _stop_spinner_with_thinking()
@@ -866,9 +1087,25 @@ async def run_repl(
                         streamed_text = ""
                     await _prompt_permission(event, session)
 
-                elif isinstance(event, ToolResultEvent):
+                elif isinstance(event, ChoiceRequestEvent):
                     await _stop_spinner_with_thinking()
-                    _render_tool_result(event)
+                    if streamed_text:
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        streamed_text = ""
+                    await _prompt_choice(event, session)
+
+                elif isinstance(event, ToolResultEvent):
+                    if event.tool_name == "AskUser":
+                        # Show a concise selection result instead of raw JSON
+                        await _stop_spinner_with_thinking()
+                        if event.is_error:
+                            console.print(f"  [dim yellow]↳ Selection cancelled[/]")
+                        else:
+                            console.print(f"  [dim green]↳ {safe_utf8_str(event.result)}[/]")
+                    else:
+                        await _stop_spinner_with_thinking()
+                        _render_tool_result(event)
 
                 elif isinstance(event, CompactEvent):
                     console.print(
@@ -877,7 +1114,9 @@ async def run_repl(
 
                 elif isinstance(event, ErrorEvent):
                     await _stop_spinner_with_thinking()
-                    console.print(f"\n[bold red]Error: {event.message}[/]")
+                    console.print(
+                        f"\n[bold red]Error: {safe_utf8_str(event.message)}[/]"
+                    )
                     if not event.recoverable:
                         break
 
