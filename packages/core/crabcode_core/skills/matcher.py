@@ -5,7 +5,9 @@ skill patterns and returns a list of skills to auto-invoke, in order.
 
 Pattern types:
   - paths: glob patterns used as a gating filter — when declared, the skill
-    only activates if at least one user-mentioned file path matches
+    only activates if at least one user-mentioned file path matches; if no
+    other positive pattern (pathPatterns/bashPatterns/importPatterns) is
+    declared, paths alone also acts as the positive trigger
   - pathPatterns: glob patterns matched against file paths the user is
     working with (from conversation context, git status, etc.)
   - bashPatterns: regex patterns matched against bash commands the user
@@ -44,16 +46,23 @@ def match_path_patterns(
     ``pathPatterns`` is a positive match — the skill triggers when a user-mentioned
     file path matches.  ``paths`` is a gating filter — when declared, the skill
     only triggers if at least one user-mentioned file path falls under one of the
-    declared paths.
+    declared paths.  If a skill declares ``paths`` but no ``pathPatterns``, the
+    paths gate itself serves as the positive trigger (gate passed ⇒ match).
     """
     matched: list[SkillDefinition] = []
     for skill in skills:
         # If `paths` is declared, at least one user file must match it
-        if skill.paths and not any(_fnmatch_any(fp, skill.paths) for fp in file_paths):
+        paths_gate_passed = not skill.paths or any(
+            _fnmatch_any(fp, skill.paths) for fp in file_paths
+        )
+        if not paths_gate_passed:
             continue
-        if not skill.pathPatterns:
-            continue
-        if any(_fnmatch_any(fp, skill.pathPatterns) for fp in file_paths):
+        # pathPatterns positive match
+        if skill.pathPatterns:
+            if any(_fnmatch_any(fp, skill.pathPatterns) for fp in file_paths):
+                matched.append(skill)
+        elif skill.paths:
+            # paths alone acts as positive trigger when no pathPatterns declared
             matched.append(skill)
     return matched
 
