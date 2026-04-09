@@ -13,12 +13,33 @@
 - **crabcode-cli**：终端前端。使用 `rich` + `prompt_toolkit` 实现交互式 REPL、Markdown 渲染和流式输出。
 - **crabcode-search** *(可选)*：语义代码搜索。将源文件嵌入为向量并存入 USearch 索引，为 agent 提供 `CodebaseSearch` 工具，支持自然语言代码检索。
 
+## 安装
+
+```bash
+# 基础安装（不含语义搜索）
+pip install crabcode
+
+# 含语义搜索
+pip install crabcode[search]
+
+# 含云端 Provider 支持
+pip install crabcode[bedrock]   # AWS Bedrock
+pip install crabcode[vertex]    # Google Vertex AI
+
+# 组合安装
+pip install crabcode[search,bedrock]
+```
+
+### 开发模式
+
+```bash
+# 以可编辑模式安装所有包
+pip install -e packages/core -e packages/cli -e packages/search
+```
+
 ## 快速开始
 
 ```bash
-# 以开发模式安装两个包
-pip install -e packages/core -e packages/cli
-
 # 设置 API Key
 export ANTHROPIC_API_KEY=YourKey
 

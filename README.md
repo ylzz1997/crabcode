@@ -13,12 +13,33 @@ AI coding assistant in the terminal — a Python reimplementation with a clean, 
 - **crabcode-cli**: A terminal frontend. Uses `rich` + `prompt_toolkit` for interactive REPL, Markdown rendering, and streaming output.
 - **crabcode-search** *(optional)*: Semantic codebase search. Embeds source files into a USearch vector index and exposes a `CodebaseSearch` tool that the agent can use for natural-language code lookup.
 
+## Installation
+
+```bash
+# Basic install (no semantic search)
+pip install crabcode
+
+# With semantic search
+pip install crabcode[search]
+
+# With cloud provider support
+pip install crabcode[bedrock]   # AWS Bedrock
+pip install crabcode[vertex]    # Google Vertex AI
+
+# Combine extras
+pip install crabcode[search,bedrock]
+```
+
+### Development
+
+```bash
+# Install packages in editable mode
+pip install -e packages/core -e packages/cli -e packages/search
+```
+
 ## Quick Start
 
 ```bash
-# Install both packages in development mode
-pip install -e packages/core -e packages/cli
-
 # Set your API key
 export ANTHROPIC_API_KEY=YourKey
 
