@@ -21,7 +21,7 @@ def main(
     prompt: Optional[str] = typer.Argument(None, help="Prompt to send (pipe mode)"),
     pipe: bool = typer.Option(False, "-p", "--pipe", help="Run in pipe mode (non-interactive)"),
     model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to use"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="API provider (anthropic/openai/router)"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="API provider (anthropic/openai/codex/router)"),
     base_url: Optional[str] = typer.Option(None, "--base-url", help="API base URL (for routers)"),
     api_format: Optional[str] = typer.Option(None, "--api-format", help="API format for router (anthropic/openai)"),
     model_profile: Optional[str] = typer.Option(None, "--model-profile", "-M", help="Use a named model from settings.models"),

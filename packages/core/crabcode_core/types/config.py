@@ -32,11 +32,11 @@ class McpServerConfig(BaseModel):
 
 class ApiConfig(BaseModel):
     """API backend configuration."""
-    provider: str | None = None  # anthropic | openai | bedrock | vertex | router
+    provider: str | None = None  # anthropic | openai | codex | bedrock | vertex | router
     model: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
-    format: str | None = None  # anthropic | openai (for routers)
+    format: str | None = None  # anthropic | openai | codex (for routers)
     max_tokens: int = 16384
     thinking_enabled: bool = True
     thinking_budget: int = 10000

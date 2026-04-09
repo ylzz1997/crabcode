@@ -41,11 +41,18 @@ crabcode --provider anthropic --model claude-sonnet-4-20250514
 crabcode --provider openai --model gpt-4o
 export OPENAI_API_KEY=YourKey
 
+# OpenAI Codex / Responses API (o-series, codex-mini, etc.)
+crabcode --provider codex --model codex-mini-latest
+export OPENAI_API_KEY=YourKey
+
 # Third-party router (OpenAI-compatible)
 crabcode --provider router --base-url https://my-router.example.com/v1 --api-format openai
 
 # Third-party router (Anthropic-compatible)
 crabcode --provider router --base-url https://my-router.example.com --api-format anthropic
+
+# Third-party router (Codex/Responses API-compatible)
+crabcode --provider router --base-url https://my-router.example.com/v1 --api-format codex --model codex-mini-latest
 ```
 
 Or configure in `~/.crabcode/settings.json`:
@@ -70,11 +77,11 @@ Or configure in `~/.crabcode/settings.json`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `provider` | Backend: `anthropic` \| `openai` \| `router` | `anthropic` |
+| `provider` | Backend: `anthropic` \| `openai` \| `codex` \| `router` | `anthropic` |
 | `model` | Model ID | — |
 | `base_url` | Custom API endpoint (for routers or local deployments) | — |
 | `api_key_env` | **Name** of the env var that holds the API key (not the key itself) | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
-| `format` | Wire format for router mode: `anthropic` \| `openai` | — |
+| `format` | Wire format for router mode: `anthropic` \| `openai` \| `codex` | — |
 | `thinking_enabled` | Enable extended thinking (set `false` for models that don't support it) | `true` |
 | `thinking_budget` | Thinking token budget | `10000` |
 | `max_tokens` | Maximum output tokens | `16384` |

@@ -22,11 +22,17 @@ def create_adapter(config: ApiConfig) -> APIAdapter:
     elif provider == "openai":
         from crabcode_core.api.openai_adapter import OpenAIAdapter
         return OpenAIAdapter(config)
+    elif provider == "codex":
+        from crabcode_core.api.codex_adapter import CodexAdapter
+        return CodexAdapter(config)
     elif provider == "router":
         fmt = config.format or "openai"
         if fmt == "anthropic":
             from crabcode_core.api.anthropic_adapter import AnthropicAdapter
             return AnthropicAdapter(config)
+        elif fmt == "codex":
+            from crabcode_core.api.codex_adapter import CodexAdapter
+            return CodexAdapter(config)
         else:
             from crabcode_core.api.openai_adapter import OpenAIAdapter
             return OpenAIAdapter(config)

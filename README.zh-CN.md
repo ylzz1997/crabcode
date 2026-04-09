@@ -41,11 +41,18 @@ crabcode --provider anthropic --model claude-sonnet-4-20250514
 crabcode --provider openai --model gpt-4o
 export OPENAI_API_KEY=YourKey
 
+# OpenAI Codex / Responses API（o-series、codex-mini 等）
+crabcode --provider codex --model codex-mini-latest
+export OPENAI_API_KEY=YourKey
+
 # 第三方转发（OpenAI 兼容格式）
 crabcode --provider router --base-url https://my-router.example.com/v1 --api-format openai
 
 # 第三方转发（Anthropic 兼容格式）
 crabcode --provider router --base-url https://my-router.example.com --api-format anthropic
+
+# 第三方转发（Codex/Responses API 兼容格式）
+crabcode --provider router --base-url https://my-router.example.com/v1 --api-format codex --model codex-mini-latest
 ```
 
 也可以在 `~/.crabcode/settings.json` 中配置：
@@ -70,11 +77,11 @@ crabcode --provider router --base-url https://my-router.example.com --api-format
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
-| `provider` | API 后端：`anthropic` \| `openai` \| `router` | `anthropic` |
+| `provider` | API 后端：`anthropic` \| `openai` \| `codex` \| `router` | `anthropic` |
 | `model` | 模型 ID | — |
 | `base_url` | 自定义 API 地址（适用于第三方转发或本地部署） | — |
 | `api_key_env` | 存放 API Key 的**环境变量名**（不是 Key 本身） | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
-| `format` | Router 模式下的协议格式：`anthropic` \| `openai` | — |
+| `format` | Router 模式下的协议格式：`anthropic` \| `openai` \| `codex` | — |
 | `thinking_enabled` | 是否启用思考模式（不支持该功能的模型需设为 `false`） | `true` |
 | `thinking_budget` | 思考 token 预算 | `10000` |
 | `max_tokens` | 最大输出 token 数 | `16384` |
