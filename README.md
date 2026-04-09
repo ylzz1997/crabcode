@@ -34,7 +34,9 @@ pip install crabcode[search,bedrock]
 
 ```bash
 # Install packages in editable mode
-pip install -e packages/core -e packages/cli -e packages/search
+pip install -e packages/core packages/cli packages/search
+# Minimal install (core + cli only, no semantic search)
+pip install -e packages/core packages/cli
 ```
 
 ## Quick Start

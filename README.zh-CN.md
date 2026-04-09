@@ -34,7 +34,9 @@ pip install crabcode[search,bedrock]
 
 ```bash
 # 以可编辑模式安装所有包
-pip install -e packages/core -e packages/cli -e packages/search
+pip install -e packages/core packages/cli packages/search
+# 最小安装
+pip install -e packages/core packages/cli
 ```
 
 ## 快速开始
