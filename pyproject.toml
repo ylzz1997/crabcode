@@ -22,6 +22,7 @@ search = [
     "sentence-transformers>=2.0.0",
     "modelscope>=1.10.0",
 ]
+browser = ["playwright>=1.48.0"]
 bedrock = ["anthropic[bedrock]>=0.40.0"]
 vertex = ["anthropic[vertex]>=0.40.0"]
 

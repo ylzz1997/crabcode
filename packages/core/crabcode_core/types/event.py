@@ -48,6 +48,8 @@ class PermissionRequestEvent:
     tool_name: str
     tool_input: dict[str, Any]
     tool_use_id: str
+    reason: str | None = None
+    permission_key: str | None = None
     agent_id: str | None = None
 
 

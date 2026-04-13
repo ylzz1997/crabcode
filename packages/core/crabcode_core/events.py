@@ -59,11 +59,14 @@ class CoreSession:
         self._agent_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
         self._agent_manager: AgentManager | None = None
         self._hook_manager: Any = None
+        self._closed = False
 
     async def initialize(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
         if self._initialized:
             return
+        if self._closed:
+            raise RuntimeError("CoreSession is closed")
 
         from crabcode_core.api import create_adapter
         from crabcode_core.config.manager import ConfigManager
@@ -268,6 +271,24 @@ class CoreSession:
         await asyncio.gather(*(t.resolve_prompt() for t in self.tools))
 
         self._initialized = True
+
+    async def close(self) -> None:
+        """Release session-scoped resources."""
+        if self._closed:
+            return
+        self._closed = True
+
+        if self._agent_manager is not None:
+            await self._agent_manager.close()
+
+        if self._mcp_manager is not None:
+            await self._mcp_manager.disconnect_all()
+
+        for tool in reversed(self.tools):
+            try:
+                await tool.close()
+            except Exception:
+                logger.warning("Failed to close tool %s", tool.name, exc_info=True)
 
     # --- Context extraction helpers for skill auto-trigger ---
 

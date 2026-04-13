@@ -19,6 +19,9 @@ AI coding assistant in the terminal — a Python reimplementation with a clean, 
 # Basic install (no semantic search)
 pip install crabcode
 
+# With browser automation
+pip install crabcode[browser]
+
 # With semantic search
 pip install crabcode[search]
 
@@ -28,6 +31,8 @@ pip install crabcode[vertex]    # Google Vertex AI
 
 # Combine extras
 pip install crabcode[search,bedrock]
+# Example: browser + search
+pip install crabcode[browser,search]
 ```
 
 ### Development
@@ -37,6 +42,10 @@ pip install crabcode[search,bedrock]
 pip install -e packages/core packages/cli packages/search
 # Minimal install (core + cli only, no semantic search)
 pip install -e packages/core packages/cli
+# Browser automation dependency
+pip install -e packages/core[browser] packages/cli
+# Install Chromium once after enabling browser support
+playwright install chromium
 ```
 
 ## Quick Start
@@ -228,6 +237,7 @@ Switching does not clear conversation history — you can mix models freely with
 | `Glob` | read | Find files by glob pattern |
 | `Grep` | read | Search file contents with regex |
 | `WebSearch` | read | Search the public web for current external information |
+| `Browser` | write | Open pages in headless Chromium, interact with DOM, extract content, and take screenshots |
 | `Lint` | read | Run linters and type-checkers |
 | `Memory` | write | Store and retrieve persistent notes |
 | `AskUser` | read | Present choices to the user and wait for selection |
@@ -317,6 +327,72 @@ Supported `provider` values:
 - `"tavily"` — require a configured API key and use Tavily only
 - `"ddg"` — use DuckDuckGo only
 
+### Browser
+
+The `Browser` tool drives a persistent Chromium session for page interaction and extraction. It runs headless by default, but `create_session` can override that with `headless: false`.
+
+- Use `WebSearch` to discover URLs or current public-web results
+- Use `Browser` when you need to open a specific page, click, fill, evaluate page-side JavaScript, or capture a screenshot
+- Install support with `pip install crabcode[browser]` and run `playwright install chromium` once
+
+Supported actions:
+
+- `create_session`
+- `goto`
+- `click`
+- `fill`
+- `press`
+- `wait_for`
+- `extract`
+- `screenshot`
+- `evaluate`
+- `list_tabs`
+- `new_tab`
+- `switch_tab`
+- `close_tab`
+- `close_session`
+
+Example `create_session` inputs:
+
+```json
+{ "action": "create_session" }
+```
+
+```json
+{ "action": "create_session", "headless": false }
+```
+
+Configure via `tool_settings.Browser` in `settings.json`:
+
+```json
+{
+  "tool_settings": {
+    "Browser": {
+      "enabled": true,
+      "default_browser": "chromium",
+      "headless": true,
+      "default_timeout_seconds": 15,
+      "max_sessions": 3,
+      "launch_options": {},
+      "context_options": {},
+      "storage_dir": ".crabcode/browser",
+      "block_downloads": true,
+      "allowed_domains": [],
+      "blocked_domains": []
+    }
+  }
+}
+```
+
+Default permission behavior:
+
+- `create_session` and `goto` ask for confirmation
+- `fill`, `press`, and `evaluate` ask for confirmation
+- `extract`, `wait_for`, `list_tabs`, `switch_tab`, `close_tab`, and `close_session` are allowed by default
+- `screenshot` is allowed by default inside the working directory and asks when writing outside it
+
+`headless` in `tool_settings.Browser` is the session default. The tool input can override it per session when calling `create_session`.
+
 ### Diff Display
 
 When the agent edits a file via `StrReplace` or `Write`, the terminal shows a compact inline diff:
@@ -374,6 +450,7 @@ Before executing any tool that modifies files or runs shell commands, CrabCode p
 - **y** — allow this one call
 - **n** — deny; the model is told the call was rejected and should not retry it
 - **a** — always allow calls to this tool for the rest of the session (no more prompts)
+  For `Browser`, this is scoped to the current action, such as `Browser:goto` or `Browser:fill`.
 
 Read-only tools (`Read`, `Glob`, `Grep`) are always allowed without prompting. `WebSearch` is the exception: it is read-only, but still asks for confirmation before each network request.
 
@@ -606,6 +683,21 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
 | `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
 | `stream_send_input_output` | Stream live output after `/agent-send` in REPL; set `false` to send input silently | `false` |
 
+Example browser-focused sub-agent profile:
+
+```json
+{
+  "agent": {
+    "types": {
+      "browser": {
+        "allowed_tools": ["Browser", "WebSearch", "Read", "Glob", "Grep"],
+        "prompt": "You are a browser-focused sub-agent. Reuse any existing session_id when possible and avoid creating duplicate browser sessions."
+      }
+    }
+  }
+}
+```
+
 ## Display Settings
 
 The number of lines shown for tool results in the terminal can be configured via the `display` field in `settings.json`:
@@ -642,6 +734,7 @@ Built-in tool line limits:
 | `Read` | `80` |
 | `Lint` | `60` |
 | `WebSearch` | `50` |
+| `Browser` | `60` |
 | `CodebaseSearch` | `50` |
 | Others | `50` (i.e. `default_max_lines`) |
 

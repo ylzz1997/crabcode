@@ -77,6 +77,7 @@ class DisplaySettings(BaseModel):
         "Read": 80,
         "Lint": 60,
         "WebSearch": 50,
+        "Browser": 60,
         "CodebaseSearch": 50,
     }
 

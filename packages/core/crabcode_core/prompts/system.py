@@ -152,6 +152,7 @@ def _get_using_tools_section(enabled_tools: list[str]) -> str:
     todo = TOOL_NAMES["todo_write"]
     codebase_search = TOOL_NAMES["codebase_search"]
     web_search = TOOL_NAMES["web_search"]
+    browser = TOOL_NAMES["browser"]
 
     provided_tool_subitems = [
         f"To read files use {read} instead of cat, head, tail, or sed",
@@ -172,6 +173,10 @@ def _get_using_tools_section(enabled_tools: list[str]) -> str:
     if web_search in enabled_tools:
         provided_tool_subitems.append(
             f"To search the public web for current external information, use {web_search} instead of shell-based web access. Use it when you need recent facts, external docs, or search results outside the repo."
+        )
+    if browser in enabled_tools:
+        provided_tool_subitems.append(
+            f"Use {browser} when you need to open a page in a real browser, interact with the DOM, fill forms, evaluate page-side JavaScript, or take screenshots. Prefer {web_search} for discovering URLs or web search results."
         )
 
     write_vs_print_subitems = [
@@ -242,6 +247,7 @@ def _get_session_guidance_section(enabled_tools: list[str]) -> str | None:
     skill = TOOL_NAMES["skill"]
     codebase_search = TOOL_NAMES["codebase_search"]
     web_search = TOOL_NAMES["web_search"]
+    browser = TOOL_NAMES["browser"]
 
     items: list[str | None] = [
         f"If you do not understand why the user has denied a tool call, use the {ask_tool} to ask them." if ask_tool in enabled_tools else None,
@@ -251,6 +257,7 @@ def _get_session_guidance_section(enabled_tools: list[str]) -> str | None:
         f"/<skill-name> (e.g. /commit) is shorthand for users to invoke a skill. When the user types a slash command that matches a skill name, use the {skill} tool to execute it. IMPORTANT: Only use {skill} for skills listed in its description — do not guess or use built-in commands." if skill in enabled_tools else None,
         f"Use {codebase_search} when you need to find code by semantic meaning, purpose, or behavior — for example: 'where is authentication handled', 'how does the build system work', or 'find the payment processing logic'. Use {glob} or {grep} when you know the exact file name or text pattern you are looking for." if codebase_search in enabled_tools else None,
         f"Use {web_search} when the task depends on current external information from the public web. Prefer it over trying to search the web through shell commands." if web_search in enabled_tools else None,
+        f"Use {browser} when the task requires opening a specific page, interacting with it, or capturing page state. Create a browser session once and reuse the returned session_id across follow-up actions." if browser in enabled_tools else None,
     ]
     filtered = [i for i in items if i is not None]
     if not filtered:

@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = ["playwright>=1.48.0"]
 bedrock = ["anthropic[bedrock]>=0.40.0"]
 vertex = ["anthropic[vertex]>=0.40.0"]
 

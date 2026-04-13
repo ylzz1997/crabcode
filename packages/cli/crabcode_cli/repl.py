@@ -454,6 +454,25 @@ def _tool_summary(name: str, inp: dict) -> str:
     if name == "Agent":
         prompt = inp.get("prompt", "")
         return (prompt[:100] + "…") if len(prompt) > 100 else prompt
+    if name == "Browser":
+        action = inp.get("action", "")
+        session_id = inp.get("session_id", "")
+        selector = inp.get("selector", "")
+        url = inp.get("url", "")
+        text = inp.get("text", "")
+        path = inp.get("path", "")
+        lines = [f"action: {action}"]
+        if session_id:
+            lines.append(f"session_id: {session_id}")
+        if url:
+            lines.append(f"url: {url}")
+        if selector:
+            lines.append(f"selector: {selector}")
+        if text:
+            lines.append(f"text: {text[:120]}")
+        if path:
+            lines.append(f"path: {path}")
+        return "\n".join(lines)
     if name == "AskUser":
         question = inp.get("question", "")
         options = inp.get("options", [])
@@ -652,6 +671,8 @@ async def _prompt_permission(
 ) -> None:
     """Prompt the user for tool permission and push response to session."""
     summary = _tool_summary(event.tool_name, event.tool_input)
+    if event.reason:
+        summary = f"{summary}\n\nReason: {event.reason}"
     console.print(
         Panel(
             Text(summary, style="dim"),
@@ -1050,248 +1071,258 @@ async def run_repl(
 
     session.on_tool_event = _on_tool_event
 
-    if resume_session_id:
-        await session.initialize()
-        ok = await session.resume(resume_session_id)
-        if ok:
-            console.print(
-                f"  [dim]Resumed session [bold]{resume_session_id[:8]}…[/bold] "
-                f"({len(session.messages)} messages)[/]"
-            )
-            console.print()
-            _render_session_history(session.messages)
+    try:
+        if resume_session_id:
+            await session.initialize()
+            ok = await session.resume(resume_session_id)
+            if ok:
+                console.print(
+                    f"  [dim]Resumed session [bold]{resume_session_id[:8]}…[/bold] "
+                    f"({len(session.messages)} messages)[/]"
+                )
+                console.print()
+                _render_session_history(session.messages)
+            else:
+                console.print(
+                    f"  [bold yellow]Warning:[/] session {resume_session_id[:8]}… not found, starting fresh.",
+                    style="dim",
+                )
+                console.print()
         else:
-            console.print(
-                f"  [bold yellow]Warning:[/] session {resume_session_id[:8]}… not found, starting fresh.",
-                style="dim",
-            )
-            console.print()
-    else:
-        # Lazy initialization: session.initialize() is called by send_message().
-        # Avoid background startup races that can garble terminal output and
-        # block shutdown when Ctrl+C happens during native model loading.
-        pass
+            pass
 
-    prompt_session: PromptSession[str] = PromptSession(
-        history=InMemoryHistory(),
-        completer=_CrabCodeCompleter(session),
-        complete_while_typing=True,
-    )
+        prompt_session: PromptSession[str] = PromptSession(
+            history=InMemoryHistory(),
+            completer=_CrabCodeCompleter(session),
+            complete_while_typing=True,
+        )
 
-    ctrl_c_exit = _CtrlCDoubleExit()
+        ctrl_c_exit = _CtrlCDoubleExit()
 
-    while True:
-        try:
-            user_input = await prompt_session.prompt_async(
-                HTML("<b><ansicyan>❯ </ansicyan></b>"),
-            )
-        except EOFError:
-            console.print("\nGoodbye!", style="dim")
+        while True:
             try:
-                await session.interrupt()
-            except Exception:
-                logger.debug("Failed to interrupt session during EOF shutdown", exc_info=True)
-            _force_exit()
-        except _REPL_INTERRUPT_EXCS:
-            if ctrl_c_exit.should_exit_now():
+                user_input = await prompt_session.prompt_async(
+                    HTML("<b><ansicyan>❯ </ansicyan></b>"),
+                )
+            except EOFError:
                 console.print("\nGoodbye!", style="dim")
                 try:
                     await session.interrupt()
                 except Exception:
-                    logger.debug("Failed to interrupt session during forced exit", exc_info=True)
+                    logger.debug("Failed to interrupt session during EOF shutdown", exc_info=True)
+                try:
+                    await session.close()
+                except Exception:
+                    logger.debug("Failed to close session during EOF shutdown", exc_info=True)
                 _force_exit()
-            _clear_sigint_cancel()
-            try:
-                await session.interrupt()
-            except Exception:
-                logger.debug("Failed to interrupt session after Ctrl+C", exc_info=True)
-            console.print(
-                f"\n[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
-            )
-            continue
-
-        user_input = user_input.strip()
-        if not user_input:
-            continue
-
-        ctrl_c_exit.clear()
-
-        if user_input.startswith("/"):
-            result = await _handle_command(user_input, session, settings)
-            if result is False:
-                break
-            if isinstance(result, str):
-                user_input = result
-            else:
+            except _REPL_INTERRUPT_EXCS:
+                if ctrl_c_exit.should_exit_now():
+                    console.print("\nGoodbye!", style="dim")
+                    try:
+                        await session.interrupt()
+                    except Exception:
+                        logger.debug("Failed to interrupt session during forced exit", exc_info=True)
+                    try:
+                        await session.close()
+                    except Exception:
+                        logger.debug("Failed to close session during forced exit", exc_info=True)
+                    _force_exit()
+                _clear_sigint_cancel()
+                try:
+                    await session.interrupt()
+                except Exception:
+                    logger.debug("Failed to interrupt session after Ctrl+C", exc_info=True)
+                console.print(
+                    f"\n[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
+                )
                 continue
 
-        if user_input.startswith("! "):
-            cmd = user_input[2:]
-            import subprocess
-            result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=False)
-            continue
+            user_input = user_input.strip()
+            if not user_input:
+                continue
 
-        streamed_text = ""
-        streamed_text_for_context = ""
-        spinner = _Spinner(ansi_enabled=_ANSI_ENABLED)
-        thinking_start: float = 0.0
-        is_thinking = False
+            ctrl_c_exit.clear()
 
-        async def _stop_spinner_with_thinking() -> None:
-            nonlocal is_thinking
-            if not spinner.is_running:
-                return
-            await spinner.stop()
-            if is_thinking and thinking_start:
-                duration = time.monotonic() - thinking_start
-                if duration >= 1:
-                    console.print(
-                        f"  [dim italic]∴ Thought for {max(1, round(duration))}s[/]"
-                    )
+            if user_input.startswith("/"):
+                result = await _handle_command(user_input, session, settings)
+                if result is False:
+                    break
+                if isinstance(result, str):
+                    user_input = result
+                else:
+                    continue
+
+            if user_input.startswith("! "):
+                cmd = user_input[2:]
+                import subprocess
+                result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=False)
+                continue
+
+            streamed_text = ""
+            streamed_text_for_context = ""
+            spinner = _Spinner(ansi_enabled=_ANSI_ENABLED)
+            thinking_start: float = 0.0
             is_thinking = False
 
-        try:
-            async for event in session.send_message(user_input):
-                if isinstance(event, StreamModeEvent):
-                    if event.mode == "requesting":
-                        spinner.start()
-                        is_thinking = False
-                        thinking_start = 0.0
-                    elif event.mode == "thinking":
-                        thinking_start = time.monotonic()
-                        is_thinking = True
-                        spinner.update("Thinking")
-                    elif event.mode == "responding":
-                        await _stop_spinner_with_thinking()
-                    elif event.mode == "tool-input":
-                        await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
-                        spinner.start("Generating")
-                    elif event.mode == "tool-running":
-                        await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
-                        spinner.start("Running")
-
-                elif isinstance(event, ThinkingEvent):
-                    pass
-
-                elif isinstance(event, StreamTextEvent):
-                    await _stop_spinner_with_thinking()
-                    chunk = safe_utf8_str(event.text)
-                    sys.stdout.write(chunk)
-                    sys.stdout.flush()
-                    streamed_text += chunk
-                    streamed_text_for_context += event.text
-
-                elif isinstance(event, ToolUseEvent):
-                    if event.tool_name == "AskUser":
-                        # Skip the ToolUse panel — ChoiceRequestEvent handles display
-                        pass
-                    else:
-                        await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
-                        _render_tool_use(event)
-
-                elif isinstance(event, AgentStateEvent):
-                    style = {
-                        "queued": "dim",
-                        "running": "cyan",
-                        "completed": "green",
-                        "failed": "red",
-                        "cancelled": "yellow",
-                    }.get(event.status, "dim")
-                    console.print(
-                        f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
-                    )
-
-                elif isinstance(event, AgentOutputEvent):
-                    if event.stream == "tool_use" and event.tool_name:
+            async def _stop_spinner_with_thinking() -> None:
+                nonlocal is_thinking
+                if not spinner.is_running:
+                    return
+                await spinner.stop()
+                if is_thinking and thinking_start:
+                    duration = time.monotonic() - thinking_start
+                    if duration >= 1:
                         console.print(
-                            f"  [dim cyan]↳ agent {event.agent_id[:8]} using {event.tool_name}[/]"
+                            f"  [dim italic]∴ Thought for {max(1, round(duration))}s[/]"
+                        )
+                is_thinking = False
+
+            try:
+                async for event in session.send_message(user_input):
+                    if isinstance(event, StreamModeEvent):
+                        if event.mode == "requesting":
+                            spinner.start()
+                            is_thinking = False
+                            thinking_start = 0.0
+                        elif event.mode == "thinking":
+                            thinking_start = time.monotonic()
+                            is_thinking = True
+                            spinner.update("Thinking")
+                        elif event.mode == "responding":
+                            await _stop_spinner_with_thinking()
+                        elif event.mode == "tool-input":
+                            await _stop_spinner_with_thinking()
+                            if streamed_text:
+                                sys.stdout.write("\n")
+                                sys.stdout.flush()
+                                streamed_text = ""
+                            spinner.start("Generating")
+                        elif event.mode == "tool-running":
+                            await _stop_spinner_with_thinking()
+                            if streamed_text:
+                                sys.stdout.write("\n")
+                                sys.stdout.flush()
+                                streamed_text = ""
+                            spinner.start("Running")
+
+                    elif isinstance(event, ThinkingEvent):
+                        pass
+
+                    elif isinstance(event, StreamTextEvent):
+                        await _stop_spinner_with_thinking()
+                        chunk = safe_utf8_str(event.text)
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+                        streamed_text += chunk
+                        streamed_text_for_context += event.text
+
+                    elif isinstance(event, ToolUseEvent):
+                        if event.tool_name == "AskUser":
+                            pass
+                        else:
+                            await _stop_spinner_with_thinking()
+                            if streamed_text:
+                                sys.stdout.write("\n")
+                                sys.stdout.flush()
+                                streamed_text = ""
+                            _render_tool_use(event)
+
+                    elif isinstance(event, AgentStateEvent):
+                        style = {
+                            "queued": "dim",
+                            "running": "cyan",
+                            "completed": "green",
+                            "failed": "red",
+                            "cancelled": "yellow",
+                        }.get(event.status, "dim")
+                        console.print(
+                            f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
                         )
 
-                elif isinstance(event, PermissionRequestEvent):
-                    await _stop_spinner_with_thinking()
-                    if streamed_text:
-                        sys.stdout.write("\n")
-                        sys.stdout.flush()
-                        streamed_text = ""
-                    await _prompt_permission(event, session)
+                    elif isinstance(event, AgentOutputEvent):
+                        if event.stream == "tool_use" and event.tool_name:
+                            console.print(
+                                f"  [dim cyan]↳ agent {event.agent_id[:8]} using {event.tool_name}[/]"
+                            )
 
-                elif isinstance(event, ChoiceRequestEvent):
-                    await _stop_spinner_with_thinking()
-                    if streamed_text:
-                        sys.stdout.write("\n")
-                        sys.stdout.flush()
-                        streamed_text = ""
-                    await _prompt_choice(event, session)
-
-                elif isinstance(event, ToolResultEvent):
-                    if event.tool_name == "AskUser":
-                        # Show a concise selection result instead of raw JSON
+                    elif isinstance(event, PermissionRequestEvent):
                         await _stop_spinner_with_thinking()
-                        if event.is_error:
-                            console.print(f"  [dim yellow]↳ Selection cancelled[/]")
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        await _prompt_permission(event, session)
+
+                    elif isinstance(event, ChoiceRequestEvent):
+                        await _stop_spinner_with_thinking()
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        await _prompt_choice(event, session)
+
+                    elif isinstance(event, ToolResultEvent):
+                        if event.tool_name == "AskUser":
+                            await _stop_spinner_with_thinking()
+                            if event.is_error:
+                                console.print("  [dim yellow]↳ Selection cancelled[/]")
+                            else:
+                                console.print(f"  [dim green]↳ {safe_utf8_str(event.result)}[/]")
                         else:
-                            console.print(f"  [dim green]↳ {safe_utf8_str(event.result)}[/]")
-                    else:
+                            await _stop_spinner_with_thinking()
+                            _render_tool_result(event)
+
+                    elif isinstance(event, CompactEvent):
+                        console.print(
+                            f"\n[dim italic]Conversation compacted: {event.summary}[/]"
+                        )
+
+                    elif isinstance(event, ErrorEvent):
                         await _stop_spinner_with_thinking()
-                        _render_tool_result(event)
+                        console.print(
+                            f"\n[bold red]Error: {safe_utf8_str(event.message)}[/]"
+                        )
+                        if not event.recoverable:
+                            break
 
-                elif isinstance(event, CompactEvent):
-                    console.print(
-                        f"\n[dim italic]Conversation compacted: {event.summary}[/]"
+                    elif isinstance(event, TurnCompleteEvent):
+                        await _stop_spinner_with_thinking()
+
+            except _REPL_INTERRUPT_EXCS:
+                await spinner.stop()
+                if ctrl_c_exit.should_exit_now():
+                    console.print("\nGoodbye!", style="dim")
+                    try:
+                        await session.interrupt()
+                    except Exception:
+                        logger.debug("Failed to interrupt session while streaming on exit", exc_info=True)
+                    _persist_partial_assistant_for_interrupt(
+                        session, streamed_text_for_context
                     )
-
-                elif isinstance(event, ErrorEvent):
-                    await _stop_spinner_with_thinking()
-                    console.print(
-                        f"\n[bold red]Error: {safe_utf8_str(event.message)}[/]"
-                    )
-                    if not event.recoverable:
-                        break
-
-                elif isinstance(event, TurnCompleteEvent):
-                    await _stop_spinner_with_thinking()
-
-        except _REPL_INTERRUPT_EXCS:
-            await spinner.stop()
-            if ctrl_c_exit.should_exit_now():
-                console.print("\nGoodbye!", style="dim")
+                    try:
+                        await session.close()
+                    except Exception:
+                        logger.debug("Failed to close session while streaming on exit", exc_info=True)
+                    _force_exit()
+                _clear_sigint_cancel()
                 try:
                     await session.interrupt()
                 except Exception:
-                    logger.debug("Failed to interrupt session while streaming on exit", exc_info=True)
+                    logger.debug("Failed to interrupt session while streaming", exc_info=True)
                 _persist_partial_assistant_for_interrupt(
                     session, streamed_text_for_context
                 )
-                _force_exit()
-            _clear_sigint_cancel()
-            try:
-                await session.interrupt()
-            except Exception:
-                logger.debug("Failed to interrupt session while streaming", exc_info=True)
-            _persist_partial_assistant_for_interrupt(
-                session, streamed_text_for_context
-            )
-            console.print(
-                f"[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
-            )
+                console.print(
+                    f"[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
+                )
 
-        if streamed_text:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+            if streamed_text:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
-        console.print()
+            console.print()
+    finally:
+        await session.close()
 
 
 async def _handle_command(

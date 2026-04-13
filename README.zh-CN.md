@@ -19,6 +19,9 @@
 # 基础安装（不含语义搜索）
 pip install crabcode
 
+# 含浏览器自动化
+pip install crabcode[browser]
+
 # 含语义搜索
 pip install crabcode[search]
 
@@ -28,6 +31,8 @@ pip install crabcode[vertex]    # Google Vertex AI
 
 # 组合安装
 pip install crabcode[search,bedrock]
+# 示例：浏览器 + 搜索
+pip install crabcode[browser,search]
 ```
 
 ### 开发模式
@@ -37,6 +42,10 @@ pip install crabcode[search,bedrock]
 pip install -e packages/core packages/cli packages/search
 # 最小安装
 pip install -e packages/core packages/cli
+# 含浏览器自动化依赖
+pip install -e packages/core[browser] packages/cli
+# 启用后首次安装 Chromium
+playwright install chromium
 ```
 
 ## 快速开始
@@ -228,6 +237,7 @@ crabcode --model-profile smart    # 简写：-M smart
 | `Glob` | 读 | 按 glob 模式查找文件 |
 | `Grep` | 读 | 用正则表达式搜索文件内容 |
 | `WebSearch` | 读 | 搜索公共互联网中的当前信息 |
+| `Browser` | 写 | 在无头 Chromium 中打开网页、交互 DOM、抽取内容和截图 |
 | `Lint` | 读 | 运行代码检查器和类型检查器 |
 | `Memory` | 写 | 存储和读取持久化笔记 |
 | `AskUser` | 读 | 向用户展示选项并等待选择 |
@@ -317,6 +327,72 @@ crabcode --model-profile smart    # 简写：-M smart
 - `"tavily"`：要求必须配置 API key，只使用 Tavily
 - `"ddg"`：只使用 DuckDuckGo
 
+### Browser（无头浏览器）
+
+`Browser` 工具会启动并复用一个持久的 Chromium 会话，用来打开页面、交互和抽取内容。默认无头运行，但 `create_session` 时可以用 `headless: false` 改成有头。
+
+- 用 `WebSearch` 查找 URL 或公共互联网结果
+- 需要真正打开页面、点击、填写、执行页面内 JavaScript、截图时，用 `Browser`
+- 启用方式：`pip install crabcode[browser]`，然后执行一次 `playwright install chromium`
+
+支持的 action：
+
+- `create_session`
+- `goto`
+- `click`
+- `fill`
+- `press`
+- `wait_for`
+- `extract`
+- `screenshot`
+- `evaluate`
+- `list_tabs`
+- `new_tab`
+- `switch_tab`
+- `close_tab`
+- `close_session`
+
+`create_session` 输入示例：
+
+```json
+{ "action": "create_session" }
+```
+
+```json
+{ "action": "create_session", "headless": false }
+```
+
+可通过 `settings.json` 中的 `tool_settings.Browser` 配置：
+
+```json
+{
+  "tool_settings": {
+    "Browser": {
+      "enabled": true,
+      "default_browser": "chromium",
+      "headless": true,
+      "default_timeout_seconds": 15,
+      "max_sessions": 3,
+      "launch_options": {},
+      "context_options": {},
+      "storage_dir": ".crabcode/browser",
+      "block_downloads": true,
+      "allowed_domains": [],
+      "blocked_domains": []
+    }
+  }
+}
+```
+
+默认权限行为：
+
+- `create_session` 和 `goto` 会请求确认
+- `fill`、`press`、`evaluate` 会请求确认
+- `extract`、`wait_for`、`list_tabs`、`switch_tab`、`close_tab`、`close_session` 默认允许
+- `screenshot` 在工作目录内默认允许；写到工作目录外时会请求确认
+
+`tool_settings.Browser.headless` 是默认值；调用 `create_session` 时可以通过输入参数 `headless` 按会话覆盖。
+
 ### Diff 显示
 
 通过 `StrReplace` 或 `Write` 修改文件时，终端会展示精简的内联 diff：
@@ -374,6 +450,7 @@ crabcode --model-profile smart    # 简写：-M smart
 - **y** — 允许本次调用
 - **n** — 拒绝；模型会收到"已被拒绝，不要重试"的提示
 - **a** — 本次会话内始终允许该工具，不再询问
+  对 `Browser` 来说，这里的“始终允许”按 action 生效，例如 `Browser:goto` 与 `Browser:fill` 会分别记忆。
 
 只读工具（`Read`、`Glob`、`Grep`）始终自动允许，不会弹出确认。`WebSearch` 是例外：它虽然只读，但每次网络请求前仍会请求确认。
 
@@ -607,6 +684,21 @@ name: python-lint
 | `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
 | `stream_send_input_output` | REPL 执行 `/agent-send` 后是否实时流式回显；设为 `false` 时仅发送输入，不自动回显 | `false` |
 
+浏览器型子 agent 配置示例：
+
+```json
+{
+  "agent": {
+    "types": {
+      "browser": {
+        "allowed_tools": ["Browser", "WebSearch", "Read", "Glob", "Grep"],
+        "prompt": "You are a browser-focused sub-agent. Reuse any existing session_id when possible and avoid creating duplicate browser sessions."
+      }
+    }
+  }
+}
+```
+
 ## 显示配置
 
 工具结果在终端中的显示行数可通过 `settings.json` 中的 `display` 字段配置：
@@ -643,6 +735,7 @@ name: python-lint
 | `Read` | `80` |
 | `Lint` | `60` |
 | `WebSearch` | `50` |
+| `Browser` | `60` |
 | `CodebaseSearch` | `50` |
 | 其他 | `50`（即 `default_max_lines`） |
 

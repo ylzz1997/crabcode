@@ -27,6 +27,7 @@ class PermissionManager:
         mode: PermissionMode = PermissionMode.DEFAULT,
     ):
         self.settings = settings or PermissionsSettings()
+        self._runtime_allow_keys: set[str] = set()
         if self.settings.run_everything:
             self.mode = PermissionMode.BYPASS
         else:
@@ -66,6 +67,9 @@ class PermissionManager:
                     reason=f"Requires confirmation: {rule.tool}",
                 )
 
+        if tool.uses_tool_permission_policy:
+            return PermissionResult(behavior=PermissionBehavior.ALLOW)
+
         if tool.is_read_only:
             return PermissionResult(behavior=PermissionBehavior.ALLOW)
 
@@ -80,16 +84,20 @@ class PermissionManager:
 
         return PermissionResult(behavior=PermissionBehavior.ASK)
 
-    def add_allow_rule(self, tool_name: str) -> None:
+    def add_allow_rule(self, permission_key: str) -> None:
         """Add a runtime allow rule (for 'always allow' during a session)."""
-        self.settings.allow.append(PermissionRule(tool=tool_name))
+        self._runtime_allow_keys.add(permission_key)
 
     def has_explicit_allow(
         self,
         tool: Tool,
         tool_input: dict[str, Any],
+        permission_key: str | None = None,
     ) -> bool:
         """Return whether an explicit allow rule matches this tool call."""
+        key = permission_key or tool.get_permission_key(tool_input)
+        if key in self._runtime_allow_keys:
+            return True
         for rule in self.settings.allow:
             if self._matches_rule(rule, tool, tool_input):
                 return True

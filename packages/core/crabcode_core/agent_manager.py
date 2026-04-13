@@ -339,6 +339,16 @@ class AgentManager:
         self._session_id = session_id
         self._persist()
 
+    async def close(self) -> None:
+        tasks: list[asyncio.Task[None]] = []
+        for run in self._runs.values():
+            if run.task and not run.task.done():
+                run.cancelled = True
+                run.task.cancel()
+                tasks.append(run.task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     def set_current_model(self, model_name: str | None) -> None:
         self._current_model_name = model_name
 
@@ -534,6 +544,8 @@ class AgentManager:
                     tool_name=event.tool_name,
                     tool_input=event.tool_input,
                     tool_use_id=event.tool_use_id,
+                    reason=event.reason,
+                    permission_key=event.permission_key,
                     agent_id=agent_id,
                 )
             )

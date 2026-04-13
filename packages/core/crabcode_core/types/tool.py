@@ -27,6 +27,7 @@ class PermissionResult:
     behavior: PermissionBehavior = PermissionBehavior.ALLOW
     reason: str | None = None
     updated_input: dict[str, Any] | None = None
+    permission_key: str | None = None
 
 
 @dataclass
@@ -72,6 +73,7 @@ class Tool(ABC):
     is_read_only: bool = False
     is_concurrency_safe: bool = False
     is_enabled: bool = True
+    uses_tool_permission_policy: bool = False
 
     _cached_prompt: str | None = None
     _background_task: asyncio.Task[Any] | None = None
@@ -89,6 +91,10 @@ class Tool(ABC):
     async def setup(self, context: ToolContext) -> None:
         """Called once during session init. Override for heavy initialization."""
         self._setup_context = context
+
+    async def close(self) -> None:
+        """Called during session shutdown to release resources."""
+        return None
 
     def emit_event(self, event_type: str, data: dict[str, Any] | None = None) -> None:
         """Emit a tool event (progress, ready, error, etc.)."""
@@ -117,6 +123,10 @@ class Tool(ABC):
     ) -> PermissionResult:
         """Check if the tool can be used with the given input."""
         return PermissionResult()
+
+    def get_permission_key(self, tool_input: dict[str, Any]) -> str:
+        """Return the permission key used for session-scoped allow rules."""
+        return self.name
 
     def to_api_schema(self) -> dict[str, Any]:
         """Convert to API tool schema for model requests.

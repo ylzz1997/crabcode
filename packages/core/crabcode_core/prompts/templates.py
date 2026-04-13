@@ -52,6 +52,7 @@ TOOL_NAMES = {
     "agent": "Agent",
     "web_fetch": "WebFetch",
     "web_search": "WebSearch",
+    "browser": "Browser",
     "notebook_edit": "NotebookEdit",
     "todo_write": "TodoWrite",
     "ask_user": "AskUserQuestion",
