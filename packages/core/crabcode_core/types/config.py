@@ -86,6 +86,13 @@ class DisplaySettings(BaseModel):
         return self._TOOL_DEFAULTS.get(tool_name, self.default_max_lines)
 
 
+class LoggingSettings(BaseModel):
+    """Settings for runtime logging."""
+
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "WARNING"
+    file: str | None = None
+
+
 class CrabCodeSettings(BaseModel):
     """Full settings.json schema."""
     permissions: PermissionsSettings = Field(default_factory=PermissionsSettings)
@@ -104,6 +111,7 @@ class CrabCodeSettings(BaseModel):
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
+    logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
     model_config = {"extra": "allow"}
 

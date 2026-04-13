@@ -112,6 +112,26 @@ Or configure in `~/.crabcode/settings.json`:
 
 The `env` map lets you define environment variables directly in the config file — they are injected at startup so you don't need to `export` them in your shell.
 
+### Logging
+
+You can configure runtime logging in `settings.json`:
+
+```json
+{
+  "logging": {
+    "level": "WARNING",
+    "file": ".crabcode/logs/crabcode.log"
+  }
+}
+```
+
+Notes:
+
+- `level` supports `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`
+- The default log file is `<project>/.crabcode/logs/crabcode.log`
+- `file` can override the log path
+- In the CLI, `/logs crabcode` shows the main runtime log
+
 ### Hooks (Tool Call Hooks)
 
 `settings.json` supports hooks that run shell commands on these events:

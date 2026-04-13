@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 from crabcode_core.agent_manager import AgentManager, AgentSnapshot
+from crabcode_core.logging_utils import configure_logging, get_logger
 from crabcode_core.types.config import CrabCodeSettings
 from crabcode_core.types.event import (
     ChoiceResponseEvent,
@@ -17,6 +18,8 @@ from crabcode_core.types.event import (
 )
 from crabcode_core.types.message import Message
 from crabcode_core.types.tool import Tool, ToolEventCallback
+
+logger = get_logger(__name__)
 
 
 class CoreSession:
@@ -74,6 +77,7 @@ class CoreSession:
         )
         from crabcode_core.tools import get_default_tools
 
+        configure_logging(self.cwd, self.settings.logging)
         config_mgr = ConfigManager(cwd=self.cwd)
         file_settings = config_mgr.load()
 
@@ -110,6 +114,10 @@ class CoreSession:
         elif file_settings.tool_settings:
             for name, cfg in file_settings.tool_settings.items():
                 merged.tool_settings.setdefault(name, {}).update(cfg)
+        if file_settings.logging.level and merged.logging.level == "WARNING":
+            merged.logging.level = file_settings.logging.level
+        if file_settings.logging.file and not merged.logging.file:
+            merged.logging.file = file_settings.logging.file
         if file_settings.hooks and not self.settings.hooks:
             merged.hooks = file_settings.hooks
         elif file_settings.hooks:
@@ -118,6 +126,8 @@ class CoreSession:
                 for item in cfg_list:
                     if item not in existing:
                         existing.append(item)
+
+        configure_logging(self.cwd, merged.logging)
 
         # Keep a /model switch that ran before the first initialize() (late init).
         chosen = self._current_model_name
@@ -179,7 +189,7 @@ class CoreSession:
                 tool_cls = getattr(mod, class_name)
                 self.tools.append(tool_cls())
             except Exception:
-                pass
+                logger.exception("Failed to load extra tool: %s", tool_path)
 
         from crabcode_core.types.tool import ToolContext as _ToolContext
 
@@ -710,7 +720,7 @@ class CoreSession:
                                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                                 return int(dt.timestamp())
                             except Exception:
-                                pass
+                                logger.debug("Failed to parse stored session timestamp: %r", ts, exc_info=True)
                         return int(datetime.now(timezone.utc).timestamp())
                     sqlite_meta = {
                         "id": session_id,
@@ -729,7 +739,7 @@ class CoreSession:
                     store.upsert(sqlite_meta)
                 store.close()
             except Exception:
-                pass
+                logger.warning("Failed to sync resumed session metadata to SQLite", exc_info=True)
 
         for raw in raw_messages:
             role = raw.get("type", "user")

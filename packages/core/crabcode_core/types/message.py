@@ -12,6 +12,9 @@ from enum import Enum
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field
+from crabcode_core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class MessageRole(str, Enum):
@@ -169,6 +172,7 @@ def deserialize_content(raw: Any) -> list[ContentBlock] | str:
             try:
                 blocks.append(cls.model_validate(item))
             except Exception:
+                logger.debug("Failed to deserialize message block type=%s", block_type, exc_info=True)
                 if "text" in item:
                     blocks.append(TextBlock(text=item["text"]))
         elif "text" in item:

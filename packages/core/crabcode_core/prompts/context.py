@@ -12,6 +12,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 async def _run_git(*args: str, cwd: str = ".") -> str:
     """Run a git command and return stdout, or empty string on failure."""
@@ -25,6 +29,7 @@ async def _run_git(*args: str, cwd: str = ".") -> str:
         stdout, _ = await proc.communicate()
         return stdout.decode().strip()
     except Exception:
+        logger.debug("Git command failed: git %s", " ".join(args), exc_info=True)
         return ""
 
 
@@ -70,6 +75,7 @@ async def get_git_status(cwd: str = ".") -> str | None:
 
         return "\n\n".join(parts)
     except Exception:
+        logger.debug("Failed to build async git status context for %s", cwd, exc_info=True)
         return None
 
 
@@ -88,6 +94,7 @@ def get_system_context(cwd: str = ".") -> dict[str, str]:
         )
         is_git = result.stdout.strip() == "true"
     except Exception:
+        logger.debug("Failed to detect git repository for %s", cwd, exc_info=True)
         is_git = False
 
     if is_git:
@@ -119,7 +126,7 @@ def get_system_context(cwd: str = ".") -> dict[str, str]:
 
             context["gitStatus"] = "\n\n".join(parts)
         except Exception:
-            pass
+            logger.debug("Failed to build git status system context for %s", cwd, exc_info=True)
 
     return context
 
@@ -156,14 +163,14 @@ def _load_claude_md(cwd: str) -> str | None:
         try:
             contents.append(home_claude_md.read_text(errors="replace"))
         except Exception:
-            pass
+            logger.warning("Failed to read %s", home_claude_md, exc_info=True)
 
     crabcode_md = home / ".crabcode" / "CLAUDE.md"
     if crabcode_md.exists():
         try:
             contents.append(crabcode_md.read_text(errors="replace"))
         except Exception:
-            pass
+            logger.warning("Failed to read %s", crabcode_md, exc_info=True)
 
     current = search_dir
     project_files: list[str] = []
@@ -174,7 +181,7 @@ def _load_claude_md(cwd: str) -> str | None:
                 try:
                     project_files.append(candidate.read_text(errors="replace"))
                 except Exception:
-                    pass
+                    logger.warning("Failed to read %s", candidate, exc_info=True)
         if (current / ".git").exists():
             break
         current = current.parent

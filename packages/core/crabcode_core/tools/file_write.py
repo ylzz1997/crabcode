@@ -5,8 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.tools.diff_utils import compute_diff, format_edit_summary
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
+
+logger = get_logger(__name__)
 
 
 class FileWriteTool(Tool):
@@ -69,7 +72,7 @@ class FileWriteTool(Tool):
             try:
                 old_content = path.read_text(errors="replace")
             except Exception:
-                pass
+                logger.debug("Failed to read existing file before overwrite: %s", path, exc_info=True)
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

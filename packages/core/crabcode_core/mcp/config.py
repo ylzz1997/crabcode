@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import McpServerConfig
+
+logger = get_logger(__name__)
 
 
 def load_mcp_configs(cwd: str) -> dict[str, McpServerConfig]:
@@ -40,6 +43,7 @@ def load_mcp_configs(cwd: str) -> dict[str, McpServerConfig]:
                         if isinstance(config, dict):
                             merged[name] = {**merged.get(name, {}), **config}
         except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to load MCP config file: %s", path, exc_info=True)
             continue
 
     result: dict[str, McpServerConfig] = {}
@@ -47,6 +51,6 @@ def load_mcp_configs(cwd: str) -> dict[str, McpServerConfig]:
         try:
             result[name] = McpServerConfig.model_validate(raw)
         except Exception:
-            pass
+            logger.warning("Skipping invalid MCP server config: %s", name, exc_info=True)
 
     return result

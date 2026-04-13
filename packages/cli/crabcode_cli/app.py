@@ -8,12 +8,15 @@ import sys
 from typing import Optional
 
 import typer
+from crabcode_core.logging_utils import configure_logging, get_logger
 
 app = typer.Typer(
     name="crabcode",
     help="CrabCode — AI coding assistant in the terminal",
     add_completion=False,
 )
+
+logger = get_logger(__name__)
 
 
 @app.command()
@@ -62,6 +65,9 @@ def main(
 
     if file_settings.permissions.run_everything:
         settings.permissions.run_everything = True
+    settings.logging = file_settings.logging.model_copy(deep=True)
+
+    configure_logging(work_dir, settings.logging)
 
     if model:
         settings.api.model = model
@@ -125,7 +131,7 @@ def main(
                     tool_config=file_settings.tool_settings.get("CodebaseSearch", {}),
                 )
         except Exception:
-            pass
+            logger.exception("Failed to start background indexer bootstrap")
 
     from crabcode_cli.repl import run_repl
     asyncio.run(run_repl(settings=settings, cwd=work_dir, resume_session_id=resume_id))

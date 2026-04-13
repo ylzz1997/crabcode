@@ -8,7 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
+
+logger = get_logger(__name__)
 
 GLOBAL_MEMORY_DIR = Path.home() / ".crabcode"
 PROJECT_MEMORY_DIR_NAME = ".crabcode"
@@ -29,7 +32,7 @@ def _load_memories(path: Path) -> list[dict[str, Any]]:
         if isinstance(data, list):
             return data
     except (json.JSONDecodeError, OSError):
-        pass
+        logger.warning("Failed to load memories from %s", path, exc_info=True)
     return []
 
 

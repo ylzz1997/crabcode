@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from crabcode_core.api.base import APIAdapter, ModelConfig
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.message import (
     Message,
     MessageRole,
@@ -12,6 +13,8 @@ from crabcode_core.types.message import (
     create_user_message,
     create_assistant_message,
 )
+
+logger = get_logger(__name__)
 
 
 COMPACT_PROMPT = """Summarize the conversation so far concisely. Focus on:
@@ -123,6 +126,7 @@ async def _generate_summary(
         return "".join(summary_parts)
 
     except Exception:
+        logger.warning("Conversation compaction via API failed; using fallback summary", exc_info=True)
         return _fallback_summary(messages)
 
 

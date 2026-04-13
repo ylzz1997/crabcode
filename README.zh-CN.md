@@ -112,6 +112,26 @@ crabcode --provider router --base-url https://my-router.example.com/v1 --api-for
 
 `env` 字段用于直接在配置文件中定义环境变量，启动时会自动注入，无需在 shell 中 `export`。
 
+### Logging（运行日志）
+
+可在 `settings.json` 中配置运行日志级别：
+
+```json
+{
+  "logging": {
+    "level": "WARNING",
+    "file": ".crabcode/logs/crabcode.log"
+  }
+}
+```
+
+说明：
+
+- `level` 支持 `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL`
+- 默认日志文件为 `<项目>/.crabcode/logs/crabcode.log`
+- 也可通过 `file` 指定自定义日志路径
+- CLI 中可通过 `/logs crabcode` 查看核心运行日志
+
 ### Hooks（工具调用钩子）
 
 `settings.json` 支持配置 hooks，在以下事件触发 shell 命令：

@@ -7,7 +7,10 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import CrabCodeSettings
+
+logger = get_logger(__name__)
 
 
 SETTING_SOURCES = [
@@ -88,11 +91,13 @@ class ConfigManager:
                 if isinstance(raw, dict):
                     merged = _merge_settings(merged, raw)
             except (json.JSONDecodeError, OSError):
+                logger.warning("Failed to load settings source: %s", path, exc_info=True)
                 continue
 
         try:
             self._cache = CrabCodeSettings.model_validate(merged)
         except Exception:
+            logger.exception("Failed to validate merged settings; using defaults")
             self._cache = CrabCodeSettings()
 
         return self._cache
@@ -121,6 +126,7 @@ class ConfigManager:
             raw = json.loads(path.read_text(errors="replace"))
             return raw if isinstance(raw, dict) else None
         except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to read settings source: %s", path, exc_info=True)
             return None
 
     def update_settings(
@@ -144,7 +150,7 @@ class ConfigManager:
             try:
                 existing = json.loads(path.read_text(errors="replace"))
             except (json.JSONDecodeError, OSError):
-                pass
+                logger.warning("Failed to read existing settings before update: %s", path, exc_info=True)
 
         merged = _merge_settings(existing, settings)
         path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n")

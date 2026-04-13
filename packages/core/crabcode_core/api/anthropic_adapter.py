@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator
 import anthropic
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
@@ -20,6 +21,8 @@ from crabcode_core.types.message import (
     ToolResultBlock,
     ToolUseBlock,
 )
+
+logger = get_logger(__name__)
 
 
 def _messages_to_api(messages: list[Message]) -> list[dict[str, Any]]:
@@ -225,6 +228,7 @@ class AnthropicAdapter(APIAdapter):
             )
             return result.input_tokens
         except Exception:
+            logger.debug("Anthropic token counting failed; using heuristic estimate", exc_info=True)
             total = sum(len(s) for s in system)
             for msg in messages:
                 if isinstance(msg.content, str):

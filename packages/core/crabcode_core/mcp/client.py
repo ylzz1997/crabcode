@@ -8,8 +8,11 @@ import os
 import re
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import McpServerConfig
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
+
+logger = get_logger(__name__)
 
 
 def _normalize_name(name: str) -> str:
@@ -95,7 +98,7 @@ class McpManager:
                 tools = await self._connect_server(name, config)
                 all_tools.extend(tools)
             except Exception:
-                pass
+                logger.exception("Failed to connect MCP server: %s", name)
 
         self._tools = all_tools
         return all_tools
@@ -110,6 +113,7 @@ class McpManager:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
         except ImportError:
+            logger.warning("MCP package not installed; skipping server %s", name)
             return []
 
         if not config.command:
@@ -146,6 +150,7 @@ class McpManager:
             return tools
 
         except Exception:
+            logger.exception("MCP connection failed for server %s", name)
             return []
 
     @property
@@ -158,6 +163,6 @@ class McpManager:
             try:
                 await session.__aexit__(None, None, None)
             except Exception:
-                pass
+                logger.exception("Failed to disconnect MCP session cleanly")
         self._connections.clear()
         self._tools.clear()

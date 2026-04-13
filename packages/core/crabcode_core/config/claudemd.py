@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 def discover_claude_md(cwd: str) -> list[dict[str, str]]:
     """Discover all CLAUDE.md files in the project hierarchy.
@@ -22,7 +26,7 @@ def discover_claude_md(cwd: str) -> list[dict[str, str]]:
                 content = home_md.read_text(errors="replace")
                 results.append({"path": str(home_md), "content": content})
             except Exception:
-                pass
+                logger.warning("Failed to read %s", home_md, exc_info=True)
 
     search_dir = Path(cwd).resolve()
     project_files: list[dict[str, str]] = []
@@ -36,7 +40,7 @@ def discover_claude_md(cwd: str) -> list[dict[str, str]]:
                     content = candidate.read_text(errors="replace")
                     project_files.append({"path": str(candidate), "content": content})
                 except Exception:
-                    pass
+                    logger.warning("Failed to read %s", candidate, exc_info=True)
         if (current / ".git").exists():
             break
         current = current.parent

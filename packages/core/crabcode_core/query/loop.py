@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Coroutine
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.event import (
     CompactEvent,
     CoreEvent,
@@ -36,6 +37,8 @@ from crabcode_core.types.message import (
     create_user_message,
 )
 from crabcode_core.types.tool import PermissionBehavior, Tool, ToolContext, ToolResult
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -214,6 +217,7 @@ async def _run_tools(
         try:
             result = await tool.call(block.input, context)
         except Exception as e:
+            logger.exception("Tool execution failed: %s", block.name)
             result = ToolResult(
                 result_for_model=f"Error executing tool: {e}",
                 is_error=True,
@@ -469,6 +473,7 @@ async def query_loop(
                     return
 
         except Exception as e:
+            logger.exception("Query loop failed")
             yield ErrorEvent(message=str(e), recoverable=False)
             return
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.prompts.profile import PromptProfile, resolve_agent_prompt
 from crabcode_core.query.loop import QueryParams, query_loop
 from crabcode_core.types.config import AgentSettings, AgentTypeConfig, CrabCodeSettings
@@ -33,6 +34,8 @@ from crabcode_core.types.message import (
     deserialize_content,
 )
 from crabcode_core.types.tool import Tool, ToolContext
+
+logger = get_logger(__name__)
 
 
 def _now_iso() -> str:
@@ -345,6 +348,7 @@ class AgentManager:
             try:
                 snapshot = AgentSnapshot(**item)
             except Exception:
+                logger.warning("Skipping invalid agent snapshot during restore", exc_info=True)
                 continue
             run = _AgentRun(snapshot=snapshot, active_model_profile=self._current_model_name)
             if self._transcript_loader is not None:

@@ -7,7 +7,10 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
+
+logger = get_logger(__name__)
 
 _LINTER_CONFIGS: list[dict[str, Any]] = [
     # ── Python ──
@@ -109,6 +112,7 @@ def _has_pyproject_section(cwd: str, section_names: set[str]) -> bool:
         text = pyproject.read_text(errors="replace")
         return any(f"[tool.{s}]" in text for s in section_names)
     except Exception:
+        logger.debug("Failed to read %s while detecting lint config", pyproject, exc_info=True)
         return False
 
 

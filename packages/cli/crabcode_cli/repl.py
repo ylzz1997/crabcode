@@ -20,6 +20,7 @@ from rich.text import Text
 
 from crabcode_cli.banner import print_banner
 from crabcode_core.events import CoreSession
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import CrabCodeSettings, DisplaySettings
 from crabcode_core.types.message import Message, MessageRole
 from crabcode_core.utf8_sanitize import safe_utf8_str
@@ -42,6 +43,7 @@ from crabcode_core.types.event import (
 
 # Module-level display settings, set during run_repl()
 _display_settings: DisplaySettings | None = None
+logger = get_logger(__name__)
 
 
 def _supports_ansi_output() -> bool:
@@ -148,6 +150,7 @@ class _CrabCodeCompleter(Completer):
                     from crabcode_search.background import list_background_logs
                     logs = list_background_logs(self._session.cwd if self._session else ".")
                 except Exception:
+                    logger.debug("Failed to load log names for completion", exc_info=True)
                     logs = {}
                 for name in logs:
                     if name.startswith(word_before_cursor):
@@ -292,6 +295,7 @@ def _format_timestamp(ts: float | None) -> str:
     try:
         return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
+        logger.debug("Failed to format timestamp: %r", ts, exc_info=True)
         return "unknown"
 
 
@@ -1086,7 +1090,7 @@ async def run_repl(
             try:
                 await session.interrupt()
             except Exception:
-                pass
+                logger.debug("Failed to interrupt session during EOF shutdown", exc_info=True)
             _force_exit()
         except _REPL_INTERRUPT_EXCS:
             if ctrl_c_exit.should_exit_now():
@@ -1094,13 +1098,13 @@ async def run_repl(
                 try:
                     await session.interrupt()
                 except Exception:
-                    pass
+                    logger.debug("Failed to interrupt session during forced exit", exc_info=True)
                 _force_exit()
             _clear_sigint_cancel()
             try:
                 await session.interrupt()
             except Exception:
-                pass
+                logger.debug("Failed to interrupt session after Ctrl+C", exc_info=True)
             console.print(
                 f"\n[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
             )
@@ -1266,7 +1270,7 @@ async def run_repl(
                 try:
                     await session.interrupt()
                 except Exception:
-                    pass
+                    logger.debug("Failed to interrupt session while streaming on exit", exc_info=True)
                 _persist_partial_assistant_for_interrupt(
                     session, streamed_text_for_context
                 )
@@ -1275,7 +1279,7 @@ async def run_repl(
             try:
                 await session.interrupt()
             except Exception:
-                pass
+                logger.debug("Failed to interrupt session while streaming", exc_info=True)
             _persist_partial_assistant_for_interrupt(
                 session, streamed_text_for_context
             )
@@ -1355,6 +1359,7 @@ async def _handle_command(
             logs = list_background_logs(session.cwd)
             bg_status = read_background_status(session.cwd)
         except Exception:
+            logger.debug("Failed to load background logs metadata", exc_info=True)
             logs = {}
             bg_status = None
 
@@ -1507,6 +1512,7 @@ async def _handle_command(
 
                 bg_status = read_background_status(session.cwd)
             except Exception:
+                logger.debug("Failed to read CodebaseSearch background status", exc_info=True)
                 bg_status = None
 
             if bg_status:

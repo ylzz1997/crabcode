@@ -11,8 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.message import Message
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree
+
+logger = get_logger(__name__)
 
 
 def get_config_home() -> Path:
@@ -89,7 +92,7 @@ def _get_git_info(cwd: str) -> dict[str, str | None]:
         if sha:
             info["git_sha"] = sha
     except Exception:
-        pass
+        logger.debug("Failed to read git info for %s", cwd, exc_info=True)
     return info
 
 
@@ -120,7 +123,7 @@ class SessionStorage:
                 encoding="utf-8",
             )
         except Exception:
-            pass
+            logger.warning("Failed to write agent snapshots: %s", path, exc_info=True)
 
     def append_agent_messages(
         self,
@@ -165,6 +168,7 @@ class SessionStorage:
                     if isinstance(entry, dict):
                         messages.append(entry)
         except Exception:
+            logger.warning("Failed to load agent messages: %s", path, exc_info=True)
             return []
         return messages
 
@@ -176,6 +180,7 @@ class SessionStorage:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
+            logger.warning("Failed to load agent snapshots: %s", path, exc_info=True)
             return []
         if isinstance(raw, list):
             return [item for item in raw if isinstance(item, dict)]
@@ -225,7 +230,7 @@ class SessionStorage:
                 })
                 store.close()
             except Exception:
-                pass
+                logger.warning("Failed to update session metadata in SQLite", exc_info=True)
             return
 
         git_info = _get_git_info(self.cwd)
@@ -274,7 +279,7 @@ class SessionStorage:
             store.upsert(sqlite_meta)
             store.close()
         except Exception:
-            pass
+            logger.warning("Failed to persist session metadata to SQLite", exc_info=True)
 
         self._meta_written = True
 
@@ -331,7 +336,7 @@ class SessionStorage:
                         seen.add(msg_uuid)
                     messages.append(entry)
         except Exception:
-            pass
+            logger.warning("Failed to load transcript: %s", self._transcript_path, exc_info=True)
 
         self._written_uuids = seen
         if meta:
@@ -347,7 +352,7 @@ class SessionStorage:
             store.update_tokens(self.session_id, tokens)
             store.close()
         except Exception:
-            pass
+            logger.debug("Failed to record token usage for session %s", self.session_id, exc_info=True)
 
     def record_message_count(self, count: int) -> None:
         """Update message count in SQLite."""
@@ -357,7 +362,7 @@ class SessionStorage:
             store.update_message_count(self.session_id, count)
             store.close()
         except Exception:
-            pass
+            logger.debug("Failed to record message count for session %s", self.session_id, exc_info=True)
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -396,7 +401,7 @@ class SessionStorage:
                     })
                 return results
         except Exception:
-            pass
+            logger.debug("SQLite session listing failed for cwd %s", abs_cwd, exc_info=True)
 
         # Fallback: scan JSONL files
         project_dir = get_project_dir(cwd)
@@ -442,6 +447,7 @@ class SessionStorage:
                     "preview": meta_info.get("first_user_message", "")[:100] or first_user_msg,
                 })
             except Exception:
+                logger.warning("Failed to inspect session transcript: %s", path, exc_info=True)
                 sessions.append({
                     "session_id": session_id,
                     "title": "",
@@ -467,6 +473,7 @@ class SessionStorage:
             store.close()
             return rows
         except Exception:
+            logger.warning("Session search failed for query %r", query, exc_info=True)
             return []
 
 
