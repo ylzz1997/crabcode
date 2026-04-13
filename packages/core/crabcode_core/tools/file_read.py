@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.tools._input_helpers import first_non_empty_str
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 
@@ -18,6 +19,7 @@ class FileReadTool(Tool):
         "properties": {
             "file_path": {
                 "type": "string",
+                "minLength": 1,
                 "description": "The absolute or relative path of the file to read.",
             },
             "offset": {
@@ -53,13 +55,19 @@ class FileReadTool(Tool):
         tool_input: dict[str, Any],
         context: ToolContext,
     ) -> ToolResult:
-        file_path = tool_input.get("file_path", "")
+        file_path = first_non_empty_str(
+            tool_input,
+            ("file_path", "path", "target_file", "filepath", "file"),
+        )
         offset = tool_input.get("offset")
         limit = tool_input.get("limit")
 
         if not file_path:
             return ToolResult(
-                result_for_model="Error: file_path is required",
+                result_for_model=(
+                    "Error: file_path is required. Pass the file path as \"file_path\" "
+                    "(aliases: path, target_file, filepath, file)."
+                ),
                 is_error=True,
             )
 

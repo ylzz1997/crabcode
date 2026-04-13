@@ -13,6 +13,7 @@ def get_default_tools() -> list[Tool]:
         AgentWaitTool,
     )
     from crabcode_core.tools.ask_user import AskUserTool
+    from crabcode_core.tools.checklist import ChecklistTool
     from crabcode_core.tools.bash import BashTool
     from crabcode_core.tools.browser import BrowserTool
     from crabcode_core.tools.file_read import FileReadTool
@@ -41,6 +42,7 @@ def get_default_tools() -> list[Tool]:
         AgentCancelTool(),
         AgentSendInputTool(),
         AskUserTool(),
+        ChecklistTool(),
     ]
 
 

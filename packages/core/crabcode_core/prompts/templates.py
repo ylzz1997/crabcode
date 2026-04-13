@@ -55,6 +55,7 @@ TOOL_NAMES = {
     "browser": "Browser",
     "notebook_edit": "NotebookEdit",
     "todo_write": "TodoWrite",
+    "checklist": "Checklist",
     "ask_user": "AskUserQuestion",
     "skill": "Skill",
     "codebase_search": "CodebaseSearch",

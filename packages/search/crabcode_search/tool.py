@@ -14,6 +14,10 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 import asyncio
 from typing import Any
 
+from crabcode_core.tools._input_helpers import (
+    first_non_empty_str,
+    latest_user_text_for_agent_fallback,
+)
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 from crabcode_search.background import STATUS_FILE_NAME
@@ -33,6 +37,7 @@ class CodebaseSearchTool(Tool):
         "properties": {
             "query": {
                 "type": "string",
+                "minLength": 1,
                 "description": "Natural language search query about the codebase.",
             },
             "target_directory": {
@@ -181,9 +186,20 @@ class CodebaseSearchTool(Tool):
                 is_error=True,
             )
 
-        query = tool_input.get("query", "")
+        query = first_non_empty_str(
+            tool_input,
+            ("query", "search", "q", "question", "prompt", "text", "natural_language_query"),
+        )
         if not query:
-            return ToolResult(result_for_model="query is required.", is_error=True)
+            query = latest_user_text_for_agent_fallback(context.messages)
+        if not query:
+            return ToolResult(
+                result_for_model=(
+                    "query is required. Pass a non-empty search string (field \"query\"); "
+                    "aliases: search, q, question, prompt, text, natural_language_query."
+                ),
+                is_error=True,
+            )
 
         num_results = tool_input.get("num_results", 10)
         target_dir = tool_input.get("target_directory")

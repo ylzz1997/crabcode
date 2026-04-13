@@ -6,6 +6,10 @@ import asyncio
 from typing import Any
 
 from crabcode_core.agent_manager import AgentManager
+from crabcode_core.tools._input_helpers import (
+    first_non_empty_str,
+    latest_user_text_for_agent_fallback,
+)
 from crabcode_core.types.config import AgentSettings
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
@@ -20,6 +24,7 @@ class AgentTool(Tool):
         "properties": {
             "prompt": {
                 "type": "string",
+                "minLength": 1,
                 "description": "The task for the sub-agent to perform.",
             },
             "subagent_type": {
@@ -75,11 +80,20 @@ class AgentTool(Tool):
         tool_input: dict[str, Any],
         context: ToolContext,
     ) -> ToolResult:
-        prompt = tool_input.get("prompt", "")
+        prompt = first_non_empty_str(
+            tool_input,
+            ("prompt", "task", "instruction", "query", "message", "description"),
+        )
+        if not prompt:
+            prompt = latest_user_text_for_agent_fallback(context.messages)
 
         if not prompt:
             return ToolResult(
-                result_for_model="Error: prompt is required",
+                result_for_model=(
+                    "Error: prompt is required. Pass a non-empty \"prompt\" string "
+                    "describing the sub-agent's task (or use field aliases: task, "
+                    "instruction, query, message, description)."
+                ),
                 is_error=True,
             )
 

@@ -6,6 +6,7 @@ import asyncio
 import shutil
 from typing import Any
 
+from crabcode_core.tools._input_helpers import first_non_empty_str
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 
@@ -19,6 +20,7 @@ class GrepTool(Tool):
         "properties": {
             "pattern": {
                 "type": "string",
+                "minLength": 1,
                 "description": "The regex pattern to search for.",
             },
             "path": {
@@ -55,14 +57,20 @@ class GrepTool(Tool):
         tool_input: dict[str, Any],
         context: ToolContext,
     ) -> ToolResult:
-        pattern = tool_input.get("pattern", "")
+        pattern = first_non_empty_str(
+            tool_input,
+            ("pattern", "regex", "regexp", "search", "query"),
+        )
         search_path = tool_input.get("path", context.cwd)
         glob_pattern = tool_input.get("glob")
         case_insensitive = tool_input.get("case_insensitive", False)
 
         if not pattern:
             return ToolResult(
-                result_for_model="Error: pattern is required",
+                result_for_model=(
+                    "Error: pattern is required. Pass a regex string; aliases: "
+                    "regex, regexp, search, query."
+                ),
                 is_error=True,
             )
 
