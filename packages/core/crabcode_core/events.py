@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
+from crabcode_core.agent_manager import AgentManager, AgentSnapshot
 from crabcode_core.types.config import CrabCodeSettings
 from crabcode_core.types.event import (
     ChoiceResponseEvent,
@@ -52,6 +53,8 @@ class CoreSession:
         self._initialized = False
         self._current_model_name: str | None = None
         self.compact_count: int = 0
+        self._agent_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
+        self._agent_manager: AgentManager | None = None
 
     async def initialize(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
@@ -63,7 +66,11 @@ class CoreSession:
         from crabcode_core.mcp.client import McpManager
         from crabcode_core.mcp.config import load_mcp_configs
         from crabcode_core.permissions.manager import PermissionManager
-        from crabcode_core.session.storage import SessionStorage, generate_session_id
+        from crabcode_core.session.storage import (
+            SessionStorage,
+            generate_session_id,
+            get_agent_transcript_path,
+        )
         from crabcode_core.tools import get_default_tools
 
         config_mgr = ConfigManager(cwd=self.cwd)
@@ -128,6 +135,16 @@ class CoreSession:
             settings=merged.permissions,
         )
 
+        async def _push_agent_event(event: CoreEvent) -> None:
+            await self._agent_event_queue.put(event)
+
+        def _tools_provider() -> list[Tool]:
+            return [tool for tool in self.tools if tool.name != "Agent"]
+
+        def _adapter_provider(model_name: str | None) -> Any:
+            selected_name = model_name if model_name is not None else self._current_model_name
+            return create_adapter(self.settings.get_api_config(selected_name))
+
         mcp_configs = load_mcp_configs(self.cwd)
         all_mcp_configs = {**mcp_configs}
         for name, cfg in merged.mcp_servers.items():
@@ -171,14 +188,47 @@ class CoreSession:
         if self.settings.prompt_profile:
             self._prompt_profile = PromptProfile(**self.settings.prompt_profile)
 
+        def _persist_agents(snapshots: list[dict[str, Any]]) -> None:
+            if self._session_storage:
+                self._session_storage.write_agent_snapshots(snapshots)
+
+        def _write_agent_transcript(agent_id: str, messages: list[Message]) -> None:
+            if self._session_storage:
+                self._session_storage.append_agent_messages(agent_id, messages)
+
+        def _load_agent_transcript(agent_id: str) -> list[dict[str, Any]]:
+            if not self._session_storage:
+                return []
+            return self._session_storage.load_agent_messages(agent_id)
+
+        def _agent_transcript_path(agent_id: str) -> str:
+            return str(get_agent_transcript_path(self.cwd, self.session_id, agent_id))
+
+        self._agent_manager = AgentManager(
+            settings=merged,
+            agent_settings=merged.agent,
+            tools_provider=_tools_provider,
+            adapter_provider=_adapter_provider,
+            event_sink=_push_agent_event,
+            permission_manager=self._permission_manager,
+            prompt_profile=self._prompt_profile,
+            cwd=self.cwd,
+            env=merged.env,
+            session_id=self.session_id,
+            current_model_name=self._current_model_name,
+            persistence_callback=_persist_agents,
+            transcript_writer=_write_agent_transcript,
+            transcript_loader=_load_agent_transcript,
+            transcript_path_getter=_agent_transcript_path,
+        )
+
         has_agent = any(isinstance(t, AgentTool) for t in self.tools)
         if not has_agent:
             sub_tools = list(self.tools)
             agent_cfg = merged.agent
             self.tools.append(AgentTool(
-                api_adapter=self._api_adapter,
-                tools=sub_tools,
-                prompt_profile=self._prompt_profile,
+                manager=self._agent_manager,
+                settings=merged.agent,
                 max_turns=agent_cfg.max_turns,
                 timeout=agent_cfg.timeout,
                 max_output_chars=agent_cfg.max_output_chars,
@@ -362,6 +412,9 @@ class CoreSession:
             env=self.settings.env,
             choice_queue=self._choice_queue,
             tool_event_queue=asyncio.Queue(),
+            agent_id=None,
+            agent_depth=0,
+            agent_manager=self._agent_manager,
         )
 
         params = QueryParams(
@@ -378,26 +431,53 @@ class CoreSession:
         )
 
         pre_loop_count = len(self.messages)
+        merged_events: asyncio.Queue[CoreEvent | None] = asyncio.Queue()
 
-        async for event in query_loop(params):
-            if isinstance(event, TurnCompleteEvent):
-                self.messages = params.messages
+        async def _produce_main_events() -> None:
+            try:
+                async for event in query_loop(params):
+                    await merged_events.put(event)
+            finally:
+                await merged_events.put(None)
 
-                if self._session_storage:
-                    for msg in self.messages[pre_loop_count:]:
-                        self._session_storage.append_message(msg)
-                    # Record token usage and message count
-                    total_tokens = event.usage.get("input_tokens", 0) + event.usage.get("output_tokens", 0)
-                    if total_tokens > 0:
-                        self._session_storage.record_tokens(total_tokens)
-                    self._session_storage.record_message_count(len(self.messages))
+        async def _forward_agent_events() -> None:
+            while True:
+                event = await self._agent_event_queue.get()
+                await merged_events.put(event)
 
-            yield event
+        producer = asyncio.create_task(_produce_main_events())
+        agent_forwarder = asyncio.create_task(_forward_agent_events())
+
+        try:
+            while True:
+                event = await merged_events.get()
+                if event is None:
+                    break
+                if isinstance(event, TurnCompleteEvent):
+                    self.messages = params.messages
+
+                    if self._session_storage:
+                        for msg in self.messages[pre_loop_count:]:
+                            self._session_storage.append_message(msg)
+                        total_tokens = event.usage.get("input_tokens", 0) + event.usage.get("output_tokens", 0)
+                        if total_tokens > 0:
+                            self._session_storage.record_tokens(total_tokens)
+                        self._session_storage.record_message_count(len(self.messages))
+                yield event
+        finally:
+            agent_forwarder.cancel()
+            producer.cancel()
 
     async def respond_permission(self, response: PermissionResponseEvent) -> None:
+        if self._agent_manager and response.agent_id:
+            if await self._agent_manager.route_permission(response):
+                return
         await self._permission_queue.put(response)
 
     async def respond_choice(self, response: ChoiceResponseEvent) -> None:
+        if self._agent_manager and response.agent_id:
+            if await self._agent_manager.route_choice(response):
+                return
         await self._choice_queue.put(response)
 
     async def interrupt(self) -> None:
@@ -428,6 +508,9 @@ class CoreSession:
                 model=active_api_cfg.model or "",
                 provider=active_api_cfg.provider or "",
             )
+        if self._agent_manager:
+            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
+            self._agent_manager.restore_snapshots([])
         return self.session_id
 
     async def compact(self) -> None:
@@ -466,17 +549,80 @@ class CoreSession:
             return False
 
         from crabcode_core.api import create_adapter
-        from crabcode_core.tools.agent import AgentTool
 
         api_config = self.settings.models[name]
         self._api_adapter = create_adapter(api_config)
         self._current_model_name = name
-
-        for tool in self.tools:
-            if isinstance(tool, AgentTool):
-                tool.api_adapter = self._api_adapter
+        if self._agent_manager:
+            self._agent_manager.set_current_model(name)
 
         return True
+
+    async def spawn_agent(
+        self,
+        *,
+        prompt: str,
+        subagent_type: str = "generalPurpose",
+        name: str | None = None,
+        model_profile: str | None = None,
+        parent_agent_id: str | None = None,
+        parent_tool_use_id: str | None = None,
+        depth: int = 1,
+    ) -> str:
+        await self.initialize()
+        if not self._agent_manager:
+            raise RuntimeError("Agent manager is not initialized")
+        return await self._agent_manager.spawn_agent(
+            prompt=prompt,
+            subagent_type=subagent_type,
+            name=name,
+            model_profile=model_profile,
+            parent_agent_id=parent_agent_id,
+            parent_tool_use_id=parent_tool_use_id,
+            depth=depth,
+        )
+
+    def get_agent(self, agent_id: str) -> AgentSnapshot | None:
+        if not self._agent_manager:
+            return None
+        return self._agent_manager.get_agent(agent_id)
+
+    def list_agents(self) -> list[AgentSnapshot]:
+        if not self._agent_manager:
+            return []
+        return self._agent_manager.list_agents()
+
+    async def wait_agent(
+        self, agent_id: str | list[str], timeout_ms: int | None = None
+    ) -> AgentSnapshot | None:
+        await self.initialize()
+        if not self._agent_manager:
+            return None
+        if isinstance(agent_id, list):
+            return await self._agent_manager.wait_any(agent_id, timeout_ms=timeout_ms)
+        return await self._agent_manager.wait_agent(agent_id, timeout_ms=timeout_ms)
+
+    async def cancel_agent(self, agent_id: str) -> bool:
+        await self.initialize()
+        if not self._agent_manager:
+            return False
+        return await self._agent_manager.cancel_agent(agent_id)
+
+    async def send_agent_input(
+        self,
+        agent_id: str,
+        prompt: str,
+        *,
+        interrupt: bool = False,
+    ) -> bool:
+        await self.initialize()
+        if not self._agent_manager:
+            return False
+        return await self._agent_manager.send_input(
+            agent_id,
+            prompt,
+            interrupt=interrupt,
+        )
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous session by loading its messages."""
@@ -489,13 +635,17 @@ class CoreSession:
 
         storage = SessionStorage(self.cwd, session_id)
         raw_messages = storage.load_messages()
+        agent_snapshots = storage.load_agent_snapshots()
 
-        if not raw_messages:
+        if not raw_messages and not storage.meta and not agent_snapshots:
             return False
 
         self.session_id = session_id
         self._session_storage = storage
         self.messages.clear()
+        if self._agent_manager:
+            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
+            self._agent_manager.restore_snapshots(agent_snapshots)
 
         # Sync meta to SQLite if it was read from JSONL but missing in DB
         if storage.meta and self._initialized:

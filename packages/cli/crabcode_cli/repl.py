@@ -24,6 +24,8 @@ from crabcode_core.types.config import CrabCodeSettings, DisplaySettings
 from crabcode_core.types.message import Message, MessageRole
 from crabcode_core.utf8_sanitize import safe_utf8_str
 from crabcode_core.types.event import (
+    AgentOutputEvent,
+    AgentStateEvent,
     ChoiceRequestEvent,
     ChoiceResponseEvent,
     CompactEvent,
@@ -60,6 +62,12 @@ console = Console(no_color=not _ANSI_ENABLED, force_terminal=_ANSI_ENABLED)
 # Slash commands with their arguments for auto-completion
 _SLASH_COMMANDS: dict[str, list[str]] = {
     "/help": [],
+    "/agents": [],
+    "/agent": [],
+    "/agent-log": [],
+    "/agent-send": [],
+    "/wait": [],
+    "/cancel-agent": [],
     "/status": [],
     "/logs": ["-f", "--follow", "--clear", "--tail"],
     "/model": [],  # Dynamic: model names
@@ -173,9 +181,27 @@ class _CrabCodeCompleter(Completer):
                         )
                 return
 
+            if cmd in {"/agent", "/agent-log", "/agent-send", "/wait", "/cancel-agent"} and self._session:
+                for snapshot in self._session.list_agents()[:20]:
+                    sid = snapshot.agent_id
+                    if sid.startswith(word_before_cursor):
+                        yield Completion(
+                            sid,
+                            start_position=-len(word_before_cursor),
+                            display=sid[:12] + "…",
+                            display_meta=f"{snapshot.status} · {snapshot.title[:40]}",
+                        )
+                return
+
     def _get_command_description(self, cmd: str) -> str:
         descriptions = {
             "/help": "show help",
+            "/agents": "list managed agents",
+            "/agent": "show an agent",
+            "/agent-log": "show an agent transcript",
+            "/agent-send": "send input to an agent",
+            "/wait": "wait for an agent",
+            "/cancel-agent": "cancel an agent",
             "/status": "show session status",
             "/logs": "show background logs",
             "/model": "show/switch model",
@@ -467,10 +493,13 @@ def _persist_partial_assistant_for_interrupt(session: CoreSession, raw: str) -> 
 def _render_tool_use(event: ToolUseEvent) -> None:
     """Render a compact tool use call."""
     summary = _tool_summary(event.tool_name, event.tool_input)
+    agent_prefix = ""
+    if event.agent_id:
+        agent_prefix = f"[{event.agent_id[:8]}] "
     console.print(
         Panel(
             Text(summary, style="dim"),
-            title=f"[bold cyan]{event.tool_name}[/]",
+            title=f"[bold cyan]{agent_prefix}{event.tool_name}[/]",
             border_style="cyan",
             expand=False,
         )
@@ -505,6 +534,8 @@ def _render_tool_result(event: ToolResultEvent) -> None:
 
     style = "red" if event.is_error else "green"
     title = f"{'Error' if event.is_error else 'Result'}: {event.tool_name}"
+    if event.agent_id:
+        title = f"[{event.agent_id[:8]}] {title}"
     console.print(
         Panel(
             Text(display, style="dim"),
@@ -513,6 +544,28 @@ def _render_tool_result(event: ToolResultEvent) -> None:
             expand=False,
         )
     )
+
+
+def _flush_agent_stream_line(active_agent_id: str | None) -> None:
+    if active_agent_id is None:
+        return
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _render_agent_text_chunk(
+    event: AgentOutputEvent,
+    active_agent_id: str | None,
+) -> str | None:
+    if event.stream != "text":
+        return active_agent_id
+    if active_agent_id != event.agent_id:
+        _flush_agent_stream_line(active_agent_id)
+        sys.stdout.write(f"[agent {event.agent_id[:8]}] ")
+        active_agent_id = event.agent_id
+    sys.stdout.write(safe_utf8_str(event.text))
+    sys.stdout.flush()
+    return active_agent_id
 
 
 def _render_diff_result(tool_name: str, display: str) -> None:
@@ -598,7 +651,7 @@ async def _prompt_permission(
     console.print(
         Panel(
             Text(summary, style="dim"),
-            title=f"[bold yellow]⚠ {event.tool_name}[/]",
+            title=f"[bold yellow]⚠ {event.tool_name}{f' [{event.agent_id[:8]}]' if event.agent_id else ''}[/]",
             border_style="yellow",
             expand=False,
         )
@@ -617,7 +670,7 @@ async def _prompt_permission(
         except (EOFError, KeyboardInterrupt):
             await session.respond_permission(
                 PermissionResponseEvent(
-                    tool_use_id=event.tool_use_id, allowed=False
+                    tool_use_id=event.tool_use_id, allowed=False, agent_id=event.agent_id
                 )
             )
             return
@@ -625,14 +678,14 @@ async def _prompt_permission(
         if choice in ("y", "yes", ""):
             await session.respond_permission(
                 PermissionResponseEvent(
-                    tool_use_id=event.tool_use_id, allowed=True
+                    tool_use_id=event.tool_use_id, allowed=True, agent_id=event.agent_id
                 )
             )
             return
         elif choice in ("n", "no"):
             await session.respond_permission(
                 PermissionResponseEvent(
-                    tool_use_id=event.tool_use_id, allowed=False
+                    tool_use_id=event.tool_use_id, allowed=False, agent_id=event.agent_id
                 )
             )
             return
@@ -642,6 +695,7 @@ async def _prompt_permission(
                     tool_use_id=event.tool_use_id,
                     allowed=True,
                     always_allow=True,
+                    agent_id=event.agent_id,
                 )
             )
             return
@@ -783,7 +837,7 @@ async def _prompt_choice(
     if _ANSI_ENABLED and sys.stdin.isatty():
         try:
             selected = await _interactive_select(
-                event.question,
+                f"{event.question}{f' [{event.agent_id[:8]}]' if event.agent_id else ''}",
                 event.options,
                 event.multiple,
             )
@@ -796,6 +850,7 @@ async def _prompt_choice(
                     tool_use_id=event.tool_use_id,
                     selected=[],
                     cancelled=True,
+                    agent_id=event.agent_id,
                 )
             )
         else:
@@ -803,11 +858,13 @@ async def _prompt_choice(
                 ChoiceResponseEvent(
                     tool_use_id=event.tool_use_id,
                     selected=selected,
+                    agent_id=event.agent_id,
                 )
             )
     else:
         # Fallback for non-interactive terminals: numbered text selection
-        console.print(f"\n  [bold cyan]? {event.question}[/]")
+        suffix = f" [agent {event.agent_id[:8]}]" if event.agent_id else ""
+        console.print(f"\n  [bold cyan]? {event.question}{suffix}[/]")
         for i, opt in enumerate(event.options, 1):
             console.print(f"    [dim]{i}.[/] {opt}")
 
@@ -823,6 +880,7 @@ async def _prompt_choice(
                     tool_use_id=event.tool_use_id,
                     selected=[],
                     cancelled=True,
+                    agent_id=event.agent_id,
                 )
             )
             return
@@ -844,6 +902,7 @@ async def _prompt_choice(
                     tool_use_id=event.tool_use_id,
                     selected=[],
                     cancelled=True,
+                    agent_id=event.agent_id,
                 )
             )
         else:
@@ -851,8 +910,67 @@ async def _prompt_choice(
                 ChoiceResponseEvent(
                     tool_use_id=event.tool_use_id,
                     selected=selected,
+                    agent_id=event.agent_id,
                 )
             )
+
+
+async def _stream_agent_until_done(
+    session: CoreSession,
+    target_agent_id: str,
+) -> None:
+    active_stream_agent: str | None = None
+    while True:
+        event = await session._agent_event_queue.get()  # type: ignore[attr-defined]
+
+        if isinstance(event, AgentOutputEvent):
+            active_stream_agent = _render_agent_text_chunk(event, active_stream_agent)
+            if event.stream == "tool_use" and event.tool_name:
+                _flush_agent_stream_line(active_stream_agent)
+                active_stream_agent = None
+                console.print(
+                    f"  [dim cyan]↳ agent {event.agent_id[:8]} using {event.tool_name}[/]"
+                )
+            continue
+
+        if isinstance(event, AgentStateEvent):
+            _flush_agent_stream_line(active_stream_agent)
+            active_stream_agent = None
+            style = {
+                "queued": "dim",
+                "running": "cyan",
+                "completed": "green",
+                "failed": "red",
+                "cancelled": "yellow",
+            }.get(event.status, "dim")
+            console.print(
+                f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
+            )
+            if event.agent_id == target_agent_id and event.status in {"completed", "failed", "cancelled"}:
+                break
+            continue
+
+        _flush_agent_stream_line(active_stream_agent)
+        active_stream_agent = None
+
+        if isinstance(event, ToolUseEvent):
+            _render_tool_use(event)
+        elif isinstance(event, ToolResultEvent):
+            if event.tool_name == "AskUser":
+                if event.is_error:
+                    console.print("  [dim yellow]↳ Selection cancelled[/]")
+                else:
+                    console.print(f"  [dim green]↳ {safe_utf8_str(event.result)}[/]")
+            else:
+                _render_tool_result(event)
+        elif isinstance(event, PermissionRequestEvent):
+            await _prompt_permission(event, session)
+        elif isinstance(event, ChoiceRequestEvent):
+            await _prompt_choice(event, session)
+        elif isinstance(event, ErrorEvent):
+            console.print(f"\n[bold red]Error: {safe_utf8_str(event.message)}[/]")
+
+    _flush_agent_stream_line(active_stream_agent)
 
 
 async def run_repl(
@@ -1079,6 +1197,24 @@ async def run_repl(
                             streamed_text = ""
                         _render_tool_use(event)
 
+                elif isinstance(event, AgentStateEvent):
+                    style = {
+                        "queued": "dim",
+                        "running": "cyan",
+                        "completed": "green",
+                        "failed": "red",
+                        "cancelled": "yellow",
+                    }.get(event.status, "dim")
+                    console.print(
+                        f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
+                    )
+
+                elif isinstance(event, AgentOutputEvent):
+                    if event.stream == "tool_use" and event.tool_name:
+                        console.print(
+                            f"  [dim cyan]↳ agent {event.agent_id[:8]} using {event.tool_name}[/]"
+                        )
+
                 elif isinstance(event, PermissionRequestEvent):
                     await _stop_spinner_with_thinking()
                     if streamed_text:
@@ -1183,6 +1319,12 @@ async def _handle_command(
             skills_section = f"\n\n[bold]Skills[/]\n{skill_lines}"
         console.print(Panel(
             "[bold]/help[/] — show this help\n"
+            "[bold]/agents[/] — list managed agents\n"
+            "[bold]/agent <id>[/] — show a managed agent\n"
+            "[bold]/agent-log <id>[/] — show an agent transcript\n"
+            "[bold]/agent-send <id> <prompt>[/] — send more input to an agent\n"
+            "[bold]/wait <id>[/] — wait for a managed agent\n"
+            "[bold]/cancel-agent <id>[/] — cancel a managed agent\n"
             "[bold]/status[/] — show session status (model, context, compactions)\n"
             "[bold]/logs[/] — show background tool logs summary\n"
             "[bold]/logs <name>[/] — show a background log tail\n"
@@ -1400,6 +1542,13 @@ async def _handle_command(
             f"[bold]🧵 Session:[/] {sid_short}",
             f"[bold]⚙️  Config:[/] think={thinking} · max_tokens={max_tok} · tools={tool_display}",
         ]
+        agents = session.list_agents()
+        if agents:
+            active_agents = sum(1 for item in agents if item.status in {"queued", "running"})
+            failed_agents = sum(1 for item in agents if item.status == "failed")
+            lines.append(
+                f"[bold]🤖 Agents:[/] total={len(agents)} · active={active_agents} · failed={failed_agents} · max_concurrency={session.settings.agent.max_concurrency}"
+            )
         if search_status is not None:
             lines.append(f"[bold]🔎 Search:[/] {search_status}")
         console.print(Panel(
@@ -1408,6 +1557,151 @@ async def _handle_command(
             border_style="cyan",
             expand=False,
         ))
+        return True
+
+    if cmd == "/agents":
+        await session.initialize()
+        agents = session.list_agents()
+        if not agents:
+            console.print("[dim]No managed agents.[/]")
+            return True
+        from rich.table import Table
+        table = Table(title="Managed Agents", border_style="blue", expand=False)
+        table.add_column("ID", style="cyan", width=10)
+        table.add_column("Status", style="dim", width=10)
+        table.add_column("Type", style="dim", width=14)
+        table.add_column("Depth", style="dim", width=5)
+        table.add_column("Title")
+        for snapshot in agents[:20]:
+            table.add_row(
+                snapshot.agent_id[:8],
+                snapshot.status,
+                snapshot.subagent_type,
+                str(snapshot.depth),
+                snapshot.title[:60],
+            )
+        console.print(table)
+        return True
+
+    if cmd == "/agent":
+        await session.initialize()
+        if not arg:
+            console.print("[dim]Usage: /agent <agent-id>[/]")
+            return True
+        snapshot = session.get_agent(arg) or next(
+            (item for item in session.list_agents() if item.agent_id.startswith(arg)),
+            None,
+        )
+        if not snapshot:
+            console.print(f"[bold red]Unknown agent: {arg}[/]")
+            return True
+        from crabcode_core.agent_manager import AgentManager
+        console.print(
+            Panel(
+                Text(AgentManager.format_snapshot(snapshot), style="dim"),
+                title=f"[bold]Agent {snapshot.agent_id[:8]}[/]",
+                border_style="cyan",
+                expand=False,
+            )
+        )
+        return True
+
+    if cmd == "/agent-log":
+        await session.initialize()
+        if not arg:
+            console.print("[dim]Usage: /agent-log <agent-id>[/]")
+            return True
+        snapshot = session.get_agent(arg) or next(
+            (item for item in session.list_agents() if item.agent_id.startswith(arg)),
+            None,
+        )
+        if not snapshot:
+            console.print(f"[bold red]Unknown agent: {arg}[/]")
+            return True
+        if not snapshot.transcript_path:
+            console.print("[dim]This agent has no transcript path.[/]")
+            return True
+        path = Path(snapshot.transcript_path)
+        if not path.exists():
+            console.print(f"[dim]Transcript not found: {path}[/]")
+            return True
+        body = _read_log_tail(path, max_lines=200)
+        console.print(
+            Panel(
+                Text(body, style="dim"),
+                title=f"[bold]Agent Log {snapshot.agent_id[:8]}[/]",
+                border_style="blue",
+                expand=False,
+            )
+        )
+        return True
+
+    if cmd == "/agent-send":
+        await session.initialize()
+        if not arg or " " not in arg.strip():
+            console.print("[dim]Usage: /agent-send <agent-id> <prompt>[/]")
+            return True
+        agent_ref, prompt = arg.split(None, 1)
+        snapshot = session.get_agent(agent_ref) or next(
+            (item for item in session.list_agents() if item.agent_id.startswith(agent_ref)),
+            None,
+        )
+        if not snapshot:
+            console.print(f"[bold red]Unknown agent: {agent_ref}[/]")
+            return True
+        ok = await session.send_agent_input(snapshot.agent_id, prompt, interrupt=False)
+        if ok:
+            console.print(f"[green]✓[/] Sent input to agent {snapshot.agent_id[:8]}")
+            if session.settings.agent.stream_send_input_output:
+                await _stream_agent_until_done(session, snapshot.agent_id)
+        else:
+            console.print(f"[bold red]Failed to send input to agent {snapshot.agent_id[:8]}[/]")
+        return True
+
+    if cmd == "/wait":
+        await session.initialize()
+        if not arg:
+            console.print("[dim]Usage: /wait <agent-id>[/]")
+            return True
+        agent = session.get_agent(arg) or next(
+            (item for item in session.list_agents() if item.agent_id.startswith(arg)),
+            None,
+        )
+        if not agent:
+            console.print(f"[bold red]Unknown agent: {arg}[/]")
+            return True
+        snapshot = await session.wait_agent(agent.agent_id, timeout_ms=None)
+        if not snapshot:
+            console.print(f"[bold red]Failed to wait for agent: {arg}[/]")
+            return True
+        from crabcode_core.agent_manager import AgentManager
+        console.print(
+            Panel(
+                Text(AgentManager.format_snapshot(snapshot), style="dim"),
+                title=f"[bold]Agent {snapshot.agent_id[:8]}[/]",
+                border_style="cyan",
+                expand=False,
+            )
+        )
+        return True
+
+    if cmd == "/cancel-agent":
+        await session.initialize()
+        if not arg:
+            console.print("[dim]Usage: /cancel-agent <agent-id>[/]")
+            return True
+        agent = session.get_agent(arg) or next(
+            (item for item in session.list_agents() if item.agent_id.startswith(arg)),
+            None,
+        )
+        if not agent:
+            console.print(f"[bold red]Unknown agent: {arg}[/]")
+            return True
+        ok = await session.cancel_agent(agent.agent_id)
+        if ok:
+            console.print(f"[yellow]Cancelled agent {agent.agent_id[:8]}[/]")
+        else:
+            console.print(f"[dim]Agent {agent.agent_id[:8]} is not running.[/]")
         return True
 
     if cmd == "/new":

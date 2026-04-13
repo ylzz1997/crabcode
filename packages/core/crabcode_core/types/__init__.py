@@ -20,6 +20,8 @@ from crabcode_core.types.tool import (
     ToolResult,
 )
 from crabcode_core.types.event import (
+    AgentOutputEvent,
+    AgentStateEvent,
     CompactEvent,
     CoreEvent,
     ErrorEvent,
@@ -32,6 +34,8 @@ from crabcode_core.types.event import (
     TurnCompleteEvent,
 )
 from crabcode_core.types.config import (
+    AgentSettings,
+    AgentTypeConfig,
     ApiConfig,
     CrabCodeSettings,
     McpServerConfig,
@@ -56,6 +60,8 @@ __all__ = [
     "ToolContext",
     "ToolResult",
     "CompactEvent",
+    "AgentOutputEvent",
+    "AgentStateEvent",
     "CoreEvent",
     "ErrorEvent",
     "PermissionRequestEvent",
@@ -66,6 +72,8 @@ __all__ = [
     "ToolUseEvent",
     "TurnCompleteEvent",
     "ApiConfig",
+    "AgentSettings",
+    "AgentTypeConfig",
     "CrabCodeSettings",
     "McpServerConfig",
     "PermissionRule",

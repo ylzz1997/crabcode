@@ -5,6 +5,13 @@ from crabcode_core.types.tool import Tool, ToolResult, ToolContext
 
 def get_default_tools() -> list[Tool]:
     """Return the default set of built-in tools."""
+    from crabcode_core.tools.agent import (
+        AgentCancelTool,
+        AgentSendInputTool,
+        AgentSpawnTool,
+        AgentStatusTool,
+        AgentWaitTool,
+    )
     from crabcode_core.tools.ask_user import AskUserTool
     from crabcode_core.tools.bash import BashTool
     from crabcode_core.tools.file_read import FileReadTool
@@ -24,6 +31,11 @@ def get_default_tools() -> list[Tool]:
         GlobTool(),
         LintTool(),
         MemoryTool(),
+        AgentSpawnTool(),
+        AgentStatusTool(),
+        AgentWaitTool(),
+        AgentCancelTool(),
+        AgentSendInputTool(),
         AskUserTool(),
     ]
 

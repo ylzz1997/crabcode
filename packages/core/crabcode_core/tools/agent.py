@@ -1,10 +1,12 @@
-"""AgentTool — spawn sub-agents for parallel/isolated work."""
+"""Agent tools — managed sub-agents for parallel/isolated work."""
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any
 
+from crabcode_core.agent_manager import AgentManager
+from crabcode_core.types.config import AgentSettings
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 
@@ -31,17 +33,15 @@ class AgentTool(Tool):
 
     def __init__(
         self,
-        api_adapter: Any = None,
-        tools: list[Tool] | None = None,
-        prompt_profile: Any = None,
+        manager: AgentManager | None = None,
+        settings: AgentSettings | None = None,
         max_turns: int = 10,
         timeout: int = 300,
         max_output_chars: int = 12_000,
         max_display_lines: int = 120,
     ):
-        self._api_adapter = api_adapter
-        self._sub_tools = tools
-        self._prompt_profile = prompt_profile
+        self._manager = manager
+        self._settings = settings or AgentSettings()
         self._max_turns = max_turns
         self._timeout = timeout
         self._max_output_chars = max_output_chars
@@ -83,70 +83,37 @@ class AgentTool(Tool):
                 is_error=True,
             )
 
-        if not self._api_adapter:
+        manager = context.agent_manager or self._manager
+        if not manager:
             return ToolResult(
-                result_for_model="Error: AgentTool requires an API adapter",
+                result_for_model="Error: AgentTool requires an agent manager",
                 is_error=True,
             )
 
-        from crabcode_core.prompts.profile import resolve_agent_prompt
-        from crabcode_core.query.loop import QueryParams, query_loop
-        from crabcode_core.types.message import create_user_message
-
-        sub_messages = [create_user_message(content=prompt)]
-
-        sub_context = ToolContext(
-            cwd=context.cwd,
-            messages=[],
-            session_id=context.session_id,
-            env=context.env,
-        )
-
-        tools = self._sub_tools or []
-        agent_prompt = resolve_agent_prompt(self._prompt_profile)
-
-        params = QueryParams(
-            messages=sub_messages,
-            system_prompt=[agent_prompt],
-            user_context={},
-            system_context={},
-            tools=tools,
-            tool_context=sub_context,
-            api_adapter=self._api_adapter,
-            max_turns=self._max_turns,
-        )
-
-        result_parts: list[str] = []
-
-        async def _collect_results():
-            async for event in query_loop(params):
-                from crabcode_core.types.event import (
-                    ErrorEvent,
-                    StreamTextEvent,
-                    ToolResultEvent,
-                )
-                if isinstance(event, StreamTextEvent):
-                    result_parts.append(event.text)
-                elif isinstance(event, ToolResultEvent):
-                    body = (event.result or "").strip()
-                    if len(body) > self._max_output_chars:
-                        body = body[:self._max_output_chars] + "\n… (truncated)"
-                    result_parts.append(
-                        f"\n\n[Tool {event.tool_name} →]\n{body or '(empty)'}\n"
-                    )
-                elif isinstance(event, ErrorEvent):
-                    result_parts.append(f"\n[Error: {event.message}]")
-
         try:
-            await asyncio.wait_for(_collect_results(), timeout=self._timeout)
+            agent_id = await manager.spawn_agent(
+                prompt=prompt,
+                subagent_type=tool_input.get("subagent_type", "generalPurpose"),
+                parent_agent_id=context.agent_id,
+                parent_tool_use_id=None,
+                depth=context.agent_depth + 1,
+            )
+            snapshot = await manager.wait_agent(agent_id, timeout_ms=self._timeout * 1000)
         except asyncio.TimeoutError:
-            result_parts.append(f"\n[Sub-agent timed out after {self._timeout}s]")
+            return ToolResult(
+                result_for_model=f"status: timed_out\nresult:\nSub-agent timed out after {self._timeout}s",
+                is_error=True,
+            )
+        except ValueError as exc:
+            return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
 
-        result = "".join(result_parts)
-        if not result:
-            result = "Sub-agent completed but produced no text output."
+        if snapshot is None:
+            return ToolResult(
+                result_for_model="status: timeout\nresult:\nSub-agent wait timed out.",
+                is_error=True,
+            )
 
-        # Build a display-friendly version: keep more content but cap by line count
+        result = AgentManager.format_snapshot(snapshot)
         display = result
         lines = display.split("\n")
         if len(lines) > self._max_display_lines:
@@ -154,7 +121,219 @@ class AgentTool(Tool):
             display = kept + f"\n… ({len(lines) - self._max_display_lines} more lines truncated)"
 
         return ToolResult(
-            data={"agent_output": result},
+            data={"agent": snapshot.to_dict()},
             result_for_model=result,
             result_for_display=display,
+            is_error=snapshot.status != "completed",
+        )
+
+
+class AgentSpawnTool(Tool):
+    name = "AgentSpawn"
+    description = "Spawn a managed sub-agent and return its agent_id."
+    is_read_only = False
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "Task for the sub-agent."},
+            "subagent_type": {
+                "type": "string",
+                "enum": ["explore", "generalPurpose"],
+                "description": "Sub-agent type.",
+            },
+            "name": {"type": "string", "description": "Optional title for the sub-agent."},
+            "model_profile": {
+                "type": "string",
+                "description": "Optional model profile override.",
+            },
+        },
+        "required": ["prompt"],
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.agent_manager
+        if not manager:
+            return ToolResult(result_for_model="Error: agent manager unavailable", is_error=True)
+        try:
+            agent_id = await manager.spawn_agent(
+                prompt=tool_input["prompt"],
+                subagent_type=tool_input.get("subagent_type", "generalPurpose"),
+                name=tool_input.get("name"),
+                model_profile=tool_input.get("model_profile"),
+                parent_agent_id=context.agent_id,
+                parent_tool_use_id=None,
+                depth=context.agent_depth + 1,
+            )
+        except ValueError as exc:
+            return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
+        return ToolResult(
+            data={"agent_id": agent_id},
+            result_for_model=f"Spawned agent: {agent_id}",
+        )
+
+
+class AgentStatusTool(Tool):
+    name = "AgentStatus"
+    description = "Inspect one or more managed sub-agents."
+    is_read_only = True
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "agent_id": {
+                "type": "string",
+                "description": "Optional agent ID. Omit to list all agents.",
+            }
+        },
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.agent_manager
+        if not manager:
+            return ToolResult(result_for_model="Error: agent manager unavailable", is_error=True)
+        agent_id = tool_input.get("agent_id")
+        if agent_id:
+            snapshot = manager.get_agent(agent_id)
+            if not snapshot:
+                return ToolResult(result_for_model=f"Error: unknown agent {agent_id}", is_error=True)
+            text = AgentManager.format_snapshot(snapshot)
+            return ToolResult(data={"agents": [snapshot.to_dict()]}, result_for_model=text)
+        snapshots = manager.list_agents()
+        if not snapshots:
+            return ToolResult(data={"agents": []}, result_for_model="No managed agents.")
+        body = "\n\n".join(AgentManager.format_snapshot(snapshot) for snapshot in snapshots)
+        return ToolResult(
+            data={"agents": [snapshot.to_dict() for snapshot in snapshots]},
+            result_for_model=body,
+        )
+
+
+class AgentWaitTool(Tool):
+    name = "AgentWait"
+    description = "Wait for a managed sub-agent to finish."
+    is_read_only = True
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "agent_id": {"type": "string", "description": "Agent ID to wait for."},
+            "agent_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of agent IDs to wait on.",
+            },
+            "wait_any": {
+                "type": "boolean",
+                "description": "If true, return when any listed agent completes.",
+                "default": True,
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "Optional timeout in seconds.",
+            },
+        },
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.agent_manager
+        if not manager:
+            return ToolResult(result_for_model="Error: agent manager unavailable", is_error=True)
+        timeout = tool_input.get("timeout_seconds")
+        timeout_ms = None if timeout is None else int(timeout) * 1000
+        agent_ids = [str(v) for v in tool_input.get("agent_ids", []) if str(v)]
+        agent_id = tool_input.get("agent_id")
+        if agent_id:
+            agent_ids.append(str(agent_id))
+        if not agent_ids:
+            return ToolResult(result_for_model="Error: agent_id or agent_ids is required.", is_error=True)
+        if len(agent_ids) == 1 or not tool_input.get("wait_any", True):
+            snapshot = await manager.wait_agent(agent_ids[0], timeout_ms=timeout_ms)
+        else:
+            snapshot = await manager.wait_any(agent_ids, timeout_ms=timeout_ms)
+        if snapshot is None:
+            return ToolResult(
+                data={"agent_ids": agent_ids, "status": "timeout"},
+                result_for_model="status: timeout\nresult:\nAgent is still running.",
+                is_error=True,
+            )
+        text = AgentManager.format_snapshot(snapshot)
+        return ToolResult(
+            data={"agent": snapshot.to_dict()},
+            result_for_model=text,
+            is_error=snapshot.status not in {"completed", "cancelled", "failed"},
+        )
+
+
+class AgentCancelTool(Tool):
+    name = "AgentCancel"
+    description = "Cancel a running managed sub-agent."
+    is_read_only = False
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "agent_id": {"type": "string", "description": "Agent ID to cancel."}
+        },
+        "required": ["agent_id"],
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.agent_manager
+        if not manager:
+            return ToolResult(result_for_model="Error: agent manager unavailable", is_error=True)
+        cancelled = await manager.cancel_agent(tool_input["agent_id"])
+        if not cancelled:
+            return ToolResult(
+                data={"agent_id": tool_input["agent_id"], "cancelled": False},
+                result_for_model="Error: agent is not running or does not exist.",
+                is_error=True,
+            )
+        snapshot = manager.get_agent(tool_input["agent_id"])
+        text = AgentManager.format_snapshot(snapshot) if snapshot else f"Cancelled agent: {tool_input['agent_id']}"
+        return ToolResult(
+            data={"agent": snapshot.to_dict() if snapshot else None, "cancelled": True},
+            result_for_model=text,
+        )
+
+
+class AgentSendInputTool(Tool):
+    name = "AgentSendInput"
+    description = "Send another prompt to an existing managed sub-agent."
+    is_read_only = False
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "agent_id": {"type": "string", "description": "Agent ID to continue."},
+            "prompt": {"type": "string", "description": "Additional input for the agent."},
+            "interrupt": {
+                "type": "boolean",
+                "description": "Cancel a currently running agent before sending input.",
+                "default": False,
+            },
+        },
+        "required": ["agent_id", "prompt"],
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.agent_manager
+        if not manager:
+            return ToolResult(result_for_model="Error: agent manager unavailable", is_error=True)
+        sent = await manager.send_input(
+            tool_input["agent_id"],
+            tool_input["prompt"],
+            interrupt=bool(tool_input.get("interrupt", False)),
+        )
+        if not sent:
+            return ToolResult(
+                data={"agent_id": tool_input["agent_id"], "sent": False},
+                result_for_model="Error: failed to send input to agent.",
+                is_error=True,
+            )
+        snapshot = manager.get_agent(tool_input["agent_id"])
+        text = AgentManager.format_snapshot(snapshot) if snapshot else f"Sent input to agent: {tool_input['agent_id']}"
+        return ToolResult(
+            data={"agent": snapshot.to_dict() if snapshot else None, "sent": True},
+            result_for_model=text,
         )

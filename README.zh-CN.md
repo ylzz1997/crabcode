@@ -240,13 +240,34 @@ crabcode --model-profile smart    # 简写：-M smart
 
 | 命令 | 说明 |
 |------|------|
-| `/help` | 列出所有命令和可用 Skill |
-| `/model` | 查看当前使用的模型，并列出所有已配置的命名模型 |
-| `/model <名称>` | 切换到 `settings.models` 中定义的某个命名模型 |
-| `/new` | 新建会话（清空对话历史） |
-| `/resume [id]` | 恢复历史会话；省略 `id` 时显示列表供选择 |
-| `/compact` | 压缩当前对话内容，节省上下文窗口 |
-| `/<skill>` | 按名称调用某个 Skill |
+| `/help` | 显示所有可用命令和技能 |
+| `/status` | 显示运行状态（模型、上下文占用、压缩次数、agent 摘要） |
+| `/logs` | 列出后台日志（例如搜索索引日志） |
+| `/logs <名称>` | 查看指定日志尾部 |
+| `/logs -f <名称>` | 实时跟随指定日志（`Ctrl+C` 停止） |
+| `/logs --clear <名称>` | 清空指定日志文件 |
+| `/model` | 查看当前模型与全部命名模型 |
+| `/model <名称>` | 切换到 `settings.models` 中的命名模型 |
+| `/agents` | 列出当前会话中的托管子 agent |
+| `/agent <id>` | 查看单个 agent 的详情（状态、用量、结果、transcript 路径） |
+| `/agent-log <id>` | 查看单个 agent 的持久化 transcript |
+| `/agent-send <id> <提示词>` | 给已有 agent 继续发送输入 |
+| `/wait <id>` | 等待某个 agent 完成并输出摘要 |
+| `/cancel-agent <id>` | 取消运行中的 agent |
+| `/new` | 新建会话（清空内存中的对话历史） |
+| `/compact` | 手动压缩对话历史，节省上下文 |
+| `/clear` | 清空当前内存对话消息 |
+| `/sessions` | 列出最近保存的会话 |
+| `/resume <id>` | 通过完整/前缀 id 或序号恢复会话 |
+| `/exit`, `/quit` | 退出 CrabCode |
+| `/<skill>` | 按名称调用技能（后面可附加用户输入） |
+| `! <shell 命令>` | 在 REPL 里直接执行 shell 命令（不走模型工具循环） |
+
+### 说明
+
+- 需要 `<id>` 的命令一般都支持使用 `/agents` 展示的短前缀。
+- `/agent-send` 是否实时回显由 `settings.json` 中 `agent.stream_send_input_output` 控制。
+- `Ctrl+C` 会中断当前操作；在短时间内再次按 `Ctrl+C` 会退出。
 
 ## 权限控制
 
@@ -482,7 +503,8 @@ name: python-lint
   "agent": {
     "max_turns": 10,
     "timeout": 300,
-    "max_output_chars": 12000
+    "max_output_chars": 12000,
+    "stream_send_input_output": false
   }
 }
 ```
@@ -492,6 +514,7 @@ name: python-lint
 | `max_turns` | 每次子 agent 调用的最大 agentic 轮次 | `10` |
 | `timeout` | 子 agent 的总超时时间（秒） | `300` |
 | `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
+| `stream_send_input_output` | REPL 执行 `/agent-send` 后是否实时流式回显；设为 `false` 时仅发送输入，不自动回显 | `false` |
 
 ## 显示配置
 

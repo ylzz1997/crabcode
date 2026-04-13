@@ -48,6 +48,18 @@ class AgentSettings(BaseModel):
     max_turns: int = 10
     timeout: int = 300
     max_output_chars: int = 12000
+    stream_send_input_output: bool = False
+    max_concurrency: int = 4
+    max_depth: int = 2
+    max_active_agents_per_run: int = 16
+    types: dict[str, "AgentTypeConfig"] = Field(default_factory=dict)
+
+
+class AgentTypeConfig(BaseModel):
+    """Settings for a specific sub-agent type."""
+    model_profile: str | None = None
+    allowed_tools: list[str] = Field(default_factory=list)
+    prompt: str | None = None
 
 
 class DisplaySettings(BaseModel):

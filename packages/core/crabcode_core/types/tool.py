@@ -52,6 +52,9 @@ class ToolContext:
     tool_config: dict[str, Any] = field(default_factory=dict)
     choice_queue: Any | None = None  # asyncio.Queue[ChoiceResponseEvent]
     tool_event_queue: Any | None = None  # asyncio.Queue[CoreEvent] — for tools to emit events mid-execution
+    agent_id: str | None = None
+    agent_depth: int = 0
+    agent_manager: Any | None = None
 
 
 CanUseToolFn = Callable[

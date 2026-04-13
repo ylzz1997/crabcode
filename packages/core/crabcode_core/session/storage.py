@@ -47,6 +47,21 @@ def get_transcript_path(cwd: str, session_id: str) -> Path:
     return get_project_dir(cwd) / f"{session_id}.jsonl"
 
 
+def get_agent_meta_path(cwd: str, session_id: str) -> Path:
+    """Get the path for a session's managed-agent metadata."""
+    return get_project_dir(cwd) / f"{session_id}.agents.json"
+
+
+def get_agent_transcript_dir(cwd: str, session_id: str) -> Path:
+    """Get the directory for managed-agent transcripts for a session."""
+    return get_project_dir(cwd) / f"{session_id}.agents"
+
+
+def get_agent_transcript_path(cwd: str, session_id: str, agent_id: str) -> Path:
+    """Get the transcript path for a managed agent."""
+    return get_agent_transcript_dir(cwd, session_id) / f"{agent_id}.jsonl"
+
+
 def generate_session_id() -> str:
     return str(uuid.uuid4())
 
@@ -94,6 +109,77 @@ class SessionStorage:
         if not self._initialized:
             self._transcript_path.parent.mkdir(parents=True, exist_ok=True)
             self._initialized = True
+
+    def write_agent_snapshots(self, snapshots: list[dict[str, Any]]) -> None:
+        """Persist managed-agent metadata for this session."""
+        self._ensure_dir()
+        path = get_agent_meta_path(self.cwd, self.session_id)
+        try:
+            path.write_text(
+                json.dumps(snapshots, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def append_agent_messages(
+        self,
+        agent_id: str,
+        messages: list[Message],
+    ) -> None:
+        """Persist a managed agent's transcript."""
+        if not messages:
+            return
+        self._ensure_dir()
+        path = get_agent_transcript_path(self.cwd, self.session_id, agent_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            for message in messages:
+                entry = {
+                    "type": message.role.value,
+                    "uuid": message.uuid,
+                    "parent_uuid": message.parent_uuid,
+                    "timestamp": message.timestamp,
+                    "content": message.content if isinstance(message.content, str) else [
+                        block.model_dump() for block in message.content
+                    ],
+                }
+                f.write(_dump_jsonl_line(entry))
+
+    def load_agent_messages(self, agent_id: str) -> list[dict[str, Any]]:
+        """Load a managed agent transcript."""
+        path = get_agent_transcript_path(self.cwd, self.session_id, agent_id)
+        if not path.exists():
+            return []
+        messages: list[dict[str, Any]] = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(entry, dict):
+                        messages.append(entry)
+        except Exception:
+            return []
+        return messages
+
+    def load_agent_snapshots(self) -> list[dict[str, Any]]:
+        """Load managed-agent metadata for this session."""
+        path = get_agent_meta_path(self.cwd, self.session_id)
+        if not path.exists():
+            return []
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        return []
 
     def write_meta(
         self,

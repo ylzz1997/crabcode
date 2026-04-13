@@ -28,6 +28,7 @@ class ToolUseEvent:
     tool_name: str
     tool_input: dict[str, Any]
     tool_use_id: str
+    agent_id: str | None = None
 
 
 @dataclass
@@ -38,6 +39,7 @@ class ToolResultEvent:
     result: str
     is_error: bool = False
     result_for_display: str | None = None
+    agent_id: str | None = None
 
 
 @dataclass
@@ -46,6 +48,7 @@ class PermissionRequestEvent:
     tool_name: str
     tool_input: dict[str, Any]
     tool_use_id: str
+    agent_id: str | None = None
 
 
 @dataclass
@@ -54,6 +57,7 @@ class PermissionResponseEvent:
     tool_use_id: str
     allowed: bool
     always_allow: bool = False
+    agent_id: str | None = None
 
 
 @dataclass
@@ -87,6 +91,7 @@ class ChoiceRequestEvent:
     question: str
     options: list[str]
     multiple: bool = False
+    agent_id: str | None = None
 
 
 @dataclass
@@ -95,6 +100,7 @@ class ChoiceResponseEvent:
     tool_use_id: str
     selected: list[str]
     cancelled: bool = False
+    agent_id: str | None = None
 
 
 @dataclass
@@ -107,6 +113,28 @@ class StreamModeEvent:
       - "responding": model is streaming text output
     """
     mode: str
+    agent_id: str | None = None
+
+
+@dataclass
+class AgentStateEvent:
+    """Lifecycle update for a managed sub-agent."""
+    agent_id: str
+    parent_agent_id: str | None
+    status: str
+    subagent_type: str
+    title: str
+    message: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AgentOutputEvent:
+    """Streamed output or tool activity from a managed sub-agent."""
+    agent_id: str
+    stream: str
+    text: str
+    tool_name: str | None = None
 
 
 CoreEvent = Union[
@@ -120,4 +148,6 @@ CoreEvent = Union[
     ErrorEvent,
     TurnCompleteEvent,
     StreamModeEvent,
+    AgentStateEvent,
+    AgentOutputEvent,
 ]

@@ -240,13 +240,34 @@ This gives you a precise audit trail of every change made.
 
 | Command | Description |
 |---------|-------------|
-| `/help` | List all commands and available skills |
-| `/model` | Show active model and list all configured named models |
-| `/model <name>` | Switch to a named model defined in `settings.models` |
-| `/new` | Start a fresh session (clears conversation history) |
-| `/resume [id]` | Resume a previous session; omit `id` to pick from a list |
-| `/compact` | Summarize the current conversation to save context window |
-| `/<skill>` | Invoke a skill by name |
+| `/help` | Show all available commands and skills |
+| `/status` | Show runtime status (model, context usage, compactions, agent summary) |
+| `/logs` | List background logs (for example search index logs) |
+| `/logs <name>` | Show tail of a specific log |
+| `/logs -f <name>` | Follow a specific log in real time (`Ctrl+C` to stop) |
+| `/logs --clear <name>` | Clear a specific log file |
+| `/model` | Show active model and all configured named models |
+| `/model <name>` | Switch to a named model from `settings.models` |
+| `/agents` | List managed sub-agents in the current session |
+| `/agent <id>` | Show details for one agent (`status`, `usage`, `result`, transcript path) |
+| `/agent-log <id>` | Show the stored transcript for one agent |
+| `/agent-send <id> <prompt>` | Send additional input to an existing agent |
+| `/wait <id>` | Wait for one agent to finish and print its summary |
+| `/cancel-agent <id>` | Cancel a running agent |
+| `/new` | Start a fresh session (clear in-memory conversation history) |
+| `/compact` | Manually compact conversation history to save context |
+| `/clear` | Clear current in-memory conversation messages |
+| `/sessions` | List recent saved sessions |
+| `/resume <id>` | Resume a saved session by full/partial id or index |
+| `/exit`, `/quit` | Exit CrabCode |
+| `/<skill>` | Invoke a skill by name (optional user input can follow) |
+| `! <shell command>` | Run a shell command directly from REPL (outside model tool loop) |
+
+### Notes
+
+- For commands that take `<id>`, you can usually pass the leading prefix shown by `/agents`.
+- `/agent-send` live output is controlled by `agent.stream_send_input_output` in `settings.json`.
+- `Ctrl+C` interrupts the current operation; pressing `Ctrl+C` again within a few seconds exits.
 
 ## Permissions
 
@@ -481,7 +502,8 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
   "agent": {
     "max_turns": 10,
     "timeout": 300,
-    "max_output_chars": 12000
+    "max_output_chars": 12000,
+    "stream_send_input_output": false
   }
 }
 ```
@@ -491,6 +513,7 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
 | `max_turns` | Maximum agentic turns per sub-agent invocation | `10` |
 | `timeout` | Total wall-clock timeout in seconds for a sub-agent | `300` |
 | `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
+| `stream_send_input_output` | Stream live output after `/agent-send` in REPL; set `false` to send input silently | `false` |
 
 ## Display Settings
 
