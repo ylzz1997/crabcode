@@ -55,6 +55,7 @@ class CoreSession:
         self.compact_count: int = 0
         self._agent_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
         self._agent_manager: AgentManager | None = None
+        self._hook_manager: Any = None
 
     async def initialize(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
@@ -109,6 +110,14 @@ class CoreSession:
         elif file_settings.tool_settings:
             for name, cfg in file_settings.tool_settings.items():
                 merged.tool_settings.setdefault(name, {}).update(cfg)
+        if file_settings.hooks and not self.settings.hooks:
+            merged.hooks = file_settings.hooks
+        elif file_settings.hooks:
+            for event_name, cfg_list in file_settings.hooks.items():
+                existing = merged.hooks.setdefault(event_name, [])
+                for item in cfg_list:
+                    if item not in existing:
+                        existing.append(item)
 
         # Keep a /model switch that ran before the first initialize() (late init).
         chosen = self._current_model_name
@@ -134,6 +143,9 @@ class CoreSession:
         self._permission_manager = PermissionManager(
             settings=merged.permissions,
         )
+        from crabcode_core.hooks.manager import HookManager
+
+        self._hook_manager = HookManager(merged.hooks)
 
         async def _push_agent_event(event: CoreEvent) -> None:
             await self._agent_event_queue.put(event)
@@ -220,6 +232,7 @@ class CoreSession:
             transcript_writer=_write_agent_transcript,
             transcript_loader=_load_agent_transcript,
             transcript_path_getter=_agent_transcript_path,
+            hook_manager=self._hook_manager,
         )
 
         has_agent = any(isinstance(t, AgentTool) for t in self.tools)
@@ -314,12 +327,42 @@ class CoreSession:
         from crabcode_core.prompts.profile import PromptProfile
         from crabcode_core.prompts.system import get_system_prompt
         from crabcode_core.query.loop import QueryParams, query_loop
-        from crabcode_core.types.event import CompactEvent, TurnCompleteEvent
+        from crabcode_core.types.event import CompactEvent, ErrorEvent, TurnCompleteEvent
         from crabcode_core.types.message import create_user_message
         from crabcode_core.types.tool import ToolContext
 
-        user_msg = create_user_message(content=text)
+        user_msg_content = text
+        hook_blocked_reason = ""
+        if self._hook_manager:
+            hook_result = await self._hook_manager.run(
+                "user_prompt_submit",
+                {"user_text": text},
+                cwd=self.cwd,
+                env=self.settings.env,
+            )
+            if hook_result.feedback:
+                payload = "\n\n".join(
+                    f"<user-prompt-submit-hook>\n{feedback}\n</user-prompt-submit-hook>"
+                    for feedback in hook_result.feedback
+                    if feedback
+                )
+                if payload:
+                    user_msg_content = f"{text}\n\n{payload}" if text else payload
+            if hook_result.blocked:
+                hook_blocked_reason = "; ".join(hook_result.details or []) or "blocked by user_prompt_submit hook"
+
+        user_msg = create_user_message(content=user_msg_content)
         self.messages.append(user_msg)
+
+        if hook_blocked_reason:
+            if self._session_storage:
+                self._session_storage.append_message(user_msg)
+            yield ErrorEvent(
+                message=f"Prompt blocked by hook: {hook_blocked_reason}",
+                recoverable=True,
+                error_type="hook",
+            )
+            return
 
         # --- Skill auto-trigger ---
         if self.skills:
@@ -428,6 +471,7 @@ class CoreSession:
             max_turns=max_turns or 0,
             permission_manager=self._permission_manager,
             permission_queue=self._permission_queue,
+            hook_manager=self._hook_manager,
         )
 
         pre_loop_count = len(self.messages)

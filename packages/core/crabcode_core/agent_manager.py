@@ -114,6 +114,7 @@ class AgentManager:
         transcript_writer: Callable[[str, list[Message]], None] | None = None,
         transcript_loader: Callable[[str], list[dict[str, Any]]] | None = None,
         transcript_path_getter: Callable[[str], str] | None = None,
+        hook_manager: Any = None,
     ) -> None:
         self._settings = settings
         self._agent_settings = agent_settings
@@ -130,6 +131,7 @@ class AgentManager:
         self._transcript_writer = transcript_writer
         self._transcript_loader = transcript_loader
         self._transcript_path_getter = transcript_path_getter
+        self._hook_manager = hook_manager
         self._runs: dict[str, _AgentRun] = {}
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max(1, agent_settings.max_concurrency))
@@ -447,6 +449,7 @@ class AgentManager:
                     max_turns=self._agent_settings.max_turns,
                     permission_manager=self._permission_manager,
                     permission_queue=run.permission_queue,
+                    hook_manager=self._hook_manager,
                 )
                 final_usage: dict[str, Any] = {}
                 async for event in query_loop(params):

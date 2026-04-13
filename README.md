@@ -112,6 +112,47 @@ Or configure in `~/.crabcode/settings.json`:
 
 The `env` map lets you define environment variables directly in the config file — they are injected at startup so you don't need to `export` them in your shell.
 
+### Hooks (Tool Call Hooks)
+
+`settings.json` supports hooks that run shell commands on these events:
+
+- `user_prompt_submit`: fires when a user message is submitted
+- `pre_tool_call`: fires before a tool call (can block that tool call)
+- `post_tool_call`: fires after a tool call
+
+Example:
+
+```json
+{
+  "hooks": {
+    "pre_tool_call": [
+      {
+        "matcher": "Bash",
+        "command": "echo '[pre] tool=$CRABCODE_HOOK_TOOL_NAME'"
+      }
+    ],
+    "post_tool_call": [
+      {
+        "matcher": "Bash",
+        "command": "echo '[post] tool=$CRABCODE_HOOK_TOOL_NAME'"
+      }
+    ],
+    "user_prompt_submit": [
+      {
+        "command": "echo '[submit] ok'"
+      }
+    ]
+  }
+}
+```
+
+Notes:
+
+- A non-zero exit code means hook failure; a failing `pre_tool_call` blocks that tool execution.
+- Use `continue_on_error: true` (or `continueOnError: true`) to keep going on hook failures.
+- Claude-style `PreToolUse` / `PostToolUse` keys and nested `hooks: [{\"type\":\"command\", ...}]` are also supported.
+- Runtime env vars include `CRABCODE_HOOK_EVENT`, `CRABCODE_HOOK_PAYLOAD`, `CRABCODE_HOOK_TOOL_NAME`, `CRABCODE_HOOK_TOOL_USE_ID`, and `CRABCODE_HOOK_AGENT_ID`.
+
 ### Multiple Named Models
 
 Define multiple model profiles in `settings.json` and switch between them at runtime without restarting:

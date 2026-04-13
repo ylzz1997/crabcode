@@ -112,6 +112,47 @@ crabcode --provider router --base-url https://my-router.example.com/v1 --api-for
 
 `env` 字段用于直接在配置文件中定义环境变量，启动时会自动注入，无需在 shell 中 `export`。
 
+### Hooks（工具调用钩子）
+
+`settings.json` 支持配置 hooks，在以下事件触发 shell 命令：
+
+- `user_prompt_submit`：用户消息提交时触发
+- `pre_tool_call`：工具调用前触发（可阻断本次工具调用）
+- `post_tool_call`：工具调用后触发
+
+示例：
+
+```json
+{
+  "hooks": {
+    "pre_tool_call": [
+      {
+        "matcher": "Bash",
+        "command": "echo '[pre] tool=$CRABCODE_HOOK_TOOL_NAME'"
+      }
+    ],
+    "post_tool_call": [
+      {
+        "matcher": "Bash",
+        "command": "echo '[post] tool=$CRABCODE_HOOK_TOOL_NAME'"
+      }
+    ],
+    "user_prompt_submit": [
+      {
+        "command": "echo '[submit] ok'"
+      }
+    ]
+  }
+}
+```
+
+说明：
+
+- hook 命令退出码非 0 视为失败，`pre_tool_call` 失败会阻断该次工具执行。
+- 可通过 `continue_on_error: true`（或 `continueOnError: true`）让失败不阻断流程。
+- 支持 Claude 风格的 `PreToolUse` / `PostToolUse` 及嵌套 `hooks: [{\"type\":\"command\", ...}]` 写法。
+- 运行时会注入环境变量：`CRABCODE_HOOK_EVENT`、`CRABCODE_HOOK_PAYLOAD`、`CRABCODE_HOOK_TOOL_NAME`、`CRABCODE_HOOK_TOOL_USE_ID`、`CRABCODE_HOOK_AGENT_ID`。
+
 ### 多模型配置与切换
 
 在 `settings.json` 中预定义多个命名模型，无需重启即可在会话中随时切换：

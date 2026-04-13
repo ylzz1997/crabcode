@@ -50,6 +50,7 @@ class QueryParams:
     max_turns: int = 0
     permission_manager: Any = None
     permission_queue: asyncio.Queue | None = None
+    hook_manager: Any = None
 
 
 def _append_system_context(
@@ -104,11 +105,12 @@ async def _run_tools(
     assistant_msg: AssistantMessage,
     tools: list[Tool],
     context: ToolContext,
-) -> AsyncGenerator[tuple[Message, CoreEvent] | CoreEvent, None]:
+    hook_manager: Any = None,
+) -> AsyncGenerator[tuple[list[Message], CoreEvent] | CoreEvent, None]:
     """Execute tool calls, yielding result events and mid-execution events.
 
     Runs concurrency-safe tools in parallel, others sequentially.
-    Yields either (message, ToolResultEvent) tuples or standalone
+    Yields either (messages, ToolResultEvent) tuples or standalone
     CoreEvents (e.g. ChoiceRequestEvent) emitted by tools during execution.
 
     When a tool puts events into context.tool_event_queue (e.g. AskUserTool
@@ -127,7 +129,21 @@ async def _run_tools(
         else:
             unsafe.append(block)
 
-    async def execute_one(block: ToolUseBlock) -> tuple[Message, CoreEvent]:
+    def _hook_feedback_messages(tag: str, feedbacks: list[str] | None) -> list[Message]:
+        if not feedbacks:
+            return []
+        msgs: list[Message] = []
+        for text in feedbacks:
+            if not text:
+                continue
+            msgs.append(
+                create_user_message(
+                    content=f"<{tag}>\n{text}\n</{tag}>"
+                )
+            )
+        return msgs
+
+    async def execute_one(block: ToolUseBlock) -> tuple[list[Message], CoreEvent]:
         tool = _find_tool(tools, block.name)
         if not tool:
             msg = create_tool_result_message(
@@ -142,7 +158,7 @@ async def _run_tools(
                 result=f"Error: unknown tool '{block.name}'",
                 is_error=True,
             )
-            return msg, event
+            return [msg], event
 
         validation_error = await tool.validate_input(block.input)
         if validation_error:
@@ -158,7 +174,42 @@ async def _run_tools(
                 result=f"Validation error: {validation_error}",
                 is_error=True,
             )
-            return msg, event
+            return [msg], event
+
+        extra_messages: list[Message] = []
+        if hook_manager:
+            pre_result = await hook_manager.run(
+                "pre_tool_call",
+                {
+                    "tool_name": block.name,
+                    "tool_input": block.input,
+                    "tool_use_id": block.id,
+                    "agent_id": context.agent_id,
+                },
+                cwd=context.cwd,
+                env=context.env,
+            )
+            extra_messages.extend(
+                _hook_feedback_messages(
+                    "pre-tool-call-hook",
+                    pre_result.feedback,
+                )
+            )
+            if pre_result.blocked:
+                reason = "; ".join(pre_result.details or []) or "blocked by pre_tool_call hook"
+                msg = create_tool_result_message(
+                    tool_use_id=block.id,
+                    result=f"Hook blocked tool call: {reason}",
+                    is_error=True,
+                    source_tool_assistant_uuid=assistant_msg.uuid,
+                )
+                event = ToolResultEvent(
+                    tool_use_id=block.id,
+                    tool_name=block.name,
+                    result=f"Hook blocked tool call: {reason}",
+                    is_error=True,
+                )
+                return [*extra_messages, msg], event
 
         try:
             result = await tool.call(block.input, context)
@@ -167,6 +218,34 @@ async def _run_tools(
                 result_for_model=f"Error executing tool: {e}",
                 is_error=True,
             )
+
+        if hook_manager:
+            post_result = await hook_manager.run(
+                "post_tool_call",
+                {
+                    "tool_name": block.name,
+                    "tool_input": block.input,
+                    "tool_use_id": block.id,
+                    "agent_id": context.agent_id,
+                    "tool_result": result.result_for_model,
+                    "tool_is_error": result.is_error,
+                },
+                cwd=context.cwd,
+                env=context.env,
+            )
+            extra_messages.extend(
+                _hook_feedback_messages(
+                    "post-tool-call-hook",
+                    post_result.feedback,
+                )
+            )
+            if post_result.blocked:
+                reason = "; ".join(post_result.details or []) or "post_tool_call hook failed"
+                result = ToolResult(
+                    result_for_model=f"{result.result_for_model}\n\nPost hook error: {reason}",
+                    result_for_display=result.result_for_display,
+                    is_error=True,
+                )
 
         msg = create_tool_result_message(
             tool_use_id=block.id,
@@ -181,11 +260,11 @@ async def _run_tools(
             is_error=result.is_error,
             result_for_display=result.result_for_display,
         )
-        return msg, event
+        return [*extra_messages, msg], event
 
     async def _run_with_event_drain(
-        coro: Coroutine[Any, Any, tuple[Message, CoreEvent]],
-    ) -> AsyncGenerator[tuple[Message, CoreEvent] | CoreEvent, None]:
+        coro: Coroutine[Any, Any, tuple[list[Message], CoreEvent]],
+    ) -> AsyncGenerator[tuple[list[Message], CoreEvent] | CoreEvent, None]:
         """Run a tool coroutine while draining mid-execution events from the queue.
 
         This solves the deadlock: a tool like AskUserTool puts a ChoiceRequestEvent
@@ -242,8 +321,8 @@ async def _run_tools(
 
     # Unsafe tools run sequentially with event draining
     for block in unsafe:
-        async for item in _run_with_event_drain(execute_one(block)):
-            yield item
+            async for item in _run_with_event_drain(execute_one(block)):
+                yield item
 
 
 async def query_loop(
@@ -483,11 +562,15 @@ async def query_loop(
         if approved_blocks:
             yield StreamModeEvent(mode="tool-running")
             async for item in _run_tools(
-                approved_blocks, assistant_msg, params.tools, params.tool_context
+                approved_blocks,
+                assistant_msg,
+                params.tools,
+                params.tool_context,
+                params.hook_manager,
             ):
                 if isinstance(item, tuple):
-                    msg, event = item
-                    messages.append(msg)
+                    msgs, event = item
+                    messages.extend(msgs)
                     yield event
                 else:
                     # Mid-execution event (e.g. ChoiceRequestEvent)
