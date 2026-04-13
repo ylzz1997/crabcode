@@ -21,6 +21,7 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.glob import GlobTool
     from crabcode_core.tools.lint import LintTool
     from crabcode_core.tools.memory import MemoryTool
+    from crabcode_core.tools.web_search import WebSearchTool
 
     return [
         BashTool(),
@@ -29,6 +30,7 @@ def get_default_tools() -> list[Tool]:
         FileWriteTool(),
         GrepTool(),
         GlobTool(),
+        WebSearchTool(),
         LintTool(),
         MemoryTool(),
         AgentSpawnTool(),

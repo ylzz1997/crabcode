@@ -440,7 +440,7 @@ class CoreSession:
                     messages_after=len(self.messages),
                 )
 
-        tool_names = [t.name for t in self.tools]
+        tool_names = [t.name for t in self.tools if t.is_enabled]
         active_api_cfg = self.settings.get_api_config(self._current_model_name)
         model = active_api_cfg.model or "claude-sonnet-4-20250514"
 

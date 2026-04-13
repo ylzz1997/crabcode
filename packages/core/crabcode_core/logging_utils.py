@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from crabcode_core.types.config import LoggingSettings
+if TYPE_CHECKING:
+    from crabcode_core.types.config import LoggingSettings
 
 
 LOG_NAMESPACE = "crabcode"
@@ -48,6 +50,8 @@ def get_log_path(cwd: str, settings: LoggingSettings | None = None) -> Path:
 def configure_logging(cwd: str, settings: LoggingSettings | None = None) -> Path:
     """Configure the shared CrabCode logger to write to a project log file."""
     global _configured_signature
+
+    from crabcode_core.types.config import LoggingSettings
 
     logging_settings = settings or LoggingSettings()
     level_name = logging_settings.level.upper()

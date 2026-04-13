@@ -84,6 +84,17 @@ class PermissionManager:
         """Add a runtime allow rule (for 'always allow' during a session)."""
         self.settings.allow.append(PermissionRule(tool=tool_name))
 
+    def has_explicit_allow(
+        self,
+        tool: Tool,
+        tool_input: dict[str, Any],
+    ) -> bool:
+        """Return whether an explicit allow rule matches this tool call."""
+        for rule in self.settings.allow:
+            if self._matches_rule(rule, tool, tool_input):
+                return True
+        return False
+
     def _matches_rule(
         self,
         rule: PermissionRule,

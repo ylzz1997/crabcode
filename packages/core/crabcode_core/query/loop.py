@@ -515,10 +515,71 @@ async def query_loop(
                 approved_blocks.append(block)
                 continue
 
-            perm = params.permission_manager.check(tool, block.input)
+            effective_block = block.model_copy(deep=True)
+            perm = params.permission_manager.check(tool, effective_block.input)
 
             if perm.behavior == PermissionBehavior.ALLOW:
-                approved_blocks.append(block)
+                explicit_allow = params.permission_manager.has_explicit_allow(
+                    tool,
+                    effective_block.input,
+                )
+                if explicit_allow:
+                    approved_blocks.append(effective_block)
+                    continue
+
+                tool_perm = await tool.check_permissions(
+                    effective_block.input,
+                    params.tool_context,
+                )
+                if tool_perm.updated_input is not None:
+                    effective_block.input = tool_perm.updated_input
+
+                if tool_perm.behavior == PermissionBehavior.ALLOW:
+                    approved_blocks.append(effective_block)
+                elif tool_perm.behavior == PermissionBehavior.DENY:
+                    reason = tool_perm.reason or "denied by tool policy"
+                    msg = create_tool_result_message(
+                        tool_use_id=effective_block.id,
+                        result=f"Permission denied: {reason}",
+                        is_error=True,
+                        source_tool_assistant_uuid=assistant_msg.uuid,
+                    )
+                    messages.append(msg)
+                    yield ToolResultEvent(
+                        tool_use_id=effective_block.id,
+                        tool_name=effective_block.name,
+                        result=f"Permission denied: {reason}",
+                        is_error=True,
+                    )
+                elif tool_perm.behavior == PermissionBehavior.ASK:
+                    yield PermissionRequestEvent(
+                        tool_name=effective_block.name,
+                        tool_input=effective_block.input,
+                        tool_use_id=effective_block.id,
+                    )
+                    response = await params.permission_queue.get()
+                    if response.allowed:
+                        if response.always_allow:
+                            params.permission_manager.add_allow_rule(tool.name)
+                        approved_blocks.append(effective_block)
+                    else:
+                        msg = create_tool_result_message(
+                            tool_use_id=effective_block.id,
+                            result=(
+                                "Permission denied by user. Do not retry the same "
+                                "tool call. Explain what you wanted to do and ask "
+                                "for guidance."
+                            ),
+                            is_error=True,
+                            source_tool_assistant_uuid=assistant_msg.uuid,
+                        )
+                        messages.append(msg)
+                        yield ToolResultEvent(
+                            tool_use_id=effective_block.id,
+                            tool_name=effective_block.name,
+                            result="Permission denied by user.",
+                            is_error=True,
+                        )
             elif perm.behavior == PermissionBehavior.DENY:
                 reason = perm.reason or "denied by rules"
                 msg = create_tool_result_message(

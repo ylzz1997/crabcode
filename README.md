@@ -227,6 +227,7 @@ Switching does not clear conversation history — you can mix models freely with
 | `StrReplace` | write | Precise in-place text replacement |
 | `Glob` | read | Find files by glob pattern |
 | `Grep` | read | Search file contents with regex |
+| `WebSearch` | read | Search the public web for current external information |
 | `Lint` | read | Run linters and type-checkers |
 | `Memory` | write | Store and retrieve persistent notes |
 | `AskUser` | read | Present choices to the user and wait for selection |
@@ -287,6 +288,35 @@ The `AskUser` tool lets the agent present a question with multiple options and w
 
 In **pipe mode** (non-interactive), the first option is auto-selected.
 
+### WebSearch
+
+The `WebSearch` tool searches the public web and returns compact search results with titles, URLs, and snippets.
+
+- **Default provider order** — Tavily first when `TAVILY_API_KEY` is configured, otherwise DuckDuckGo HTML search
+- **Offline behavior** — if CrabCode cannot detect outbound network access during session startup, `WebSearch` is disabled for that session and is not exposed to the model
+- **Permission behavior** — `WebSearch` is read-only, but still asks for confirmation before each network request
+
+Configure via `tool_settings.WebSearch` in `settings.json`:
+
+```json
+{
+  "tool_settings": {
+    "WebSearch": {
+      "provider": "auto",
+      "api_key_env": "TAVILY_API_KEY",
+      "timeout_seconds": 8,
+      "max_results": 5
+    }
+  }
+}
+```
+
+Supported `provider` values:
+
+- `"auto"` — use Tavily when configured, otherwise DuckDuckGo; if Tavily fails at runtime, retry with DuckDuckGo once
+- `"tavily"` — require a configured API key and use Tavily only
+- `"ddg"` — use DuckDuckGo only
+
 ### Diff Display
 
 When the agent edits a file via `StrReplace` or `Write`, the terminal shows a compact inline diff:
@@ -345,7 +375,7 @@ Before executing any tool that modifies files or runs shell commands, CrabCode p
 - **n** — deny; the model is told the call was rejected and should not retry it
 - **a** — always allow calls to this tool for the rest of the session (no more prompts)
 
-Read-only tools (`Read`, `Glob`, `Grep`) are always allowed without prompting.
+Read-only tools (`Read`, `Glob`, `Grep`) are always allowed without prompting. `WebSearch` is the exception: it is read-only, but still asks for confirmation before each network request.
 
 ### Permission rules
 
@@ -611,6 +641,7 @@ Built-in tool line limits:
 | `Glob` | `30` |
 | `Read` | `80` |
 | `Lint` | `60` |
+| `WebSearch` | `50` |
 | `CodebaseSearch` | `50` |
 | Others | `50` (i.e. `default_max_lines`) |
 
@@ -792,7 +823,7 @@ crabcode/
 │   │   ├── types/              # Pydantic types (Message, Tool, Event, Config)
 │   │   ├── api/                # API adapters (Anthropic, OpenAI, Router)
 │   │   ├── query/              # Agentic turn loop
-│   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, Lint, Memory, AskUser)
+│   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, WebSearch, Lint, Memory, AskUser)
 │   │   ├── skills/             # Skill loading + auto-trigger matching (SkillDefinition, load_skills, auto_match)
 │   │   ├── prompts/            # System prompt construction
 │   │   ├── mcp/                # MCP server integration

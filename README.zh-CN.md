@@ -227,6 +227,7 @@ crabcode --model-profile smart    # 简写：-M smart
 | `StrReplace` | 写 | 精确的原地文本替换 |
 | `Glob` | 读 | 按 glob 模式查找文件 |
 | `Grep` | 读 | 用正则表达式搜索文件内容 |
+| `WebSearch` | 读 | 搜索公共互联网中的当前信息 |
 | `Lint` | 读 | 运行代码检查器和类型检查器 |
 | `Memory` | 写 | 存储和读取持久化笔记 |
 | `AskUser` | 读 | 向用户展示选项并等待选择 |
@@ -287,6 +288,35 @@ crabcode --model-profile smart    # 简写：-M smart
 
 在 **管道模式**（非交互）下，会自动选择第一个选项。
 
+### WebSearch（联网搜索）
+
+`WebSearch` 工具用于搜索公共互联网，并返回包含标题、URL 和摘要的精简结果。
+
+- **默认后端顺序**：如果配置了 `TAVILY_API_KEY`，优先使用 Tavily；否则使用 DuckDuckGo HTML 搜索
+- **离线行为**：如果 CrabCode 在会话启动时检测不到外网连通性，则该会话内会禁用 `WebSearch`，并且不会把它暴露给模型
+- **权限行为**：`WebSearch` 虽然是只读工具，但每次发起网络请求前仍会请求确认
+
+可通过 `settings.json` 中的 `tool_settings.WebSearch` 配置：
+
+```json
+{
+  "tool_settings": {
+    "WebSearch": {
+      "provider": "auto",
+      "api_key_env": "TAVILY_API_KEY",
+      "timeout_seconds": 8,
+      "max_results": 5
+    }
+  }
+}
+```
+
+`provider` 支持以下取值：
+
+- `"auto"`：配置了 Tavily 就先用 Tavily，否则用 DuckDuckGo；如果 Tavily 运行时失败，会回退到 DuckDuckGo 一次
+- `"tavily"`：要求必须配置 API key，只使用 Tavily
+- `"ddg"`：只使用 DuckDuckGo
+
 ### Diff 显示
 
 通过 `StrReplace` 或 `Write` 修改文件时，终端会展示精简的内联 diff：
@@ -345,7 +375,7 @@ crabcode --model-profile smart    # 简写：-M smart
 - **n** — 拒绝；模型会收到"已被拒绝，不要重试"的提示
 - **a** — 本次会话内始终允许该工具，不再询问
 
-只读工具（`Read`、`Glob`、`Grep`）始终自动允许，不会弹出确认。
+只读工具（`Read`、`Glob`、`Grep`）始终自动允许，不会弹出确认。`WebSearch` 是例外：它虽然只读，但每次网络请求前仍会请求确认。
 
 ### 权限规则
 
@@ -612,6 +642,7 @@ name: python-lint
 | `Glob` | `30` |
 | `Read` | `80` |
 | `Lint` | `60` |
+| `WebSearch` | `50` |
 | `CodebaseSearch` | `50` |
 | 其他 | `50`（即 `default_max_lines`） |
 
@@ -793,7 +824,7 @@ crabcode/
 │   │   ├── types/              # Pydantic 类型定义（Message、Tool、Event、Config）
 │   │   ├── api/                # API 适配器（Anthropic、OpenAI、Router）
 │   │   ├── query/              # Agent 对话循环
-│   │   ├── tools/              # 内置工具（Bash、Read、Edit、Write、Grep、Glob、Lint、Memory、AskUser）
+│   │   ├── tools/              # 内置工具（Bash、Read、Edit、Write、Grep、Glob、WebSearch、Lint、Memory、AskUser）
 │   │   ├── skills/             # Skill 加载 + 自动触发匹配（SkillDefinition、load_skills、auto_match）
 │   │   ├── prompts/            # 系统提示词构造
 │   │   ├── mcp/                # MCP 服务器集成
