@@ -369,6 +369,27 @@ def test_wait_any_returns_first_completed_agent():
     asyncio.run(_run())
 
 
+def test_spawned_agents_always_run_in_agent_mode():
+    async def _run():
+        with _patched_storage_home():
+            session = _make_session()
+            await _initialize_fake_session(session)
+            seen_modes: list[str] = []
+
+            async def fake_query_loop(params):
+                seen_modes.append(params.agent_mode)
+                yield TurnCompleteEvent(reason="end_turn", turn_count=1, usage={})
+
+            with patch("crabcode_core.agent_manager.query_loop", fake_query_loop):
+                agent_id = await session.spawn_agent(prompt="done")
+                snapshot = await session.wait_agent(agent_id, timeout_ms=2000)
+
+            assert snapshot is not None
+            assert seen_modes == ["agent"]
+
+    asyncio.run(_run())
+
+
 def test_agent_transcript_persists_and_resumes():
     async def _run():
         with _patched_storage_home():

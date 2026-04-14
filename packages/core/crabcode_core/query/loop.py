@@ -94,6 +94,7 @@ class QueryParams:
     permission_manager: Any = None
     permission_queue: asyncio.Queue | None = None
     hook_manager: Any = None
+    agent_mode: str = "agent"  # "agent" | "plan"
 
 
 def _append_system_context(
@@ -389,7 +390,11 @@ async def query_loop(
         )
         messages_for_api = _prepend_user_context(messages, params.user_context)
 
-        tool_schemas = [t.to_api_schema() for t in params.tools if t.is_enabled]
+        tool_schemas = [
+            t.to_api_schema()
+            for t in params.tools
+            if t.is_enabled and (params.agent_mode != "plan" or t.is_read_only)
+        ]
 
         model_config = ModelConfig(
             model=params.api_adapter.config.model if hasattr(params.api_adapter, 'config') else "claude-sonnet-4-20250514",
@@ -635,6 +640,7 @@ async def query_loop(
 
         if approved_blocks:
             yield StreamModeEvent(mode="tool-running")
+            should_end_turn_after_tools = False
             async for item in _run_tools(
                 approved_blocks,
                 assistant_msg,
@@ -645,10 +651,21 @@ async def query_loop(
                 if isinstance(item, tuple):
                     msgs, event = item
                     messages.extend(msgs)
+                    if event.tool_name == "SwitchMode" and not event.is_error:
+                        should_end_turn_after_tools = True
                     yield event
                 else:
                     # Mid-execution event (e.g. ChoiceRequestEvent)
                     yield item
+
+            if should_end_turn_after_tools:
+                yield TurnCompleteEvent(
+                    reason="mode_switch_requested",
+                    turn_count=turn_count,
+                    usage=total_usage,
+                )
+                params.messages[:] = messages
+                return
 
         if params.max_turns and turn_count >= params.max_turns:
             yield TurnCompleteEvent(

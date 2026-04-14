@@ -31,8 +31,10 @@ from crabcode_core.types.event import (
     ChoiceResponseEvent,
     CompactEvent,
     ErrorEvent,
+    ModeChangeEvent,
     PermissionRequestEvent,
     PermissionResponseEvent,
+    PlanReadyEvent,
     StreamModeEvent,
     StreamTextEvent,
     ThinkingEvent,
@@ -64,8 +66,10 @@ console = Console(no_color=not _ANSI_ENABLED, force_terminal=_ANSI_ENABLED)
 # Slash commands with their arguments for auto-completion
 _SLASH_COMMANDS: dict[str, list[str]] = {
     "/help": [],
-    "/agents": [],
+    "/plan": [],
     "/agent": [],
+    "/plan-status": [],
+    "/agents": [],
     "/agent-log": [],
     "/agent-send": [],
     "/wait": [],
@@ -199,8 +203,10 @@ class _CrabCodeCompleter(Completer):
     def _get_command_description(self, cmd: str) -> str:
         descriptions = {
             "/help": "show help",
+            "/plan": "switch to plan mode (read-only analysis)",
+            "/agent": "switch to agent mode / show agent (<id>)",
+            "/plan-status": "show current plan status",
             "/agents": "list managed agents",
-            "/agent": "show an agent",
             "/agent-log": "show an agent transcript",
             "/agent-send": "send input to an agent",
             "/wait": "wait for an agent",
@@ -998,6 +1004,98 @@ async def _stream_agent_until_done(
     _flush_agent_stream_line(active_stream_agent)
 
 
+async def _run_plan_executor_with_runtime_events(
+    session: CoreSession,
+    plan: object,
+) -> None:
+    from crabcode_core.plan.executor import PlanExecutor
+
+    merged_events: asyncio.Queue[object] = asyncio.Queue()
+    done_sentinel = object()
+
+    async def _produce_plan_events() -> None:
+        executor = PlanExecutor(
+            plan=plan,
+            spawn_fn=session.spawn_agent,
+            wait_fn=session.wait_agent,
+        )
+        try:
+            async for plan_event in executor.execute():
+                await merged_events.put(plan_event)
+        finally:
+            await merged_events.put(done_sentinel)
+
+    async def _forward_agent_events() -> None:
+        while True:
+            event = await session._agent_event_queue.get()  # type: ignore[attr-defined]
+            await merged_events.put(event)
+
+    producer = asyncio.create_task(_produce_plan_events())
+    forwarder = asyncio.create_task(_forward_agent_events())
+    active_stream_agent: str | None = None
+
+    try:
+        while True:
+            event = await merged_events.get()
+            if event is done_sentinel:
+                break
+
+            if isinstance(event, StreamTextEvent):
+                _flush_agent_stream_line(active_stream_agent)
+                active_stream_agent = None
+                console.print(f"  {safe_utf8_str(event.text)}", end="")
+                continue
+
+            if isinstance(event, AgentOutputEvent):
+                active_stream_agent = _render_agent_text_chunk(event, active_stream_agent)
+                if event.stream == "tool_use" and event.tool_name:
+                    _flush_agent_stream_line(active_stream_agent)
+                    active_stream_agent = None
+                    console.print(
+                        f"  [dim cyan]↳ agent {event.agent_id[:8]} using {event.tool_name}[/]"
+                    )
+                continue
+
+            _flush_agent_stream_line(active_stream_agent)
+            active_stream_agent = None
+
+            if isinstance(event, AgentStateEvent):
+                style = {
+                    "queued": "dim",
+                    "running": "cyan",
+                    "completed": "green",
+                    "failed": "red",
+                    "cancelled": "yellow",
+                }.get(event.status, "dim")
+                console.print(
+                    f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
+                )
+            elif isinstance(event, ToolUseEvent):
+                _render_tool_use(event)
+            elif isinstance(event, ToolResultEvent):
+                if event.tool_name == "AskUser":
+                    if event.is_error:
+                        console.print("  [dim yellow]↳ Selection cancelled[/]")
+                    else:
+                        console.print(f"  [dim green]↳ {safe_utf8_str(event.result)}[/]")
+                else:
+                    _render_tool_result(event)
+            elif isinstance(event, PermissionRequestEvent):
+                await _prompt_permission(event, session)
+            elif isinstance(event, ChoiceRequestEvent):
+                await _prompt_choice(event, session)
+            elif isinstance(event, ErrorEvent):
+                console.print(f"  [bold red]{safe_utf8_str(event.message)}[/]")
+    finally:
+        forwarder.cancel()
+        producer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await forwarder
+        with contextlib.suppress(asyncio.CancelledError):
+            await producer
+        _flush_agent_stream_line(active_stream_agent)
+
+
 async def run_repl(
     settings: CrabCodeSettings | None = None,
     cwd: str = ".",
@@ -1101,9 +1199,12 @@ async def run_repl(
 
         while True:
             try:
-                user_input = await prompt_session.prompt_async(
-                    HTML("<b><ansicyan>❯ </ansicyan></b>"),
-                )
+                mode = getattr(session, '_agent_mode', 'agent')
+                if mode == "plan":
+                    prompt_html = HTML("<b><ansiblue>[plan]</ansiblue> <ansicyan>❯ </ansicyan></b>")
+                else:
+                    prompt_html = HTML("<b><ansicyan>❯ </ansicyan></b>")
+                user_input = await prompt_session.prompt_async(prompt_html)
             except EOFError:
                 console.print("\nGoodbye!", style="dim")
                 try:
@@ -1177,6 +1278,7 @@ async def run_repl(
                         )
                 is_thinking = False
 
+            plan_pending = False
             try:
                 async for event in session.send_message(user_input):
                     if isinstance(event, StreamModeEvent):
@@ -1285,8 +1387,44 @@ async def run_repl(
                         if not event.recoverable:
                             break
 
+                    elif isinstance(event, ModeChangeEvent):
+                        await _stop_spinner_with_thinking()
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        session.switch_mode(event.mode)
+                        if event.mode == "plan":
+                            console.print(
+                                "\n  [bold blue]Switched to plan mode[/] — read-only, agent will only plan"
+                            )
+                        else:
+                            console.print(
+                                "\n  [bold green]Switched to agent mode[/] — full tool access"
+                            )
+
+                    elif isinstance(event, PlanReadyEvent):
+                        await _stop_spinner_with_thinking()
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        session.set_plan(event.plan)
+                        from crabcode_core.plan.types import ExecutionPlan
+                        plan = ExecutionPlan.from_dict(event.plan)
+                        console.print(f"\n  [bold]Plan received:[/] {plan.title}")
+                        console.print(f"  [dim]{plan.summary}[/]")
+                        console.print(Panel(
+                            plan.render(),
+                            title="[bold]Execution Plan[/]",
+                            border_style="blue",
+                            expand=False,
+                        ))
+
                     elif isinstance(event, TurnCompleteEvent):
                         await _stop_spinner_with_thinking()
+                        if getattr(session, '_current_plan', None) and session.agent_mode == "agent":
+                            plan_pending = True
 
             except _REPL_INTERRUPT_EXCS:
                 await spinner.stop()
@@ -1320,9 +1458,65 @@ async def run_repl(
                 sys.stdout.write("\n")
                 sys.stdout.flush()
 
+            # Execute plan after the send_message generator has fully completed,
+            # to avoid deadlock with the event queue inside send_message.
+            if plan_pending:
+                await _prompt_plan_action(session, console)
+
             console.print()
     finally:
         await session.close()
+
+
+async def _prompt_plan_action(session: CoreSession, console: Console) -> None:
+    """Prompt user to execute, modify, or cancel a pending plan."""
+    from crabcode_core.plan.types import ExecutionPlan
+
+    plan_data = session.current_plan
+    if not plan_data:
+        return
+
+    plan = ExecutionPlan.from_dict(plan_data) if isinstance(plan_data, dict) else plan_data
+
+    console.print()
+    console.print(
+        "  [bold]What would you like to do?[/]\n"
+        "    [bold green]y[/] / [bold green]yes[/] — execute the plan\n"
+        "    [bold blue]m[/] / [bold blue]modify[/] — request changes (stay in plan mode)\n"
+        "    [bold red]n[/] / [bold red]no[/] — cancel the plan"
+    )
+
+    try:
+        choice_session: PromptSession[str] = PromptSession()
+        answer = await choice_session.prompt_async(
+            HTML("<b><ansicyan>plan❯ </ansicyan></b>"),
+        )
+        answer = answer.strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = "n"
+
+    if answer in ("y", "yes", "execute", "run"):
+        session.set_plan(None)
+        session.switch_mode("agent")
+        console.print("\n  [bold cyan]Executing plan via DAG scheduler...[/]\n")
+        try:
+            await _run_plan_executor_with_runtime_events(session, plan)
+        except _REPL_INTERRUPT_EXCS:
+            _clear_sigint_cancel()
+            console.print("\n  [dim yellow]Plan execution interrupted.[/]")
+        console.print(f"\n  [dim]{plan.render()}[/]\n")
+
+    elif answer in ("m", "modify", "edit", "change"):
+        session.switch_mode("plan")
+        console.print(
+            "\n  [bold blue]Staying in plan mode.[/] "
+            "Describe the changes you want — the plan will be revised.\n"
+            "  [dim]The current plan is preserved in context.[/]"
+        )
+
+    else:
+        session.set_plan(None)
+        console.print("  [dim]Plan cancelled.[/]")
 
 
 async def _handle_command(
@@ -1354,6 +1548,9 @@ async def _handle_command(
             skills_section = f"\n\n[bold]Skills[/]\n{skill_lines}"
         console.print(Panel(
             "[bold]/help[/] — show this help\n"
+            "[bold]/plan[/] — switch to plan mode (read-only analysis)\n"
+            "[bold]/agent[/] — switch to agent mode (full execution; no args)\n"
+            "[bold]/plan-status[/] — show current plan status\n"
             "[bold]/agents[/] — list managed agents\n"
             "[bold]/agent <id>[/] — show a managed agent\n"
             "[bold]/agent-log <id>[/] — show an agent transcript\n"
@@ -1381,6 +1578,33 @@ async def _handle_command(
             title="[bold]Commands[/]",
             border_style="blue",
         ))
+        return True
+
+    if cmd == "/plan":
+        session.switch_mode("plan")
+        console.print("[bold blue]Switched to plan mode[/] — read-only, agent will only plan")
+        return True
+
+    if cmd == "/agent" and not arg:
+        session.switch_mode("agent")
+        console.print("[bold green]Switched to agent mode[/] — full tool access")
+        return True
+
+    if cmd == "/plan-status":
+        plan_data = session.current_plan
+        if plan_data:
+            from crabcode_core.plan.types import ExecutionPlan
+            plan = ExecutionPlan.from_dict(plan_data) if isinstance(plan_data, dict) else plan_data
+            console.print(Panel(
+                plan.render(),
+                title="[bold]Current Plan[/]",
+                border_style="blue",
+                expand=False,
+            ))
+        else:
+            console.print("[dim]No active plan.[/]")
+        mode = getattr(session, '_agent_mode', 'agent')
+        console.print(f"  Mode: [bold]{'plan' if mode == 'plan' else 'agent'}[/]")
         return True
 
     if cmd == "/logs":
@@ -1571,9 +1795,11 @@ async def _handle_command(
             else:
                 search_status = "enabled, waiting to start"
 
+        agent_mode = getattr(session, '_agent_mode', 'agent')
+        mode_display = "[bold blue]plan[/]" if agent_mode == "plan" else "[bold green]agent[/]"
         lines = [
             f"[bold cyan]🦀 CrabCode[/] v{__import__('crabcode_cli').__version__}",
-            f"[bold]🧠 Model:[/] {model_display}",
+            f"[bold]🧠 Model:[/] {model_display} · [bold]Mode:[/] {mode_display}",
             f"[bold]📚 Context:[/] {_fmt_k(ctx_used)} / {_fmt_k(ctx_threshold)} ({ctx_pct}%) · [bold]💬 Messages:[/] {msg_count}",
             f"[bold]🧹 Compactions:[/] {compact_count} · [bold]Auto-compact:[/] {auto_compact}",
             f"[bold]🧵 Session:[/] {sid_short}",

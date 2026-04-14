@@ -419,6 +419,9 @@ This gives you a precise audit trail of every change made.
 | `/agent <id>` | Show details for one agent (`status`, `usage`, `result`, transcript path) |
 | `/agent-log <id>` | Show the stored transcript for one agent |
 | `/agent-send <id> <prompt>` | Send additional input to an existing agent |
+| `/plan` | Switch to plan mode (read-only analysis and plan generation) |
+| `/agent` | Switch to agent mode (normal execution mode) |
+| `/plan-status` | Show current plan and mode status |
 | `/wait <id>` | Wait for one agent to finish and print its summary |
 | `/cancel-agent <id>` | Cancel a running agent |
 | `/new` | Start a fresh session (clear in-memory conversation history) |
@@ -435,6 +438,16 @@ This gives you a precise audit trail of every change made.
 - For commands that take `<id>`, you can usually pass the leading prefix shown by `/agents`.
 - `/agent-send` live output is controlled by `agent.stream_send_input_output` in `settings.json`.
 - `Ctrl+C` interrupts the current operation; pressing `Ctrl+C` again within a few seconds exits.
+
+### Plan Mode Workflow
+
+When plan mode produces an execution plan, CrabCode does not auto-run it immediately. The REPL prints the full plan and asks what to do next:
+
+- `y` / `yes`: execute the plan via DAG scheduler in agent mode
+- `m` / `modify`: stay in plan mode and revise the plan
+- `n` / `no`: cancel and clear the pending plan
+
+This keeps the final execution decision with the user while preserving parallel DAG orchestration after confirmation.
 
 ## Permissions
 

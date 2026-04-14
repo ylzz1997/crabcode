@@ -464,6 +464,7 @@ class AgentManager:
                     permission_manager=self._permission_manager,
                     permission_queue=run.permission_queue,
                     hook_manager=self._hook_manager,
+                    agent_mode="agent",
                 )
                 final_usage: dict[str, Any] = {}
                 async for event in query_loop(params):

@@ -14,7 +14,9 @@ from crabcode_core.types.event import (
     ChoiceResponseEvent,
     CompactEvent,
     CoreEvent,
+    ModeChangeEvent,
     PermissionResponseEvent,
+    PlanReadyEvent,
 )
 from crabcode_core.types.message import Message
 from crabcode_core.types.tool import Tool, ToolEventCallback
@@ -60,6 +62,9 @@ class CoreSession:
         self._agent_manager: AgentManager | None = None
         self._hook_manager: Any = None
         self._closed = False
+        self._agent_mode: str = "agent"  # "agent" | "plan"
+        self._saved_permission_mode: Any = None
+        self._current_plan: Any = None  # ExecutionPlan | None
 
     async def initialize(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
@@ -475,6 +480,7 @@ class CoreSession:
             cwd=self.cwd,
             language=self.settings.language,
             profile=profile,
+            agent_mode=self._agent_mode,
         )
         system_context = get_system_context(self.cwd)
         user_context = get_user_context(self.cwd)
@@ -491,6 +497,14 @@ class CoreSession:
             agent_manager=self._agent_manager,
         )
 
+        # Sync SwitchModeTool's current_mode so its prompt and validation
+        # reflect the actual mode the agent is running in.
+        from crabcode_core.tools.switch_mode import SwitchModeTool
+        for tool in self.tools:
+            if isinstance(tool, SwitchModeTool):
+                tool.current_mode = self._agent_mode
+                break
+
         params = QueryParams(
             messages=list(self.messages),
             system_prompt=system_prompt,
@@ -503,6 +517,7 @@ class CoreSession:
             permission_manager=self._permission_manager,
             permission_queue=self._permission_queue,
             hook_manager=self._hook_manager,
+            agent_mode=self._agent_mode,
         )
 
         pre_loop_count = len(self.messages)
@@ -632,6 +647,44 @@ class CoreSession:
             self._agent_manager.set_current_model(name)
 
         return True
+
+    def switch_mode(self, mode: str) -> bool:
+        """Switch between 'agent' and 'plan' mode.
+
+        In plan mode, only read-only tools are available and the agent
+        is instructed to produce a structured plan instead of executing changes.
+        """
+        if mode not in ("agent", "plan"):
+            return False
+        if mode == self._agent_mode:
+            return True
+        self._agent_mode = mode
+        if self._permission_manager:
+            from crabcode_core.permissions.manager import PermissionMode
+
+            if mode == "plan":
+                self._saved_permission_mode = self._permission_manager.mode
+                self._permission_manager.mode = PermissionMode.PLAN
+            else:
+                self._permission_manager.mode = (
+                    self._saved_permission_mode
+                    if self._saved_permission_mode is not None
+                    else PermissionMode.DEFAULT
+                )
+                self._saved_permission_mode = None
+        return True
+
+    @property
+    def agent_mode(self) -> str:
+        return self._agent_mode
+
+    @property
+    def current_plan(self) -> Any:
+        from crabcode_core.plan.types import ExecutionPlan
+        return self._current_plan
+
+    def set_plan(self, plan: Any) -> None:
+        self._current_plan = plan
 
     async def spawn_agent(
         self,

@@ -348,11 +348,14 @@ def get_system_prompt(
     mcp_instructions: dict[str, str] | None = None,
     language: str | None = None,
     profile: PromptProfile | None = None,
+    agent_mode: str = "agent",
 ) -> list[str]:
     """Build the system prompt as a list of strings.
 
     When *profile* is ``None`` the built-in defaults are used (backward-compatible).
     Pass a ``PromptProfile`` to override individual sections.
+    When *agent_mode* is ``"plan"``, a plan-mode instruction section is appended
+    and task-execution sections are suppressed.
     """
     import os
     import sys
@@ -367,16 +370,21 @@ def get_system_prompt(
     if not os_version:
         os_version = f"{os.uname().sysname} {os.uname().release}"
 
+    is_plan = agent_mode == "plan"
+
     sections: list[str | None] = [
         # --- Static / behavioral sections (cacheable, overridable) ---
         _resolve_section(profile, "intro", _get_intro_section, profile.prefix),
         _resolve_section(profile, "system", _get_system_section),
-        _resolve_section(profile, "doing_tasks", _get_doing_tasks_section),
-        _resolve_section(profile, "actions", _get_actions_section),
-        _resolve_section(profile, "git_safety", _get_git_safety_section),
+        # In plan mode, skip execution-oriented sections
+        None if is_plan else _resolve_section(profile, "doing_tasks", _get_doing_tasks_section),
+        None if is_plan else _resolve_section(profile, "actions", _get_actions_section),
+        None if is_plan else _resolve_section(profile, "git_safety", _get_git_safety_section),
         _resolve_section(profile, "using_tools", _get_using_tools_section, enabled_tools),
         _resolve_section(profile, "tone_and_style", _get_tone_and_style_section),
         _resolve_section(profile, "output_efficiency", _get_output_efficiency_section),
+        # --- Plan mode section ---
+        _get_plan_mode_section() if is_plan else None,
         # --- Extra custom sections from profile ---
         *profile.extra_sections,
         # --- Cache boundary ---
@@ -392,6 +400,31 @@ def get_system_prompt(
     ]
 
     return [s for s in sections if s is not None]
+
+
+def _get_plan_mode_section() -> str:
+    return """# Plan mode is active
+
+You are in plan mode. Follow these rules strictly:
+
+1. You MUST NOT make any edits, run write commands, create files, or otherwise modify the system. This supersedes any other instructions. Instead, produce a structured plan.
+2. Read files, search code, and gather context to understand the problem thoroughly.
+3. If requirements are ambiguous, ask the user for clarification before producing a plan.
+4. When you have gathered enough context, call the SwitchMode tool once to submit your plan. Use target_mode "agent" and include the plan in the "plan" field. This only submits the plan back to the interface for review; it does NOT mean execution has started yet.
+5. After submitting the plan with SwitchMode, stop immediately. Do not call any other tools, do not continue reasoning about execution, and do not claim that files were created or changed.
+6. The plan must be a JSON object with this schema:
+   - "title": string — a short title for the plan
+   - "summary": string — a 1-3 sentence overview
+   - "steps": array of step objects, each with:
+     - "id": string — unique short identifier (e.g. "s1", "s2")
+     - "title": string — one-line description of the step
+     - "description": string — detailed prompt for the sub-agent that will execute this step
+     - "files": array of string — file paths this step will modify
+     - "depends_on": array of string — ids of steps that must complete before this one
+     - "subagent_type": string — "generalPurpose" (default) or "explore" for read-only steps
+7. Design steps to be parallelizable where possible. Steps with no dependencies can run concurrently.
+8. Keep each step focused — one logical unit of work. Include enough context in each step's description so a sub-agent can execute it independently.
+9. After the plan is submitted, the interface will ask the user whether to execute, revise, or cancel it."""
 
 
 def _get_language_section(language: str | None) -> str | None:

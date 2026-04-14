@@ -419,6 +419,9 @@ crabcode --model-profile smart    # 简写：-M smart
 | `/agent <id>` | 查看单个 agent 的详情（状态、用量、结果、transcript 路径） |
 | `/agent-log <id>` | 查看单个 agent 的持久化 transcript |
 | `/agent-send <id> <提示词>` | 给已有 agent 继续发送输入 |
+| `/plan` | 切换到 plan 模式（只读分析与计划生成） |
+| `/agent` | 切换到 agent 模式（正常执行模式） |
+| `/plan-status` | 查看当前计划与模式状态 |
 | `/wait <id>` | 等待某个 agent 完成并输出摘要 |
 | `/cancel-agent <id>` | 取消运行中的 agent |
 | `/new` | 新建会话（清空内存中的对话历史） |
@@ -435,6 +438,16 @@ crabcode --model-profile smart    # 简写：-M smart
 - 需要 `<id>` 的命令一般都支持使用 `/agents` 展示的短前缀。
 - `/agent-send` 是否实时回显由 `settings.json` 中 `agent.stream_send_input_output` 控制。
 - `Ctrl+C` 会中断当前操作；在短时间内再次按 `Ctrl+C` 会退出。
+
+### Plan 模式流程
+
+当 plan 模式产出执行计划后，CrabCode 不会立即自动执行。REPL 会先展示完整计划，并询问下一步操作：
+
+- `y` / `yes`：进入 agent 模式并通过 DAG 调度器执行计划
+- `m` / `modify`：保持在 plan 模式，继续修改计划
+- `n` / `no`：取消并清空当前待执行计划
+
+这样可以把最终执行决策交给用户，同时在确认后仍保留 DAG 并行编排能力。
 
 ## 权限控制
 

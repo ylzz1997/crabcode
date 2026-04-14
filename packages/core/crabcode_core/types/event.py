@@ -139,6 +139,19 @@ class AgentOutputEvent:
     tool_name: str | None = None
 
 
+@dataclass
+class ModeChangeEvent:
+    """Agent mode has changed (e.g. plan <-> agent)."""
+    mode: str  # "plan" | "agent"
+    reason: str = ""
+
+
+@dataclass
+class PlanReadyEvent:
+    """A structured execution plan has been produced by plan mode."""
+    plan: dict[str, Any]
+
+
 CoreEvent = Union[
     StreamTextEvent,
     ThinkingEvent,
@@ -152,4 +165,6 @@ CoreEvent = Union[
     StreamModeEvent,
     AgentStateEvent,
     AgentOutputEvent,
+    ModeChangeEvent,
+    PlanReadyEvent,
 ]

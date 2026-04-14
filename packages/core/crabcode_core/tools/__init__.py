@@ -23,6 +23,7 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.glob import GlobTool
     from crabcode_core.tools.lint import LintTool
     from crabcode_core.tools.memory import MemoryTool
+    from crabcode_core.tools.switch_mode import SwitchModeTool
     from crabcode_core.tools.web_search import WebSearchTool
 
     return [
@@ -43,6 +44,7 @@ def get_default_tools() -> list[Tool]:
         AgentSendInputTool(),
         AskUserTool(),
         ChecklistTool(),
+        SwitchModeTool(),
     ]
 
 
