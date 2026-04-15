@@ -344,6 +344,28 @@ class SessionStorage:
             self._meta_written = True
         return messages
 
+    def update_title(self, title: str) -> None:
+        """Update the session title in SQLite and in-memory meta."""
+        self._meta["title"] = title
+        try:
+            from crabcode_core.session.meta_db import SessionMetaStore
+            store = SessionMetaStore()
+            store.update_title(self.session_id, title)
+            store.close()
+        except Exception:
+            logger.debug("Failed to update session title for %s", self.session_id, exc_info=True)
+
+    def update_summary(self, summary: str) -> None:
+        """Update the session summary in SQLite and in-memory meta."""
+        self._meta["summary"] = summary
+        try:
+            from crabcode_core.session.meta_db import SessionMetaStore
+            store = SessionMetaStore()
+            store.update_summary(self.session_id, summary)
+            store.close()
+        except Exception:
+            logger.debug("Failed to update session summary for %s", self.session_id, exc_info=True)
+
     def record_tokens(self, tokens: int) -> None:
         """Accumulate token usage in SQLite."""
         try:
@@ -363,6 +385,73 @@ class SessionStorage:
             store.close()
         except Exception:
             logger.debug("Failed to record message count for session %s", self.session_id, exc_info=True)
+
+    def create_checkpoint(self, messages: list, label: str = "") -> str | None:
+        """Create a checkpoint at the current message position."""
+        if not messages:
+            return None
+        last_msg = messages[-1]
+        msg_uuid = getattr(last_msg, "uuid", "") or ""
+        msg_index = len(messages) - 1
+        try:
+            from crabcode_core.session.meta_db import SessionMetaStore
+            store = SessionMetaStore()
+            cp_id = store.create_checkpoint(
+                session_id=self.session_id,
+                message_uuid=msg_uuid,
+                message_index=msg_index,
+                label=label,
+            )
+            store.close()
+            # Write a marker line to JSONL for auditability
+            self._ensure_dir()
+            entry = {
+                "type": "checkpoint",
+                "checkpoint_id": cp_id,
+                "message_uuid": msg_uuid,
+                "message_index": msg_index,
+                "label": label,
+            }
+            with open(self._transcript_path, "a", encoding="utf-8") as f:
+                f.write(_dump_jsonl_line(entry))
+            return cp_id
+        except Exception:
+            logger.warning("Failed to create checkpoint for session %s", self.session_id, exc_info=True)
+            return None
+
+    def list_checkpoints(self) -> list[dict[str, Any]]:
+        """List checkpoints for this session."""
+        try:
+            from crabcode_core.session.meta_db import SessionMetaStore
+            store = SessionMetaStore()
+            cps = store.list_checkpoints(self.session_id)
+            store.close()
+            return cps
+        except Exception:
+            logger.debug("Failed to list checkpoints for session %s", self.session_id, exc_info=True)
+            return []
+
+    def rollback_to_checkpoint(self, checkpoint_id: str) -> int | None:
+        """Get the message index to rollback to. Returns index or None if not found."""
+        try:
+            from crabcode_core.session.meta_db import SessionMetaStore
+            store = SessionMetaStore()
+            cp = store.get_checkpoint(checkpoint_id)
+            store.close()
+            if cp and cp["session_id"] == self.session_id:
+                # Write rollback marker to JSONL
+                self._ensure_dir()
+                entry = {
+                    "type": "rollback",
+                    "checkpoint_id": checkpoint_id,
+                    "rollback_to_index": cp["message_index"],
+                }
+                with open(self._transcript_path, "a", encoding="utf-8") as f:
+                    f.write(_dump_jsonl_line(entry))
+                return cp["message_index"]
+        except Exception:
+            logger.warning("Failed to rollback checkpoint %s", checkpoint_id, exc_info=True)
+        return None
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -397,7 +486,8 @@ class SessionStorage:
                         "git_sha": r.get("git_sha"),
                         "message_count": r.get("message_count", 0),
                         "modified": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else "",
-                        "preview": r.get("first_user_message", "")[:100],
+                        "summary": r.get("summary", ""),
+                        "preview": r.get("summary", "")[:100] or r.get("first_user_message", "")[:100],
                     })
                 return results
         except Exception:
@@ -462,6 +552,23 @@ class SessionStorage:
                 })
 
         return sessions
+
+    @classmethod
+    def from_session_id(cls, session_id: str) -> "SessionStorage | None":
+        """Resolve a session by ID using SQLite metadata (cross-project).
+
+        Returns a SessionStorage pointed at the original cwd, or None if not found.
+        """
+        try:
+            from crabcode_core.session.meta_db import SessionMetaStore
+            store = SessionMetaStore()
+            row = store.get(session_id)
+            store.close()
+            if row and row.get("cwd"):
+                return cls(cwd=row["cwd"], session_id=session_id)
+        except Exception:
+            logger.debug("from_session_id lookup failed for %s", session_id, exc_info=True)
+        return None
 
     @staticmethod
     def search_sessions(query: str, limit: int = 20) -> list[dict[str, Any]]:

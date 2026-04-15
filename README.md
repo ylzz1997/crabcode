@@ -59,6 +59,35 @@ echo "explain this codebase" | crabcode -p
 
 # Interactive REPL
 crabcode
+
+# Resume last session
+crabcode --continue      # or -c
+
+# Resume a specific session
+crabcode --resume <id>   # or -r <id>
+```
+
+### Session Management CLI
+
+```bash
+# List sessions for the current project
+crabcode sessions list
+
+# List sessions across all projects
+crabcode sessions list --all
+
+# Search sessions by keyword
+crabcode sessions search "refactor auth"
+
+# Export a session to Markdown or JSON
+crabcode sessions export <id> --format md --output chat.md
+
+# Archive old sessions (older than 30 days) and clean up
+crabcode sessions prune --days 30 --delete-files
+
+# Show usage statistics
+crabcode stats
+crabcode stats --project   # current project only
 ```
 
 ## Multi-API Support
@@ -118,8 +147,44 @@ Or configure in `~/.crabcode/settings.json`:
 | `thinking_budget` | Thinking token budget | `10000` |
 | `max_tokens` | Maximum output tokens | `16384` |
 | `timeout` | API call timeout in seconds (prevents hanging on slow/unresponsive APIs) | `300` |
+| `context_window` | Override the model's context window size (tokens). Used when auto-detection fails or is inaccurate — see [Context Window](#context-window) below. | auto-detected |
 
 The `env` map lets you define environment variables directly in the config file — they are injected at startup so you don't need to `export` them in your shell.
+
+### Context Window
+
+CrabCode automatically manages the context window to prevent `400 token limit exceeded` errors.
+
+**How context window size is resolved** (in priority order):
+
+1. `context_window` field in your `api` config (explicit override)
+2. Built-in lookup table for known models (e.g. `glm-5.1-fp8` → 202752, `gpt-4o` → 128000)
+3. `DEFAULT_CONTEXT_WINDOW` fallback: `200000`
+
+If your model is not in the built-in table and you don't set an override, the fallback of 128k is used. For models with a larger window (e.g. Zhipu GLM), set `context_window` explicitly:
+
+```json
+{
+  "api": {
+    "provider": "openai",
+    "model": "glm-5.1-fp8",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "context_window": 202752
+  }
+}
+```
+
+**Automatic compaction**
+
+When the estimated token count approaches the context limit, CrabCode automatically:
+
+1. Summarizes old conversation messages into a single compact `[Conversation summary: ...]` message via an API call
+2. Keeps the most recent messages intact
+3. Continues the current task in the same session without interruption
+
+You can also trigger compaction manually with `/compact`, or configure the threshold via `max_context_length` in `settings.json`.
+
+> **Note**: Auto-compaction uses the same model configured in `api`. If your model is served through a custom endpoint, make sure the `model` field in `api` is set correctly — otherwise the summarization call may fail silently.
 
 ### Logging
 
@@ -427,8 +492,16 @@ This gives you a precise audit trail of every change made.
 | `/new` | Start a fresh session (clear in-memory conversation history) |
 | `/compact` | Manually compact conversation history to save context |
 | `/clear` | Clear current in-memory conversation messages |
-| `/sessions` | List recent saved sessions |
-| `/resume <id>` | Resume a saved session by full/partial id or index |
+| `/sessions` | List recent saved sessions for current project |
+| `/recent` | List recent sessions across all projects |
+| `/search <query>` | Search sessions by title or message content |
+| `/resume <id>` | Resume a saved session by full/partial id or index (supports cross-project) |
+| `/archive <id>` | Archive a session (hide from listings) |
+| `/export [md\|json] [path]` | Export current session to Markdown or JSON |
+| `/stats` | Show usage statistics (tokens, sessions, models) |
+| `/checkpoint [label]` | Create a checkpoint at the current conversation position |
+| `/checkpoints` | List checkpoints for the current session |
+| `/rollback <id\|#>` | Rollback conversation to a checkpoint |
 | `/exit`, `/quit` | Exit CrabCode |
 | `/<skill>` | Invoke a skill by name (optional user input can follow) |
 | `! <shell command>` | Run a shell command directly from REPL (outside model tool loop) |
@@ -438,6 +511,7 @@ This gives you a precise audit trail of every change made.
 - For commands that take `<id>`, you can usually pass the leading prefix shown by `/agents`.
 - `/agent-send` live output is controlled by `agent.stream_send_input_output` in `settings.json`.
 - `Ctrl+C` interrupts the current operation; pressing `Ctrl+C` again within a few seconds exits.
+- `/resume` supports cross-project sessions — if the session ID belongs to another project it will be resolved automatically via the metadata database.
 
 ### Plan Mode Workflow
 

@@ -38,12 +38,33 @@ CREATE INDEX IF NOT EXISTS idx_session_meta_cwd
 """
 
 
+_MIGRATIONS = [
+    "ALTER TABLE session_meta ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
+    """\
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    message_uuid TEXT NOT NULL,
+    message_index INTEGER NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id, created_at DESC)",
+]
+
+
 def _get_conn(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_SCHEMA)
+    for stmt in _MIGRATIONS:
+        try:
+            conn.execute(stmt)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column/table already exists
     return conn
 
 
@@ -101,6 +122,24 @@ class SessionMetaStore:
         conn.execute(
             "UPDATE session_meta SET tokens_used = tokens_used + ?, updated_at = ? WHERE id = ?",
             (tokens, int(datetime.now(timezone.utc).timestamp()), session_id),
+        )
+        conn.commit()
+
+    def update_title(self, session_id: str, title: str) -> None:
+        """Update the title for a session."""
+        conn = self._conn_or_create()
+        conn.execute(
+            "UPDATE session_meta SET title = ?, updated_at = ? WHERE id = ?",
+            (title, int(datetime.now(timezone.utc).timestamp()), session_id),
+        )
+        conn.commit()
+
+    def update_summary(self, session_id: str, summary: str) -> None:
+        """Update the summary for a session."""
+        conn = self._conn_or_create()
+        conn.execute(
+            "UPDATE session_meta SET summary = ?, updated_at = ? WHERE id = ?",
+            (summary, int(datetime.now(timezone.utc).timestamp()), session_id),
         )
         conn.commit()
 
@@ -173,3 +212,133 @@ class SessionMetaStore:
             (int(datetime.now(timezone.utc).timestamp()), session_id),
         )
         conn.commit()
+
+    def auto_archive(self, days: int = 30) -> int:
+        """Archive sessions not updated in the last *days* days. Returns count archived."""
+        conn = self._conn_or_create()
+        cutoff = int(datetime.now(timezone.utc).timestamp()) - days * 86400
+        cur = conn.execute(
+            "UPDATE session_meta SET is_archived = 1 "
+            "WHERE is_archived = 0 AND updated_at < ?",
+            (cutoff,),
+        )
+        conn.commit()
+        return cur.rowcount
+
+    def purge_archived(self) -> list[dict[str, Any]]:
+        """Delete archived rows from SQLite. Returns list of purged sessions (id, cwd)."""
+        conn = self._conn_or_create()
+        rows = conn.execute(
+            "SELECT id, cwd FROM session_meta WHERE is_archived = 1"
+        ).fetchall()
+        if rows:
+            conn.execute("DELETE FROM session_meta WHERE is_archived = 1")
+            conn.commit()
+        return [{"id": r[0], "cwd": r[1]} for r in rows]
+
+    # --- Checkpoints ---
+
+    def create_checkpoint(
+        self,
+        session_id: str,
+        message_uuid: str,
+        message_index: int,
+        label: str = "",
+    ) -> str:
+        """Create a checkpoint at the given message position. Returns checkpoint ID."""
+        import uuid
+        cp_id = str(uuid.uuid4())
+        conn = self._conn_or_create()
+        conn.execute(
+            "INSERT INTO checkpoints (id, session_id, message_uuid, message_index, label, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cp_id, session_id, message_uuid, message_index, label,
+             int(datetime.now(timezone.utc).timestamp())),
+        )
+        conn.commit()
+        return cp_id
+
+    def list_checkpoints(self, session_id: str) -> list[dict[str, Any]]:
+        """List checkpoints for a session, newest first."""
+        conn = self._conn_or_create()
+        rows = conn.execute(
+            "SELECT id, session_id, message_uuid, message_index, label, created_at "
+            "FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC",
+            (session_id,),
+        ).fetchall()
+        cols = ["id", "session_id", "message_uuid", "message_index", "label", "created_at"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def delete_checkpoint(self, checkpoint_id: str) -> None:
+        conn = self._conn_or_create()
+        conn.execute("DELETE FROM checkpoints WHERE id = ?", (checkpoint_id,))
+        conn.commit()
+
+    def get_checkpoint(self, checkpoint_id: str) -> dict[str, Any] | None:
+        conn = self._conn_or_create()
+        row = conn.execute(
+            "SELECT id, session_id, message_uuid, message_index, label, created_at "
+            "FROM checkpoints WHERE id = ?",
+            (checkpoint_id,),
+        ).fetchone()
+        if not row:
+            return None
+        cols = ["id", "session_id", "message_uuid", "message_index", "label", "created_at"]
+        return dict(zip(cols, row))
+
+    # --- Statistics ---
+
+    def stats_global(self) -> dict[str, Any]:
+        """Aggregate statistics across all sessions."""
+        conn = self._conn_or_create()
+        row = conn.execute(
+            "SELECT COUNT(*) as total, "
+            "COALESCE(SUM(tokens_used), 0) as total_tokens, "
+            "COALESCE(SUM(message_count), 0) as total_messages, "
+            "COUNT(DISTINCT cwd) as active_projects "
+            "FROM session_meta WHERE is_archived = 0"
+        ).fetchone()
+        now = int(datetime.now(timezone.utc).timestamp())
+        week_ago = now - 7 * 86400
+        week_row = conn.execute(
+            "SELECT COUNT(*) as week_sessions, "
+            "COALESCE(SUM(tokens_used), 0) as week_tokens "
+            "FROM session_meta WHERE is_archived = 0 AND created_at > ?",
+            (week_ago,),
+        ).fetchone()
+        return {
+            "total_sessions": row[0],
+            "total_tokens": row[1],
+            "total_messages": row[2],
+            "active_projects": row[3],
+            "week_sessions": week_row[0] if week_row else 0,
+            "week_tokens": week_row[1] if week_row else 0,
+        }
+
+    def stats_by_project(self, cwd: str) -> dict[str, Any]:
+        """Statistics for a specific project directory."""
+        conn = self._conn_or_create()
+        row = conn.execute(
+            "SELECT COUNT(*) as total, "
+            "COALESCE(SUM(tokens_used), 0) as total_tokens, "
+            "COALESCE(SUM(message_count), 0) as total_messages "
+            "FROM session_meta WHERE cwd = ? AND is_archived = 0",
+            (cwd,),
+        ).fetchone()
+        return {
+            "total_sessions": row[0],
+            "total_tokens": row[1],
+            "total_messages": row[2],
+        }
+
+    def stats_by_model(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Token usage aggregated by model."""
+        conn = self._conn_or_create()
+        rows = conn.execute(
+            "SELECT model, COUNT(*) as sessions, "
+            "COALESCE(SUM(tokens_used), 0) as tokens "
+            "FROM session_meta WHERE is_archived = 0 AND model != '' "
+            "GROUP BY model ORDER BY tokens DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [{"model": r[0], "sessions": r[1], "tokens": r[2]} for r in rows]

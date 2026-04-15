@@ -140,6 +140,160 @@ def main(
     os._exit(0)
 
 
+sessions_app = typer.Typer(
+    name="sessions",
+    help="Manage CrabCode sessions",
+)
+app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.command("list")
+def sessions_list(
+    all_projects: bool = typer.Option(False, "--all", "-a", help="List sessions across all projects"),
+    cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max number of sessions to show"),
+) -> None:
+    """List recent sessions."""
+    work_dir = cwd or os.getcwd()
+    if all_projects:
+        from crabcode_core.session.meta_db import SessionMetaStore
+        store = SessionMetaStore()
+        rows = store.list_recent(limit=limit)
+        store.close()
+    else:
+        from crabcode_core.session.storage import SessionStorage
+        rows = SessionStorage.list_sessions(work_dir)[:limit]
+        rows = [
+            {"id": r["session_id"], "cwd": work_dir, **{k: v for k, v in r.items() if k != "session_id"}}
+            for r in rows
+        ]
+
+    if not rows:
+        typer.echo("No sessions found.")
+        return
+
+    for i, r in enumerate(rows, 1):
+        sid = r.get("id", "")[:8]
+        cwd_col = r.get("cwd", "")
+        if len(cwd_col) > 30:
+            cwd_col = "…" + cwd_col[-29:]
+        model = r.get("model", "") or ""
+        tokens = r.get("tokens_used", 0)
+        tokens_str = f"{tokens // 1000}k" if tokens >= 1000 else str(tokens)
+        preview = r.get("title", "") or r.get("first_user_message", "") or r.get("preview", "")
+        project_part = f"  [{cwd_col}]" if all_projects else ""
+        typer.echo(f"  {i:>3}. {sid}  {model[:16]:<16}  {tokens_str:>6} tok{project_part}  {preview[:50]}")
+
+
+@sessions_app.command("search")
+def sessions_search(
+    query: str = typer.Argument(..., help="Search query"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
+) -> None:
+    """Search sessions by title or first message."""
+    from crabcode_core.session.storage import SessionStorage
+    results = SessionStorage.search_sessions(query, limit=limit)
+    if not results:
+        typer.echo(f"No sessions matching \"{query}\".")
+        return
+    for i, r in enumerate(results, 1):
+        sid = r.get("id", "")[:8]
+        cwd_col = r.get("cwd", "")
+        if len(cwd_col) > 30:
+            cwd_col = "…" + cwd_col[-29:]
+        model = r.get("model", "") or ""
+        tokens = r.get("tokens_used", 0)
+        tokens_str = f"{tokens // 1000}k" if tokens >= 1000 else str(tokens)
+        preview = r.get("title", "") or r.get("first_user_message", "")
+        typer.echo(f"  {i:>3}. {sid}  {model[:16]:<16}  {tokens_str:>6} tok  [{cwd_col}]  {preview[:50]}")
+
+
+@sessions_app.command("export")
+def sessions_export(
+    session_id: str = typer.Argument(..., help="Session ID (full or prefix)"),
+    fmt: str = typer.Option("md", "--format", "-f", help="Export format: md or json"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory"),
+) -> None:
+    """Export a session transcript to Markdown or JSON."""
+    work_dir = cwd or os.getcwd()
+    from crabcode_core.session.export import export_json, export_markdown
+    if fmt == "json":
+        content = export_json(session_id, work_dir)
+        ext = ".json"
+    else:
+        content = export_markdown(session_id, work_dir)
+        ext = ".md"
+    out_path = output or os.path.join(work_dir, f"{session_id[:8]}{ext}")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    typer.echo(f"Exported to {out_path}")
+
+
+@sessions_app.command("prune")
+def sessions_prune(
+    days: int = typer.Option(30, "--days", "-d", help="Archive sessions older than N days"),
+    delete_files: bool = typer.Option(False, "--delete-files", help="Also delete JSONL transcript files"),
+) -> None:
+    """Archive old sessions and optionally delete their files."""
+    from crabcode_core.session.meta_db import SessionMetaStore
+    store = SessionMetaStore()
+    archived = store.auto_archive(days=days)
+    typer.echo(f"Archived {archived} session(s) older than {days} days.")
+    if delete_files:
+        purged = store.purge_archived()
+        for entry in purged:
+            sid = entry["id"]
+            cwd = entry.get("cwd", "")
+            if cwd:
+                from crabcode_core.session.storage import get_transcript_path
+                path = get_transcript_path(cwd, sid)
+                try:
+                    if path.exists():
+                        path.unlink()
+                except OSError:
+                    pass
+        typer.echo(f"Purged {len(purged)} archived session(s) from database and disk.")
+    else:
+        purged = store.purge_archived()
+        typer.echo(f"Purged {len(purged)} archived session(s) from database.")
+    store.close()
+
+
+@app.command("stats")
+def stats(
+    project: bool = typer.Option(False, "--project", "-p", help="Show only current project stats"),
+    cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory"),
+) -> None:
+    """Show usage statistics."""
+    work_dir = os.path.abspath(cwd or os.getcwd())
+    from crabcode_core.session.meta_db import SessionMetaStore
+    store = SessionMetaStore()
+
+    def _fmt_tok(n: int) -> str:
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.1f}k"
+        return str(n)
+
+    if project:
+        p = store.stats_by_project(work_dir)
+        typer.echo(f"Project: {work_dir}")
+        typer.echo(f"  Sessions: {p['total_sessions']}  |  Tokens: {_fmt_tok(p['total_tokens'])}  |  Messages: {p['total_messages']}")
+    else:
+        g = store.stats_global()
+        p = store.stats_by_project(work_dir)
+        models = store.stats_by_model(limit=5)
+        typer.echo(f"Global:        {g['total_sessions']} sessions  |  {_fmt_tok(g['total_tokens'])} tokens  |  {g['active_projects']} projects")
+        typer.echo(f"This week:     {g['week_sessions']} sessions  |  {_fmt_tok(g['week_tokens'])} tokens")
+        typer.echo(f"This project:  {p['total_sessions']} sessions  |  {_fmt_tok(p['total_tokens'])} tokens  |  {p['total_messages']} messages")
+        if models:
+            model_parts = [f"{m['model']} ({_fmt_tok(m['tokens'])})" for m in models]
+            typer.echo(f"Top models:    {', '.join(model_parts)}")
+    store.close()
+
+
 def entry() -> None:
     app()
 

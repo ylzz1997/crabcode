@@ -81,6 +81,14 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/compact": [],
     "/clear": [],
     "/sessions": [],
+    "/recent": [],
+    "/search": [],  # Dynamic: search query
+    "/archive": [],
+    "/export": [],
+    "/stats": [],
+    "/checkpoint": [],
+    "/checkpoints": [],
+    "/rollback": [],
     "/resume": [],  # Dynamic: session IDs
     "/exit": [],
     "/quit": [],
@@ -218,6 +226,14 @@ class _CrabCodeCompleter(Completer):
             "/compact": "compact conversation",
             "/clear": "clear history",
             "/sessions": "list sessions",
+            "/recent": "list recent sessions (all projects)",
+            "/search": "search sessions",
+            "/archive": "archive a session",
+            "/export": "export session (md/json)",
+            "/stats": "usage statistics",
+            "/checkpoint": "create checkpoint",
+            "/checkpoints": "list checkpoints",
+            "/rollback": "rollback to checkpoint",
             "/resume": "resume session",
             "/exit": "exit CrabCode",
             "/quit": "exit CrabCode",
@@ -1569,6 +1585,14 @@ async def _handle_command(
             "[bold]/compact[/] — compact conversation\n"
             "[bold]/clear[/] — clear conversation history\n"
             "[bold]/sessions[/] — list recent sessions\n"
+            "[bold]/recent[/] — list recent sessions across all projects\n"
+            "[bold]/search <query>[/] — search sessions by title or message\n"
+            "[bold]/archive <id>[/] — archive a session\n"
+            "[bold]/export [md|json] [path][/] — export current session\n"
+            "[bold]/stats[/] — usage statistics\n"
+            "[bold]/checkpoint [label][/] — create a checkpoint\n"
+            "[bold]/checkpoints[/] — list checkpoints\n"
+            "[bold]/rollback <id|#>[/] — rollback to a checkpoint\n"
             "[bold]/resume <id>[/] — resume a previous session\n"
             "[bold]/exit[/] — exit CrabCode\n"
             f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
@@ -2013,6 +2037,236 @@ async def _handle_command(
         console.print(table)
         return True
 
+    if cmd == "/search":
+        if not arg:
+            console.print("[dim]Usage: /search <query>[/]")
+            return True
+        from crabcode_core.session.storage import SessionStorage
+        results = SessionStorage.search_sessions(arg)
+        if not results:
+            console.print(f"[dim]No sessions matching \"{arg}\".[/]")
+            return True
+        from rich.table import Table as SearchTable
+        table = SearchTable(title=f"Search: \"{arg}\"", border_style="blue", expand=False)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("ID", style="cyan", width=8)
+        table.add_column("Project", style="dim", width=20)
+        table.add_column("Model", style="dim", width=16)
+        table.add_column("Tokens", style="dim", width=8, justify="right")
+        table.add_column("Preview")
+        for i, r in enumerate(results[:20], 1):
+            sid = r.get("id", "")
+            cwd_display = r.get("cwd", "")
+            if len(cwd_display) > 20:
+                cwd_display = "…" + cwd_display[-19:]
+            tokens = r.get("tokens_used", 0)
+            tokens_str = f"{tokens // 1000}k" if tokens >= 1000 else str(tokens)
+            preview = r.get("title", "") or r.get("first_user_message", "")
+            table.add_row(
+                str(i),
+                sid[:8],
+                cwd_display,
+                r.get("model", "")[:16],
+                tokens_str,
+                preview[:50],
+            )
+        console.print(table)
+        return True
+
+    if cmd == "/stats":
+        from crabcode_core.session.meta_db import SessionMetaStore as StatsStore
+        store = StatsStore()
+        g = store.stats_global()
+        p = store.stats_by_project(os.path.abspath(session.cwd))
+        models = store.stats_by_model(limit=5)
+        store.close()
+
+        def _fmt_tok(n: int) -> str:
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
+            if n >= 1_000:
+                return f"{n / 1_000:.1f}k"
+            return str(n)
+
+        lines = [
+            f"[bold]Global:[/]  {g['total_sessions']} sessions  |  "
+            f"{_fmt_tok(g['total_tokens'])} tokens  |  "
+            f"{g['active_projects']} projects",
+            f"[bold]This week:[/]  {g['week_sessions']} sessions  |  "
+            f"{_fmt_tok(g['week_tokens'])} tokens",
+            f"[bold]This project:[/]  {p['total_sessions']} sessions  |  "
+            f"{_fmt_tok(p['total_tokens'])} tokens  |  "
+            f"{p['total_messages']} messages",
+        ]
+        if models:
+            model_parts = [f"{m['model']} ({_fmt_tok(m['tokens'])})" for m in models]
+            lines.append(f"[bold]Top models:[/]  {', '.join(model_parts)}")
+        console.print(Panel(
+            "\n".join(lines),
+            title="[bold]Usage Statistics[/]",
+            border_style="blue",
+            expand=False,
+        ))
+        return True
+
+    if cmd == "/checkpoint":
+        label = arg or ""
+        cp_id = session.checkpoint(label=label)
+        if cp_id:
+            label_display = f" \"{label}\"" if label else ""
+            console.print(
+                f"[green]✓[/] Checkpoint created{label_display}: [bold]{cp_id[:8]}…[/bold] "
+                f"(at message {len(session.messages)})"
+            )
+        else:
+            console.print("[dim]No active session or no messages to checkpoint.[/]")
+        return True
+
+    if cmd == "/checkpoints":
+        cps = session.list_checkpoints()
+        if not cps:
+            console.print("[dim]No checkpoints for this session.[/]")
+            return True
+        from rich.table import Table as CpTable
+        table = CpTable(title="Checkpoints", border_style="blue", expand=False)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("ID", style="cyan", width=8)
+        table.add_column("Msg#", style="dim", width=5, justify="right")
+        table.add_column("Label")
+        table.add_column("Created", style="dim", width=20)
+        for i, cp in enumerate(cps, 1):
+            ts = cp.get("created_at", 0)
+            created = _format_timestamp(ts) if ts else ""
+            table.add_row(
+                str(i),
+                cp["id"][:8],
+                str(cp.get("message_index", "")),
+                cp.get("label", ""),
+                created,
+            )
+        console.print(table)
+        return True
+
+    if cmd == "/rollback":
+        if not arg:
+            console.print("[dim]Usage: /rollback <checkpoint-id or #>[/]")
+            return True
+        cps = session.list_checkpoints()
+        target_id = arg
+        # Try numeric index first
+        try:
+            idx = int(arg) - 1
+            if 0 <= idx < len(cps):
+                target_id = cps[idx]["id"]
+        except ValueError:
+            # Try prefix match
+            for cp in cps:
+                if cp["id"].startswith(arg):
+                    target_id = cp["id"]
+                    break
+        old_count = len(session.messages)
+        ok = session.rollback(target_id)
+        if ok:
+            console.print(
+                f"[green]✓[/] Rolled back to checkpoint [bold]{target_id[:8]}…[/bold] "
+                f"({old_count} → {len(session.messages)} messages)"
+            )
+        else:
+            console.print(f"[bold red]Checkpoint not found: {arg}[/]")
+        return True
+
+    if cmd == "/export":
+        if not session.session_id:
+            console.print("[dim]No active session to export.[/]")
+            return True
+        parts = arg.split() if arg else []
+        fmt = "md"
+        out_path = ""
+        for p in parts:
+            if p in ("md", "markdown", "json"):
+                fmt = "json" if p == "json" else "md"
+            else:
+                out_path = p
+        from crabcode_core.session.export import export_markdown, export_json
+        if fmt == "json":
+            content = export_json(session.session_id, session.cwd)
+            ext = ".json"
+        else:
+            content = export_markdown(session.session_id, session.cwd)
+            ext = ".md"
+        if not out_path:
+            out_path = os.path.join(session.cwd, f"{session.session_id[:8]}{ext}")
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            console.print(f"[green]✓[/] Exported to [bold]{out_path}[/]")
+        except OSError as exc:
+            console.print(f"[bold red]Export failed: {exc}[/]")
+        return True
+
+    if cmd == "/archive":
+        if not arg:
+            console.print("[dim]Usage: /archive <session-id>[/]")
+            return True
+        from crabcode_core.session.storage import SessionStorage as ArchiveStorage
+        sessions = ArchiveStorage.list_sessions(session.cwd)
+        match = None
+        for s in sessions:
+            if s["session_id"] == arg or s["session_id"].startswith(arg):
+                match = s["session_id"]
+                break
+        if not match:
+            try:
+                idx = int(arg) - 1
+                if 0 <= idx < len(sessions):
+                    match = sessions[idx]["session_id"]
+            except ValueError:
+                pass
+        if not match:
+            console.print(f"[bold red]Session not found: {arg}[/]")
+            return True
+        from crabcode_core.session.meta_db import SessionMetaStore as ArchiveStore
+        store = ArchiveStore()
+        store.archive(match)
+        store.close()
+        console.print(f"[dim]Archived session [bold]{match[:8]}…[/bold][/]")
+        return True
+
+    if cmd == "/recent":
+        from crabcode_core.session.meta_db import SessionMetaStore
+        store = SessionMetaStore()
+        rows = store.list_recent(limit=20)
+        store.close()
+        if not rows:
+            console.print("[dim]No sessions found.[/]")
+            return True
+        from rich.table import Table as RecentTable
+        table = RecentTable(title="Recent Sessions (all projects)", border_style="blue", expand=False)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("ID", style="cyan", width=8)
+        table.add_column("Project", style="dim", width=24)
+        table.add_column("Model", style="dim", width=16)
+        table.add_column("Tokens", style="dim", width=8, justify="right")
+        table.add_column("Preview")
+        for i, r in enumerate(rows, 1):
+            sid = r.get("id", "")
+            cwd_display = r.get("cwd", "")
+            if len(cwd_display) > 24:
+                cwd_display = "…" + cwd_display[-23:]
+            tokens = r.get("tokens_used", 0)
+            tokens_str = f"{tokens // 1000}k" if tokens >= 1000 else str(tokens)
+            preview = r.get("title", "") or r.get("first_user_message", "")
+            table.add_row(
+                str(i),
+                sid[:8],
+                cwd_display,
+                r.get("model", "")[:16],
+                tokens_str,
+                preview[:50],
+            )
+        console.print(table)
+        return True
+
     if cmd == "/resume":
         if not arg:
             console.print("[dim]Usage: /resume <session-id>[/]")
@@ -2023,6 +2277,8 @@ async def _handle_command(
         session_id = arg
 
         match = None
+        match_source = "local"
+        # 1) Try current project: exact, prefix, or numeric index
         for s in sessions:
             if s["session_id"] == session_id or s["session_id"].startswith(session_id):
                 match = s["session_id"]
@@ -2035,9 +2291,34 @@ async def _handle_command(
             except ValueError:
                 pass
 
+        # 2) Fallback: cross-project lookup via SQLite
+        if not match:
+            from crabcode_core.session.meta_db import SessionMetaStore as ResumeStore
+            store = ResumeStore()
+            # Try exact match first
+            row = store.get(session_id)
+            if row:
+                match = row["id"]
+                match_source = row.get("cwd", "")
+            else:
+                # Try prefix match across all recent sessions
+                recent = store.list_recent(limit=100)
+                for r in recent:
+                    if r["id"].startswith(session_id):
+                        match = r["id"]
+                        match_source = r.get("cwd", "")
+                        break
+            store.close()
+
         if not match:
             console.print(f"[bold red]Session not found: {session_id}[/]")
             return True
+
+        if match_source != "local" and match_source:
+            cwd_display = match_source
+            if len(cwd_display) > 40:
+                cwd_display = "…" + cwd_display[-39:]
+            console.print(f"[dim]Found in project: {cwd_display}[/]")
 
         ok = await session.resume(match)
         if ok:

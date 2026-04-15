@@ -65,6 +65,7 @@ class CoreSession:
         self._agent_mode: str = "agent"  # "agent" | "plan"
         self._saved_permission_mode: Any = None
         self._current_plan: Any = None  # ExecutionPlan | None
+        self._title_generation_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
@@ -79,8 +80,6 @@ class CoreSession:
         from crabcode_core.mcp.config import load_mcp_configs
         from crabcode_core.permissions.manager import PermissionManager
         from crabcode_core.session.storage import (
-            SessionStorage,
-            generate_session_id,
             get_agent_transcript_path,
         )
         from crabcode_core.tools import get_default_tools
@@ -150,15 +149,8 @@ class CoreSession:
         if not self.tools:
             self.tools = get_default_tools()
 
-        self.session_id = generate_session_id()
-        self._session_storage = SessionStorage(self.cwd, self.session_id)
-
-        # Write session meta to JSONL + SQLite
-        active_cfg = merged.get_api_config(self._current_model_name)
-        self._session_storage.write_meta(
-            model=active_cfg.model or "",
-            provider=active_cfg.provider or "",
-        )
+        # Session storage is created lazily by _ensure_session_storage()
+        # to avoid leaving empty session files when resume() is called.
 
         self._permission_manager = PermissionManager(
             settings=merged.permissions,
@@ -279,6 +271,61 @@ class CoreSession:
 
         self._initialized = True
 
+    def _ensure_session_storage(self) -> None:
+        """Lazily create session storage on first real use.
+
+        This avoids creating empty session files when resume() will be called
+        right after initialize().
+        """
+        if self._session_storage is not None:
+            return
+        from crabcode_core.session.storage import SessionStorage, generate_session_id
+
+        self.session_id = generate_session_id()
+        self._session_storage = SessionStorage(self.cwd, self.session_id)
+        active_cfg = self.settings.get_api_config(self._current_model_name)
+        self._session_storage.write_meta(
+            model=active_cfg.model or "",
+            provider=active_cfg.provider or "",
+        )
+        if self._agent_manager:
+            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
+
+    def _maybe_generate_title(self) -> None:
+        """Fire-and-forget task to generate an LLM title after the first turn."""
+        if self._title_generation_task is not None:
+            return
+        if not self._session_storage or not self._api_adapter:
+            return
+        meta = self._session_storage.meta
+        # Only generate if title is still the truncated first_user_message
+        title = meta.get("title", "")
+        first_msg = meta.get("first_user_message", "")
+        if not first_msg:
+            return
+        if title and title != first_msg[:200]:
+            return
+
+        first_assistant_text = ""
+        for msg in self.messages:
+            if msg.role.value == "assistant":
+                first_assistant_text = msg.text_content[:500]
+                break
+
+        storage = self._session_storage
+        adapter = self._api_adapter
+
+        async def _gen() -> None:
+            try:
+                from crabcode_core.session.title_gen import generate_title
+                new_title = await generate_title(first_msg, first_assistant_text, adapter)
+                if new_title:
+                    storage.update_title(new_title)
+            except Exception:
+                logger.debug("Background title generation failed", exc_info=True)
+
+        self._title_generation_task = asyncio.create_task(_gen())
+
     async def close(self) -> None:
         """Release session-scoped resources."""
         if self._closed:
@@ -358,6 +405,7 @@ class CoreSession:
     ) -> AsyncGenerator[CoreEvent, None]:
         """Send a user message and stream back events."""
         await self.initialize()
+        self._ensure_session_storage()
         self._abort_controller.clear()
 
         from crabcode_core.compact.compact import should_auto_compact, compact_conversation
@@ -479,6 +527,13 @@ class CoreSession:
                 old_count = len(self.messages)
                 self.messages = compact_result
                 self.compact_count += 1
+                # Persist compact summary to session metadata
+                if self._session_storage and compact_result:
+                    summary_text = compact_result[0].text_content if compact_result[0].text_content else ""
+                    if summary_text.startswith("[Conversation summary: "):
+                        summary_text = summary_text[len("[Conversation summary: "):-1]
+                    if summary_text:
+                        self._session_storage.update_summary(summary_text)
                 yield CompactEvent(
                     summary="Conversation auto-compacted",
                     messages_before=old_count,
@@ -578,6 +633,7 @@ class CoreSession:
                         if total_tokens > 0:
                             self._session_storage.record_tokens(total_tokens)
                         self._session_storage.record_message_count(len(self.messages))
+                        self._maybe_generate_title()
                 yield event
         finally:
             agent_forwarder.cancel()
@@ -638,6 +694,36 @@ class CoreSession:
         if result:
             self.messages = result
             self.compact_count += 1
+            if self._session_storage and result:
+                summary_text = result[0].text_content if result[0].text_content else ""
+                if summary_text.startswith("[Conversation summary: "):
+                    summary_text = summary_text[len("[Conversation summary: "):-1]
+                if summary_text:
+                    self._session_storage.update_summary(summary_text)
+
+    def checkpoint(self, label: str = "") -> str | None:
+        """Create a checkpoint at the current conversation position."""
+        if not self._session_storage:
+            return None
+        return self._session_storage.create_checkpoint(self.messages, label=label)
+
+    def list_checkpoints(self) -> list[dict[str, Any]]:
+        """List checkpoints for the current session."""
+        if not self._session_storage:
+            return []
+        return self._session_storage.list_checkpoints()
+
+    def rollback(self, checkpoint_id: str) -> bool:
+        """Rollback conversation to a checkpoint. Returns True on success."""
+        if not self._session_storage:
+            return False
+        idx = self._session_storage.rollback_to_checkpoint(checkpoint_id)
+        if idx is None:
+            return False
+        self.messages = self.messages[: idx + 1]
+        if self._session_storage:
+            self._session_storage.record_message_count(len(self.messages))
+        return True
 
     def list_models(self) -> dict[str, str]:
         """Return a dict of {name -> description} for all configured named models.
@@ -789,6 +875,14 @@ class CoreSession:
         storage = SessionStorage(self.cwd, session_id)
         raw_messages = storage.load_messages()
         agent_snapshots = storage.load_agent_snapshots()
+
+        if not raw_messages and not storage.meta and not agent_snapshots:
+            # Try cross-project lookup via SQLite
+            cross = SessionStorage.from_session_id(session_id)
+            if cross is not None:
+                storage = cross
+                raw_messages = storage.load_messages()
+                agent_snapshots = storage.load_agent_snapshots()
 
         if not raw_messages and not storage.meta and not agent_snapshots:
             return False

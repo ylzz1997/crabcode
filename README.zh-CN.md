@@ -59,6 +59,35 @@ echo "explain this codebase" | crabcode -p
 
 # 交互式 REPL
 crabcode
+
+# 继续上次会话
+crabcode --continue      # 或 -c
+
+# 恢复指定会话
+crabcode --resume <id>   # 或 -r <id>
+```
+
+### 会话管理 CLI
+
+```bash
+# 列出当前项目的会话
+crabcode sessions list
+
+# 列出所有项目的会话
+crabcode sessions list --all
+
+# 按关键词搜索会话
+crabcode sessions search "重构认证"
+
+# 导出会话为 Markdown 或 JSON
+crabcode sessions export <id> --format md --output chat.md
+
+# 归档旧会话（超过 30 天）并清理文件
+crabcode sessions prune --days 30 --delete-files
+
+# 查看使用统计
+crabcode stats
+crabcode stats --project   # 仅当前项目
 ```
 
 ## 多 API 支持
@@ -118,8 +147,44 @@ crabcode --provider router --base-url https://my-router.example.com/v1 --api-for
 | `thinking_budget` | 思考 token 预算 | `10000` |
 | `max_tokens` | 最大输出 token 数 | `16384` |
 | `timeout` | API 调用超时时间（秒），防止网络卡住时无限等待 | `300` |
+| `context_window` | 覆盖模型的上下文窗口大小（token 数）。当自动检测失败或不准确时使用——详见下方[上下文窗口管理](#上下文窗口管理)。 | 自动检测 |
 
 `env` 字段用于直接在配置文件中定义环境变量，启动时会自动注入，无需在 shell 中 `export`。
+
+### 上下文窗口管理
+
+CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报错。
+
+**上下文窗口大小的解析优先级：**
+
+1. `api` 配置中显式指定的 `context_window` 字段
+2. 内置已知模型查找表（例如 `glm-5.1-fp8` → 202752、`gpt-4o` → 128000）
+3. 默认兜底值：`200000`
+
+如果你的模型不在内置表中，且未显式配置，则使用 128k 兜底。对于上下文窗口更大的模型（如智谱 GLM），建议手动指定：
+
+```json
+{
+  "api": {
+    "provider": "openai",
+    "model": "glm-5.1-fp8",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "context_window": 202752
+  }
+}
+```
+
+**自动压缩（Auto Compact）**
+
+当估算 token 数接近上下文限制时，CrabCode 会自动：
+
+1. 调用 API 将历史消息总结为一条 `[Conversation summary: ...]` 消息
+2. 保留最近的若干条消息不变
+3. **在同一个 session 内继续执行当前任务**，无需用户干预
+
+也可以使用 `/compact` 命令手动触发压缩，或通过 `settings.json` 中的 `max_context_length` 字段自定义触发阈值。
+
+> **注意**：自动压缩使用的是 `api` 中配置的同一个模型。如果你的模型通过自定义接口访问，请确保 `api.model` 字段填写正确——否则摘要生成请求可能静默失败。
 
 ### Logging（运行日志）
 
@@ -427,8 +492,16 @@ crabcode --model-profile smart    # 简写：-M smart
 | `/new` | 新建会话（清空内存中的对话历史） |
 | `/compact` | 手动压缩对话历史，节省上下文 |
 | `/clear` | 清空当前内存对话消息 |
-| `/sessions` | 列出最近保存的会话 |
-| `/resume <id>` | 通过完整/前缀 id 或序号恢复会话 |
+| `/sessions` | 列出当前项目最近保存的会话 |
+| `/recent` | 列出所有项目的最近会话 |
+| `/search <关键词>` | 按标题或消息内容搜索会话 |
+| `/resume <id>` | 通过完整/前缀 id 或序号恢复会话（支持跨项目） |
+| `/archive <id>` | 归档会话（从列表中隐藏） |
+| `/export [md\|json] [路径]` | 将当前会话导出为 Markdown 或 JSON |
+| `/stats` | 显示使用统计（token 消耗、会话数、模型分布） |
+| `/checkpoint [标签]` | 在当前对话位置创建检查点 |
+| `/checkpoints` | 列出当前会话的检查点 |
+| `/rollback <id\|序号>` | 回滚对话到指定检查点 |
 | `/exit`, `/quit` | 退出 CrabCode |
 | `/<skill>` | 按名称调用技能（后面可附加用户输入） |
 | `! <shell 命令>` | 在 REPL 里直接执行 shell 命令（不走模型工具循环） |
@@ -438,6 +511,7 @@ crabcode --model-profile smart    # 简写：-M smart
 - 需要 `<id>` 的命令一般都支持使用 `/agents` 展示的短前缀。
 - `/agent-send` 是否实时回显由 `settings.json` 中 `agent.stream_send_input_output` 控制。
 - `Ctrl+C` 会中断当前操作；在短时间内再次按 `Ctrl+C` 会退出。
+- `/resume` 支持跨项目会话恢复——如果会话 ID 属于其他项目，会通过元数据数据库自动定位。
 
 ### Plan 模式流程
 
