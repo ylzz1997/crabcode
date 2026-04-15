@@ -436,6 +436,23 @@ class AgentManager:
                 await self._emit_state(run, "running", "Agent started")
                 tools = self._resolve_tools(run.snapshot.subagent_type, profile_cfg)
                 adapter = self._adapter_provider(model_profile)
+
+                resolved_cw = 0
+                if hasattr(adapter, "resolve_context_window"):
+                    try:
+                        resolved_cw = await adapter.resolve_context_window()
+                    except Exception:
+                        pass
+                if resolved_cw == 0:
+                    from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW
+                    resolved_cw = DEFAULT_CONTEXT_WINDOW
+
+                agent_api_config = None
+                if model_profile and hasattr(self._settings, "get_api_config"):
+                    agent_api_config = self._settings.get_api_config(model_profile)
+                elif hasattr(self._settings, "get_api_config"):
+                    agent_api_config = self._settings.get_api_config(None)
+
                 agent_prompt = (
                     profile_cfg.prompt
                     if profile_cfg.prompt is not None
@@ -465,6 +482,8 @@ class AgentManager:
                     permission_queue=run.permission_queue,
                     hook_manager=self._hook_manager,
                     agent_mode="agent",
+                    api_config=agent_api_config,
+                    context_window=resolved_cw,
                 )
                 final_usage: dict[str, Any] = {}
                 async for event in query_loop(params):

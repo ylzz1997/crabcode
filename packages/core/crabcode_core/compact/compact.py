@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from crabcode_core.api.base import APIAdapter, ModelConfig
@@ -10,6 +11,9 @@ from crabcode_core.types.message import (
     Message,
     MessageRole,
     TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
     create_user_message,
     create_assistant_message,
 )
@@ -29,19 +33,76 @@ DEFAULT_COMPACT_THRESHOLD = 100_000
 AUTOCOMPACT_BUFFER_TOKENS = 13_000
 
 
-def estimate_token_count(messages: list[Message]) -> int:
-    """Rough token estimate: ~4 chars per token."""
-    total = 0
+def _estimate_block_chars(block: Any) -> int:
+    """Estimate character count for a single content block."""
+    if isinstance(block, TextBlock):
+        return len(block.text)
+    if isinstance(block, ToolUseBlock):
+        return len(block.name) + len(json.dumps(block.input, ensure_ascii=False))
+    if isinstance(block, ToolResultBlock):
+        return len(block.content)
+    if isinstance(block, ThinkingBlock):
+        return len(block.thinking)
+    if hasattr(block, "content"):
+        return len(getattr(block, "content", ""))
+    return 0
+
+
+def _estimate_tokens_for_text(text: str) -> int:
+    """Estimate token count using UTF-8 byte length as a fast proxy.
+
+    ASCII: ratio=1.0 → ~0.25 tokens/char; CJK: ratio=3.0 → ~1.5 tokens/char.
+    Linear interpolation between these extremes based on byte/char ratio.
+    """
+    total_chars = len(text)
+    if total_chars == 0:
+        return 0
+    byte_len = len(text.encode("utf-8"))
+    ratio = byte_len / total_chars
+    tokens_per_char = 0.25 + (ratio - 1.0) * 0.625
+    return max(1, int(total_chars * tokens_per_char))
+
+
+def estimate_token_count(messages: list[Message], system: list[str] | None = None) -> int:
+    """Estimate token count for messages and optional system prompt.
+
+    Uses UTF-8 byte length heuristic for fast estimation without char-by-char
+    iteration. Covers TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock.
+    """
+    total_bytes = 0
+    total_chars = 0
+
+    def _account(s: object) -> None:
+        nonlocal total_bytes, total_chars
+        if not isinstance(s, str):
+            s = str(s) if s is not None else ""
+        total_chars += len(s)
+        total_bytes += len(s.encode("utf-8"))
+
+    if system:
+        for s in system:
+            _account(s)
     for msg in messages:
         if isinstance(msg.content, str):
-            total += len(msg.content)
+            _account(msg.content)
+        elif msg.content is None:
+            continue
         else:
             for block in msg.content:
                 if isinstance(block, TextBlock):
-                    total += len(block.text)
-                elif hasattr(block, "content"):
-                    total += len(getattr(block, "content", ""))
-    return total // 4
+                    _account(block.text)
+                elif isinstance(block, ToolResultBlock):
+                    _account(block.content)
+                elif isinstance(block, ThinkingBlock):
+                    _account(block.thinking)
+                elif isinstance(block, ToolUseBlock):
+                    _account(json.dumps(block.input, ensure_ascii=False))
+
+    if total_chars == 0:
+        return 0
+    ratio = total_bytes / total_chars
+    tokens_per_char = 0.25 + (ratio - 1.0) * 0.625
+    return max(1, int(total_chars * tokens_per_char))
 
 
 def should_auto_compact(
@@ -108,7 +169,11 @@ async def _generate_summary(
             ),
         ]
 
+        adapter_model = ""
+        if hasattr(api_adapter, "config"):
+            adapter_model = getattr(api_adapter.config, "model", "") or ""
         config = ModelConfig(
+            model=adapter_model,
             max_tokens=2048,
             thinking_enabled=False,
         )

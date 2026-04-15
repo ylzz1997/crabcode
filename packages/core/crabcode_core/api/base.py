@@ -19,6 +19,7 @@ class ModelConfig:
     temperature: float | None = None
     stop_sequences: list[str] | None = None
     timeout: int = 300  # seconds
+    context_window: int = 0  # 0 means unknown / not resolved yet
 
 
 @dataclass
@@ -44,6 +45,8 @@ class APIAdapter(ABC):
     message format and the provider's native format.
     """
 
+    config: Any  # ApiConfig — set by concrete subclasses
+
     @abstractmethod
     async def stream_message(
         self,
@@ -64,3 +67,23 @@ class APIAdapter(ABC):
     ) -> int:
         """Estimate token count for a message list."""
         ...
+
+    async def resolve_context_window(self) -> int:
+        """Resolve the effective context window size for the current model.
+
+        Priority: config.context_window (user override)
+                  -> API query (Anthropic Models API)
+                  -> built-in lookup table
+                  -> DEFAULT_CONTEXT_WINDOW
+        """
+        from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW, lookup_context_window
+
+        if hasattr(self, "config") and getattr(self.config, "context_window", None):
+            return self.config.context_window
+
+        model = getattr(self.config, "model", None) if hasattr(self, "config") else None
+        looked_up = lookup_context_window(model)
+        if looked_up is not None:
+            return looked_up
+
+        return DEFAULT_CONTEXT_WINDOW

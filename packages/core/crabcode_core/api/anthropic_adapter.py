@@ -84,6 +84,7 @@ class AnthropicAdapter(APIAdapter):
 
     def __init__(self, config: ApiConfig):
         self.config = config
+        self._cached_context_window: int | None = None
         api_key = None
         if config.api_key_env:
             api_key = os.environ.get(config.api_key_env)
@@ -97,6 +98,35 @@ class AnthropicAdapter(APIAdapter):
             kwargs["base_url"] = config.base_url
 
         self.client = anthropic.AsyncAnthropic(**kwargs)
+
+    async def resolve_context_window(self) -> int:
+        """Query the Anthropic Models API for context window, with caching."""
+        from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW, lookup_context_window
+
+        if self.config.context_window:
+            return self.config.context_window
+
+        if self._cached_context_window is not None:
+            return self._cached_context_window
+
+        model = self.config.model
+        if model:
+            try:
+                model_info = await self.client.models.retrieve(model_id=model)
+                window = getattr(model_info, "max_input_tokens", None)
+                if window:
+                    self._cached_context_window = window
+                    return window
+            except Exception:
+                logger.debug("Failed to query Anthropic Models API for %s", model, exc_info=True)
+
+        looked_up = lookup_context_window(model)
+        if looked_up is not None:
+            self._cached_context_window = looked_up
+            return looked_up
+
+        self._cached_context_window = DEFAULT_CONTEXT_WINDOW
+        return DEFAULT_CONTEXT_WINDOW
 
     async def stream_message(
         self,

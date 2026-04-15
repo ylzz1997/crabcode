@@ -18,6 +18,7 @@ from crabcode_core.query.loop import QueryParams, query_loop
 from crabcode_core.tools.switch_mode import SwitchModeTool
 from crabcode_core.types.config import ApiConfig, CrabCodeSettings
 from crabcode_core.types.event import (
+    CompactEvent,
     CoreEvent,
     ErrorEvent,
     ModeChangeEvent,
@@ -26,7 +27,7 @@ from crabcode_core.types.event import (
     ToolResultEvent,
     TurnCompleteEvent,
 )
-from crabcode_core.types.message import Message
+from crabcode_core.types.message import Message, create_user_message
 from crabcode_core.types.tool import (
     PermissionBehavior,
     Tool,
@@ -397,6 +398,133 @@ class TestSwitchModeTool:
 
 
 class TestQueryLoopPlanSubmission:
+    def test_emergency_compact_appends_resume_prompt_and_continues(self, monkeypatch: pytest.MonkeyPatch):
+        async def _run():
+            class ResumeAwareAdapter(APIAdapter):
+                def __init__(self):
+                    self.config = ApiConfig(model="test-model", max_tokens=128)
+                    self.seen_messages: list[Message] = []
+
+                async def stream_message(
+                    self,
+                    messages: list[Any],
+                    system: list[str] | None = None,
+                    tools: list[dict[str, Any]] | None = None,
+                    config: ModelConfig | None = None,
+                ) -> AsyncGenerator[StreamChunk, None]:
+                    self.seen_messages = list(messages)
+                    assert isinstance(messages[-1].content, str)
+                    assert "Conversation was compacted to fit the context window" in messages[-1].content
+                    yield StreamChunk(type="text", text="continued")
+                    yield StreamChunk(type="message_stop")
+
+                async def count_tokens(
+                    self,
+                    messages: list[Any],
+                    system: list[str] | None = None,
+                ) -> int:
+                    return 0
+
+            async def fake_compact(messages, api_adapter=None):
+                return [create_user_message(content="[Conversation summary: compacted]")]
+
+            token_calls = {"count": 0}
+
+            def fake_estimate(messages, system=None):
+                token_calls["count"] += 1
+                if token_calls["count"] == 1:
+                    return 10_000
+                return 10
+
+            monkeypatch.setattr("crabcode_core.compact.compact.compact_conversation", fake_compact)
+            monkeypatch.setattr("crabcode_core.compact.compact.estimate_token_count", fake_estimate)
+
+            adapter = ResumeAwareAdapter()
+            params = QueryParams(
+                messages=[create_user_message(content="do something")],
+                system_prompt=["test"],
+                user_context={},
+                system_context={},
+                tools=[],
+                tool_context=ToolContext(tool_event_queue=asyncio.Queue()),
+                api_adapter=adapter,
+                agent_mode="agent",
+                api_config=adapter.config,
+                context_window=256,
+            )
+
+            events = [event async for event in query_loop(params)]
+            assert any(isinstance(e, CompactEvent) for e in events)
+            assert any(isinstance(e, StreamTextEvent) and e.text == "continued" for e in events)
+
+        asyncio.run(_run())
+
+    def test_empty_response_after_compact_retries_once(self, monkeypatch: pytest.MonkeyPatch):
+        async def _run():
+            class EmptyThenContinueAdapter(APIAdapter):
+                def __init__(self):
+                    self.config = ApiConfig(model="test-model", max_tokens=128)
+                    self.calls = 0
+
+                async def stream_message(
+                    self,
+                    messages: list[Any],
+                    system: list[str] | None = None,
+                    tools: list[dict[str, Any]] | None = None,
+                    config: ModelConfig | None = None,
+                ) -> AsyncGenerator[StreamChunk, None]:
+                    self.calls += 1
+                    if self.calls == 1:
+                        assert isinstance(messages[-1].content, str)
+                        assert "Conversation was compacted to fit the context window" in messages[-1].content
+                        yield StreamChunk(type="message_stop")
+                        return
+                    assert isinstance(messages[-1].content, str)
+                    assert "previous attempt returned no content after compaction" in messages[-1].content
+                    yield StreamChunk(type="text", text="resumed")
+                    yield StreamChunk(type="message_stop")
+
+                async def count_tokens(
+                    self,
+                    messages: list[Any],
+                    system: list[str] | None = None,
+                ) -> int:
+                    return 0
+
+            async def fake_compact(messages, api_adapter=None):
+                return [create_user_message(content="[Conversation summary: compacted]")]
+
+            token_calls = {"count": 0}
+
+            def fake_estimate(messages, system=None):
+                token_calls["count"] += 1
+                if token_calls["count"] == 1:
+                    return 10_000
+                return 10
+
+            monkeypatch.setattr("crabcode_core.compact.compact.compact_conversation", fake_compact)
+            monkeypatch.setattr("crabcode_core.compact.compact.estimate_token_count", fake_estimate)
+
+            adapter = EmptyThenContinueAdapter()
+            params = QueryParams(
+                messages=[create_user_message(content="do something")],
+                system_prompt=["test"],
+                user_context={},
+                system_context={},
+                tools=[],
+                tool_context=ToolContext(tool_event_queue=asyncio.Queue()),
+                api_adapter=adapter,
+                agent_mode="agent",
+                api_config=adapter.config,
+                context_window=256,
+            )
+
+            events = [event async for event in query_loop(params)]
+            assert adapter.calls == 2
+            assert any(isinstance(e, StreamTextEvent) and e.text == "resumed" for e in events)
+
+        asyncio.run(_run())
+
     def test_switch_mode_submission_ends_turn_immediately(self):
         async def _run():
             chunks = [

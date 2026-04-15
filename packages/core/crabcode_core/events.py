@@ -108,6 +108,8 @@ class CoreSession:
             merged.api.thinking_enabled = file_settings.api.thinking_enabled
         if file_settings.api.max_tokens != 16384 and self.settings.api.max_tokens == 16384:
             merged.api.max_tokens = file_settings.api.max_tokens
+        if file_settings.api.context_window and not self.settings.api.context_window:
+            merged.api.context_window = file_settings.api.context_window
 
         if file_settings.models:
             for name, cfg in file_settings.models.items():
@@ -447,11 +449,28 @@ class CoreSession:
                     first_user_message=text,
                 )
 
-        compact_kwargs: dict[str, Any] = {}
-        if self.settings.max_context_length is not None:
-            compact_kwargs["threshold"] = self.settings.max_context_length
+        active_api_cfg = self.settings.get_api_config(self._current_model_name)
+        if hasattr(self._api_adapter, "resolve_context_window"):
+            resolved_context_window = await self._api_adapter.resolve_context_window()
+        else:
+            from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW, lookup_context_window
+            resolved_context_window = (
+                active_api_cfg.context_window
+                or lookup_context_window(active_api_cfg.model)
+                or DEFAULT_CONTEXT_WINDOW
+            )
 
-        if self.settings.auto_compact_enabled and should_auto_compact(self.messages, **compact_kwargs):
+        compact_threshold: int
+        if self.settings.max_context_length is not None:
+            compact_threshold = self.settings.max_context_length
+        elif resolved_context_window > 0:
+            from crabcode_core.compact.compact import AUTOCOMPACT_BUFFER_TOKENS
+            compact_threshold = resolved_context_window - active_api_cfg.max_tokens - AUTOCOMPACT_BUFFER_TOKENS
+        else:
+            from crabcode_core.compact.compact import DEFAULT_COMPACT_THRESHOLD
+            compact_threshold = DEFAULT_COMPACT_THRESHOLD
+
+        if self.settings.auto_compact_enabled and should_auto_compact(self.messages, threshold=compact_threshold):
             compact_result = await compact_conversation(
                 self.messages,
                 api_adapter=self._api_adapter,
@@ -467,7 +486,6 @@ class CoreSession:
                 )
 
         tool_names = [t.name for t in self.tools if t.is_enabled]
-        active_api_cfg = self.settings.get_api_config(self._current_model_name)
         model = active_api_cfg.model or "claude-sonnet-4-20250514"
 
         profile: PromptProfile | None = None
@@ -518,6 +536,8 @@ class CoreSession:
             permission_queue=self._permission_queue,
             hook_manager=self._hook_manager,
             agent_mode=self._agent_mode,
+            api_config=active_api_cfg,
+            context_window=resolved_context_window,
         )
 
         pre_loop_count = len(self.messages)
@@ -527,6 +547,11 @@ class CoreSession:
             try:
                 async for event in query_loop(params):
                     await merged_events.put(event)
+            except Exception:
+                logger.exception("query_loop crashed")
+                await merged_events.put(
+                    ErrorEvent(message="Internal error in query loop", recoverable=False, error_type="internal")
+                )
             finally:
                 await merged_events.put(None)
 

@@ -41,6 +41,7 @@ class ApiConfig(BaseModel):
     thinking_enabled: bool = True
     thinking_budget: int = 10000
     timeout: int = 300  # seconds, for API calls
+    context_window: int | None = None  # override auto-detected context window
 
 
 class AgentSettings(BaseModel):
