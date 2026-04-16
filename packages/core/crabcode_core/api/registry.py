@@ -22,6 +22,15 @@ def create_adapter(config: ApiConfig) -> APIAdapter:
     elif provider == "openai":
         from crabcode_core.api.openai_adapter import OpenAIAdapter
         return OpenAIAdapter(config)
+    elif provider == "azure":
+        from crabcode_core.api.azure_adapter import AzureOpenAIAdapter
+        return AzureOpenAIAdapter(config)
+    elif provider == "gemini":
+        from crabcode_core.api.gemini_adapter import GeminiAdapter
+        return GeminiAdapter(config)
+    elif provider == "ollama":
+        from crabcode_core.api.ollama_adapter import OllamaAdapter
+        return OllamaAdapter(config)
     elif provider == "codex":
         from crabcode_core.api.codex_adapter import CodexAdapter
         return CodexAdapter(config)
@@ -33,6 +42,15 @@ def create_adapter(config: ApiConfig) -> APIAdapter:
         elif fmt == "codex":
             from crabcode_core.api.codex_adapter import CodexAdapter
             return CodexAdapter(config)
+        elif fmt == "ollama":
+            from crabcode_core.api.ollama_adapter import OllamaAdapter
+            return OllamaAdapter(config)
+        elif fmt == "gemini":
+            from crabcode_core.api.gemini_adapter import GeminiAdapter
+            return GeminiAdapter(config)
+        elif fmt == "azure":
+            from crabcode_core.api.azure_adapter import AzureOpenAIAdapter
+            return AzureOpenAIAdapter(config)
         else:
             from crabcode_core.api.openai_adapter import OpenAIAdapter
             return OpenAIAdapter(config)

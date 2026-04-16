@@ -32,6 +32,20 @@ KNOWN_CONTEXT_WINDOWS: dict[str, int] = {
     "glm-5.1": 202_752,
     "glm-4-plus": 128_000,
     "glm-4": 128_000,
+    # Ollama
+    "qwen3:32b": 128_000,
+    "qwen2.5-coder:32b": 128_000,
+    "deepseek-coder-v2": 128_000,
+    "llama3.1:8b": 128_000,
+    "codellama": 16_000,
+    "mistral": 32_000,
+    "mixtral": 32_000,
+    # Gemini
+    "gemini-2.5-pro": 1_048_576,
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.0-flash": 1_048_576,
+    "gemini-1.5-pro": 2_097_152,
+    "gemini-1.5-flash": 1_048_576,
 }
 
 DEFAULT_CONTEXT_WINDOW = 200_000

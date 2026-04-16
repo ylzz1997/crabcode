@@ -114,6 +114,20 @@ crabcode --provider router --base-url https://my-router.example.com --api-format
 
 # 第三方转发（Codex/Responses API 兼容格式）
 crabcode --provider router --base-url https://my-router.example.com/v1 --api-format codex --model codex-mini-latest
+
+# Ollama（本地）
+crabcode --provider ollama --model qwen3:32b
+# 或在 settings.json 中配置：
+# {"api": {"provider": "ollama", "model": "qwen3:32b"}}
+
+# Google Gemini
+crabcode --provider gemini --model gemini-2.5-flash
+export GEMINI_API_KEY=YourKey
+
+# Azure OpenAI
+crabcode --provider azure --model my-gpt4o-deployment
+export AZURE_OPENAI_API_KEY=YourKey
+export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 ```
 
 也可以在 `~/.crabcode/settings.json` 中配置：
@@ -138,11 +152,11 @@ crabcode --provider router --base-url https://my-router.example.com/v1 --api-for
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
-| `provider` | API 后端：`anthropic` \| `openai` \| `codex` \| `router` | `anthropic` |
+| `provider` | API 后端：`anthropic` \| `openai` \| `codex` \| `router` \| `ollama` \| `gemini` \| `azure` | `anthropic` |
 | `model` | 模型 ID | — |
 | `base_url` | 自定义 API 地址（适用于第三方转发或本地部署） | — |
 | `api_key_env` | 存放 API Key 的**环境变量名**（不是 Key 本身） | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
-| `format` | Router 模式下的协议格式：`anthropic` \| `openai` \| `codex` | — |
+| `format` | Router 模式下的协议格式：`anthropic` \| `openai` \| `codex` \| `ollama` \| `gemini` \| `azure` | — |
 | `thinking_enabled` | 是否启用思考模式（不支持该功能的模型需设为 `false`） | `true` |
 | `thinking_budget` | 思考 token 预算 | `10000` |
 | `max_tokens` | 最大输出 token 数 | `16384` |

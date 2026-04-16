@@ -99,13 +99,23 @@ def _tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class OpenAIAdapter(APIAdapter):
-    """Adapter for OpenAI-compatible APIs."""
+    """Adapter for OpenAI-compatible APIs.
+
+    Designed to be subclassed by providers that use an OpenAI-compatible
+    chat completions surface (Azure, Ollama, Gemini, etc.).  Subclasses
+    can override :meth:`_create_client` and :meth:`_resolve_model` to
+    customise client construction and model/deployment name resolution.
+    """
 
     def __init__(self, config: ApiConfig):
+        self.config = config
+        self.client = self._create_client(config)
+
+    def _create_client(self, config: ApiConfig) -> Any:
+        """Create the async OpenAI client.  Override in subclasses."""
         import openai
 
-        self.config = config
-        api_key = None
+        api_key: str | None = None
         if config.api_key_env:
             api_key = os.environ.get(config.api_key_env)
         if not api_key:
@@ -117,7 +127,11 @@ class OpenAIAdapter(APIAdapter):
         if config.base_url:
             kwargs["base_url"] = config.base_url
 
-        self.client = openai.AsyncOpenAI(**kwargs)
+        return openai.AsyncOpenAI(**kwargs)
+
+    def _resolve_model(self, config: ModelConfig) -> str:
+        """Resolve the model name for the API call.  Override in subclasses."""
+        return config.model or self.config.model or "gpt-4o"
 
     async def stream_message(
         self,
@@ -126,7 +140,7 @@ class OpenAIAdapter(APIAdapter):
         tools: list[dict[str, Any]],
         config: ModelConfig,
     ) -> AsyncGenerator[StreamChunk, None]:
-        model = config.model or self.config.model or "gpt-4o"
+        model = self._resolve_model(config)
 
         params: dict[str, Any] = {
             "model": model,

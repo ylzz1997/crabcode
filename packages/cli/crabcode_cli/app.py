@@ -24,7 +24,7 @@ def main(
     prompt: Optional[str] = typer.Argument(None, help="Prompt to send (pipe mode)"),
     pipe: bool = typer.Option(False, "-p", "--pipe", help="Run in pipe mode (non-interactive)"),
     model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to use"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="API provider (anthropic/openai/codex/router)"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="API provider (anthropic/openai/codex/ollama/gemini/azure/bedrock/vertex/router)"),
     base_url: Optional[str] = typer.Option(None, "--base-url", help="API base URL (for routers)"),
     api_format: Optional[str] = typer.Option(None, "--api-format", help="API format for router (anthropic/openai)"),
     model_profile: Optional[str] = typer.Option(None, "--model-profile", "-M", help="Use a named model from settings.models"),
@@ -57,6 +57,12 @@ def main(
         settings.api.thinking_enabled = file_settings.api.thinking_enabled
     if file_settings.api.max_tokens != 16384:
         settings.api.max_tokens = file_settings.api.max_tokens
+    if file_settings.api.azure_endpoint:
+        settings.api.azure_endpoint = file_settings.api.azure_endpoint
+    if file_settings.api.azure_api_version:
+        settings.api.azure_api_version = file_settings.api.azure_api_version
+    if file_settings.api.azure_deployment:
+        settings.api.azure_deployment = file_settings.api.azure_deployment
 
     if file_settings.models:
         settings.models = {**file_settings.models, **settings.models}

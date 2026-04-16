@@ -109,6 +109,12 @@ class CoreSession:
             merged.api.max_tokens = file_settings.api.max_tokens
         if file_settings.api.context_window and not self.settings.api.context_window:
             merged.api.context_window = file_settings.api.context_window
+        if file_settings.api.azure_endpoint and not self.settings.api.azure_endpoint:
+            merged.api.azure_endpoint = file_settings.api.azure_endpoint
+        if file_settings.api.azure_api_version and not self.settings.api.azure_api_version:
+            merged.api.azure_api_version = file_settings.api.azure_api_version
+        if file_settings.api.azure_deployment and not self.settings.api.azure_deployment:
+            merged.api.azure_deployment = file_settings.api.azure_deployment
 
         if file_settings.models:
             for name, cfg in file_settings.models.items():

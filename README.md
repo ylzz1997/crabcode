@@ -114,6 +114,20 @@ crabcode --provider router --base-url https://my-router.example.com --api-format
 
 # Third-party router (Codex/Responses API-compatible)
 crabcode --provider router --base-url https://my-router.example.com/v1 --api-format codex --model codex-mini-latest
+
+# Ollama (local)
+crabcode --provider ollama --model qwen3:32b
+# Or configure in settings.json:
+# {"api": {"provider": "ollama", "model": "qwen3:32b"}}
+
+# Google Gemini
+crabcode --provider gemini --model gemini-2.5-flash
+export GEMINI_API_KEY=YourKey
+
+# Azure OpenAI
+crabcode --provider azure --model my-gpt4o-deployment
+export AZURE_OPENAI_API_KEY=YourKey
+export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 ```
 
 Or configure in `~/.crabcode/settings.json`:
@@ -138,7 +152,7 @@ Or configure in `~/.crabcode/settings.json`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `provider` | Backend: `anthropic` \| `openai` \| `codex` \| `router` | `anthropic` |
+| `provider` | Backend: `anthropic` \| `openai` \| `codex` \| `router` \| `ollama` \| `gemini` \| `azure` | `anthropic` |
 | `model` | Model ID | — |
 | `base_url` | Custom API endpoint (for routers or local deployments) | — |
 | `api_key_env` | **Name** of the env var that holds the API key (not the key itself) | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
@@ -256,17 +270,21 @@ Define multiple model profiles in `settings.json` and switch between them at run
   "default_model": "fast",
   "models": {
     "fast": {
-      "provider": "anthropic",
-      "model": "claude-haiku-4-20250514"
+      "provider": "ollama",
+      "model": "qwen3:32b",
+      "thinking_enabled": false
     },
     "smart": {
       "provider": "anthropic",
       "model": "claude-opus-4-20250514"
     },
-    "local": {
+    "code": {
       "provider": "openai",
-      "base_url": "http://localhost:11434/v1",
-      "model": "qwen3:32b",
+      "model": "gpt-4o"
+    },
+    "local": {
+      "provider": "ollama",
+      "model": "deepseek-coder-v2:236b",
       "thinking_enabled": false
     }
   }
@@ -285,8 +303,9 @@ crabcode --model-profile smart    # short: -M smart
 
 ```
 /model              # show active model, list all configured profiles
-/model fast         # switch to the "fast" profile
-/model local        # switch to the "local" (e.g. Ollama) profile
+/model fast         # switch to the "fast" (ollama) profile
+/model smart        # switch to the "smart" (anthropic) profile
+/model code         # switch to the "code" (openai) profile
 ```
 
 Switching does not clear conversation history — you can mix models freely within a single session.

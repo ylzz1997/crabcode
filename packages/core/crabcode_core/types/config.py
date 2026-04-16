@@ -32,16 +32,19 @@ class McpServerConfig(BaseModel):
 
 class ApiConfig(BaseModel):
     """API backend configuration."""
-    provider: str | None = None  # anthropic | openai | codex | bedrock | vertex | router
+    provider: str | None = None  # anthropic | openai | codex | ollama | gemini | azure | bedrock | vertex | router
     model: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
-    format: str | None = None  # anthropic | openai | codex (for routers)
+    format: str | None = None  # anthropic | openai | codex | ollama | gemini | azure (for routers)
     max_tokens: int = 16384
     thinking_enabled: bool = True
     thinking_budget: int = 10000
     timeout: int = 300  # seconds, for API calls
     context_window: int | None = None  # override auto-detected context window
+    azure_endpoint: str | None = None  # Azure OpenAI endpoint URL
+    azure_api_version: str | None = None  # Azure API version
+    azure_deployment: str | None = None  # Azure deployment name (if model field is not used for this)
 
 
 class AgentSettings(BaseModel):
