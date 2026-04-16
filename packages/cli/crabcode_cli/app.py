@@ -295,6 +295,16 @@ def stats(
 
 
 def entry() -> None:
+    known_subcommands = {"main", "sessions", "stats"}
+    args = sys.argv[1:]
+    # Preserve root --help so users can still discover all subcommands.
+    if args and args[0] in ("--help", "-h"):
+        app()
+        return
+    # If the first positional argument is not a known subcommand, default to main.
+    first_positional = next((a for a in args if not a.startswith("-")), None)
+    if first_positional not in known_subcommands:
+        sys.argv.insert(1, "main")
     app()
 
 
