@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.tools._input_helpers import first_non_empty_str
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
+
+logger = get_logger(__name__)
 
 
 class FileReadTool(Tool):
@@ -125,7 +129,26 @@ class FileReadTool(Tool):
 
         result_text = "\n".join(numbered)
 
+        # Background LSP touch — notifies language servers about this file
+        # so diagnostics are ready when the user writes later. Non-blocking.
+        lsp = context.lsp_manager
+        if lsp is not None:
+            try:
+                asyncio.get_event_loop().create_task(
+                    _lsp_touch(str(path), lsp),
+                )
+            except Exception:
+                pass
+
         return ToolResult(
             data={"file_path": str(path), "content": content, "total_lines": total_lines},
             result_for_model=result_text,
         )
+
+
+async def _lsp_touch(file_path: str, lsp: Any) -> None:
+    """Fire-and-forget LSP touch_file call."""
+    try:
+        await lsp.touch_file(file_path)
+    except Exception:
+        logger.debug("LSP touch_file failed for %s", file_path, exc_info=True)

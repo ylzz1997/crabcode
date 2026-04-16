@@ -30,6 +30,20 @@ class McpServerConfig(BaseModel):
     disabled: bool = False
 
 
+class LspServerConfig(BaseModel):
+    """Configuration for a single LSP server.
+
+    Users can customize built-in LSP servers or add new ones in settings.json,
+    following the same pattern as OpenCode's opencode.json LSP configuration.
+    """
+
+    command: list[str] = Field(default_factory=list)
+    extensions: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    initialization: dict[str, Any] = Field(default_factory=dict)
+    disabled: bool = False
+
+
 class ApiConfig(BaseModel):
     """API backend configuration."""
     provider: str | None = None  # anthropic | openai | codex | ollama | gemini | azure | bedrock | vertex | router
@@ -64,6 +78,7 @@ class AgentTypeConfig(BaseModel):
     model_profile: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     prompt: str | None = None
+    enable_lsp: bool = True
 
 
 class DisplaySettings(BaseModel):
@@ -118,6 +133,7 @@ class CrabCodeSettings(BaseModel):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    lsp: dict[str, LspServerConfig] | bool = Field(default_factory=dict)
 
     model_config = {"extra": "allow"}
 

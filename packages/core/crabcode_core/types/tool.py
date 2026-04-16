@@ -56,6 +56,7 @@ class ToolContext:
     agent_id: str | None = None
     agent_depth: int = 0
     agent_manager: Any | None = None
+    lsp_manager: Any | None = None  # LSPManager — session-scoped, set during CoreSession.initialize()
 
 
 CanUseToolFn = Callable[

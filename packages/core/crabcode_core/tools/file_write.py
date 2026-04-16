@@ -12,6 +12,18 @@ from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 logger = get_logger(__name__)
 
 
+async def _get_lsp_diagnostics(
+    file_path: str | Path,
+    context: ToolContext,
+) -> str:
+    """Collect LSP diagnostics for the written file, return formatted string."""
+    lsp = context.lsp_manager
+    if lsp is None:
+        return ""
+    from crabcode_core.lsp.diagnostics import collect_and_format_diagnostics
+    return await collect_and_format_diagnostics(lsp, str(file_path))
+
+
 class FileWriteTool(Tool):
     name = "Write"
     description = "Write content to a file, creating it if necessary."
@@ -85,13 +97,15 @@ class FileWriteTool(Tool):
 
         if is_new:
             line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+            lsp_msg = await _get_lsp_diagnostics(path, context)
             return ToolResult(
                 data={"file_path": str(path), "created": True, "lines": line_count},
-                result_for_model=f"Created {path} ({line_count} lines).",
+                result_for_model=f"Created {path} ({line_count} lines).{lsp_msg}",
             )
 
         diff_info = compute_diff(old_content, content, str(path))
         model_msg, display_msg = format_edit_summary(str(path), diff_info)
+        lsp_msg = await _get_lsp_diagnostics(path, context)
 
         return ToolResult(
             data={
@@ -100,6 +114,6 @@ class FileWriteTool(Tool):
                 "line_range": diff_info["line_range"],
                 "stats": diff_info["stats"],
             },
-            result_for_model=model_msg,
+            result_for_model=model_msg + lsp_msg,
             result_for_display=display_msg,
         )

@@ -336,6 +336,79 @@ crabcode --model-profile smart    # 简写：-M smart
 
 编辑文件后，agent 会自动调用 `Lint` 验证是否引入了错误。你也可以在对话中直接说"检查这个文件"来触发。
 
+### LSP 集成
+
+CrabCode 集成了 **Language Server Protocol (LSP)** 服务器，为 AI agent 提供实时代码智能——诊断、悬停信息、跳转定义和引用查找。
+
+**工作原理：** 当 agent 写入或编辑文件时，CrabCode 会自动通知对应的 LSP 服务器（如 Python 用 `pyright`，TypeScript 用 `typescript-language-server`）。服务器分析代码后返回诊断信息（错误、警告），这些信息会被注入到工具结果中，LLM 可以立即看到并修复问题——形成闭环反馈。
+
+**默认行为：** LSP **默认开启**。语言服务器按需懒启动——仅在首次访问对应类型文件时才启动。启动失败会被记录，后续不再重试。对于不需要 LSP 的项目，零开销。
+
+**内置服务器**（从 `PATH` 检测）：
+
+| 语言 | 服务器 | 文件扩展名 |
+|------|--------|-----------|
+| Python | `pyright-langserver` | `.py`、`.pyi`、`.pyw` |
+| TypeScript / JS | `typescript-language-server` | `.ts`、`.tsx`、`.js`、`.jsx`、`.mjs`、`.cjs` |
+| Go | `gopls` | `.go` |
+| Rust | `rust-analyzer` | `.rs` |
+| C / C++ | `clangd` | `.c`、`.cpp`、`.h`、`.hpp`、`.cc`、`.cxx` |
+| C# | `omnisharp` | `.cs` |
+| Java | `jdtls` | `.java` |
+| Ruby | `solargraph` | `.rb` |
+| PHP | `phpactor` | `.php` |
+| Dart | `dart language-server` | `.dart` |
+| Lua | `lua-language-server` | `.lua` |
+| Kotlin | `kotlin-language-server` | `.kt`、`.kts` |
+| Swift | `sourcekit-lsp` | `.swift` |
+| Zig | `zls` | `.zig` |
+| Elixir | `lexical` | `.ex`、`.exs` |
+| Scala | `metals` | `.scala` |
+
+如果服务器未安装，会自动跳过——不会报错，不会延迟。
+
+**在 `settings.json` 中配置：**
+
+```json
+{
+  "lsp": {
+    "python": { "disabled": true },
+    "my-custom-server": {
+      "command": ["my-lsp", "--stdio"],
+      "extensions": [".xyz"],
+      "env": {},
+      "initialization": {}
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `lsp` | `true` = 启用（默认），`false` = 禁用所有，`{}` = 启用并自定义覆盖 |
+| `command` | 启动 LSP 服务器的命令（必须支持 `--stdio` 模式） |
+| `extensions` | 该服务器处理的文件扩展名 |
+| `env` | 传递给服务器进程的额外环境变量 |
+| `initialization` | 传给 LSP `initialize` 请求的 `initializationOptions` |
+| `disabled` | 设为 `true` 可禁用特定内置服务器 |
+
+**按 agent 类型控制：** 子 agent 可以通过 `enable_lsp` 关闭 LSP：
+
+```json
+{
+  "agent": {
+    "types": {
+      "explore": {
+        "allowed_tools": ["Read", "Grep", "Glob"],
+        "enable_lsp": false
+      }
+    }
+  }
+}
+```
+
+`enable_lsp` 默认为 `true`。设为 `false` 时，子 agent 的 `ToolContext.lsp_manager` 为 `None`，不会触发任何 LSP 操作。
+
 ### Memory（持久化记忆）
 
 `Memory` 工具让 agent 拥有跨会话持久化的笔记能力。
@@ -1019,6 +1092,7 @@ crabcode/
 │   │   ├── api/                # API 适配器（Anthropic、OpenAI、Router）
 │   │   ├── query/              # Agent 对话循环
 │   │   ├── tools/              # 内置工具（Bash、Read、Edit、Write、Grep、Glob、WebSearch、Lint、Memory、AskUser）
+│   │   ├── lsp/                # LSP 客户端集成（LSPClient、LSPManager、诊断格式化、服务器注册表）
 │   │   ├── skills/             # Skill 加载 + 自动触发匹配（SkillDefinition、load_skills、auto_match）
 │   │   ├── prompts/            # 系统提示词构造
 │   │   ├── mcp/                # MCP 服务器集成

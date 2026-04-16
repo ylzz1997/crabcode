@@ -118,6 +118,7 @@ class AgentManager:
         transcript_loader: Callable[[str], list[dict[str, Any]]] | None = None,
         transcript_path_getter: Callable[[str], str] | None = None,
         hook_manager: Any = None,
+        lsp_manager: Any = None,
     ) -> None:
         self._settings = settings
         self._agent_settings = agent_settings
@@ -135,6 +136,7 @@ class AgentManager:
         self._transcript_loader = transcript_loader
         self._transcript_path_getter = transcript_path_getter
         self._hook_manager = hook_manager
+        self._lsp_manager = lsp_manager
         self._runs: dict[str, _AgentRun] = {}
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max(1, agent_settings.max_concurrency))
@@ -468,6 +470,7 @@ class AgentManager:
                     agent_id=run.snapshot.agent_id,
                     agent_depth=run.snapshot.depth,
                     agent_manager=self,
+                    lsp_manager=self._lsp_manager if profile_cfg.enable_lsp else None,
                 )
                 params = QueryParams(
                     messages=list(run.messages),

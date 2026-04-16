@@ -5,8 +5,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.logging_utils import get_logger
 from crabcode_core.tools.diff_utils import compute_diff, format_edit_summary
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
+
+logger = get_logger(__name__)
+
+
+async def _get_lsp_diagnostics(
+    file_path: str | Path,
+    context: ToolContext,
+) -> str:
+    """Collect LSP diagnostics for the edited file, return formatted string."""
+    lsp = context.lsp_manager
+    if lsp is None:
+        return ""
+    from crabcode_core.lsp.diagnostics import collect_and_format_diagnostics
+    return await collect_and_format_diagnostics(lsp, str(file_path))
 
 
 class FileEditTool(Tool):
@@ -132,6 +147,7 @@ class FileEditTool(Tool):
         model_msg, display_msg = format_edit_summary(
             str(path), diff_info, replacements=replaced
         )
+        lsp_msg = await _get_lsp_diagnostics(path, context)
 
         return ToolResult(
             data={
@@ -140,6 +156,6 @@ class FileEditTool(Tool):
                 "line_range": diff_info["line_range"],
                 "stats": diff_info["stats"],
             },
-            result_for_model=model_msg,
+            result_for_model=model_msg + lsp_msg,
             result_for_display=display_msg,
         )

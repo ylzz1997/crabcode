@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator
 
 from crabcode_core.agent_manager import AgentManager, AgentSnapshot
 from crabcode_core.logging_utils import configure_logging, get_logger
+from crabcode_core.lsp.manager import LSPManager
 from crabcode_core.types.config import CrabCodeSettings
 from crabcode_core.types.event import (
     ChoiceResponseEvent,
@@ -61,6 +62,7 @@ class CoreSession:
         self._agent_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
         self._agent_manager: AgentManager | None = None
         self._hook_manager: Any = None
+        self._lsp_manager: LSPManager | None = None
         self._closed = False
         self._agent_mode: str = "agent"  # "agent" | "plan"
         self._saved_permission_mode: Any = None
@@ -251,6 +253,7 @@ class CoreSession:
             transcript_loader=_load_agent_transcript,
             transcript_path_getter=_agent_transcript_path,
             hook_manager=self._hook_manager,
+            lsp_manager=self._lsp_manager,
         )
 
         has_agent = any(isinstance(t, AgentTool) for t in self.tools)
@@ -274,6 +277,15 @@ class CoreSession:
             self.tools.append(SkillTool(self.skills))
 
         await asyncio.gather(*(t.resolve_prompt() for t in self.tools))
+
+        # Initialize LSP manager (default on, can be disabled via settings)
+        if merged.lsp is not False:
+            try:
+                self._lsp_manager = LSPManager(cwd=self.cwd, settings=merged)
+                logger.info("LSP manager initialized with %d server(s)", len(self._lsp_manager.servers))
+            except Exception:
+                logger.warning("Failed to initialize LSP manager", exc_info=True)
+                self._lsp_manager = None
 
         self._initialized = True
 
@@ -340,6 +352,13 @@ class CoreSession:
 
         if self._agent_manager is not None:
             await self._agent_manager.close()
+
+        if self._lsp_manager is not None:
+            try:
+                await self._lsp_manager.shutdown()
+            except Exception:
+                logger.warning("Failed to shut down LSP manager", exc_info=True)
+            self._lsp_manager = None
 
         if self._mcp_manager is not None:
             await self._mcp_manager.disconnect_all()
@@ -574,6 +593,7 @@ class CoreSession:
             agent_id=None,
             agent_depth=0,
             agent_manager=self._agent_manager,
+            lsp_manager=self._lsp_manager,
         )
 
         # Sync SwitchModeTool's current_mode so its prompt and validation

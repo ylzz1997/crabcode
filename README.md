@@ -341,6 +341,79 @@ The `Lint` tool runs the appropriate linter for the given language automatically
 
 The agent calls `Lint` after editing files to verify there are no introduced errors. You can also invoke it directly in conversation: *"lint this file"*.
 
+### LSP Integration
+
+CrabCode integrates with **Language Server Protocol (LSP)** servers to provide real-time code intelligence — diagnostics, hover info, go-to-definition, and references — directly to the AI agent.
+
+**How it works:** When the agent writes or edits a file, CrabCode automatically notifies the relevant LSP server (e.g. `pyright` for Python, `typescript-language-server` for TS). The server analyzes the code and sends back diagnostics (errors, warnings). These are injected into the tool result so the LLM can see and fix issues immediately — forming a closed feedback loop.
+
+**Default behavior:** LSP is **enabled by default**. Language servers are lazily started — only when a file of the matching type is first accessed. Failed starts are remembered so they aren't retried. This means zero overhead for projects where LSP isn't needed.
+
+**Built-in servers** (detected from `PATH`):
+
+| Language | Server | Extensions |
+|----------|--------|------------|
+| Python | `pyright-langserver` | `.py`, `.pyi`, `.pyw` |
+| TypeScript / JS | `typescript-language-server` | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` |
+| Go | `gopls` | `.go` |
+| Rust | `rust-analyzer` | `.rs` |
+| C / C++ | `clangd` | `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` |
+| C# | `omnisharp` | `.cs` |
+| Java | `jdtls` | `.java` |
+| Ruby | `solargraph` | `.rb` |
+| PHP | `phpactor` | `.php` |
+| Dart | `dart language-server` | `.dart` |
+| Lua | `lua-language-server` | `.lua` |
+| Kotlin | `kotlin-language-server` | `.kt`, `.kts` |
+| Swift | `sourcekit-lsp` | `.swift` |
+| Zig | `zls` | `.zig` |
+| Elixir | `lexical` | `.ex`, `.exs` |
+| Scala | `metals` | `.scala` |
+
+If a server isn't installed, it's simply skipped — no error, no delay.
+
+**Configuration in `settings.json`:**
+
+```json
+{
+  "lsp": {
+    "python": { "disabled": true },
+    "my-custom-server": {
+      "command": ["my-lsp", "--stdio"],
+      "extensions": [".xyz"],
+      "env": {},
+      "initialization": {}
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `lsp` | `true` = enable (default), `false` = disable all, `{}` = enable with custom overrides |
+| `command` | Command to start the LSP server (must support `--stdio` mode) |
+| `extensions` | File extensions this server handles |
+| `env` | Extra environment variables for the server process |
+| `initialization` | `initializationOptions` passed to the LSP `initialize` request |
+| `disabled` | Set `true` to disable a specific built-in server |
+
+**Per-agent-type control:** Sub-agents can opt out of LSP via `enable_lsp`:
+
+```json
+{
+  "agent": {
+    "types": {
+      "explore": {
+        "allowed_tools": ["Read", "Grep", "Glob"],
+        "enable_lsp": false
+      }
+    }
+  }
+}
+```
+
+`enable_lsp` defaults to `true`. When `false`, the sub-agent's `ToolContext.lsp_manager` is `None` and no LSP operations are triggered.
+
 ### Memory
 
 The `Memory` tool gives the agent persistent notes that survive across sessions.
@@ -1023,6 +1096,7 @@ crabcode/
 │   │   ├── api/                # API adapters (Anthropic, OpenAI, Router)
 │   │   ├── query/              # Agentic turn loop
 │   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, WebSearch, Lint, Memory, AskUser)
+│   │   ├── lsp/                # LSP client integration (LSPClient, LSPManager, diagnostics formatting, server registry)
 │   │   ├── skills/             # Skill loading + auto-trigger matching (SkillDefinition, load_skills, auto_match)
 │   │   ├── prompts/            # System prompt construction
 │   │   ├── mcp/                # MCP server integration
