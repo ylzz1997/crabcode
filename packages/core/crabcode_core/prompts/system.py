@@ -249,6 +249,31 @@ def _get_session_guidance_section(enabled_tools: list[str]) -> str | None:
     web_search = TOOL_NAMES["web_search"]
     browser = TOOL_NAMES["browser"]
 
+
+def _get_team_tools_section(enabled_tools: list[str]) -> str | None:
+    """Return guidance for Agent Teams tools if they are available."""
+    team_create = TOOL_NAMES.get("team_create", "TeamCreate")
+    team_spawn = TOOL_NAMES.get("team_spawn", "TeamSpawn")
+    team_message = TOOL_NAMES.get("team_message", "TeamMessage")
+    team_broadcast = TOOL_NAMES.get("team_broadcast", "TeamBroadcast")
+    team_status = TOOL_NAMES.get("team_status", "TeamStatus")
+    team_task_add = TOOL_NAMES.get("team_task_add", "TeamTaskAdd")
+    team_task_claim = TOOL_NAMES.get("team_task_claim", "TeamTaskClaim")
+    team_shutdown = TOOL_NAMES.get("team_shutdown", "TeamShutdown")
+
+    if team_create not in enabled_tools:
+        return None
+
+    return (
+        f"**Agent Teams** — Use {team_create} to create a team when you need multiple agents to coordinate on a complex task. "
+        f"Use {team_spawn} to add teammates (each can use a different model for multi-model collaboration). "
+        f"Use {team_message} for peer-to-peer messaging and {team_broadcast} to message all teammates. "
+        f"Use {team_task_add}/{team_task_claim} to manage a shared task board. "
+        f"Use {team_status} to check team state and {team_shutdown} when done. "
+        f"Prefer teams over individual agents when tasks are large enough to benefit from parallelism and coordination. "
+        f"Avoid message storms — send concise messages, don't repeat yourself."
+    )
+
     items: list[str | None] = [
         f"If you do not understand why the user has denied a tool call, use the {ask_tool} to ask them." if ask_tool in enabled_tools else None,
         "If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt \u2014 the `!` prefix runs the command in this session so its output lands directly in the conversation.",
@@ -258,6 +283,7 @@ def _get_session_guidance_section(enabled_tools: list[str]) -> str | None:
         f"Use {codebase_search} when you need to find code by semantic meaning, purpose, or behavior — for example: 'where is authentication handled', 'how does the build system work', or 'find the payment processing logic'. Use {glob} or {grep} when you know the exact file name or text pattern you are looking for." if codebase_search in enabled_tools else None,
         f"Use {web_search} when the task depends on current external information from the public web. Prefer it over trying to search the web through shell commands." if web_search in enabled_tools else None,
         f"Use {browser} when the task requires opening a specific page, interacting with it, or capturing page state. Create a browser session once and reuse the returned session_id across follow-up actions." if browser in enabled_tools else None,
+        _get_team_tools_section(enabled_tools),
     ]
     filtered = [i for i in items if i is not None]
     if not filtered:

@@ -37,6 +37,9 @@ from crabcode_core.types.event import (
     PlanReadyEvent,
     StreamModeEvent,
     StreamTextEvent,
+    TaskUpdateEvent,
+    TeamMessageEvent,
+    TeamStateEvent,
     ThinkingEvent,
     ToolResultEvent,
     ToolUseEvent,
@@ -74,6 +77,7 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/agent-send": [],
     "/wait": [],
     "/cancel-agent": [],
+    "/team": ["list", "status", "messages", "shutdown"],
     "/status": [],
     "/logs": ["-f", "--follow", "--clear", "--tail"],
     "/model": [],  # Dynamic: model names
@@ -219,6 +223,7 @@ class _CrabCodeCompleter(Completer):
             "/agent-send": "send input to an agent",
             "/wait": "wait for an agent",
             "/cancel-agent": "cancel an agent",
+            "/team": "team management (list/status/messages/shutdown)",
             "/status": "show session status",
             "/logs": "show background logs",
             "/model": "show/switch model",
@@ -1419,6 +1424,26 @@ async def run_repl(
                                 "\n  [bold green]Switched to agent mode[/] — full tool access"
                             )
 
+                    elif isinstance(event, TeamMessageEvent):
+                        console.print(
+                            f"  [dim magenta][team:{event.team_id[:8]}] "
+                            f"{event.from_agent[:8]} → {event.to_agent[:8]}: "
+                            f"{event.text[:100]}[/]"
+                        )
+
+                    elif isinstance(event, TeamStateEvent):
+                        console.print(
+                            f"  [dim magenta][team:{event.team_id[:8]}] "
+                            f"{event.agent_id[:8]} {event.old_state} → {event.new_state}[/]"
+                        )
+
+                    elif isinstance(event, TaskUpdateEvent):
+                        console.print(
+                            f"  [dim magenta][team:{event.team_id[:8]}] "
+                            f"task {event.task_id[:8]} {event.status}"
+                            f"{f' by {event.assignee[:8]}' if event.assignee else ''}[/]"
+                        )
+
                     elif isinstance(event, PlanReadyEvent):
                         await _stop_spinner_with_thinking()
                         if streamed_text:
@@ -1573,6 +1598,10 @@ async def _handle_command(
             "[bold]/agent-send <id> <prompt>[/] — send more input to an agent\n"
             "[bold]/wait <id>[/] — wait for a managed agent\n"
             "[bold]/cancel-agent <id>[/] — cancel a managed agent\n"
+            "[bold]/team list[/] — list active teams\n"
+            "[bold]/team status <id>[/] — show team status\n"
+            "[bold]/team messages <id>[/] — show team messages\n"
+            "[bold]/team shutdown <id>[/] — shut down a team\n"
             "[bold]/status[/] — show session status (model, context, compactions)\n"
             "[bold]/logs[/] — show background tool logs summary\n"
             "[bold]/logs <name>[/] — show a background log tail\n"
@@ -1989,6 +2018,105 @@ async def _handle_command(
             console.print(f"[yellow]Cancelled agent {agent.agent_id[:8]}[/]")
         else:
             console.print(f"[dim]Agent {agent.agent_id[:8]} is not running.[/]")
+        return True
+
+    if cmd == "/team":
+        await session.initialize()
+        team_mgr = getattr(session, "_team_manager", None)
+        sub = arg.strip().split(None, 1)
+        subcmd = sub[0] if sub else "list"
+        subarg = sub[1].strip() if len(sub) > 1 else ""
+
+        if subcmd == "list":
+            teams = team_mgr.list_teams() if team_mgr else []
+            if not teams:
+                console.print("[dim]No active teams.[/]")
+            else:
+                for tid in teams:
+                    status = team_mgr.get_team_status(tid) if team_mgr else {}
+                    count = status.get("teammate_count", "?")
+                    state = status.get("state", "?")
+                    console.print(f"  [cyan]{tid}[/] · {count} teammates · {state}")
+            return True
+
+        if subcmd == "status":
+            if not subarg:
+                console.print("[dim]Usage: /team status <team-id>[/]")
+                return True
+            if not team_mgr:
+                console.print("[dim]Team manager not initialized.[/]")
+                return True
+            status = team_mgr.get_team_status(subarg)
+            if not status:
+                console.print(f"[bold red]Team '{subarg}' not found.[/]")
+                return True
+            lines = [
+                f"Team: {status['team_id']}  State: {status['state']}",
+                f"Teammates: {status['teammate_count']}/{status['max_teammates']}",
+            ]
+            for t in status["teammates"]:
+                name = t.get("name") or t["agent_id"][:8]
+                lines.append(f"  {name} · {t['role']} · {t['state']}")
+            tasks = status["tasks"]
+            lines.append(
+                f"Tasks: {tasks['total']} total "
+                f"({tasks['pending']} pending, {tasks['claimed']} claimed, "
+                f"{tasks['completed']} done, {tasks['failed']} failed)"
+            )
+            console.print(Panel(
+                "\n".join(lines),
+                title=f"[bold]Team: {subarg}[/]",
+                border_style="blue",
+                expand=False,
+            ))
+            return True
+
+        if subcmd == "messages":
+            if not subarg:
+                console.print("[dim]Usage: /team messages <team-id>[/]")
+                return True
+            if not team_mgr:
+                console.print("[dim]Team manager not initialized.[/]")
+                return True
+            # Show recent messages for all teammates
+            status = team_mgr.get_team_status(subarg)
+            if not status:
+                console.print(f"[bold red]Team '{subarg}' not found.[/]")
+                return True
+            all_msgs: list[str] = []
+            for t in status["teammates"]:
+                aid = t["agent_id"]
+                msgs = team_mgr.get_all_messages(subarg, aid)
+                for m in msgs[-20:]:
+                    direction = f"{m.from_agent[:8]} → {m.to_agent[:8]}"
+                    read_flag = "" if m.read else " [dim](unread)[/]"
+                    all_msgs.append(f"  {direction}: {m.text[:100]}{read_flag}")
+            if not all_msgs:
+                console.print("[dim]No messages.[/]")
+            else:
+                console.print(Panel(
+                    "\n".join(all_msgs),
+                    title=f"[bold]Messages: {subarg}[/]",
+                    border_style="blue",
+                    expand=False,
+                ))
+            return True
+
+        if subcmd == "shutdown":
+            if not subarg:
+                console.print("[dim]Usage: /team shutdown <team-id>[/]")
+                return True
+            if not team_mgr:
+                console.print("[dim]Team manager not initialized.[/]")
+                return True
+            ok = await team_mgr.shutdown_team(subarg)
+            if ok:
+                console.print(f"[green]Team '{subarg}' shut down.[/]")
+            else:
+                console.print(f"[bold red]Team '{subarg}' not found.[/]")
+            return True
+
+        console.print("[dim]Usage: /team [list|status|messages|shutdown] [args][/]")
         return True
 
     if cmd == "/new":

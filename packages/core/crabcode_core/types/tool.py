@@ -57,6 +57,8 @@ class ToolContext:
     agent_depth: int = 0
     agent_manager: Any | None = None
     lsp_manager: Any | None = None  # LSPManager — session-scoped, set during CoreSession.initialize()
+    team_id: str | None = None  # Team ID the current agent belongs to
+    team_manager: Any | None = None  # TeamManager — session-scoped
 
 
 CanUseToolFn = Callable[

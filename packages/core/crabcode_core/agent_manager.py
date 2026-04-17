@@ -137,6 +137,7 @@ class AgentManager:
         self._transcript_path_getter = transcript_path_getter
         self._hook_manager = hook_manager
         self._lsp_manager = lsp_manager
+        self._team_manager: Any = None  # Set by CoreSession after construction
         self._runs: dict[str, _AgentRun] = {}
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max(1, agent_settings.max_concurrency))
@@ -471,6 +472,7 @@ class AgentManager:
                     agent_depth=run.snapshot.depth,
                     agent_manager=self,
                     lsp_manager=self._lsp_manager if profile_cfg.enable_lsp else None,
+                    team_manager=self._team_manager,
                 )
                 params = QueryParams(
                     messages=list(run.messages),

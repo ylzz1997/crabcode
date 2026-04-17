@@ -581,6 +581,10 @@ This gives you a precise audit trail of every change made.
 | `/plan-status` | Show current plan and mode status |
 | `/wait <id>` | Wait for one agent to finish and print its summary |
 | `/cancel-agent <id>` | Cancel a running agent |
+| `/team list` | List active agent teams |
+| `/team status <team_id>` | Show team status table |
+| `/team messages <team_id>` | Show team message history |
+| `/team shutdown <team_id>` | Shut down a team |
 | `/new` | Start a fresh session (clear in-memory conversation history) |
 | `/compact` | Manually compact conversation history to save context |
 | `/clear` | Clear current in-memory conversation messages |
@@ -840,6 +844,89 @@ Run ruff check and mypy.
 
 When a user mentions `src/app.py`, all three skills activate in order: `python-dev` → `python-test` → `python-lint`.
 
+## Agent Teams
+
+Agent Teams let a lead AI spawn multiple teammates that coordinate through message passing and a shared task board. Each teammate runs in its own context window and can use a different model — enabling multi-model collaboration (e.g. Claude for coding, Gemini for research, GPT for review) within a single team.
+
+### How it works
+
+1. The lead agent calls `TeamCreate` to create a team, then `TeamSpawn` to add teammates with specific roles and optional model profiles.
+2. Teammates communicate via `TeamMessage` (peer-to-peer) or `TeamBroadcast` (to all teammates).
+3. The shared task board lets the lead assign work and teammates atomically claim tasks — concurrent claims are serialized via a lock.
+4. Messages are stored as JSONL (O(1) append writes) and injected into the recipient's session with auto-wake for idle agents.
+5. Backpressure: each teammate has a bounded queue (default 100 messages); overflow drops the oldest unread message with a warning.
+
+### Built-in Team Tools
+
+| Tool | Description |
+|------|-------------|
+| `TeamCreate` | Create a new team |
+| `TeamSpawn` | Spawn a teammate with a role (worker/researcher/reviewer), optional model profile |
+| `TeamMessage` | Send a message to a specific teammate |
+| `TeamBroadcast` | Broadcast a message to all teammates |
+| `TeamStatus` | View team and teammate status |
+| `TeamTaskAdd` | Add a task to the shared task board |
+| `TeamTaskClaim` | Atomically claim an unclaimed task |
+| `TeamTaskComplete` | Mark a claimed task as completed |
+| `TeamShutdown` | Shut down the team and cancel all teammates |
+
+### Configuration
+
+Configure via the `team` field in `settings.json`:
+
+```json
+{
+  "team": {
+    "max_teammates": 8,
+    "inbox_dir": null,
+    "backpressure_queue_size": 100,
+    "message_size_limit": 10240
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `max_teammates` | Maximum teammates per team | `8` |
+| `inbox_dir` | Custom directory for JSONL inbox files (default: `~/.crabcode/team_inbox/`) | `null` |
+| `backpressure_queue_size` | Per-teammate message queue size | `100` |
+| `message_size_limit` | Max message size in bytes | `10240` (10KB) |
+
+### Cross-team communication
+
+Teams are isolated by default. `TeamBridge` allows controlled messaging between teams with configurable policies:
+
+- `allow_all` — all cross-team messages pass through
+- `allow_tagged` — only messages with a specific tag are forwarded
+- `deny` — no cross-team messages (default)
+
+### Crash recovery
+
+When the server restarts while teammates are running, busy teammates are force-transitioned to `ready` (not auto-restarted) and the lead is notified to re-engage them manually. This prevents runaway agents from burning API credits unattended.
+
+### REPL commands
+
+| Command | Description |
+|---------|-------------|
+| `/team list` | List active teams |
+| `/team status <team_id>` | Show team status table |
+| `/team messages <team_id>` | Show team message history |
+| `/team shutdown <team_id>` | Shut down a team |
+
+### Multi-model example
+
+```json
+{
+  "models": {
+    "coder": { "provider": "anthropic", "model": "claude-opus-4-20250514" },
+    "researcher": { "provider": "gemini", "model": "gemini-2.5-pro" },
+    "reviewer": { "provider": "openai", "model": "gpt-4o" }
+  }
+}
+```
+
+The lead spawns teammates with `model_profile` pointing to different named models — each teammate uses the corresponding provider and model.
+
 ## Agent Settings
 
 The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its behavior can be configured via the `agent` field in `settings.json`:
@@ -1095,7 +1182,8 @@ crabcode/
 │   │   ├── types/              # Pydantic types (Message, Tool, Event, Config)
 │   │   ├── api/                # API adapters (Anthropic, OpenAI, Router)
 │   │   ├── query/              # Agentic turn loop
-│   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, WebSearch, Lint, Memory, AskUser)
+│   │   ├── tools/              # Built-in tools (Bash, Read, Edit, Write, Grep, Glob, WebSearch, Lint, Memory, AskUser, Team)
+│   │   ├── team/               # Agent Teams (models, message bus, manager, inbox, recovery, bridge)
 │   │   ├── lsp/                # LSP client integration (LSPClient, LSPManager, diagnostics formatting, server registry)
 │   │   ├── skills/             # Skill loading + auto-trigger matching (SkillDefinition, load_skills, auto_match)
 │   │   ├── prompts/            # System prompt construction

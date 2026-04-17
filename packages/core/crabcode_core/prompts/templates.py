@@ -59,4 +59,13 @@ TOOL_NAMES = {
     "ask_user": "AskUserQuestion",
     "skill": "Skill",
     "codebase_search": "CodebaseSearch",
+    "team_create": "TeamCreate",
+    "team_spawn": "TeamSpawn",
+    "team_message": "TeamMessage",
+    "team_broadcast": "TeamBroadcast",
+    "team_status": "TeamStatus",
+    "team_task_add": "TeamTaskAdd",
+    "team_task_claim": "TeamTaskClaim",
+    "team_task_complete": "TeamTaskComplete",
+    "team_shutdown": "TeamShutdown",
 }

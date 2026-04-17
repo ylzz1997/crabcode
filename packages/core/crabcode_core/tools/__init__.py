@@ -24,6 +24,17 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.lint import LintTool
     from crabcode_core.tools.memory import MemoryTool
     from crabcode_core.tools.switch_mode import SwitchModeTool
+    from crabcode_core.tools.team import (
+        TeamBroadcastTool,
+        TeamCreateTool,
+        TeamMessageTool,
+        TeamShutdownTool,
+        TeamSpawnTool,
+        TeamStatusTool,
+        TeamTaskAddTool,
+        TeamTaskClaimTool,
+        TeamTaskCompleteTool,
+    )
     from crabcode_core.tools.web_search import WebSearchTool
 
     return [
@@ -45,6 +56,15 @@ def get_default_tools() -> list[Tool]:
         AskUserTool(),
         ChecklistTool(),
         SwitchModeTool(),
+        TeamCreateTool(),
+        TeamSpawnTool(),
+        TeamMessageTool(),
+        TeamBroadcastTool(),
+        TeamStatusTool(),
+        TeamTaskAddTool(),
+        TeamTaskClaimTool(),
+        TeamTaskCompleteTool(),
+        TeamShutdownTool(),
     ]
 
 

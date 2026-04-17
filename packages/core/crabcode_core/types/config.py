@@ -114,6 +114,16 @@ class LoggingSettings(BaseModel):
     file: str | None = None
 
 
+class TeamSettings(BaseModel):
+    """Settings for Agent Teams feature."""
+
+    max_teammates: int = 8
+    backpressure_queue_size: int = 100
+    max_message_size_bytes: int = 10_000
+    inbox_dir: str | None = None
+    bridge_policy: str = "deny"  # deny | allow_tagged | allow_all
+
+
 class CrabCodeSettings(BaseModel):
     """Full settings.json schema."""
     permissions: PermissionsSettings = Field(default_factory=PermissionsSettings)
@@ -131,6 +141,7 @@ class CrabCodeSettings(BaseModel):
     extra_tools: list[str] = Field(default_factory=list)
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    team: TeamSettings = Field(default_factory=TeamSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     lsp: dict[str, LspServerConfig] | bool = Field(default_factory=dict)

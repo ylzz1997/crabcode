@@ -152,6 +152,37 @@ class PlanReadyEvent:
     plan: dict[str, Any]
 
 
+@dataclass
+class TeamMessageEvent:
+    """A message was sent between teammates."""
+    team_id: str
+    from_agent: str
+    to_agent: str
+    text: str
+    msg_type: str = "text"
+    message_id: str = ""
+
+
+@dataclass
+class TeamStateEvent:
+    """A teammate's state changed within a team."""
+    team_id: str
+    agent_id: str
+    old_state: str
+    new_state: str
+    role: str = ""
+
+
+@dataclass
+class TaskUpdateEvent:
+    """A task on the shared task board was updated."""
+    team_id: str
+    task_id: str
+    status: str
+    assignee: str | None = None
+    description: str = ""
+
+
 CoreEvent = Union[
     StreamTextEvent,
     ThinkingEvent,
@@ -167,4 +198,7 @@ CoreEvent = Union[
     AgentOutputEvent,
     ModeChangeEvent,
     PlanReadyEvent,
+    TeamMessageEvent,
+    TeamStateEvent,
+    TaskUpdateEvent,
 ]

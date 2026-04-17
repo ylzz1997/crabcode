@@ -68,6 +68,7 @@ class CoreSession:
         self._saved_permission_mode: Any = None
         self._current_plan: Any = None  # ExecutionPlan | None
         self._title_generation_task: asyncio.Task[None] | None = None
+        self._team_manager: Any = None  # TeamManager
 
     async def initialize(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
@@ -256,6 +257,17 @@ class CoreSession:
             lsp_manager=self._lsp_manager,
         )
 
+        # Initialize TeamManager
+        from crabcode_core.team.manager import TeamManager
+        self._team_manager = TeamManager(
+            agent_manager=self._agent_manager,
+            settings=merged,
+            event_sink=_push_agent_event,
+            cwd=self.cwd,
+            session_id=self.session_id,
+        )
+        self._agent_manager._team_manager = self._team_manager
+
         has_agent = any(isinstance(t, AgentTool) for t in self.tools)
         if not has_agent:
             sub_tools = list(self.tools)
@@ -352,6 +364,9 @@ class CoreSession:
 
         if self._agent_manager is not None:
             await self._agent_manager.close()
+
+        if self._team_manager is not None:
+            await self._team_manager.close()
 
         if self._lsp_manager is not None:
             try:
@@ -594,6 +609,7 @@ class CoreSession:
             agent_depth=0,
             agent_manager=self._agent_manager,
             lsp_manager=self._lsp_manager,
+            team_manager=self._team_manager,
         )
 
         # Sync SwitchModeTool's current_mode so its prompt and validation
