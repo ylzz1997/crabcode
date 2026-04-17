@@ -38,6 +38,7 @@ from crabcode_core.types.message import (
     create_tool_result_message,
     create_user_message,
 )
+from crabcode_core.permissions.manager import PermissionMode
 from crabcode_core.types.tool import PermissionBehavior, PermissionResult, Tool, ToolContext, ToolResult
 
 logger = get_logger(__name__)
@@ -852,6 +853,18 @@ async def query_loop(
                 effective_block.input = tool_perm.updated_input
 
             permission_key = tool_perm.permission_key or tool.get_permission_key(effective_block.input)
+
+            bypass_active = (
+                hasattr(params.permission_manager, "mode")
+                and params.permission_manager.mode == PermissionMode.BYPASS
+            )
+            if bypass_active and tool_perm.behavior == PermissionBehavior.ASK:
+                tool_perm = PermissionResult(
+                    behavior=PermissionBehavior.ALLOW,
+                    updated_input=tool_perm.updated_input,
+                    permission_key=permission_key,
+                )
+
             merged_perm = _merge_permission_results(
                 rule_perm,
                 PermissionResult(

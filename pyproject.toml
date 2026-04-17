@@ -25,6 +25,13 @@ search = [
 browser = ["playwright>=1.48.0"]
 bedrock = ["anthropic[bedrock]>=0.40.0"]
 vertex = ["anthropic[vertex]>=0.40.0"]
+gateway = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "grpcio>=1.65.0",
+    "grpcio-health-checking>=1.65.0",
+    "sse-starlette>=2.0.0",
+]
 
 [project.scripts]
 crabcode = "crabcode_cli.app:entry"
@@ -38,6 +45,7 @@ packages = [
     "packages/core/crabcode_core",
     "packages/cli/crabcode_cli",
     "packages/search/crabcode_search",
+    "packages/gateway/crabcode_gateway",
 ]
 
 [tool.uv.workspace]

@@ -266,6 +266,36 @@ def sessions_prune(
     store.close()
 
 
+@app.command("gateway")
+def gateway(
+    port: int = typer.Option(4096, "--port", "-p", help="HTTP port"),
+    grpc_port: Optional[int] = typer.Option(None, "--grpc-port", help="gRPC port (optional)"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
+    password: Optional[str] = typer.Option(None, "--password", help="Basic Auth password"),
+    cors: Optional[str] = typer.Option(None, "--cors", help="Allowed CORS origin"),
+    log_level: str = typer.Option("info", "--log-level", help="Log level"),
+) -> None:
+    """Start the CrabCode HTTP/gRPC gateway server."""
+    from crabcode_core.logging_utils import configure_logging
+    from crabcode_core.types.config import CrabCodeSettings, LoggingSettings
+
+    log_settings = LoggingSettings(level=log_level.upper())
+    configure_logging(os.getcwd(), log_settings)
+
+    cors_origins = [cors] if cors else None
+
+    from crabcode_gateway.server import run_server
+
+    run_server(
+        host=host,
+        port=port,
+        grpc_port=grpc_port,
+        password=password,
+        cors_origins=cors_origins,
+        log_level=log_level,
+    )
+
+
 @app.command("stats")
 def stats(
     project: bool = typer.Option(False, "--project", "-p", help="Show only current project stats"),
@@ -301,7 +331,7 @@ def stats(
 
 
 def entry() -> None:
-    known_subcommands = {"main", "sessions", "stats"}
+    known_subcommands = {"main", "sessions", "stats", "gateway"}
     args = sys.argv[1:]
     # Preserve root --help so users can still discover all subcommands.
     if args and args[0] in ("--help", "-h"):

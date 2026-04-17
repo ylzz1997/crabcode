@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package crabcode;
+
+// ── Messages ────────────────────────────────────────────────────
+
+message Empty {}
+
+message SendMessageRequest {
+  string text = 1;
+  int32 max_turns = 2;
+  string session_id = 3;
+}
+
+message SubscribeRequest {
+  string session_id = 1;
+}
+
+message SpawnAgentRequest {
+  string prompt = 1;
+  string subagent_type = 2;
+  optional string name = 3;
+  optional string model_profile = 4;
+}
+
+message SpawnAgentResponse {
+  string agent_id = 1;
+}
+
+message GetAgentRequest {
+  string agent_id = 1;
+}
+
+message ListAgentsRequest {}
+
+message CancelAgentRequest {
+  string agent_id = 1;
+}
+
+message CancelAgentResponse {
+  bool ok = 1;
+}
+
+message WaitAgentRequest {
+  repeated string agent_ids = 1;
+  optional int32 timeout_ms = 2;
+}
+
+message PermissionResponseMsg {
+  string tool_use_id = 1;
+  bool allowed = 2;
+  bool always_allow = 3;
+  optional string agent_id = 4;
+}
+
+message ChoiceResponseMsg {
+  string tool_use_id = 1;
+  repeated string selected = 2;
+  bool cancelled = 3;
+  optional string agent_id = 4;
+}
+
+message SwitchModelRequest {
+  string name = 1;
+}
+
+message SwitchModeRequest {
+  string mode = 1;  // "agent" | "plan"
+}
+
+message ListModelsResponse {
+  repeated ModelEntry models = 1;
+}
+
+message ModelEntry {
+  string name = 1;
+  string description = 2;
+}
+
+message HealthCheckResponse {
+  string status = 1;
+  string version = 2;
+}
+
+// ── CoreEvent on the wire ───────────────────────────────────────
+
+message CoreEventProto {
+  string type = 1;
+  string payload_json = 2;  // JSON-encoded EventPayload
+}
+
+// ── Agent snapshot ──────────────────────────────────────────────
+
+message AgentSnapshotProto {
+  string agent_id = 1;
+  optional string parent_agent_id = 2;
+  string title = 3;
+  string subagent_type = 4;
+  string status = 5;
+  string model = 6;
+  string created_at = 7;
+  map<string, int64> usage = 8;
+  string final_result = 9;
+  string error = 10;
+}
+
+message ListAgentsResponse {
+  repeated AgentSnapshotProto agents = 1;
+}
+
+// ── Service ─────────────────────────────────────────────────────
+
+service CrabCodeService {
+  // Streaming conversation
+  rpc SendMessage(SendMessageRequest) returns (stream CoreEventProto);
+
+  // Subscribe to all events for a session
+  rpc SubscribeEvents(SubscribeRequest) returns (stream CoreEventProto);
+
+  // Agent management
+  rpc SpawnAgent(SpawnAgentRequest) returns (SpawnAgentResponse);
+  rpc GetAgent(GetAgentRequest) returns (AgentSnapshotProto);
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  rpc CancelAgent(CancelAgentRequest) returns (CancelAgentResponse);
+  rpc WaitAgent(WaitAgentRequest) returns (AgentSnapshotProto);
+
+  // Permission & choice
+  rpc RespondPermission(PermissionResponseMsg) returns (Empty);
+  rpc RespondChoice(ChoiceResponseMsg) returns (Empty);
+
+  // Configuration
+  rpc ListModels(Empty) returns (ListModelsResponse);
+  rpc SwitchModel(SwitchModelRequest) returns (Empty);
+  rpc SwitchMode(SwitchModeRequest) returns (Empty);
+
+  // Health
+  rpc HealthCheck(Empty) returns (HealthCheckResponse);
+}
