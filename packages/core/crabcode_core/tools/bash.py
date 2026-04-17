@@ -72,6 +72,14 @@ class BashTool(Tool):
 
         env = {**os.environ, **context.env}
 
+        # Create snapshot before bash commands that might modify files
+        if context.session_id:
+            try:
+                from crabcode_core.snapshot.tracker import pre_bash_snapshot
+                pre_bash_snapshot(context.cwd, context.session_id)
+            except Exception:
+                pass  # Best-effort; don't block bash if snapshot fails
+
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,

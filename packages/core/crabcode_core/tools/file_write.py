@@ -86,6 +86,20 @@ class FileWriteTool(Tool):
             except Exception:
                 logger.debug("Failed to read existing file before overwrite: %s", path, exc_info=True)
 
+        # Track snapshot before writing
+        if context.session_id:
+            try:
+                from crabcode_core.snapshot.tracker import track_snapshot_for_file
+                track_snapshot_for_file(
+                    cwd=context.cwd,
+                    session_id=context.session_id,
+                    file_path=str(path),
+                    old_content=old_content if not is_new else None,
+                    action="create" if is_new else "modify",
+                )
+            except Exception:
+                logger.debug("Failed to track snapshot for write", exc_info=True)
+
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)

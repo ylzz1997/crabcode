@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.middleware import register_middleware
-from crabcode_gateway.routes import agent, config, event, health, permission, session
+from crabcode_gateway.routes import agent, config, event, health, permission, session, snapshot
 
 logger = get_logger(__name__)
 
@@ -85,6 +85,7 @@ class GatewayServer:
         app.include_router(permission.router)
         app.include_router(config.router)
         app.include_router(event.router)
+        app.include_router(snapshot.router)
 
         self._app = app
         return app

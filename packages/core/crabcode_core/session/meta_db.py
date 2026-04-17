@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     created_at INTEGER NOT NULL
 )""",
     "CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id, created_at DESC)",
+    "ALTER TABLE checkpoints ADD COLUMN snapshot_id TEXT",
 ]
 
 
@@ -244,15 +245,16 @@ class SessionMetaStore:
         message_uuid: str,
         message_index: int,
         label: str = "",
+        snapshot_id: str | None = None,
     ) -> str:
         """Create a checkpoint at the given message position. Returns checkpoint ID."""
         import uuid
         cp_id = str(uuid.uuid4())
         conn = self._conn_or_create()
         conn.execute(
-            "INSERT INTO checkpoints (id, session_id, message_uuid, message_index, label, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (cp_id, session_id, message_uuid, message_index, label,
+            "INSERT INTO checkpoints (id, session_id, message_uuid, message_index, label, snapshot_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (cp_id, session_id, message_uuid, message_index, label, snapshot_id,
              int(datetime.now(timezone.utc).timestamp())),
         )
         conn.commit()
@@ -262,11 +264,11 @@ class SessionMetaStore:
         """List checkpoints for a session, newest first."""
         conn = self._conn_or_create()
         rows = conn.execute(
-            "SELECT id, session_id, message_uuid, message_index, label, created_at "
+            "SELECT id, session_id, message_uuid, message_index, label, snapshot_id, created_at "
             "FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC",
             (session_id,),
         ).fetchall()
-        cols = ["id", "session_id", "message_uuid", "message_index", "label", "created_at"]
+        cols = ["id", "session_id", "message_uuid", "message_index", "label", "snapshot_id", "created_at"]
         return [dict(zip(cols, r)) for r in rows]
 
     def delete_checkpoint(self, checkpoint_id: str) -> None:
@@ -277,13 +279,13 @@ class SessionMetaStore:
     def get_checkpoint(self, checkpoint_id: str) -> dict[str, Any] | None:
         conn = self._conn_or_create()
         row = conn.execute(
-            "SELECT id, session_id, message_uuid, message_index, label, created_at "
+            "SELECT id, session_id, message_uuid, message_index, label, snapshot_id, created_at "
             "FROM checkpoints WHERE id = ?",
             (checkpoint_id,),
         ).fetchone()
         if not row:
             return None
-        cols = ["id", "session_id", "message_uuid", "message_index", "label", "created_at"]
+        cols = ["id", "session_id", "message_uuid", "message_index", "label", "snapshot_id", "created_at"]
         return dict(zip(cols, row))
 
     # --- Statistics ---

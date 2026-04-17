@@ -133,6 +133,20 @@ class FileEditTool(Tool):
         else:
             new_content = content.replace(old_string, new_string, 1)
 
+        # Track snapshot before writing
+        if context.session_id:
+            try:
+                from crabcode_core.snapshot.tracker import track_snapshot_for_file
+                track_snapshot_for_file(
+                    cwd=context.cwd,
+                    session_id=context.session_id,
+                    file_path=str(path),
+                    old_content=content,
+                    action="modify",
+                )
+            except Exception:
+                logger.debug("Failed to track snapshot for edit", exc_info=True)
+
         try:
             path.write_text(new_content)
         except Exception as e:

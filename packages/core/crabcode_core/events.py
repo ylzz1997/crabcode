@@ -744,10 +744,23 @@ class CoreSession:
                     self._session_storage.update_summary(summary_text)
 
     def checkpoint(self, label: str = "") -> str | None:
-        """Create a checkpoint at the current conversation position."""
+        """Create a checkpoint at the current conversation position.
+
+        Also creates a file-system snapshot so that ``/revert`` can later
+        restore both the conversation *and* the files.
+        """
         if not self._session_storage:
             return None
-        return self._session_storage.create_checkpoint(self.messages, label=label)
+        # Create a file-system snapshot alongside the conversation checkpoint
+        snapshot_id: str | None = None
+        try:
+            from crabcode_core.snapshot.tracker import create_full_snapshot
+            snapshot_id = create_full_snapshot(self.cwd, self.session_id, label=label)
+        except Exception:
+            logger.debug("Failed to create file snapshot for checkpoint", exc_info=True)
+        return self._session_storage.create_checkpoint(
+            self.messages, label=label, snapshot_id=snapshot_id,
+        )
 
     def list_checkpoints(self) -> list[dict[str, Any]]:
         """List checkpoints for the current session."""
@@ -756,7 +769,10 @@ class CoreSession:
         return self._session_storage.list_checkpoints()
 
     def rollback(self, checkpoint_id: str) -> bool:
-        """Rollback conversation to a checkpoint. Returns True on success."""
+        """Rollback conversation to a checkpoint (conversation only, no file restore).
+
+        For file + conversation restore, use :meth:`revert` instead.
+        """
         if not self._session_storage:
             return False
         idx = self._session_storage.rollback_to_checkpoint(checkpoint_id)
@@ -766,6 +782,65 @@ class CoreSession:
         if self._session_storage:
             self._session_storage.record_message_count(len(self.messages))
         return True
+
+    def revert(self, checkpoint_id: str) -> dict[str, Any]:
+        """Revert both files and conversation to a checkpoint.
+
+        Returns a dict with keys:
+          - ``success``: bool
+          - ``files_restored``: list[str] — files that were restored
+          - ``messages_rolled_back``: int — how many messages were removed
+          - ``snapshot_id``: str | None — the file snapshot that was restored
+          - ``warning``: str | None — any warning message
+
+        If the checkpoint has no file snapshot, only the conversation is
+        rolled back (equivalent to ``rollback()``) and a warning is set.
+        """
+        result: dict[str, Any] = {
+            "success": False,
+            "files_restored": [],
+            "messages_rolled_back": 0,
+            "snapshot_id": None,
+            "warning": None,
+        }
+        if not self._session_storage:
+            return result
+
+        # Look up the checkpoint to get its snapshot_id
+        from crabcode_core.session.meta_db import SessionMetaStore
+        store = SessionMetaStore()
+        cp = store.get_checkpoint(checkpoint_id)
+        store.close()
+
+        if not cp or cp["session_id"] != self.session_id:
+            return result
+
+        snapshot_id = cp.get("snapshot_id")
+        result["snapshot_id"] = snapshot_id
+
+        # Restore file system if snapshot exists
+        files_restored: list[str] = []
+        if snapshot_id:
+            try:
+                from crabcode_core.snapshot.tracker import restore_snapshot
+                files_restored = restore_snapshot(self.cwd, snapshot_id)
+                result["files_restored"] = files_restored
+            except Exception:
+                logger.warning("Failed to restore snapshot %s", snapshot_id, exc_info=True)
+                result["warning"] = "File restore failed; only conversation was rolled back"
+        else:
+            result["warning"] = "No file snapshot for this checkpoint; only conversation was rolled back"
+
+        # Roll back conversation
+        old_count = len(self.messages)
+        idx = self._session_storage.rollback_to_checkpoint(checkpoint_id)
+        if idx is not None:
+            self.messages = self.messages[: idx + 1]
+            self._session_storage.record_message_count(len(self.messages))
+            result["messages_rolled_back"] = old_count - len(self.messages)
+
+        result["success"] = True
+        return result
 
     def list_models(self) -> dict[str, str]:
         """Return a dict of {name -> description} for all configured named models.

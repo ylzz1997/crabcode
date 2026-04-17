@@ -137,6 +137,10 @@ crabcode gateway --password secret
 | `/config/switch-mode` | POST | Switch agent/plan mode |
 | `/tools` | GET | List available tools (including MCP) |
 | `/context` | POST | Push workspace context (active file, selection, cursor) |
+| `/snapshot/checkpoint` | POST | Create checkpoint with file snapshot |
+| `/snapshot/list` | GET | List checkpoints for a session |
+| `/snapshot/revert` | POST | Revert files + conversation to a checkpoint |
+| `/snapshot/rollback` | POST | Rollback conversation only (no file restore) |
 | `/event` | GET (SSE) | Real-time event stream with 10s heartbeat |
 | `/ws` | WebSocket | Bidirectional channel (preferred for VSCode) |
 
@@ -614,6 +618,48 @@ When the agent edits a file via `StrReplace` or `Write`, the terminal shows a co
 
 This gives you a precise audit trail of every change made.
 
+### Snapshot & Revert
+
+CrabCode automatically tracks file-system changes made during a session, allowing you to **undo** code changes by reverting to a previous checkpoint.
+
+**How it works:**
+
+1. Every time you create a checkpoint (`/checkpoint`), CrabCode takes a snapshot of the working directory state using git internals (or file-copy fallback for non-git projects).
+2. Tools that modify files (`Edit`, `Write`, `Bash`) also record per-file snapshots before each change.
+3. You can revert to any checkpoint to restore both the conversation **and** the files to that point.
+
+**Commands:**
+
+```
+/checkpoint "before refactor"    # create checkpoint with file snapshot
+/checkpoints                     # list checkpoints (✓ = has file snapshot)
+/revert 1                        # revert files + conversation to checkpoint #1
+/undo                            # revert the most recent checkpoint
+/rollback 1                      # rollback conversation only (no file restore)
+```
+
+**Difference between `/revert` and `/rollback`:**
+
+| Command | Conversation | Files |
+|---------|-------------|-------|
+| `/revert` | Rolled back | Restored to snapshot |
+| `/rollback` | Rolled back | Not touched |
+| `/undo` | Same as `/revert` (targets most recent checkpoint) | Restored to snapshot |
+
+**How snapshots are stored:**
+
+- **Git repos** (preferred): uses `git write-tree` + `git update-ref` under `refs/crabcode/` — lightweight, zero-commit snapshots that don't pollute your git history.
+- **Non-git directories**: files are copied to `.crabcode/snapshots/` for tracking.
+
+**Gateway API:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/snapshot/checkpoint` | POST | Create checkpoint with file snapshot |
+| `/snapshot/list` | GET | List checkpoints for a session |
+| `/snapshot/revert` | POST | Revert files + conversation to a checkpoint |
+| `/snapshot/rollback` | POST | Rollback conversation only |
+
 ## REPL Commands
 
 | Command | Description |
@@ -649,9 +695,11 @@ This gives you a precise audit trail of every change made.
 | `/archive <id>` | Archive a session (hide from listings) |
 | `/export [md\|json] [path]` | Export current session to Markdown or JSON |
 | `/stats` | Show usage statistics (tokens, sessions, models) |
-| `/checkpoint [label]` | Create a checkpoint at the current conversation position |
-| `/checkpoints` | List checkpoints for the current session |
-| `/rollback <id\|#>` | Rollback conversation to a checkpoint |
+| `/checkpoint [label]` | Create a checkpoint at the current conversation position (includes file snapshot) |
+| `/checkpoints` | List checkpoints for the current session (with file snapshot status) |
+| `/rollback <id\|#>` | Rollback conversation to a checkpoint (conversation only, no file restore) |
+| `/revert <id\|#>` | Revert both files AND conversation to a checkpoint |
+| `/undo` | Undo last checkpoint — revert files + conversation to the most recent checkpoint |
 | `/exit`, `/quit` | Exit CrabCode |
 | `/<skill>` | Invoke a skill by name (optional user input can follow) |
 | `! <shell command>` | Run a shell command directly from REPL (outside model tool loop) |
@@ -1243,6 +1291,7 @@ crabcode/
 │   │   ├── prompts/            # System prompt construction
 │   │   ├── mcp/                # MCP server integration
 │   │   ├── compact/            # Conversation compaction
+│   │   ├── snapshot/           # File-system snapshots & revert (SnapshotManager, tracker)
 │   │   ├── session/            # Session persistence (JSONL)
 │   │   ├── config/             # Multi-layer settings
 │   │   ├── permissions/        # Tool permission management

@@ -91,6 +91,18 @@ class ContextPushRequest(BaseModel):
     language_id: str | None = None
 
 
+class CheckpointRequest(BaseModel):
+    """Create a checkpoint with file snapshot."""
+    session_id: str
+    label: str = ""
+
+
+class RevertRequest(BaseModel):
+    """Revert files + conversation to a checkpoint."""
+    session_id: str
+    checkpoint_id: str
+
+
 # ── Response / event schemas ─────────────────────────────────────
 
 
@@ -298,6 +310,19 @@ class FileChangePayload(BaseModel):
     diff: str | None = None
 
 
+class SnapshotPayload(BaseModel):
+    type: Literal["snapshot"] = "snapshot"
+    snapshot_id: str
+    tool_name: str
+    files: list[str] = Field(default_factory=list)
+
+
+class RevertPayload(BaseModel):
+    type: Literal["revert"] = "revert"
+    snapshot_id: str
+    files_restored: list[str] = Field(default_factory=list)
+
+
 class ServerConnectedPayload(BaseModel):
     type: Literal["server.connected"] = "server.connected"
     properties: dict[str, Any] = Field(default_factory=dict)
@@ -329,6 +354,8 @@ EventPayload = Union[
     TeamStatePayload,
     TaskUpdatePayload,
     FileChangePayload,
+    SnapshotPayload,
+    RevertPayload,
     ServerConnectedPayload,
     ServerHeartbeatPayload,
 ]
@@ -476,6 +503,18 @@ def core_event_to_payload(event: Any) -> EventPayload:
             status=event.status,
             assignee=event.assignee,
             description=event.description,
+        )
+    from crabcode_core.types.event import SnapshotEvent, RevertEvent
+    if isinstance(event, SnapshotEvent):
+        return SnapshotPayload(
+            snapshot_id=event.snapshot_id,
+            tool_name=event.tool_name,
+            files=event.files,
+        )
+    if isinstance(event, RevertEvent):
+        return RevertPayload(
+            snapshot_id=event.snapshot_id,
+            files_restored=event.files_restored,
         )
     # Fallback: wrap as error
     return ErrorPayload(

@@ -183,6 +183,21 @@ class TaskUpdateEvent:
     description: str = ""
 
 
+@dataclass
+class SnapshotEvent:
+    """A file system snapshot was created."""
+    snapshot_id: str
+    tool_name: str
+    files: list[str]  # files affected
+
+
+@dataclass
+class RevertEvent:
+    """File system state was reverted."""
+    snapshot_id: str
+    files_restored: list[str]
+
+
 CoreEvent = Union[
     StreamTextEvent,
     ThinkingEvent,
@@ -201,4 +216,6 @@ CoreEvent = Union[
     TeamMessageEvent,
     TeamStateEvent,
     TaskUpdateEvent,
+    SnapshotEvent,
+    RevertEvent,
 ]

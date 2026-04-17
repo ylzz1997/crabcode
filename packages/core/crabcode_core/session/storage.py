@@ -386,8 +386,12 @@ class SessionStorage:
         except Exception:
             logger.debug("Failed to record message count for session %s", self.session_id, exc_info=True)
 
-    def create_checkpoint(self, messages: list, label: str = "") -> str | None:
-        """Create a checkpoint at the current message position."""
+    def create_checkpoint(self, messages: list, label: str = "", snapshot_id: str | None = None) -> str | None:
+        """Create a checkpoint at the current message position.
+
+        If *snapshot_id* is provided, it is stored alongside the checkpoint
+        so that ``/revert`` can also restore file-system state.
+        """
         if not messages:
             return None
         last_msg = messages[-1]
@@ -401,6 +405,7 @@ class SessionStorage:
                 message_uuid=msg_uuid,
                 message_index=msg_index,
                 label=label,
+                snapshot_id=snapshot_id,
             )
             store.close()
             # Write a marker line to JSONL for auditability
@@ -411,6 +416,7 @@ class SessionStorage:
                 "message_uuid": msg_uuid,
                 "message_index": msg_index,
                 "label": label,
+                "snapshot_id": snapshot_id,
             }
             with open(self._transcript_path, "a", encoding="utf-8") as f:
                 f.write(_dump_jsonl_line(entry))

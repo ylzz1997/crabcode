@@ -93,6 +93,8 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/checkpoint": [],
     "/checkpoints": [],
     "/rollback": [],
+    "/revert": [],
+    "/undo": [],
     "/resume": [],  # Dynamic: session IDs
     "/exit": [],
     "/quit": [],
@@ -236,9 +238,11 @@ class _CrabCodeCompleter(Completer):
             "/archive": "archive a session",
             "/export": "export session (md/json)",
             "/stats": "usage statistics",
-            "/checkpoint": "create checkpoint",
+            "/checkpoint": "create checkpoint (with file snapshot)",
             "/checkpoints": "list checkpoints",
-            "/rollback": "rollback to checkpoint",
+            "/rollback": "rollback conversation to checkpoint",
+            "/revert": "revert files + conversation to checkpoint",
+            "/undo": "undo last checkpoint (revert files + conversation)",
             "/resume": "resume session",
             "/exit": "exit CrabCode",
             "/quit": "exit CrabCode",
@@ -1619,9 +1623,11 @@ async def _handle_command(
             "[bold]/archive <id>[/] — archive a session\n"
             "[bold]/export [md|json] [path][/] — export current session\n"
             "[bold]/stats[/] — usage statistics\n"
-            "[bold]/checkpoint [label][/] — create a checkpoint\n"
+            "[bold]/checkpoint [label][/] — create checkpoint (with file snapshot)\n"
             "[bold]/checkpoints[/] — list checkpoints\n"
-            "[bold]/rollback <id|#>[/] — rollback to a checkpoint\n"
+            "[bold]/rollback <id|#>[/] — rollback conversation to a checkpoint\n"
+            "[bold]/revert <id|#>[/] — revert files + conversation to a checkpoint\n"
+            "[bold]/undo[/] — revert last checkpoint (files + conversation)\n"
             "[bold]/resume <id>[/] — resume a previous session\n"
             "[bold]/exit[/] — exit CrabCode\n"
             f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
@@ -2242,9 +2248,10 @@ async def _handle_command(
         cp_id = session.checkpoint(label=label)
         if cp_id:
             label_display = f" \"{label}\"" if label else ""
+            snap_indicator = " [dim](file snapshot included)[/]" if True else ""
             console.print(
                 f"[green]✓[/] Checkpoint created{label_display}: [bold]{cp_id[:8]}…[/bold] "
-                f"(at message {len(session.messages)})"
+                f"(at message {len(session.messages)}){snap_indicator}"
             )
         else:
             console.print("[dim]No active session or no messages to checkpoint.[/]")
@@ -2260,15 +2267,18 @@ async def _handle_command(
         table.add_column("#", style="dim", width=3)
         table.add_column("ID", style="cyan", width=8)
         table.add_column("Msg#", style="dim", width=5, justify="right")
+        table.add_column("Files", style="green", width=5, justify="center")
         table.add_column("Label")
         table.add_column("Created", style="dim", width=20)
         for i, cp in enumerate(cps, 1):
             ts = cp.get("created_at", 0)
             created = _format_timestamp(ts) if ts else ""
+            has_snap = "✓" if cp.get("snapshot_id") else "✗"
             table.add_row(
                 str(i),
                 cp["id"][:8],
                 str(cp.get("message_index", "")),
+                has_snap,
                 cp.get("label", ""),
                 created,
             )
@@ -2301,6 +2311,46 @@ async def _handle_command(
             )
         else:
             console.print(f"[bold red]Checkpoint not found: {arg}[/]")
+        return True
+
+    if cmd == "/revert" or cmd == "/undo":
+        cps = session.list_checkpoints()
+        if cmd == "/undo":
+            # /undo = revert the most recent checkpoint
+            if not cps:
+                console.print("[dim]No checkpoints to undo.[/]")
+                return True
+            target_id = cps[0]["id"]
+        else:
+            if not arg:
+                if not cps:
+                    console.print("[dim]No checkpoints to revert.[/]")
+                    return True
+                target_id = cps[0]["id"]
+            else:
+                target_id = arg
+                try:
+                    idx = int(arg) - 1
+                    if 0 <= idx < len(cps):
+                        target_id = cps[idx]["id"]
+                except ValueError:
+                    for cp in cps:
+                        if cp["id"].startswith(arg):
+                            target_id = cp["id"]
+                            break
+
+        result = session.revert(target_id)
+        if result.get("success"):
+            parts = [f"[green]✓[/] Reverted to checkpoint [bold]{target_id[:8]}…[/bold]"]
+            if result.get("files_restored"):
+                parts.append(f"  [green]{len(result['files_restored'])} file(s) restored[/]")
+            if result.get("messages_rolled_back"):
+                parts.append(f"  [dim]{result['messages_rolled_back']} message(s) removed[/]")
+            if result.get("warning"):
+                parts.append(f"  [yellow]⚠ {result['warning']}[/]")
+            console.print("\n".join(parts))
+        else:
+            console.print(f"[bold red]Checkpoint not found or revert failed: {target_id[:8]}[/]")
         return True
 
     if cmd == "/export":
