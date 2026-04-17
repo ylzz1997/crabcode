@@ -1,4 +1,4 @@
-"""GrepTool — search file contents using ripgrep."""
+"""GrepTool — search file contents using ripgrep (falls back to grep)."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class GrepTool(Tool):
 
     async def get_prompt(self, **kwargs: Any) -> str:
         return (
-            "Search file contents for a regex pattern using ripgrep. "
+            "Search file contents for a regex pattern using ripgrep (falls back to grep if rg is not installed). "
             "Returns matching lines with file paths and line numbers. "
             "Use this instead of running grep or rg via Bash.\n\n"
             "Supports full regex syntax (e.g., 'log.*Error', "
@@ -75,20 +75,29 @@ class GrepTool(Tool):
             )
 
         rg = shutil.which("rg")
-        if not rg:
-            rg = "rg"
+        use_ripgrep = bool(rg)
 
-        args = [rg, "--line-number", "--no-heading", "--color=never"]
-
-        if case_insensitive:
-            args.append("-i")
-        if glob_pattern:
-            args.extend(["--glob", glob_pattern])
-
-        args.extend(["--max-count", "200"])
-        args.append(pattern)
-        args.append("--")
-        args.append(search_path)
+        if use_ripgrep:
+            args = [rg, "--line-number", "--no-heading", "--color=never"]
+            if case_insensitive:
+                args.append("-i")
+            if glob_pattern:
+                args.extend(["--glob", glob_pattern])
+            args.extend(["--max-count", "200"])
+            args.append(pattern)
+            args.append("--")
+            args.append(search_path)
+        else:
+            # Fallback to system grep
+            grep_bin = shutil.which("grep") or "grep"
+            args = [grep_bin, "-n", "--color=never", "-E"]
+            if case_insensitive:
+                args.append("-i")
+            if glob_pattern:
+                args.extend(["--include", glob_pattern])
+            args.extend(["-m", "200"])
+            args.append(pattern)
+            args.append(search_path)
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -107,7 +116,7 @@ class GrepTool(Tool):
             )
         except FileNotFoundError:
             return ToolResult(
-                result_for_model="Error: ripgrep (rg) not found. Please install it.",
+                result_for_model="Error: neither ripgrep (rg) nor grep found on PATH.",
                 is_error=True,
             )
 
