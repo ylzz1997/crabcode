@@ -25,7 +25,11 @@ class GrepTool(Tool):
             },
             "path": {
                 "type": "string",
-                "description": "Directory or file to search in (default: cwd).",
+                "description": (
+                    "Directory or file to search in (default: cwd). "
+                    "Directories are searched recursively. "
+                    "Use the glob parameter to filter file types when searching a directory."
+                ),
             },
             "glob": {
                 "type": "string",
@@ -90,7 +94,7 @@ class GrepTool(Tool):
         else:
             # Fallback to system grep
             grep_bin = shutil.which("grep") or "grep"
-            args = [grep_bin, "-n", "--color=never", "-E"]
+            args = [grep_bin, "-rn", "--color=never", "-E"]
             if case_insensitive:
                 args.append("-i")
             if glob_pattern:

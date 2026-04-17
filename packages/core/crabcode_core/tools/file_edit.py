@@ -113,8 +113,20 @@ class FileEditTool(Tool):
         count = content.count(old_string)
 
         if count == 0:
+            # Give the model a head start: show the first 120 chars of the
+            # old_string it provided so it can spot whitespace/encoding drift,
+            # and remind it to re-read before retrying.
+            snippet = repr(old_string[:120]) + ("..." if len(old_string) > 120 else "")
             return ToolResult(
-                result_for_model=f"Error: old_string not found in {path}",
+                result_for_model=(
+                    f"Error: old_string not found in {path}.\n"
+                    f"The string you provided (first 120 chars): {snippet}\n"
+                    "Common causes: wrong indentation (tabs vs spaces), "
+                    "stale content (file was already modified), or "
+                    "the string was never in this file.\n"
+                    "Fix: use the Read tool to re-read the file and verify "
+                    "the exact content before retrying the Edit."
+                ),
                 is_error=True,
             )
 

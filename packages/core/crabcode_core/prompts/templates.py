@@ -68,4 +68,6 @@ TOOL_NAMES = {
     "team_task_claim": "TeamTaskClaim",
     "team_task_complete": "TeamTaskComplete",
     "team_shutdown": "TeamShutdown",
+    "checkpoint": "Checkpoint",
+    "revert": "Revert",
 }

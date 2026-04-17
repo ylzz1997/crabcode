@@ -239,17 +239,6 @@ Focus text output on:
 If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls."""
 
 
-def _get_session_guidance_section(enabled_tools: list[str]) -> str | None:
-    ask_tool = TOOL_NAMES["ask_user"]
-    agent = TOOL_NAMES["agent"]
-    glob = TOOL_NAMES["glob"]
-    grep = TOOL_NAMES["grep"]
-    skill = TOOL_NAMES["skill"]
-    codebase_search = TOOL_NAMES["codebase_search"]
-    web_search = TOOL_NAMES["web_search"]
-    browser = TOOL_NAMES["browser"]
-
-
 def _get_team_tools_section(enabled_tools: list[str]) -> str | None:
     """Return guidance for Agent Teams tools if they are available."""
     team_create = TOOL_NAMES.get("team_create", "TeamCreate")
@@ -274,16 +263,31 @@ def _get_team_tools_section(enabled_tools: list[str]) -> str | None:
         f"Avoid message storms — send concise messages, don't repeat yourself."
     )
 
+
+def _get_session_guidance_section(enabled_tools: list[str]) -> str | None:
+    ask_tool = TOOL_NAMES["ask_user"]
+    agent = TOOL_NAMES["agent"]
+    glob = TOOL_NAMES["glob"]
+    grep = TOOL_NAMES["grep"]
+    skill = TOOL_NAMES["skill"]
+    codebase_search = TOOL_NAMES["codebase_search"]
+    web_search = TOOL_NAMES["web_search"]
+    browser = TOOL_NAMES["browser"]
+    checkpoint_tool = TOOL_NAMES.get("checkpoint", "Checkpoint")
+    revert_tool = TOOL_NAMES.get("revert", "Revert")
+
     items: list[str | None] = [
         f"If you do not understand why the user has denied a tool call, use the {ask_tool} to ask them." if ask_tool in enabled_tools else None,
         "If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt \u2014 the `!` prefix runs the command in this session so its output lands directly in the conversation.",
         f"Use the {agent} tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself." if agent in enabled_tools else None,
         f"For simple, directed codebase searches (e.g. for a specific file/class/function) use the {glob} or {grep} directly." if agent in enabled_tools else None,
-        f"/<skill-name> (e.g. /commit) is shorthand for users to invoke a skill. When the user types a slash command that matches a skill name, use the {skill} tool to execute it. IMPORTANT: Only use {skill} for skills listed in its description — do not guess or use built-in commands." if skill in enabled_tools else None,
-        f"Use {codebase_search} when you need to find code by semantic meaning, purpose, or behavior — for example: 'where is authentication handled', 'how does the build system work', or 'find the payment processing logic'. Use {glob} or {grep} when you know the exact file name or text pattern you are looking for." if codebase_search in enabled_tools else None,
+        f"/<skill-name> (e.g. /commit) is shorthand for users to invoke a skill. When the user types a slash command that matches a skill name, use the {skill} tool to execute it. IMPORTANT: Only use {skill} for skills listed in its description \u2014 do not guess or use built-in commands." if skill in enabled_tools else None,
+        f"Use {codebase_search} when you need to find code by semantic meaning, purpose, or behavior \u2014 for example: 'where is authentication handled', 'how does the build system work', or 'find the payment processing logic'. Use {glob} or {grep} when you know the exact file name or text pattern you are looking for." if codebase_search in enabled_tools else None,
         f"Use {web_search} when the task depends on current external information from the public web. Prefer it over trying to search the web through shell commands." if web_search in enabled_tools else None,
         f"Use {browser} when the task requires opening a specific page, interacting with it, or capturing page state. Create a browser session once and reuse the returned session_id across follow-up actions." if browser in enabled_tools else None,
         _get_team_tools_section(enabled_tools),
+        f"Use {checkpoint_tool} proactively before making significant or risky changes (large refactoring, destructive operations, changes that are hard to undo). This saves both the conversation state and a file-system snapshot. You can later use {revert_tool} to roll back to any checkpoint. Do NOT checkpoint trivial changes (single-file edits, adding comments)." if checkpoint_tool in enabled_tools else None,
+        f"Use {revert_tool} to undo changes by reverting both files and conversation to a previous {checkpoint_tool}. Pass the checkpoint_id returned by {checkpoint_tool}, or 'latest' to revert the most recent one. This is destructive \u2014 changes after the checkpoint will be lost." if revert_tool in enabled_tools else None,
     ]
     filtered = [i for i in items if i is not None]
     if not filtered:

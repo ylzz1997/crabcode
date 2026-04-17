@@ -610,6 +610,7 @@ class CoreSession:
             agent_manager=self._agent_manager,
             lsp_manager=self._lsp_manager,
             team_manager=self._team_manager,
+            session=self,
         )
 
         # Sync SwitchModeTool's current_mode so its prompt and validation

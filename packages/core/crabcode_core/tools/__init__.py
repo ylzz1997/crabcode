@@ -14,6 +14,7 @@ def get_default_tools() -> list[Tool]:
     )
     from crabcode_core.tools.ask_user import AskUserTool
     from crabcode_core.tools.checklist import ChecklistTool
+    from crabcode_core.tools.checkpoint import CheckpointTool
     from crabcode_core.tools.bash import BashTool
     from crabcode_core.tools.browser import BrowserTool
     from crabcode_core.tools.file_read import FileReadTool
@@ -23,6 +24,7 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.glob import GlobTool
     from crabcode_core.tools.lint import LintTool
     from crabcode_core.tools.memory import MemoryTool
+    from crabcode_core.tools.revert import RevertTool
     from crabcode_core.tools.switch_mode import SwitchModeTool
     from crabcode_core.tools.team import (
         TeamBroadcastTool,
@@ -54,6 +56,7 @@ def get_default_tools() -> list[Tool]:
         AgentCancelTool(),
         AgentSendInputTool(),
         AskUserTool(),
+        CheckpointTool(),
         ChecklistTool(),
         SwitchModeTool(),
         TeamCreateTool(),
@@ -65,6 +68,7 @@ def get_default_tools() -> list[Tool]:
         TeamTaskClaimTool(),
         TeamTaskCompleteTool(),
         TeamShutdownTool(),
+        RevertTool(),
     ]
 
 
