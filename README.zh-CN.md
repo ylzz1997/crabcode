@@ -148,6 +148,52 @@ crabcode gateway --password secret
 
 **gRPC** 在启用 `--grpc-port` 后可用，提供流式 `SendMessage` 和 `SubscribeEvents` RPC。完整服务定义见 `packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto`。
 
+### ACP（Agent Client Protocol）支持
+
+CrabCode 支持 **Agent Client Protocol (ACP)**，这是一种开放的 JSON-RPC 协议，标准化了代码编辑器与 AI 编码 Agent 之间的通信。可让你直接在 Zed、JetBrains 等 ACP 兼容编辑器中使用 CrabCode。
+
+```bash
+# 启动 CrabCode 作为 ACP Agent（通过 stdio 通信）
+crabcode acp
+```
+
+**工作原理：**
+
+1. `crabcode acp` 启动内部 Gateway HTTP 服务器，然后在 stdio 上启动 ACP Agent
+2. 编辑器（Zed、JetBrains）将 `crabcode acp` 作为子进程启动
+3. 通过 stdin/stdout 以 JSON-RPC（ndjson）格式通信
+4. ACP 事件（工具调用、权限请求、流式文本）从 CrabCode 的 EventBus 实时翻译
+
+**Zed 配置** — 在 `settings.json` 中添加：
+
+```json
+{
+  "agent": {
+    "profiles": {
+      "crabcode": {
+        "command": "crabcode",
+        "args": ["acp"]
+      }
+    }
+  }
+}
+```
+
+**支持的 ACP 能力：**
+
+| 能力 | 详情 |
+|------|------|
+| 会话管理 | 新建、加载、列表、分叉、恢复 |
+| 提示 | 文本、图片、资源链接、嵌入上下文 |
+| MCP 集成 | 从编辑器传入 HTTP/SSE MCP 服务器 |
+| 权限请求 | 允许一次 / 始终允许 / 拒绝 |
+| 工具更新 | 实时状态（pending → in_progress → completed/failed） |
+| 流式输出 | Agent 消息块、思考块 |
+| 模型切换 | 通过配置选项在会话中切换模型 |
+| 模式切换 | agent 模式 / plan 模式 |
+
+**架构：** ACP 层是薄适配层——它在 ACP JSON-RPC 和 CrabCode Gateway REST API 之间做翻译，核心逻辑零重复。
+
 ## 多 API 支持
 
 CrabCode 支持多种 API 后端：
@@ -1309,6 +1355,11 @@ crabcode/
 │       ├── schemas.py          # Pydantic 请求/响应模型 + CoreEvent 序列化
 │       ├── middleware.py       # 认证、日志、CORS、错误处理中间件
 │       ├── event_bus.py        # 多订阅者事件总线（SSE + WS）
+│       ├── acp/                # ACP（Agent Client Protocol）层
+│       │   ├── agent.py        # CrabCodeACPAgent — ACP Agent 实现
+│       │   ├── session.py      # ACPSessionManager — ACP 会话状态
+│       │   ├── types.py        # ACP 类型定义 + 工具类型映射
+│       │   └── transport.py    # stdio 传输层（run_agent 封装）
 │       ├── routes/             # FastAPI 路由组（session、agent、config、event、health）
 │       └── grpc_/              # gRPC 服务 + proto 定义
 └── tests/

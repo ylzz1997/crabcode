@@ -296,6 +296,77 @@ def gateway(
     )
 
 
+@app.command("acp")
+def acp_cmd(
+    port: int = typer.Option(4096, "--port", "-p", help="Internal HTTP server port"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Internal HTTP server host"),
+    cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory"),
+    log_level: str = typer.Option("warning", "--log-level", help="Log level"),
+) -> None:
+    """Start ACP (Agent Client Protocol) server on stdio.
+
+    This command starts an internal Gateway HTTP server and then
+    runs the ACP agent, communicating with the editor over
+    stdin/stdout via JSON-RPC (ndjson).
+
+    Used by ACP-compatible editors (Zed, JetBrains, Neovim) to
+    integrate CrabCode as a coding agent backend.
+
+    Example Zed settings.json::
+
+        {
+          "agent": {
+            "profiles": {
+              "crabcode": {
+                "command": "crabcode",
+                "args": ["acp"]
+              }
+            }
+          }
+        }
+    """
+    import asyncio
+
+    from crabcode_core.logging_utils import configure_logging
+    from crabcode_core.types.config import CrabCodeSettings, LoggingSettings
+
+    work_dir = cwd or os.getcwd()
+    log_settings = LoggingSettings(level=log_level.upper())
+    configure_logging(work_dir, log_settings)
+
+    async def _run() -> None:
+        # 1. Start internal Gateway HTTP server
+        from crabcode_gateway.server import GatewayServer
+
+        server = GatewayServer(host=host, port=port, log_level=log_level)
+        await server.start_background()
+
+        # Wait for server to be ready
+        import httpx
+        async with httpx.AsyncClient() as health_client:
+            for _ in range(20):
+                try:
+                    resp = await health_client.get(f"http://{host}:{port}/health")
+                    if resp.status_code == 200:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.25)
+
+        # 2. Run ACP agent on stdio
+        from crabcode_gateway.acp.transport import run_acp_server
+        from crabcode_gateway.acp.types import ACPConfig
+
+        config = ACPConfig(base_url=f"http://{host}:{port}")
+        try:
+            await run_acp_server(config)
+        finally:
+            await server.stop()
+
+    asyncio.run(_run())
+    os._exit(0)
+
+
 @app.command("stats")
 def stats(
     project: bool = typer.Option(False, "--project", "-p", help="Show only current project stats"),
@@ -331,7 +402,7 @@ def stats(
 
 
 def entry() -> None:
-    known_subcommands = {"main", "sessions", "stats", "gateway"}
+    known_subcommands = {"main", "sessions", "stats", "gateway", "acp"}
     args = sys.argv[1:]
     # Preserve root --help so users can still discover all subcommands.
     if args and args[0] in ("--help", "-h"):

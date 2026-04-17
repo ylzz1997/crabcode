@@ -148,6 +148,52 @@ crabcode gateway --password secret
 
 **gRPC** service is available when `--grpc-port` is set, with streaming `SendMessage` and `SubscribeEvents` RPCs. See `packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto` for the full service definition.
 
+### ACP (Agent Client Protocol) Support
+
+CrabCode supports the **Agent Client Protocol (ACP)**, an open JSON-RPC protocol that standardizes communication between code editors and AI coding agents. This lets you use CrabCode directly inside ACP-compatible editors like Zed and JetBrains IDEs.
+
+```bash
+# Start CrabCode as an ACP agent (communicates over stdio)
+crabcode acp
+```
+
+**How it works:**
+
+1. `crabcode acp` starts an internal Gateway HTTP server, then launches the ACP agent on stdio
+2. The editor (Zed, JetBrains) spawns `crabcode acp` as a subprocess
+3. Communication flows over stdin/stdout via JSON-RPC (ndjson)
+4. ACP events (tool calls, permissions, streaming text) are translated from CrabCode's EventBus in real-time
+
+**Zed configuration** — add to `settings.json`:
+
+```json
+{
+  "agent": {
+    "profiles": {
+      "crabcode": {
+        "command": "crabcode",
+        "args": ["acp"]
+      }
+    }
+  }
+}
+```
+
+**Supported ACP capabilities:**
+
+| Capability | Details |
+|-----------|---------|
+| Session management | new, load, list, fork, resume |
+| Prompt | text, image, resource links, embedded context |
+| MCP integration | HTTP and SSE MCP servers from the editor |
+| Permission requests | Allow once / Always allow / Reject |
+| Tool updates | real-time status (pending → in_progress → completed/failed) |
+| Streaming | agent message chunks, thought chunks |
+| Model switching | change model mid-session via config options |
+| Mode switching | agent mode / plan mode |
+
+**Architecture:** The ACP layer is a thin adapter — it translates between ACP JSON-RPC and CrabCode's Gateway REST API, so no core logic is duplicated.
+
 ## Multi-API Support
 
 CrabCode supports multiple API backends:
@@ -1313,6 +1359,11 @@ crabcode/
 │       ├── schemas.py          # Pydantic request/response + CoreEvent serialization
 │       ├── middleware.py       # Auth, Logger, CORS, Error middleware
 │       ├── event_bus.py        # Multi-subscriber event bus (SSE + WS)
+│       ├── acp/                # ACP (Agent Client Protocol) layer
+│       │   ├── agent.py        # CrabCodeACPAgent — ACP Agent implementation
+│       │   ├── session.py      # ACPSessionManager — ACP session state
+│       │   ├── types.py        # ACP types + tool kind mapping
+│       │   └── transport.py    # stdio transport (run_agent wrapper)
 │       ├── routes/             # FastAPI route groups (session, agent, config, event, health)
 │       └── grpc_/              # gRPC service + proto definition
 └── tests/

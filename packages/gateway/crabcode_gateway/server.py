@@ -119,6 +119,27 @@ class GatewayServer:
         logger.info("CrabCode Gateway starting on %s:%d", self.host, self.port)
         await self._http_server.serve()
 
+    async def start_background(self) -> None:
+        """Start HTTP server in the background (non-blocking).
+
+        Unlike ``start()``, this returns immediately so the caller
+        can proceed (e.g. to start an ACP agent on stdio).
+        """
+        if self._app is None:
+            self.build_app()
+
+        config = uvicorn.Config(
+            app=self._app,
+            host=self.host,
+            port=self.port,
+            log_level=self.log_level,
+            loop="asyncio",
+        )
+        self._http_server = uvicorn.Server(config)
+
+        logger.info("CrabCode Gateway starting (background) on %s:%d", self.host, self.port)
+        asyncio.ensure_future(self._http_server.serve())
+
     async def stop(self) -> None:
         """Gracefully stop all servers."""
         if self._http_server:
