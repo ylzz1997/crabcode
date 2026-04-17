@@ -12,6 +12,7 @@ AI coding assistant in the terminal — a Python reimplementation with a clean, 
 - **crabcode-core**: The engine. Handles API calls, tool execution, prompt construction, session management, and MCP integration. Exposes a pure async event-stream interface — no I/O or terminal dependency.
 - **crabcode-cli**: A terminal frontend. Uses `rich` + `prompt_toolkit` for interactive REPL, Markdown rendering, and streaming output.
 - **crabcode-search** *(optional)*: Semantic codebase search. Embeds source files into a USearch vector index and exposes a `CodebaseSearch` tool that the agent can use for natural-language code lookup.
+- **crabcode-gateway** *(optional)*: Multi-protocol (HTTP/gRPC) gateway server. Exposes `crabcode-core` as a network service with REST API, SSE event streaming, WebSocket bidirectional channel, and gRPC — enabling integration with VSCode extensions, web UIs, and other clients.
 
 ## Installation
 
@@ -33,6 +34,8 @@ pip install crabcode[vertex]    # Google Vertex AI
 pip install crabcode[search,bedrock]
 # Example: browser + search
 pip install crabcode[browser,search]
+# With gateway server support
+pip install crabcode[gateway]
 ```
 
 ### Development
@@ -89,6 +92,57 @@ crabcode sessions prune --days 30 --delete-files
 crabcode stats
 crabcode stats --project   # current project only
 ```
+
+## Multi-API Support
+
+### Gateway Server
+
+CrabCode can run as a multi-protocol network service, enabling integration with VSCode extensions, web UIs, and other external clients.
+
+```bash
+# Start HTTP gateway on port 4096
+crabcode gateway
+
+# Custom port and host
+crabcode gateway --port 8080 --host 0.0.0.0
+
+# With gRPC support
+crabcode gateway --port 4096 --grpc-port 50051
+
+# With Basic Auth
+crabcode gateway --password secret
+```
+
+**HTTP API endpoints:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/session/new` | POST | Create a new session |
+| `/session/send` | POST | Send a message (starts query loop, events via SSE) |
+| `/session/interrupt` | POST | Interrupt current turn |
+| `/session/compact` | POST | Trigger manual compaction |
+| `/session/list` | GET | List active sessions |
+| `/session/resume` | POST | Resume a session |
+| `/agent/spawn` | POST | Spawn a sub-agent |
+| `/agent/{id}` | GET | Get agent status |
+| `/agent/list` | GET | List all agents |
+| `/agent/{id}/cancel` | POST | Cancel an agent |
+| `/agent/{id}/input` | POST | Send input to an agent |
+| `/agent/wait` | POST | Wait for agent(s) to complete |
+| `/permission/respond` | POST | Respond to a permission request |
+| `/choice/respond` | POST | Respond to a choice request |
+| `/config/models` | GET | List available models |
+| `/config/switch-model` | POST | Switch model |
+| `/config/switch-mode` | POST | Switch agent/plan mode |
+| `/tools` | GET | List available tools (including MCP) |
+| `/context` | POST | Push workspace context (active file, selection, cursor) |
+| `/event` | GET (SSE) | Real-time event stream with 10s heartbeat |
+| `/ws` | WebSocket | Bidirectional channel (preferred for VSCode) |
+
+**WebSocket `/ws`** supports incoming commands (`send_message`, `permission_response`, `choice_response`, `push_context`) and outgoing event payloads — a single connection handles all interaction, making it ideal for VSCode extensions.
+
+**gRPC** service is available when `--grpc-port` is set, with streaming `SendMessage` and `SubscribeEvents` RPCs. See `packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto` for the full service definition.
 
 ## Multi-API Support
 
@@ -1204,5 +1258,13 @@ crabcode/
 │       ├── store.py            # USearch vector store (exact → HNSW at 100k chunks)
 │       ├── indexer.py          # File scanning, change detection, batch indexing
 │       └── tool.py             # CodebaseSearchTool (extra_tools entry point)
+│   └── gateway/crabcode_gateway/ # Gateway server (optional)
+│       ├── server.py           # GatewayServer main entry
+│       ├── adapter.py          # ProtocolAdapter ABC (HTTP, gRPC)
+│       ├── schemas.py          # Pydantic request/response + CoreEvent serialization
+│       ├── middleware.py       # Auth, Logger, CORS, Error middleware
+│       ├── event_bus.py        # Multi-subscriber event bus (SSE + WS)
+│       ├── routes/             # FastAPI route groups (session, agent, config, event, health)
+│       └── grpc_/              # gRPC service + proto definition
 └── tests/
 ```

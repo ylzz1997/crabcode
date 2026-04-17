@@ -12,6 +12,7 @@
 - **crabcode-core**：核心引擎。负责 API 调用、工具执行、提示词构造、会话管理和 MCP 集成。对外暴露纯异步事件流接口，不依赖任何 I/O 或终端。
 - **crabcode-cli**：终端前端。使用 `rich` + `prompt_toolkit` 实现交互式 REPL、Markdown 渲染和流式输出。
 - **crabcode-search** *(可选)*：语义代码搜索。将源文件嵌入为向量并存入 USearch 索引，为 agent 提供 `CodebaseSearch` 工具，支持自然语言代码检索。
+- **crabcode-gateway** *(可选)*：多协议（HTTP/gRPC）网关服务器。将 `crabcode-core` 暴露为网络服务，提供 REST API、SSE 事件流、WebSocket 双向通道和 gRPC —— 可与 VSCode 扩展、Web UI 等外部客户端集成。
 
 ## 安装
 
@@ -33,6 +34,8 @@ pip install crabcode[vertex]    # Google Vertex AI
 pip install crabcode[search,bedrock]
 # 示例：浏览器 + 搜索
 pip install crabcode[browser,search]
+# 含网关服务器支持
+pip install crabcode[gateway]
 ```
 
 ### 开发模式
@@ -89,6 +92,57 @@ crabcode sessions prune --days 30 --delete-files
 crabcode stats
 crabcode stats --project   # 仅当前项目
 ```
+
+## 多 API 支持
+
+### 网关服务器（Gateway）
+
+CrabCode 可以作为多协议网络服务运行，支持 VSCode 扩展、Web UI 等外部客户端接入。
+
+```bash
+# 启动 HTTP 网关（默认端口 4096）
+crabcode gateway
+
+# 自定义端口和地址
+crabcode gateway --port 8080 --host 0.0.0.0
+
+# 同时启用 gRPC
+crabcode gateway --port 4096 --grpc-port 50051
+
+# 启用 Basic Auth
+crabcode gateway --password secret
+```
+
+**HTTP API 端点：**
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/session/new` | POST | 创建新会话 |
+| `/session/send` | POST | 发送消息（触发 query loop，事件通过 SSE 推送） |
+| `/session/interrupt` | POST | 中断当前轮次 |
+| `/session/compact` | POST | 手动触发对话压缩 |
+| `/session/list` | GET | 列出活跃会话 |
+| `/session/resume` | POST | 恢复会话 |
+| `/agent/spawn` | POST | 生成子 agent |
+| `/agent/{id}` | GET | 获取 agent 状态 |
+| `/agent/list` | GET | 列出所有 agent |
+| `/agent/{id}/cancel` | POST | 取消 agent |
+| `/agent/{id}/input` | POST | 向 agent 发送输入 |
+| `/agent/wait` | POST | 等待 agent 完成 |
+| `/permission/respond` | POST | 回复权限请求 |
+| `/choice/respond` | POST | 回复选择请求 |
+| `/config/models` | GET | 列出可用模型 |
+| `/config/switch-model` | POST | 切换模型 |
+| `/config/switch-mode` | POST | 切换 agent/plan 模式 |
+| `/tools` | GET | 列出可用工具（含 MCP） |
+| `/context` | POST | 推送工作区上下文（活动文件、选中内容、光标位置） |
+| `/event` | GET (SSE) | 实时事件流（10 秒心跳） |
+| `/ws` | WebSocket | 双向通信（VSCode 扩展首选） |
+
+**WebSocket `/ws`** 支持收发命令（`send_message`、`permission_response`、`choice_response`、`push_context`）和事件推送 —— 单个连接即可完成所有交互，适合 VSCode 扩展使用。
+
+**gRPC** 在启用 `--grpc-port` 后可用，提供流式 `SendMessage` 和 `SubscribeEvents` RPC。完整服务定义见 `packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto`。
 
 ## 多 API 支持
 
@@ -1200,5 +1254,13 @@ crabcode/
 │       ├── store.py            # USearch 向量存储（精确搜索 → HNSW，阈值 10 万 chunks）
 │       ├── indexer.py          # 文件扫描、变更检测、批量索引
 │       └── tool.py             # CodebaseSearchTool（extra_tools 挂载入口）
+│   └── gateway/crabcode_gateway/ # 网关服务器（可选）
+│       ├── server.py           # GatewayServer 主入口
+│       ├── adapter.py          # ProtocolAdapter 抽象（HTTP、gRPC）
+│       ├── schemas.py          # Pydantic 请求/响应模型 + CoreEvent 序列化
+│       ├── middleware.py       # 认证、日志、CORS、错误处理中间件
+│       ├── event_bus.py        # 多订阅者事件总线（SSE + WS）
+│       ├── routes/             # FastAPI 路由组（session、agent、config、event、health）
+│       └── grpc_/              # gRPC 服务 + proto 定义
 └── tests/
 ```
