@@ -1,6 +1,6 @@
 [project]
 name = "crabcode-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "CrabCode CLI - terminal frontend for CrabCode"
 requires-python = ">=3.10"
 dependencies = [

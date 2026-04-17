@@ -1,6 +1,6 @@
 [project]
 name = "crabcode-core"
-version = "0.1.0"
+version = "0.1.1"
 description = "CrabCode core library - AI coding assistant engine"
 requires-python = ">=3.10"
 dependencies = [
