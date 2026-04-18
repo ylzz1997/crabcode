@@ -30,12 +30,15 @@ pip install crabcode[search]
 pip install crabcode[bedrock]   # AWS Bedrock
 pip install crabcode[vertex]    # Google Vertex AI
 
-# Combine extras
-pip install crabcode[search,bedrock]
-# Example: browser + search
-pip install crabcode[browser,search]
 # With gateway server support
 pip install crabcode[gateway]
+
+# Install all optional features at once
+pip install crabcode[all]
+
+# Combine extras
+pip install crabcode[search,bedrock]
+pip install crabcode[browser,search]
 ```
 
 ### Development

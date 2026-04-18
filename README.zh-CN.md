@@ -30,12 +30,15 @@ pip install crabcode[search]
 pip install crabcode[bedrock]   # AWS Bedrock
 pip install crabcode[vertex]    # Google Vertex AI
 
-# 组合安装
-pip install crabcode[search,bedrock]
-# 示例：浏览器 + 搜索
-pip install crabcode[browser,search]
 # 含网关服务器支持
 pip install crabcode[gateway]
+
+# 一键安装全部可选特性
+pip install crabcode[all]
+
+# 组合安装
+pip install crabcode[search,bedrock]
+pip install crabcode[browser,search]
 ```
 
 ### 开发模式
