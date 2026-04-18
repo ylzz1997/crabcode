@@ -108,7 +108,7 @@ class GatewayServer:
         # Start gRPC server if configured
         if self.grpc_port is not None:
             try:
-                from crabcode_gateway.grpc_.server import GrpcAdapter
+                from crabcode_gateway.grpc.server import GrpcAdapter
 
                 self._grpc_adapter = GrpcAdapter(self._app.state)
                 await self._grpc_adapter.start(self.host, self.grpc_port)

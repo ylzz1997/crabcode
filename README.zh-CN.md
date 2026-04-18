@@ -146,7 +146,7 @@ crabcode gateway --password secret
 
 **WebSocket `/ws`** 支持收发命令（`send_message`、`permission_response`、`choice_response`、`push_context`）和事件推送 —— 单个连接即可完成所有交互，适合 VSCode 扩展使用。
 
-**gRPC** 在启用 `--grpc-port` 后可用，提供流式 `SendMessage` 和 `SubscribeEvents` RPC。完整服务定义见 `packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto`。
+**gRPC** 在启用 `--grpc-port` 后可用，提供流式 `SendMessage` 和 `SubscribeEvents` RPC。完整服务定义见 `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto`。
 
 ### ACP（Agent Client Protocol）支持
 
@@ -1361,6 +1361,6 @@ crabcode/
 │       │   ├── types.py        # ACP 类型定义 + 工具类型映射
 │       │   └── transport.py    # stdio 传输层（run_agent 封装）
 │       ├── routes/             # FastAPI 路由组（session、agent、config、event、health）
-│       └── grpc_/              # gRPC 服务 + proto 定义
+│       └── grpc/               # gRPC 服务 + proto 定义
 └── tests/
 ```

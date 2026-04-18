@@ -7,10 +7,10 @@ definition at runtime via grpcio's generic handlers.
 In production, run::
 
     python -m grpc_tools.protoc \\
-        -I packages/gateway/crabcode_gateway/grpc_/proto \\
+        -I packages/gateway/crabcode_gateway/grpc/proto \\
         --python_out=packages/gateway/crabcode_gateway/grpc_ \\
         --grpc_python_out=packages/gateway/crabcode_gateway/grpc_ \\
-        packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto
+        packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto
 """
 
 from __future__ import annotations
@@ -267,7 +267,7 @@ class GrpcAdapter(ProtocolAdapter):
 
         # Try to use generated stubs
         try:
-            from crabcode_gateway.grpc_ import crabcode_pb2_grpc  # noqa: F401
+            from crabcode_gateway.grpc import crabcode_pb2_grpc  # noqa: F401
 
             crabcode_pb2_grpc.add_CrabCodeServiceServicer_to_server(
                 _GeneratedStubServicer(servicer), self._server
@@ -308,10 +308,10 @@ class GrpcAdapter(ProtocolAdapter):
         raise ImportError(
             "gRPC generated stubs not found. Run:\n"
             "  python -m grpc_tools.protoc "
-            "-I packages/gateway/crabcode_gateway/grpc_/proto "
+            "-I packages/gateway/crabcode_gateway/grpc/proto "
             "--python_out=packages/gateway/crabcode_gateway/grpc_ "
             "--grpc_python_out=packages/gateway/crabcode_gateway/grpc_ "
-            "packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto"
+            "packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto"
         )
 
 
@@ -345,22 +345,22 @@ class _GeneratedStubServicer:
         if request.HasField("model_profile"):
             req_dict["model_profile"] = request.model_profile
         result = await self._servicer.SpawnAgent(req_dict, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2 as _pb2
+        from crabcode_gateway.grpc import crabcode_pb2 as _pb2
         return _pb2.SpawnAgentResponse(**result)
 
     async def GetAgent(self, request, context):
         result = await self._servicer.GetAgent({"agent_id": request.agent_id}, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.AgentSnapshotProto(**result)
 
     async def ListAgents(self, request, context):
         result = await self._servicer.ListAgents({}, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.ListAgentsResponse(**result)
 
     async def CancelAgent(self, request, context):
         result = await self._servicer.CancelAgent({"agent_id": request.agent_id}, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.CancelAgentResponse(**result)
 
     async def WaitAgent(self, request, context):
@@ -368,7 +368,7 @@ class _GeneratedStubServicer:
         if request.HasField("timeout_ms"):
             req_dict["timeout_ms"] = request.timeout_ms
         result = await self._servicer.WaitAgent(req_dict, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.AgentSnapshotProto(**result)
 
     async def RespondPermission(self, request, context):
@@ -377,7 +377,7 @@ class _GeneratedStubServicer:
             "allowed": request.allowed,
             "always_allow": request.always_allow,
         }, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.Empty()
 
     async def RespondChoice(self, request, context):
@@ -386,30 +386,30 @@ class _GeneratedStubServicer:
             "selected": list(request.selected),
             "cancelled": request.cancelled,
         }, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.Empty()
 
     async def ListModels(self, request, context):
         result = await self._servicer.ListModels({}, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.ListModelsResponse(**result)
 
     async def SwitchModel(self, request, context):
         await self._servicer.SwitchModel({"name": request.name}, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.Empty()
 
     async def SwitchMode(self, request, context):
         await self._servicer.SwitchMode({"mode": request.mode}, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.Empty()
 
     async def HealthCheck(self, request, context):
         result = await self._servicer.HealthCheck({}, context)
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.HealthCheckResponse(**result)
 
     @staticmethod
     def _proto_event(event_dict: dict):
-        from crabcode_gateway.grpc_ import crabcode_pb2
+        from crabcode_gateway.grpc import crabcode_pb2
         return crabcode_pb2.CoreEventProto(**event_dict)

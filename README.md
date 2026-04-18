@@ -146,7 +146,7 @@ crabcode gateway --password secret
 
 **WebSocket `/ws`** supports incoming commands (`send_message`, `permission_response`, `choice_response`, `push_context`) and outgoing event payloads — a single connection handles all interaction, making it ideal for VSCode extensions.
 
-**gRPC** service is available when `--grpc-port` is set, with streaming `SendMessage` and `SubscribeEvents` RPCs. See `packages/gateway/crabcode_gateway/grpc_/proto/crabcode.proto` for the full service definition.
+**gRPC** service is available when `--grpc-port` is set, with streaming `SendMessage` and `SubscribeEvents` RPCs. See `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto` for the full service definition.
 
 ### ACP (Agent Client Protocol) Support
 
@@ -1365,6 +1365,6 @@ crabcode/
 │       │   ├── types.py        # ACP types + tool kind mapping
 │       │   └── transport.py    # stdio transport (run_agent wrapper)
 │       ├── routes/             # FastAPI route groups (session, agent, config, event, health)
-│       └── grpc_/              # gRPC service + proto definition
+│       └── grpc/               # gRPC service + proto definition
 └── tests/
 ```
