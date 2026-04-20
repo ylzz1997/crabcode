@@ -31,6 +31,7 @@ def main(
     cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory"),
     resume: Optional[str] = typer.Option(None, "-r", "--resume", help="Resume a session by ID"),
     continue_last: bool = typer.Option(False, "-c", "--continue", help="Continue most recent session"),
+    image: Optional[list[str]] = typer.Option(None, "-i", "--image", help="Image file(s) to attach (repeatable)"),
 ) -> None:
     """CrabCode — AI coding assistant in the terminal."""
     from crabcode_core.types.config import ApiConfig, CrabCodeSettings
@@ -94,6 +95,30 @@ def main(
                 err=True,
             )
 
+    # Read image files into base64 attachments
+    image_attachments: list[dict[str, str]] | None = None
+    if image:
+        import base64
+        import mimetypes
+        from pathlib import Path
+
+        image_attachments = []
+        for img_path_str in image:
+            img_path = Path(img_path_str)
+            if not img_path.exists():
+                typer.echo(f"Error: image file not found: {img_path_str}", err=True)
+                raise typer.Exit(1)
+            if img_path.stat().st_size > 20 * 1024 * 1024:
+                typer.echo(f"Error: image file too large (>20MB): {img_path_str}", err=True)
+                raise typer.Exit(1)
+            media_type = mimetypes.guess_type(img_path_str)[0] or "image/png"
+            if not media_type.startswith("image/"):
+                typer.echo(f"Error: not an image file: {img_path_str}", err=True)
+                raise typer.Exit(1)
+            with open(img_path, "rb") as f:
+                data = base64.b64encode(f.read()).decode("ascii")
+            image_attachments.append({"media_type": media_type, "data": data})
+
     stdin_text = ""
     if not sys.stdin.isatty():
         stdin_text = sys.stdin.read().strip()
@@ -105,12 +130,12 @@ def main(
             raise typer.Exit(1)
 
         from crabcode_cli.pipe import run_pipe
-        asyncio.run(run_pipe(text, settings=settings, cwd=work_dir))
+        asyncio.run(run_pipe(text, settings=settings, cwd=work_dir, images=image_attachments))
         return
 
     if prompt:
         from crabcode_cli.pipe import run_pipe
-        asyncio.run(run_pipe(prompt, settings=settings, cwd=work_dir))
+        asyncio.run(run_pipe(prompt, settings=settings, cwd=work_dir, images=image_attachments))
         return
 
     resume_id: str | None = None

@@ -26,11 +26,12 @@ async def run_pipe(
     prompt: str,
     settings: CrabCodeSettings | None = None,
     cwd: str = ".",
+    images: list[dict[str, str]] | None = None,
 ) -> None:
     """Run a single prompt through the core and print the response."""
     session = CoreSession(cwd=cwd, settings=settings)
     try:
-        async for event in session.send_message(prompt):
+        async for event in session.send_message(prompt, images=images):
             if isinstance(event, StreamTextEvent):
                 sys.stdout.write(safe_utf8_str(event.text))
                 sys.stdout.flush()

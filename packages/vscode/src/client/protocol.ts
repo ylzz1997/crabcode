@@ -12,6 +12,7 @@ import type {
   PermissionResponseRequest,
   ChoiceResponseRequest,
   ContextPushRequest,
+  ImageAttachment,
 } from "./types";
 
 // ── Command envelope types ────────────────────────────────────────
@@ -21,6 +22,7 @@ export interface SendMessageCommand {
   text: string;
   max_turns: number;
   session_id: string | null;
+  images?: ImageAttachment[];
 }
 
 export interface PermissionResponseCommand {
@@ -64,14 +66,18 @@ export type WsCommand =
  */
 export function buildSendMessageCommand(
   text: string,
-  options: { maxTurns?: number; sessionId?: string } = {},
+  options: { maxTurns?: number; sessionId?: string; images?: ImageAttachment[] } = {},
 ): SendMessageCommand {
-  return {
+  const cmd: SendMessageCommand = {
     type: "send_message",
     text,
     max_turns: options.maxTurns ?? 0,
     session_id: options.sessionId ?? null,
   };
+  if (options.images && options.images.length > 0) {
+    cmd.images = options.images;
+  }
+  return cmd;
 }
 
 /**

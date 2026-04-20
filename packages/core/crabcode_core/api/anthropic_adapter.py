@@ -14,6 +14,7 @@ from crabcode_core.types.config import ApiConfig
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
     ContentBlock,
+    ImageBlock,
     Message,
     MessageRole,
     TextBlock,
@@ -58,6 +59,11 @@ def _messages_to_api(messages: list[Message]) -> list[dict[str, Any]]:
                 blocks.append({
                     "type": "thinking",
                     "thinking": block.thinking,
+                })
+            elif isinstance(block, ImageBlock):
+                blocks.append({
+                    "type": "image",
+                    "source": block.source,
                 })
 
         if blocks:

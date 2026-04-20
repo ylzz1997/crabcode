@@ -145,10 +145,14 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
 
     text = msg.get("text", "")
     max_turns = msg.get("max_turns", 0)
+    images = msg.get("images")  # Optional list of {media_type, data} dicts
 
     async def _run():
         try:
-            async for event in session.send_message(text, max_turns=max_turns):
+            kwargs = {"max_turns": max_turns}
+            if images and isinstance(images, list):
+                kwargs["images"] = images
+            async for event in session.send_message(text, **kwargs):
                 await event_bus.publish(session.session_id, event)
         except Exception as exc:
             from crabcode_core.types.event import ErrorEvent

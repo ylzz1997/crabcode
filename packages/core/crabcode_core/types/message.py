@@ -55,7 +55,17 @@ class SignatureBlock(BaseModel):
     signature: str
 
 
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, SignatureBlock]
+class ImageBlock(BaseModel):
+    """An image content block (base64-encoded).
+
+    Follows Anthropic's image block format. API adapters translate
+    to provider-specific representations.
+    """
+    type: Literal["image"] = "image"
+    source: dict[str, Any]  # {"type": "base64", "media_type": "image/png", "data": "..."}
+
+
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, SignatureBlock, ImageBlock]
 
 
 # --- Messages ---
@@ -160,6 +170,7 @@ def deserialize_content(raw: Any) -> list[ContentBlock] | str:
         "tool_result": ToolResultBlock,
         "thinking": ThinkingBlock,
         "signature": SignatureBlock,
+        "image": ImageBlock,
     }
 
     blocks: list[ContentBlock] = []

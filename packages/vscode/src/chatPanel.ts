@@ -17,6 +17,7 @@ import type {
   ToolUsePayload,
   ToolResultPayload,
   FileChangePayload,
+  ImageAttachment,
 } from "./client/types";
 
 // ── Chat message stored locally for rendering ─────────────────────
@@ -28,6 +29,7 @@ export interface ChatMessage {
   role: ChatMessageRole;
   text: string;
   timestamp: number;
+  images?: ImageAttachment[];
 }
 
 export interface ToolCard {
@@ -78,7 +80,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((msg: any) => {
       switch (msg.type) {
         case "sendMessage":
-          this.handleUserMessage(msg.text);
+          this.handleUserMessage(msg.text, msg.images);
           break;
         case "requestHistory":
           this.postMessage({ type: "history", messages: this.messages });
@@ -119,9 +121,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   // ── Internals ──────────────────────────────────────────────────
 
-  private handleUserMessage(text: string): void {
-    this.addMessage("user", text);
-    this.connection.send(text);
+  private handleUserMessage(text: string, images?: ImageAttachment[]): void {
+    this.addMessage("user", text, images);
+    this.connection.send(text, { images });
   }
 
   private handleServerEvent(payload: EventPayload): void {
@@ -202,12 +204,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private addMessage(role: ChatMessageRole, text: string): void {
+  private addMessage(role: ChatMessageRole, text: string, images?: ImageAttachment[]): void {
     const msg: ChatMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
       timestamp: Date.now(),
+      images,
     };
     this.messages.push(msg);
     this.postMessage({ type: "newMessage", message: msg });
@@ -238,7 +241,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';" />
+        content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src data:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CrabCode Chat</title>
   <style nonce="${nonce}">
@@ -314,8 +317,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     #input-area {
-      display: flex; padding: 6px;
+      display: flex; flex-direction: column; padding: 6px;
       border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #333));
+    }
+    #input-row {
+      display: flex; align-items: flex-end;
     }
     #input {
       flex: 1; resize: none; border: none; outline: none;
@@ -324,35 +330,94 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding: 6px 8px; border-radius: 4px;
       font-family: var(--font); font-size: var(--vscode-font-size);
     }
+    .input-btn {
+      margin-left: 4px; padding: 6px 8px;
+      background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-panel-border, #333); border-radius: 4px; cursor: pointer;
+      font-size: 1em;
+    }
+    .input-btn:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground)); }
     #send-btn {
-      margin-left: 6px; padding: 6px 12px;
+      margin-left: 4px; padding: 6px 12px;
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
       border: none; border-radius: 4px; cursor: pointer;
     }
     #send-btn:hover { background: var(--vscode-button-hoverBackground); }
+
+    /* Image attachments in input area */
+    #attachment-bar {
+      display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0;
+    }
+    .attachment-thumb {
+      position: relative; width: 60px; height: 60px; border-radius: 4px;
+      border: 1px solid var(--vscode-panel-border, #333); overflow: hidden;
+    }
+    .attachment-thumb img {
+      width: 100%; height: 100%; object-fit: cover;
+    }
+    .attachment-thumb .remove-btn {
+      position: absolute; top: 2px; right: 2px; width: 16px; height: 16px;
+      background: rgba(0,0,0,0.6); color: #fff; border: none; border-radius: 50%;
+      font-size: 10px; line-height: 16px; text-align: center; cursor: pointer; padding: 0;
+    }
+    .attachment-thumb .remove-btn:hover { background: rgba(200,0,0,0.8); }
+
+    /* Images in user messages */
+    .msg-images {
+      display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;
+    }
+    .msg-images img {
+      max-width: 200px; max-height: 150px; border-radius: 4px;
+      border: 1px solid var(--vscode-panel-border, #333); cursor: pointer;
+    }
+    .msg-images img:hover { opacity: 0.85; }
   </style>
 </head>
 <body>
   <div id="messages"></div>
   <div id="input-area">
-    <textarea id="input" rows="2" placeholder="Ask CrabCode…"></textarea>
-    <button id="send-btn">Send</button>
+    <div id="attachment-bar"></div>
+    <div id="input-row">
+      <textarea id="input" rows="2" placeholder="Ask CrabCode…"></textarea>
+      <button class="input-btn" id="attach-btn" title="Attach image">📎</button>
+      <button id="send-btn">Send</button>
+    </div>
+    <input type="file" id="file-input" accept="image/*" multiple hidden />
   </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const msgContainer = document.getElementById('messages');
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send-btn');
+    const attachBtn = document.getElementById('attach-btn');
+    const fileInput = document.getElementById('file-input');
+    const attachmentBar = document.getElementById('attachment-bar');
 
     // ── Tool card state ──────────────────────────────────────────
     const toolCards = new Map();
+
+    // ── Image attachment state ────────────────────────────────────
+    // pendingImages: array of { media_type, data, dataUrl }
+    const pendingImages = [];
+    const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
 
     function addMessageEl(msg) {
       const div = document.createElement('div');
       div.className = 'msg ' + msg.role;
       div.id = 'msg-' + msg.id;
-      div.innerHTML = '<div class="role">' + capitalize(msg.role) + '</div><div class="text">' + escapeHtml(msg.text) + '</div>';
+      let html = '<div class="role">' + capitalize(msg.role) + '</div><div class="text">' + escapeHtml(msg.text) + '</div>';
+      // Render images in user messages
+      if (msg.images && msg.images.length > 0) {
+        html += '<div class="msg-images">';
+        for (const img of msg.images) {
+          const src = 'data:' + escapeAttr(img.media_type) + ';base64,' + img.data;
+          html += '<img src="' + src + '" alt="attachment" loading="lazy" />';
+        }
+        html += '</div>';
+      }
+      div.innerHTML = html;
       msgContainer.appendChild(div);
       msgContainer.scrollTop = msgContainer.scrollHeight;
     }
@@ -471,17 +536,91 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (t == null) return '';
       return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
+    function escapeAttr(t) {
+      if (t == null) return '';
+      return String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // ── Image handling ───────────────────────────────────────────
+
+    function addImageFile(file) {
+      if (!file.type.startsWith('image/')) return;
+      if (file.size > MAX_IMAGE_SIZE) {
+        alert('Image too large (max 20MB): ' + file.name);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const dataUrl = e.target.result;
+        const base64 = dataUrl.split(',')[1];
+        pendingImages.push({ media_type: file.type, data: base64, dataUrl: dataUrl });
+        renderAttachmentBar();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function removeImage(index) {
+      pendingImages.splice(index, 1);
+      renderAttachmentBar();
+    }
+
+    function renderAttachmentBar() {
+      attachmentBar.innerHTML = '';
+      pendingImages.forEach(function(img, idx) {
+        const thumb = document.createElement('div');
+        thumb.className = 'attachment-thumb';
+        thumb.innerHTML = '<img src="' + escapeAttr(img.dataUrl) + '" alt="attachment" />' +
+          '<button class="remove-btn" data-idx="' + idx + '" title="Remove">✕</button>';
+        attachmentBar.appendChild(thumb);
+      });
+      // Wire remove buttons
+      attachmentBar.querySelectorAll('.remove-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          removeImage(parseInt(btn.dataset.idx));
+        });
+      });
+    }
+
+    // ── Send ─────────────────────────────────────────────────────
 
     function send() {
       const text = input.value.trim();
-      if (!text) return;
-      vscode.postMessage({ type: 'sendMessage', text });
+      if (!text && pendingImages.length === 0) return;
+      const images = pendingImages.map(function(img) {
+        return { media_type: img.media_type, data: img.data };
+      });
+      vscode.postMessage({ type: 'sendMessage', text, images: images.length > 0 ? images : undefined });
       input.value = '';
+      pendingImages.length = 0;
+      renderAttachmentBar();
     }
 
     sendBtn.addEventListener('click', send);
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
+    });
+
+    // ── File input & paste ───────────────────────────────────────
+
+    attachBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files) {
+        Array.from(fileInput.files).forEach(addImageFile);
+      }
+      fileInput.value = '';  // Reset so same file can be re-selected
+    });
+
+    // Paste images from clipboard
+    document.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) addImageFile(file);
+        }
+      }
     });
 
     window.addEventListener('message', event => {

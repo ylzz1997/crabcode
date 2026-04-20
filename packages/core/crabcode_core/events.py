@@ -442,8 +442,16 @@ class CoreSession:
         self,
         text: str,
         max_turns: int = 0,
+        images: list[dict[str, Any]] | None = None,
     ) -> AsyncGenerator[CoreEvent, None]:
-        """Send a user message and stream back events."""
+        """Send a user message and stream back events.
+
+        Args:
+            text: The user's text message.
+            max_turns: Maximum agentic turns (0 = unlimited).
+            images: Optional list of image attachments. Each dict should have
+                    ``media_type`` (e.g. "image/png") and ``data`` (base64-encoded).
+        """
         await self.initialize()
         self._ensure_session_storage()
         self._abort_controller.clear()
@@ -477,7 +485,24 @@ class CoreSession:
             if hook_result.blocked:
                 hook_blocked_reason = "; ".join(hook_result.details or []) or "blocked by user_prompt_submit hook"
 
-        user_msg = create_user_message(content=user_msg_content)
+        # Build user message content — text + optional image blocks
+        if images:
+            from crabcode_core.types.message import ImageBlock as _ImageBlock
+            content_blocks: list[Any] = []
+            if user_msg_content:
+                from crabcode_core.types.message import TextBlock as _TextBlock
+                content_blocks.append(_TextBlock(text=user_msg_content))
+            for img in images:
+                content_blocks.append(_ImageBlock(
+                    source={
+                        "type": "base64",
+                        "media_type": img.get("media_type", "image/png"),
+                        "data": img.get("data", ""),
+                    }
+                ))
+            user_msg = create_user_message(content=content_blocks)
+        else:
+            user_msg = create_user_message(content=user_msg_content)
         self.messages.append(user_msg)
 
         if hook_blocked_reason:

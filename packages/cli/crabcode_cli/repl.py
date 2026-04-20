@@ -98,6 +98,7 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/resume": [],  # Dynamic: session IDs
     "/exit": [],
     "/quit": [],
+    "/image": [],  # Dynamic: file path
 }
 
 
@@ -244,6 +245,7 @@ class _CrabCodeCompleter(Completer):
             "/revert": "revert files + conversation to checkpoint",
             "/undo": "undo last checkpoint (revert files + conversation)",
             "/resume": "resume session",
+            "/image": "attach image to next message",
             "/exit": "exit CrabCode",
             "/quit": "exit CrabCode",
         }
@@ -1165,6 +1167,9 @@ async def run_repl(
 
     session = CoreSession(cwd=cwd, settings=settings)
 
+    # Pending image attachments for the next user message
+    pending_images: list[dict[str, str]] = []
+
     global _display_settings
     _display_settings = settings.display if settings else None
 
@@ -1227,6 +1232,8 @@ async def run_repl(
                 mode = getattr(session, '_agent_mode', 'agent')
                 if mode == "plan":
                     prompt_html = HTML("<b><ansiblue>[plan]</ansiblue> <ansicyan>❯ </ansicyan></b>")
+                elif pending_images:
+                    prompt_html = HTML("<b><ansicyan>❯ 📎 </ansicyan></b>")
                 else:
                     prompt_html = HTML("<b><ansicyan>❯ </ansicyan></b>")
                 user_input = await prompt_session.prompt_async(prompt_html)
@@ -1270,7 +1277,7 @@ async def run_repl(
             ctrl_c_exit.clear()
 
             if user_input.startswith("/"):
-                result = await _handle_command(user_input, session, settings)
+                result = await _handle_command(user_input, session, settings, pending_images)
                 if result is False:
                     break
                 if isinstance(result, str):
@@ -1305,7 +1312,9 @@ async def run_repl(
 
             plan_pending = False
             try:
-                async for event in session.send_message(user_input):
+                send_images = pending_images.copy() if pending_images else None
+                pending_images.clear()
+                async for event in session.send_message(user_input, images=send_images):
                     if isinstance(event, StreamModeEvent):
                         if event.mode == "requesting":
                             spinner.start()
@@ -1568,6 +1577,7 @@ async def _handle_command(
     command: str,
     session: CoreSession,
     settings: CrabCodeSettings | None,
+    pending_images: list[dict[str, str]] | None = None,
 ) -> bool | str:
     """Handle slash commands.
 
@@ -1582,6 +1592,42 @@ async def _handle_command(
 
     # --- Built-in commands take priority over skill names ---
     skills = getattr(session, "skills", [])
+
+    if cmd == "/image":
+        if not arg:
+            if pending_images is not None and pending_images:
+                console.print(f"[dim]{len(pending_images)} image(s) attached for next message.[/]")
+            else:
+                console.print("[dim]Usage: /image <path> [path2 ...][/]")
+            return True
+        import base64
+        import mimetypes
+        from pathlib import Path
+
+        paths = arg.split()
+        added = 0
+        for p in paths:
+            img_path = Path(p).expanduser()
+            if not img_path.exists():
+                console.print(f"[bold red]File not found: {p}[/]")
+                continue
+            if img_path.stat().st_size > 20 * 1024 * 1024:
+                console.print(f"[bold red]File too large (>20MB): {p}[/]")
+                continue
+            media_type = mimetypes.guess_type(str(img_path))[0] or "image/png"
+            if not media_type.startswith("image/"):
+                console.print(f"[bold red]Not an image: {p} (detected: {media_type})[/]")
+                continue
+            with open(img_path, "rb") as f:
+                data = base64.b64encode(f.read()).decode("ascii")
+            if pending_images is not None:
+                pending_images.append({"media_type": media_type, "data": data})
+            added += 1
+            size_kb = img_path.stat().st_size / 1024
+            console.print(f"  [green]✓[/] Attached: {p} ({media_type}, {size_kb:.0f}KB)")
+        if added and pending_images is not None:
+            console.print(f"[dim]{len(pending_images)} image(s) will be sent with your next message.[/]")
+        return True
 
     if cmd == "/help":
         skills_section = ""
@@ -1629,6 +1675,7 @@ async def _handle_command(
             "[bold]/revert <id|#>[/] — revert files + conversation to a checkpoint\n"
             "[bold]/undo[/] — revert last checkpoint (files + conversation)\n"
             "[bold]/resume <id>[/] — resume a previous session\n"
+            "[bold]/image <path>[/] — attach image(s) to your next message\n"
             "[bold]/exit[/] — exit CrabCode\n"
             f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
             "\n"

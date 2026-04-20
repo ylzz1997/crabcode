@@ -20,6 +20,7 @@ from crabcode_core.types.message import (
     ToolResultBlock,
     ToolUseBlock,
     ThinkingBlock,
+    ImageBlock,
 )
 
 
@@ -85,8 +86,32 @@ def _messages_to_responses_input(
             # Add function_call_output items (they are separate top-level items)
             for tr in tool_results:
                 result.append(tr)
-            # Add user message if there's text content
-            if text_parts and not tool_results:
+            # Add user message — handle multimodal content with images
+            has_images = isinstance(msg.content, list) and any(
+                isinstance(b, ImageBlock) for b in msg.content
+            )
+            if has_images:
+                content_parts: list[dict[str, Any]] = []
+                for block in msg.content if isinstance(msg.content, list) else []:
+                    if isinstance(block, TextBlock):
+                        content_parts.append({"type": "input_text", "text": block.text})
+                    elif isinstance(block, ImageBlock):
+                        source = block.source
+                        if source.get("type") == "base64":
+                            data_url = f"data:{source.get('media_type', 'image/png')};base64,{source.get('data', '')}"
+                        else:
+                            data_url = source.get("url", "")
+                        content_parts.append({
+                            "type": "input_image",
+                            "image_url": data_url,
+                        })
+                if content_parts:
+                    result.append({
+                        "type": "message",
+                        "role": "user",
+                        "content": content_parts,
+                    })
+            elif text_parts and not tool_results:
                 result.append({
                     "type": "message",
                     "role": "user",

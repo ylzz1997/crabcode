@@ -22,6 +22,7 @@ import type {
   ServerHeartbeatPayload,
   SessionInfo,
   ContextPushRequest,
+  ImageAttachment,
 } from "./client/types";
 
 // ── Events emitted by the connection ──────────────────────────────
@@ -128,10 +129,11 @@ export class CrabCodeConnection implements vscode.Disposable {
 
   // ── Sending commands ───────────────────────────────────────────
 
-  send(text: string, options?: { maxTurns?: number; sessionId?: string }): void {
+  send(text: string, options?: { maxTurns?: number; sessionId?: string; images?: ImageAttachment[] }): void {
     const cmd = buildSendMessageCommand(text, {
       maxTurns: options?.maxTurns,
       sessionId: options?.sessionId ?? this._sessionId ?? undefined,
+      images: options?.images,
     });
     this.sendCommand(cmd);
   }

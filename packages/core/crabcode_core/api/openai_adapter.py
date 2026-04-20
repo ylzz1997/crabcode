@@ -16,6 +16,7 @@ from crabcode_core.types.message import (
     ToolResultBlock,
     ToolUseBlock,
     ThinkingBlock,
+    ImageBlock,
 )
 
 
@@ -76,8 +77,33 @@ def _messages_to_openai(
         elif msg.role == MessageRole.USER:
             if tool_results:
                 result.extend(tool_results)
-            elif text_parts:
-                result.append({"role": "user", "content": "".join(text_parts)})
+            else:
+                # Check if there are any image blocks — if so, use multimodal content
+                has_images = isinstance(msg.content, list) and any(
+                    isinstance(b, ImageBlock) for b in msg.content
+                )
+                if has_images:
+                    content_parts: list[dict[str, Any]] = []
+                    for block in msg.content if isinstance(msg.content, list) else []:
+                        if isinstance(block, TextBlock):
+                            content_parts.append({"type": "text", "text": block.text})
+                        elif isinstance(block, ImageBlock):
+                            # Build data URL from base64 source
+                            source = block.source
+                            if source.get("type") == "base64":
+                                data_url = f"data:{source.get('media_type', 'image/png')};base64,{source.get('data', '')}"
+                            else:
+                                data_url = source.get("url", "")
+                            content_parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": data_url},
+                            })
+                    if content_parts:
+                        result.append({"role": "user", "content": content_parts})
+                    elif text_parts:
+                        result.append({"role": "user", "content": "".join(text_parts)})
+                elif text_parts:
+                    result.append({"role": "user", "content": "".join(text_parts)})
 
     return safe_utf8_json_tree(result)
 
