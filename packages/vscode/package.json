@@ -1,0 +1,170 @@
+{
+  "name": "crabcode",
+  "displayName": "CrabCode",
+  "description": "CrabCode - AI coding assistant in your editor",
+  "version": "0.1.1",
+  "publisher": "crabcode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Chat"
+  ],
+  "keywords": [
+    "ai",
+    "coding",
+    "assistant",
+    "chat"
+  ],
+  "activationEvents": [
+    "onCommand:crabcode.openChat",
+    "onCommand:crabcode.explainCode",
+    "onCommand:crabcode.fixCode",
+    "onCommand:crabcode.sendToChat",
+    "onCommand:crabcode.interrupt",
+    "onCommand:crabcode.newSession",
+    "onCommand:crabcode.connect",
+    "onCommand:crabcode.disconnect",
+    "onView:crabcode.chatPanel"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "crabcode.openChat",
+        "title": "CrabCode: Open Chat"
+      },
+      {
+        "command": "crabcode.explainCode",
+        "title": "CrabCode: Explain Code"
+      },
+      {
+        "command": "crabcode.fixCode",
+        "title": "CrabCode: Fix Code"
+      },
+      {
+        "command": "crabcode.sendToChat",
+        "title": "CrabCode: Send to Chat"
+      },
+      {
+        "command": "crabcode.interrupt",
+        "title": "CrabCode: Interrupt"
+      },
+      {
+        "command": "crabcode.newSession",
+        "title": "CrabCode: New Session"
+      },
+      {
+        "command": "crabcode.openSettings",
+        "title": "CrabCode: Open Settings"
+      },
+      {
+        "command": "crabcode.connect",
+        "title": "CrabCode: Connect"
+      },
+      {
+        "command": "crabcode.disconnect",
+        "title": "CrabCode: Disconnect"
+      },
+      {
+        "command": "crabcode.refactorCode",
+        "title": "CrabCode: Refactor Code"
+      },
+      {
+        "command": "crabcode.addTests",
+        "title": "CrabCode: Add Tests"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "crabcode",
+          "title": "CrabCode",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "crabcode": [
+        {
+          "id": "crabcode.chatPanel",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CrabCode",
+      "properties": {
+        "crabcode.serverUrl": {
+          "type": "string",
+          "default": "ws://localhost:4096",
+          "description": "WebSocket URL for the CrabCode server"
+        },
+        "crabcode.password": {
+          "type": "string",
+          "default": "",
+          "description": "Password for authenticating with the CrabCode server"
+        },
+        "crabcode.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to the CrabCode server when the extension activates"
+        },
+        "crabcode.showDiffOnFileChange": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a diff notification when files are changed by CrabCode"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "crabcode.explainCode",
+          "when": "editorHasSelection",
+          "group": "crabcode@1"
+        },
+        {
+          "command": "crabcode.fixCode",
+          "when": "editorHasSelection",
+          "group": "crabcode@2"
+        },
+        {
+          "command": "crabcode.refactorCode",
+          "when": "editorHasSelection",
+          "group": "crabcode@3"
+        },
+        {
+          "command": "crabcode.addTests",
+          "when": "editorHasSelection",
+          "group": "crabcode@4"
+        },
+        {
+          "command": "crabcode.sendToChat",
+          "when": "editorHasSelection",
+          "group": "crabcode@5"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js",
+    "lint": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.14",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

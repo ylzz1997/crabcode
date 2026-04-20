@@ -11,3 +11,4 @@ build/
 .crabcode/
 .claude/
 .DS_Store
+node_modules
