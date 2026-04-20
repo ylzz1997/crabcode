@@ -81,14 +81,27 @@ def _format_run_brief(run: dict[str, Any]) -> str:
 def _compute_next_run(schedule: str, schedule_type: str) -> str | None:
     """Best-effort computation of the next run timestamp.
 
-    For 'once' type, the schedule itself is the timestamp.
+    For 'once' type, the schedule can be an ISO timestamp or a relative
+    offset prefixed with '+' (e.g. '+30m', '+2h', '+1d').
     For 'interval', we add the interval to now.
     For 'cron', we return None (requires a real cron parser).
     """
     now = datetime.now(timezone.utc)
 
     if schedule_type == "once":
-        # Validate that the schedule looks like a timestamp
+        # Relative offset: +30m, +2h, +1d, +90s, +60 (plain seconds)
+        if schedule.startswith("+"):
+            offset_str = schedule[1:]
+            try:
+                from datetime import timedelta
+
+                seconds = _parse_interval(offset_str)
+                next_dt = now + timedelta(seconds=seconds)
+                return next_dt.isoformat()
+            except (ValueError, TypeError):
+                return None
+
+        # Absolute ISO timestamp
         try:
             datetime.fromisoformat(schedule)
             return schedule
@@ -170,7 +183,8 @@ class ScheduleCreateTool(Tool):
                 "description": (
                     "Schedule definition. For cron: a cron expression (e.g. '0 */6 * * *'). "
                     "For interval: seconds as integer or shorthand like '30m', '2h', '1d'. "
-                    "For once: an ISO 8601 timestamp (e.g. '2025-03-01T09:00:00Z')."
+                    "For once: an ISO 8601 timestamp (e.g. '2025-03-01T09:00:00Z') "
+                    "or a relative offset prefixed with '+' (e.g. '+30m', '+2h', '+1d')."
                 ),
             },
             "schedule_type": {
@@ -217,7 +231,8 @@ class ScheduleCreateTool(Tool):
             "- 'interval': Recurring at a fixed interval. "
             "Provide seconds or shorthand like '30m', '2h', '1d'.\n"
             "- 'once': One-shot execution at a specific ISO 8601 timestamp "
-            "(e.g. '2025-03-01T09:00:00Z').\n\n"
+            "(e.g. '2025-03-01T09:00:00Z') or a relative offset "
+            "(e.g. '+30m' = 30 minutes from now, '+2h' = 2 hours from now).\n\n"
             "Parameters:\n"
             "- name (required): A human-readable name for the task.\n"
             "- prompt (required): The prompt to send to the agent when the task fires.\n"
@@ -249,12 +264,21 @@ class ScheduleCreateTool(Tool):
 
         # Validate once timestamp
         if schedule_type == "once":
-            try:
-                ts = datetime.fromisoformat(tool_input["schedule"])
-                if ts.tzinfo is None:
-                    return "once schedule must include timezone info (e.g. '2025-03-01T09:00:00Z')"
-            except (ValueError, TypeError) as e:
-                return f"Invalid ISO timestamp for once schedule: {e}"
+            schedule_value = tool_input["schedule"]
+            # Allow relative offset: +30m, +2h, +1d, +90s, +60
+            if schedule_value.startswith("+"):
+                offset_str = schedule_value[1:]
+                try:
+                    _parse_interval(offset_str)
+                except (ValueError, TypeError) as e:
+                    return f"Invalid relative offset for once schedule: {e}"
+            else:
+                try:
+                    ts = datetime.fromisoformat(schedule_value)
+                    if ts.tzinfo is None:
+                        return "once schedule must include timezone info (e.g. '2025-03-01T09:00:00Z') or use relative offset (e.g. '+30m')"
+                except (ValueError, TypeError) as e:
+                    return f"Invalid ISO timestamp for once schedule: {e}"
 
         return None
 
