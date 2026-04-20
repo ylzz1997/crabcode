@@ -124,6 +124,17 @@ class TeamSettings(BaseModel):
     bridge_policy: str = "deny"  # deny | allow_tagged | allow_all
 
 
+class ScheduleSettings(BaseModel):
+    """Settings for the Schedule (cron/interval/once) subsystem."""
+
+    enabled: bool = True
+    max_concurrent_jobs: int = 4
+    default_timeout: int = 600  # seconds
+    max_runs_per_job: int | None = None  # None = unlimited
+    persist: bool = True  # persist jobs across restarts
+    log_retention_days: int = 30
+
+
 class CrabCodeSettings(BaseModel):
     """Full settings.json schema."""
     permissions: PermissionsSettings = Field(default_factory=PermissionsSettings)
@@ -142,6 +153,7 @@ class CrabCodeSettings(BaseModel):
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     team: TeamSettings = Field(default_factory=TeamSettings)
+    schedule: ScheduleSettings = Field(default_factory=ScheduleSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     lsp: dict[str, LspServerConfig] | bool = Field(default_factory=dict)

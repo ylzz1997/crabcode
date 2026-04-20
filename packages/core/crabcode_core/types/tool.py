@@ -59,6 +59,7 @@ class ToolContext:
     lsp_manager: Any | None = None  # LSPManager — session-scoped, set during CoreSession.initialize()
     team_id: str | None = None  # Team ID the current agent belongs to
     team_manager: Any | None = None  # TeamManager — session-scoped
+    schedule_manager: Any | None = None  # ScheduleManager — session-scoped
     session: Any | None = None  # CoreSession — for checkpoint/revert operations
 
 

@@ -198,6 +198,18 @@ class RevertEvent:
     files_restored: list[str]
 
 
+@dataclass
+class ScheduleRunEvent:
+    """A scheduled job has been executed (or failed/timed out)."""
+    job_id: str
+    run_id: str
+    status: str  # "success" | "failed" | "timeout"
+    duration_seconds: float = 0.0
+    error_message: str = ""
+    result_summary: str = ""
+    next_run: str | None = None
+
+
 CoreEvent = Union[
     StreamTextEvent,
     ThinkingEvent,
@@ -218,4 +230,5 @@ CoreEvent = Union[
     TaskUpdateEvent,
     SnapshotEvent,
     RevertEvent,
+    ScheduleRunEvent,
 ]
