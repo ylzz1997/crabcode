@@ -1,10 +1,10 @@
 [project]
 name = "crabcode-gateway"
-version = "0.1.1"
+version = "0.1.2"
 description = "CrabCode Gateway - multi-protocol (HTTP/gRPC) server for CrabCode"
 requires-python = ">=3.10"
 dependencies = [
-    "crabcode-core>=0.1.0",
+    "crabcode-core>=0.1.2",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "grpcio>=1.65.0",

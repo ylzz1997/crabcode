@@ -199,7 +199,7 @@ class _CrabCodeServicer:
         return {}
 
     async def HealthCheck(self, request: dict, context: Any) -> dict:
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": "0.1.2"}
 
     # ── Server-streaming RPCs ────────────────────────────────────
 

@@ -291,7 +291,7 @@ class CrabCodeACPAgent:
                 ),
             ),
             auth_methods=[auth_method],
-            agent_info=Implementation(name="CrabCode", version="0.1.0"),
+            agent_info=Implementation(name="CrabCode", version="0.1.2"),
         )
 
     async def new_session(

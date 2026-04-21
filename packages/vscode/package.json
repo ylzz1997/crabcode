@@ -2,7 +2,7 @@
   "name": "crabcode",
   "displayName": "CrabCode",
   "description": "CrabCode 编程助手：在编辑器中与 CrabCode 网关协同工作",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "crabcode",
   "license": "MIT",
   "engines": {

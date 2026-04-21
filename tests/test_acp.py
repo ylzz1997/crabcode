@@ -92,7 +92,7 @@ class TestInitialize:
         assert resp.protocol_version == 1
         assert resp.agent_info is not None
         assert resp.agent_info.name == "CrabCode"
-        assert resp.agent_info.version == "0.1.0"
+        assert resp.agent_info.version == "0.1.2"
         assert resp.agent_capabilities is not None
         assert resp.agent_capabilities.load_session is True
         assert resp.agent_capabilities.mcp_capabilities is not None

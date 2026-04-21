@@ -61,7 +61,7 @@ class GatewayServer:
         """Build and configure the FastAPI application."""
         app = FastAPI(
             title="crabcode",
-            version="0.1.0",
+            version="0.1.2",
             description="CrabCode Gateway API",
         )
 
