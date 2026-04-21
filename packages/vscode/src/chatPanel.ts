@@ -402,160 +402,296 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CrabCode Chat</title>
   <style nonce="${nonce}">
-    :root { --font: var(--vscode-font-family); }
+    :root {
+      --font: var(--vscode-font-family);
+      --radius: 10px;
+      --radius-lg: 14px;
+      --border: color-mix(in srgb, var(--vscode-widget-border, #444) 55%, transparent);
+      --border-strong: color-mix(in srgb, var(--vscode-widget-border, #444) 80%, transparent);
+      --surface: color-mix(in srgb, var(--vscode-editor-background) 60%, var(--vscode-sideBar-background));
+      --surface-elevated: color-mix(in srgb, var(--vscode-input-background) 85%, var(--vscode-sideBar-background));
+      --surface-soft: color-mix(in srgb, var(--vscode-sideBar-background) 65%, var(--vscode-editor-background));
+      --accent: var(--vscode-focusBorder, #3794ff);
+      --accent-muted: color-mix(in srgb, var(--accent) 14%, transparent);
+      --text-muted: var(--vscode-descriptionForeground);
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.12);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: var(--font);
       font-size: var(--vscode-font-size);
       color: var(--vscode-foreground);
       background: var(--vscode-sideBar-background);
-      display: flex; flex-direction: column; height: 100vh;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
     }
-    #messages {
-      flex: 1; overflow-y: auto; padding: 10px 10px 16px;
+    button, select, textarea { font: inherit; }
+    button:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 1.5px solid var(--accent);
+      outline-offset: 1px;
     }
-    .msg { margin-bottom: 10px; padding: 8px 11px; border-radius: 10px; }
-    .msg.user { background: var(--vscode-input-background); }
-    .msg.assistant { background: var(--vscode-editor-background); }
-    .msg.system { background: var(--vscode-editorWarning-background, #553300); opacity: 0.85; }
-    .msg .role { font-weight: bold; font-size: 0.85em; margin-bottom: 2px; }
-    .msg .text { white-space: pre-wrap; word-break: break-word; }
 
-    /* Tool cards */
+    /* ── Messages ──────────────────────────────────────────────── */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 10px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #messages:empty::before {
+      content: '开始和 CrabCode 聊天吧';
+      display: block;
+      margin: auto;
+      padding: 16px 14px;
+      border-radius: var(--radius-lg);
+      border: 1px dashed var(--border);
+      color: var(--text-muted);
+      background: var(--surface);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    /* ── Message bubbles ───────────────────────────────────────── */
+    .msg {
+      position: relative;
+      padding: 8px 10px;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .msg.user {
+      align-self: flex-end;
+      width: min(94%, 520px);
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface-elevated));
+      border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+      border-top-right-radius: 4px;
+    }
+    .msg.assistant {
+      align-self: stretch;
+      background: color-mix(in srgb, var(--surface) 80%, var(--vscode-editor-background));
+      border-top-left-radius: 4px;
+    }
+    .msg.system {
+      align-self: stretch;
+      background: color-mix(in srgb, var(--vscode-editorWarning-background, #553300) 60%, var(--surface));
+      border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground, #ffcc66) 24%, var(--border));
+      opacity: 0.96;
+    }
+    .msg .role {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 4px;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--text-muted);
+    }
+    .msg .text {
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+      font-size: 13px;
+    }
+
+    /* ── Tool cards ────────────────────────────────────────────── */
     .tool-card {
-      margin: 6px 0; border-radius: 6px;
-      border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #333));
-      overflow: hidden; font-size: 0.9em;
+      margin: 4px 0 0;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface-soft);
+      overflow: hidden;
+      font-size: 12px;
+      box-shadow: var(--shadow-sm);
     }
     .tool-card-header {
-      display: flex; align-items: center; gap: 6px;
-      padding: 4px 8px; cursor: pointer;
-      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      background: transparent;
+      transition: background 0.12s;
     }
-    .tool-card-header .icon { font-size: 1em; opacity: 0.7; }
-    .tool-card-header .tool-name { font-weight: 600; flex: 1; }
-    .tool-card-header .chevron { opacity: 0.5; transition: transform 0.15s; }
+    .tool-card-header:hover {
+      background: var(--accent-muted);
+    }
+    .tool-card-header .icon {
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      background: var(--accent-muted);
+      font-size: 10px;
+      opacity: 0.85;
+    }
+    .tool-card-header .tool-name { font-weight: 600; flex: 1; font-size: 11.5px; }
+    .tool-card-header .chevron { opacity: 0.45; transition: transform 0.15s; font-size: 11px; }
     .tool-card-header .chevron.collapsed { transform: rotate(-90deg); }
-    .tool-card-header .status { font-size: 0.8em; opacity: 0.6; }
-    .tool-card-header .status.error { color: var(--vscode-errorForeground, #f48771); }
-    .tool-card-header .status.ok { color: var(--vscode-terminal-ansiGreen, #89d185); }
+    .tool-card-header .status {
+      font-size: 10.5px;
+      opacity: 0.85;
+      padding: 1px 7px;
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--vscode-badge-background, #444) 45%, transparent);
+    }
+    .tool-card-header .status.error {
+      color: var(--vscode-errorForeground, #f48771);
+      background: color-mix(in srgb, var(--vscode-errorForeground, #f48771) 10%, transparent);
+    }
+    .tool-card-header .status.ok {
+      color: var(--vscode-terminal-ansiGreen, #89d185);
+      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #89d185) 10%, transparent);
+    }
     .tool-card-body {
-      padding: 6px 8px; max-height: 200px; overflow-y: auto;
-      background: var(--vscode-editor-background);
-      border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #333));
+      padding: 8px 10px;
+      max-height: 200px;
+      overflow-y: auto;
+      background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--surface-soft));
+      border-top: 1px solid var(--border);
     }
     .tool-card-body.hidden { display: none; }
     .tool-card-body pre {
-      white-space: pre-wrap; word-break: break-word;
+      white-space: pre-wrap;
+      word-break: break-word;
       font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 0.9em;
+      font-size: 11px;
+      line-height: 1.4;
     }
 
-    /* Diff display inside tool cards */
+    /* ── Diff colours ──────────────────────────────────────────── */
     .diff-line-add { color: var(--vscode-terminal-ansiGreen, #89d185); }
     .diff-line-del { color: var(--vscode-terminal-ansiRed, #f48771); }
     .diff-line-ctx { color: var(--vscode-descriptionForeground, #888); }
 
-    /* File change pill */
+    /* ── File change pills ─────────────────────────────────────── */
     .file-change {
-      display: inline-flex; align-items: center; gap: 4px;
-      padding: 2px 8px; margin: 2px 0; border-radius: 10px;
-      font-size: 0.8em; background: var(--vscode-input-background);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      margin: 2px 0;
+      border-radius: 6px;
+      font-size: 11px;
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+      align-self: flex-start;
     }
     .file-change .action {
-      font-weight: 600; text-transform: uppercase; font-size: 0.85em;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 9.5px;
+      letter-spacing: 0.04em;
     }
     .file-change .action.create { color: var(--vscode-terminal-ansiGreen, #89d185); }
     .file-change .action.modify { color: var(--vscode-terminal-ansiYellow, #cca700); }
     .file-change .action.delete { color: var(--vscode-terminal-ansiRed, #f48771); }
     .file-change .path {
-      cursor: pointer; text-decoration: underline;
-      text-underline-offset: 2px;
+      cursor: pointer;
+      color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+      text-decoration: none;
     }
+    .file-change .path:hover { text-decoration: underline; }
 
-    /* ── Composer (Cursor-style compact card) ─────────────────── */
+    /* ── Composer ──────────────────────────────────────────────── */
     #composer-wrap {
       flex-shrink: 0;
-      padding: 8px 10px 10px;
-      display: flex; flex-direction: column; gap: 8px;
+      padding: 6px 8px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
       background: var(--vscode-sideBar-background);
-      border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border, #333) 70%, transparent);
+      border-top: 1px solid var(--border);
     }
     #composer-wrap.drag-hover #composer-card {
-      outline: 1px dashed var(--vscode-focusBorder, #007fd4);
+      outline: 1.5px dashed var(--accent);
       outline-offset: 2px;
     }
     #composer-card {
-      border-radius: 12px;
-      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 85%, transparent);
-      background: color-mix(in srgb, var(--vscode-input-background) 92%, var(--vscode-sideBar-background));
-      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border-strong);
+      background: var(--surface-elevated);
+      box-shadow: var(--shadow-md);
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
+    #composer-card:focus-within {
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border-strong));
+      box-shadow: var(--shadow-md), 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+
+    /* ── Composer meta bar ─────────────────────────────────────── */
     .composer-meta {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 60%, transparent);
-      background: color-mix(in srgb, var(--vscode-editor-background) 35%, transparent);
-      min-height: 36px;
+      gap: 6px;
+      padding: 6px 10px;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+      background: color-mix(in srgb, var(--vscode-editor-background) 20%, transparent);
+      min-height: 32px;
     }
     .ctx-toggle {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 5px;
       border: none;
       background: transparent;
       color: var(--vscode-foreground);
-      font-family: var(--font);
-      font-size: 12px;
-      letter-spacing: 0.01em;
+      font-size: 11.5px;
       cursor: pointer;
-      padding: 2px 4px;
+      padding: 3px 6px;
       border-radius: 6px;
-      opacity: 0.92;
+      opacity: 0.9;
     }
-    .ctx-toggle:hover { background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
+    .ctx-toggle:hover { background: var(--accent-muted); }
     .ctx-chevron {
       display: inline-block;
-      font-size: 14px;
-      width: 14px;
+      font-size: 12px;
+      width: 12px;
       text-align: center;
-      color: var(--vscode-descriptionForeground);
+      color: var(--text-muted);
       transition: transform 0.18s ease;
       transform: rotate(0deg);
     }
     #composer-card.ctx-open .ctx-chevron { transform: rotate(90deg); }
-    #ctx-summary { color: var(--vscode-descriptionForeground); font-weight: 500; }
+    #ctx-summary { color: var(--text-muted); font-weight: 500; font-size: 11.5px; }
     .meta-spacer { flex: 1; }
     .meta-link {
       border: none;
       background: transparent;
       color: var(--vscode-textLink-foreground, var(--vscode-foreground));
-      font-size: 12px;
+      font-size: 11.5px;
       cursor: pointer;
-      padding: 4px 8px;
+      padding: 3px 7px;
       border-radius: 6px;
-      opacity: 0.85;
+      opacity: 0.8;
     }
-    .meta-link:hover { background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
+    .meta-link:hover { background: var(--accent-muted); }
     #ctx-attachments {
-      padding: 6px 10px 2px;
+      padding: 6px 8px 3px;
       max-height: 100px;
       overflow-y: auto;
-      border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 45%, transparent);
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
     }
     #composer-card:not(.ctx-open) #ctx-attachments { display: none; }
     #composer-card:not(.has-attachments) #ctx-attachments { display: none; border-bottom: none; }
     #composer-card:not(.has-attachments) .ctx-chevron { display: none; }
+    #composer-card:not(.has-attachments) .composer-meta { display: none; }
     #composer-tip {
-      font-size: 11px;
-      line-height: 1.35;
-      color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent);
-      padding: 6px 12px 2px;
+      font-size: 10.5px;
+      line-height: 1.4;
+      color: var(--text-muted);
+      padding: 4px 10px 1px;
       max-height: 0;
       overflow: hidden;
       opacity: 0;
@@ -564,174 +700,252 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     #composer-tip kbd {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10px;
-      padding: 1px 5px;
+      padding: 0px 4px;
       border-radius: 4px;
-      border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 65%, transparent);
-      background: color-mix(in srgb, var(--vscode-input-background) 85%, transparent);
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--vscode-input-background) 75%, transparent);
     }
     #composer-card.tip-visible #composer-tip {
-      max-height: 56px;
+      max-height: 48px;
       opacity: 1;
-      padding-top: 8px;
+      padding-top: 6px;
     }
     #attachment-bar {
-      display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: flex-start;
     }
     .attachment-thumb {
-      position: relative; width: 52px; height: 52px; border-radius: 8px;
-      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 70%, transparent);
+      position: relative;
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
       overflow: hidden;
     }
     .attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
     .attachment-thumb .remove-btn {
-      position: absolute; top: 3px; right: 3px; width: 18px; height: 18px;
-      background: rgba(0,0,0,0.55); color: #fff; border: none; border-radius: 50%;
-      font-size: 11px; line-height: 18px; text-align: center; cursor: pointer; padding: 0;
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 16px;
+      height: 16px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      font-size: 10px;
+      line-height: 16px;
+      text-align: center;
+      cursor: pointer;
+      padding: 0;
     }
-    .attachment-thumb .remove-btn:hover { background: rgba(180,40,40,0.95); }
+    .attachment-thumb .remove-btn:hover { background: rgba(180,40,40,0.9); }
     .text-file-chip {
-      display: inline-flex; align-items: center; gap: 6px; max-width: 200px;
-      padding: 4px 10px; border-radius: 999px; font-size: 11px;
-      background: color-mix(in srgb, var(--vscode-input-background) 70%, var(--vscode-badge-background, #333));
-      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 55%, transparent);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 200px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 10.5px;
+      background: color-mix(in srgb, var(--vscode-input-background) 60%, var(--vscode-badge-background, #333));
+      border: 1px solid var(--border);
     }
     .text-file-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .text-file-chip .remove-btn {
-      background: transparent; border: none; color: var(--vscode-foreground); cursor: pointer; padding: 0 2px; opacity: 0.75;
+      background: transparent;
+      border: none;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      padding: 0 1px;
+      opacity: 0.65;
+      font-size: 11px;
     }
     .text-file-chip .remove-btn:hover { opacity: 1; }
+
+    /* ── Textarea ──────────────────────────────────────────────── */
     #input {
-      display: block; width: 100%; min-height: 80px; max-height: 220px;
-      resize: vertical; border: none; outline: none;
+      display: block;
+      width: 100%;
+      min-height: 72px;
+      max-height: 200px;
+      resize: vertical;
+      border: none;
+      outline: none;
       background: transparent;
       color: var(--vscode-input-foreground);
-      padding: 12px 14px 10px;
-      font-family: var(--font);
-      font-size: calc(var(--vscode-font-size) * 1.02);
-      line-height: 1.45;
+      padding: 10px 12px 8px;
+      font-size: 13px;
+      line-height: 1.5;
     }
-    #input::placeholder { color: color-mix(in srgb, var(--vscode-input-foreground) 38%, transparent); }
+    #input::placeholder { color: color-mix(in srgb, var(--vscode-input-foreground) 35%, transparent); }
+
+    /* ── Toolbar ───────────────────────────────────────────────── */
     .composer-toolbar {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 10px;
-      padding: 8px 10px 10px;
-      border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 40%, transparent);
-      background: color-mix(in srgb, var(--vscode-sideBar-background) 40%, transparent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 6px 8px;
+      border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
     }
     .toolbar-left {
-      display: flex; align-items: center; gap: 8px;
-      flex: 1; min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
     }
     .tb-left-wrap { position: relative; flex-shrink: 0; }
     .tb-icon-btn {
-      width: 32px; height: 32px; border-radius: 999px; border: none;
-      background: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
       color: var(--vscode-foreground);
       cursor: pointer;
-      font-size: 1.15rem;
+      font-size: 15px;
       line-height: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.12s ease;
+      transition: background 0.12s, border-color 0.12s;
+      opacity: 0.75;
     }
-    .tb-icon-btn:hover { background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
+    .tb-icon-btn:hover {
+      background: var(--accent-muted);
+      border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+      opacity: 1;
+    }
     .plus-menu {
-      position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 168px;
-      background: var(--vscode-menu-background); color: var(--vscode-menu-foreground);
-      border: 1px solid var(--vscode-menu-border, #444); border-radius: 10px;
-      box-shadow: 0 8px 28px rgba(0,0,0,0.45); z-index: 30;
-      padding: 4px 0;
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 0;
+      min-width: 160px;
+      background: var(--vscode-menu-background);
+      color: var(--vscode-menu-foreground);
+      border: 1px solid var(--vscode-menu-border, #444);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 30;
+      padding: 3px 0;
     }
     .plus-menu.hidden { display: none; }
     .plus-menu button {
-      display: block; width: 100%; text-align: left; padding: 8px 12px;
-      border: none; background: transparent; color: inherit; cursor: pointer; font-size: 12px;
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 7px 12px;
+      border: none;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 12px;
     }
-    .plus-menu button:hover { background: var(--vscode-menu-selectionBackground, rgba(127,127,127,0.22)); }
+    .plus-menu button:hover { background: var(--vscode-menu-selectionBackground, rgba(127,127,127,0.18)); }
     .model-pill-wrap { flex: 1; min-width: 0; max-width: 100%; }
     .tb-model {
       width: 100%;
       max-width: 100%;
-      padding: 6px 12px;
-      border-radius: 999px;
-      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 50%, transparent);
-      background: color-mix(in srgb, var(--vscode-input-background) 55%, transparent);
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--vscode-input-background) 50%, transparent);
       color: var(--vscode-foreground);
-      font-family: var(--font);
-      font-size: 12px;
+      font-size: 11.5px;
       cursor: pointer;
     }
     .tb-model:hover {
-      border-color: color-mix(in srgb, var(--vscode-focusBorder) 55%, var(--vscode-widget-border));
-      background: color-mix(in srgb, var(--vscode-input-background) 75%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent);
     }
-    .tb-model:disabled { opacity: 0.55; cursor: not-allowed; }
+    .tb-model:disabled { opacity: 0.5; cursor: not-allowed; }
     .tb-send-circle {
       flex-shrink: 0;
-      width: 36px; height: 36px;
-      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
       border: none;
-      background: color-mix(in srgb, var(--vscode-foreground) 88%, transparent);
-      color: color-mix(in srgb, var(--vscode-editor-background) 95%, #0a0a0a);
+      background: var(--accent);
+      color: white;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: transform 0.12s ease, filter 0.12s ease;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+      transition: filter 0.12s, transform 0.12s;
     }
     .tb-send-circle:hover {
-      filter: brightness(1.08);
-      transform: scale(1.04);
+      filter: brightness(1.1);
+      transform: translateY(-0.5px);
     }
-    .tb-send-circle:active { transform: scale(0.96); }
+    .tb-send-circle:active { transform: scale(0.95); }
     .tb-send-circle svg { display: block; }
+
+    /* ── Footer ────────────────────────────────────────────────── */
     #footer-bar {
-      display: flex; align-items: center; justify-content: space-between; gap: 10px;
-      padding: 0 4px 2px;
-      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 0 3px 1px;
+      font-size: 10.5px;
     }
-    .footer-left.muted { color: var(--vscode-descriptionForeground); letter-spacing: 0.02em; }
+    .footer-left.muted {
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+      font-weight: 500;
+    }
     .footer-select {
       flex: 0 1 58%;
-      max-width: 200px;
-      padding: 4px 10px;
-      border-radius: 8px;
-      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 45%, transparent);
-      background: color-mix(in srgb, var(--vscode-input-background) 50%, transparent);
+      max-width: 180px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--vscode-input-background) 45%, transparent);
       color: var(--vscode-foreground);
-      font-size: 11px;
-      font-family: var(--font);
+      font-size: 10.5px;
     }
 
-    /* Images in user messages */
+    /* ── Images in messages ────────────────────────────────────── */
     .msg-images {
-      display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 6px;
     }
     .msg-images img {
-      max-width: 200px; max-height: 150px; border-radius: 4px;
-      border: 1px solid var(--vscode-panel-border, #333); cursor: pointer;
+      max-width: 180px;
+      max-height: 130px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      cursor: pointer;
     }
-    .msg-images img:hover { opacity: 0.85; }
+    .msg-images img:hover { opacity: 0.88; }
+
+    /* ── Scrollbar (subtle) ────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--vscode-foreground) 15%, transparent); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); }
   </style>
 </head>
 <body>
   <div id="messages"></div>
   <div id="composer-wrap">
-    <div id="composer-card" class="ctx-open">
+    <div id="composer-card">
       <div class="composer-meta">
-        <button type="button" class="ctx-toggle" id="ctx-toggle" aria-expanded="true" title="展开或折叠附件">
-          <span class="ctx-chevron">›</span>
-          <span id="ctx-summary">CrabCode：添加上下文（拖拽 / 粘贴）</span>
+        <button type="button" class="ctx-toggle" id="ctx-toggle" aria-expanded="false" title="展开或折叠附件">
+          <span class="ctx-chevron">▸</span>
+          <span id="ctx-summary"></span>
         </button>
         <span class="meta-spacer"></span>
-        <button type="button" class="meta-link" id="tip-toggle">提示</button>
       </div>
       <div id="ctx-attachments">
         <div id="attachment-bar"></div>
       </div>
-      <div id="composer-tip">CrabCode 提示：输入 <kbd>/help</kbd> 查看命令。支持拖入文件或图片、粘贴截图，或通过左下角「+」添加。</div>
       <textarea id="input" rows="3" placeholder="输入问题或命令（如 /help）…"></textarea>
       <div id="input-toolbar" class="composer-toolbar">
         <div class="toolbar-left">
@@ -748,7 +962,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           </div>
         </div>
         <button type="button" class="tb-send-circle" id="send-btn" title="发送 (⌘↵ / Ctrl+Enter)" aria-label="发送">
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5.5L17.5 14H14v6h-4v-6H6.5L12 5.5z"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
         </button>
       </div>
     </div>
@@ -770,7 +984,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const composerWrap = document.getElementById('composer-wrap');
     const composerCard = document.getElementById('composer-card');
     const ctxToggle = document.getElementById('ctx-toggle');
-    const tipToggle = document.getElementById('tip-toggle');
     const plusBtn = document.getElementById('plus-btn');
     const plusMenu = document.getElementById('plus-menu');
     const fileInputImage = document.getElementById('file-input-image');
@@ -848,7 +1061,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           ? '<span class="status error">失败</span>'
           : '<span class="status ok">完成</span>';
       } else {
-        statusHtml = '<span class="status">运行中…</span>';
+        statusHtml = '<span class="status">运行中</span>';
       }
 
       const inputStr = formatToolInput(card.toolName, card.input);
@@ -860,13 +1073,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           bodyHtml = '<div class="tool-card-body"><pre>' + escapeHtml(inputStr) + '</pre></div>';
         }
       } else if (card.result !== null) {
-        // Show a one-line preview when collapsed
-        const preview = card.result.split('\\n')[0].substring(0, 120);
-        statusHtml += ' <span style="opacity:0.5">' + escapeHtml(preview) + (card.result.length > 120 ? '…' : '') + '</span>';
+        const preview = card.result.split('\\n')[0].substring(0, 90);
+        statusHtml += '<span style="opacity:0.56; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:34%;">' + escapeHtml(preview) + (card.result.length > 90 ? '…' : '') + '</span>';
       }
 
       return '<div class="tool-card-header">' +
-        '<span class="icon">⚙</span>' +
+        '<span class="icon">&#9881;</span>' +
         '<span class="tool-name">' + escapeHtml(card.toolName) + '</span>' +
         statusHtml +
         '<span class="' + chevron + '">▾</span>' +
@@ -1018,7 +1230,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const n = pendingImages.length + pendingTextFiles.length;
       composerCard.classList.toggle('has-attachments', n > 0);
       const sum = document.getElementById('ctx-summary');
-      if (sum) sum.textContent = n ? ('CrabCode：' + n + ' 个附件') : 'CrabCode：添加上下文（拖拽 / 粘贴）';
+      if (sum) sum.textContent = n ? (n + ' 个附件') : '';
       if (n > 0 && prevAttachCount === 0) composerCard.classList.add('ctx-open');
       ctxToggle.setAttribute('aria-expanded', composerCard.classList.contains('ctx-open') ? 'true' : 'false');
       prevAttachCount = n;
@@ -1117,15 +1329,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     ctxToggle.addEventListener('click', function() {
       const n = pendingImages.length + pendingTextFiles.length;
       if (n === 0) {
-        composerCard.classList.toggle('tip-visible');
         return;
       }
       composerCard.classList.toggle('ctx-open');
       ctxToggle.setAttribute('aria-expanded', composerCard.classList.contains('ctx-open') ? 'true' : 'false');
-    });
-    tipToggle.addEventListener('click', function(e) {
-      e.stopPropagation();
-      composerCard.classList.toggle('tip-visible');
     });
 
     // ── Drag & drop on composer ─────────────────────────────────
