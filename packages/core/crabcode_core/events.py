@@ -106,6 +106,8 @@ class CoreSession:
             merged.api.base_url = file_settings.api.base_url
         if file_settings.api.api_key_env and not self.settings.api.api_key_env:
             merged.api.api_key_env = file_settings.api.api_key_env
+        if file_settings.api.http_headers and not self.settings.api.http_headers:
+            merged.api.http_headers = dict(file_settings.api.http_headers)
         if file_settings.api.format and not self.settings.api.format:
             merged.api.format = file_settings.api.format
         if file_settings.api.thinking_enabled is False and self.settings.api.thinking_enabled:

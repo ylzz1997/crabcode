@@ -246,6 +246,9 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
     "model": "gpt-4o",
     "base_url": "https://api.openai.com/v1",
     "api_key_env": "OPENAI_API_KEY",
+    "http_headers": {
+      "X-Workspace": "crabcode"
+    },
     "thinking_enabled": false,
     "max_tokens": 16384
   },
@@ -263,6 +266,7 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `model` | 模型 ID | — |
 | `base_url` | 自定义 API 地址（适用于第三方转发或本地部署） | — |
 | `api_key_env` | 存放 API Key 的**环境变量名**（不是 Key 本身） | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `http_headers` | 为该配置的每次 API 请求附加额外 HTTP Header | `{}` |
 | `format` | Router 模式下的协议格式：`anthropic` \| `openai` \| `codex` \| `ollama` \| `gemini` \| `azure` | — |
 | `thinking_enabled` | 是否启用思考模式（不支持该功能的模型需设为 `false`） | `true` |
 | `thinking_budget` | 思考 token 预算 | `10000` |

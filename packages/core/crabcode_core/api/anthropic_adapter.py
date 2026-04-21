@@ -102,6 +102,8 @@ class AnthropicAdapter(APIAdapter):
             kwargs["api_key"] = api_key
         if config.base_url:
             kwargs["base_url"] = config.base_url
+        if config.http_headers:
+            kwargs["default_headers"] = config.http_headers
 
         self.client = anthropic.AsyncAnthropic(**kwargs)
 

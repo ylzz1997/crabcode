@@ -14,6 +14,9 @@ from crabcode_core.api import (
     create_adapter,
 )
 from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW, lookup_context_window
+from crabcode_core.api.openai_adapter import OpenAIAdapter
+from crabcode_core.api.codex_adapter import CodexAdapter
+from crabcode_core.api.anthropic_adapter import AnthropicAdapter
 from crabcode_core.types.config import ApiConfig
 
 
@@ -311,6 +314,65 @@ class TestAzureOpenAIAdapter:
             clear=False,
         ):
             assert os.environ.get("AZURE_OPENAI_API_VERSION") == "2025-01-01"
+
+
+class TestCustomHeaders:
+    """HTTP headers from config are passed through to API clients."""
+
+    def test_openai_adapter_passes_default_headers(self):
+        config = ApiConfig(
+            provider="openai",
+            model="gpt-4o",
+            http_headers={"X-Test-Header": "openai"},
+        )
+        with patch("openai.AsyncOpenAI") as mock_client:
+            OpenAIAdapter(config)
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["default_headers"] == {
+            "X-Test-Header": "openai"
+        }
+
+    def test_codex_adapter_passes_default_headers(self):
+        config = ApiConfig(
+            provider="codex",
+            model="gpt-5.4",
+            http_headers={"X-Test-Header": "codex"},
+        )
+        with patch("openai.AsyncOpenAI") as mock_client:
+            CodexAdapter(config)
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["default_headers"] == {
+            "X-Test-Header": "codex"
+        }
+
+    def test_anthropic_adapter_passes_default_headers(self):
+        config = ApiConfig(
+            provider="anthropic",
+            model="claude-sonnet-4-20250514",
+            http_headers={"X-Test-Header": "anthropic"},
+        )
+        with patch("anthropic.AsyncAnthropic") as mock_client:
+            AnthropicAdapter(config)
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["default_headers"] == {
+            "X-Test-Header": "anthropic"
+        }
+
+    def test_azure_adapter_passes_default_headers(self):
+        config = ApiConfig(
+            provider="azure",
+            model="gpt-4o",
+            http_headers={"X-Test-Header": "azure"},
+        )
+        with patch("openai.AsyncAzureOpenAI") as mock_client:
+            adapter = AzureOpenAIAdapter.__new__(AzureOpenAIAdapter)
+            adapter._deployment_override = None
+            adapter.config = config
+            AzureOpenAIAdapter._create_client(adapter, config)
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["default_headers"] == {
+            "X-Test-Header": "azure"
+        }
 
 
 # ---------------------------------------------------------------------------

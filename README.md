@@ -246,6 +246,9 @@ Or configure in `~/.crabcode/settings.json`:
     "model": "gpt-4o",
     "base_url": "https://api.openai.com/v1",
     "api_key_env": "OPENAI_API_KEY",
+    "http_headers": {
+      "X-Workspace": "crabcode"
+    },
     "thinking_enabled": false,
     "max_tokens": 16384
   },
@@ -263,6 +266,7 @@ Or configure in `~/.crabcode/settings.json`:
 | `model` | Model ID | — |
 | `base_url` | Custom API endpoint (for routers or local deployments) | — |
 | `api_key_env` | **Name** of the env var that holds the API key (not the key itself) | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `http_headers` | Extra HTTP headers to attach to every API request for this config | `{}` |
 | `format` | Wire format for router mode: `anthropic` \| `openai` \| `codex` | — |
 | `thinking_enabled` | Enable extended thinking (set `false` for models that don't support it) | `true` |
 | `thinking_budget` | Thinking token budget | `10000` |

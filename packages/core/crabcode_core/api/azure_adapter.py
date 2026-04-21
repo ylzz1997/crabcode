@@ -53,6 +53,8 @@ class AzureOpenAIAdapter(OpenAIAdapter):
         if azure_endpoint:
             kwargs["azure_endpoint"] = azure_endpoint
         kwargs["api_version"] = api_version
+        if config.http_headers:
+            kwargs["default_headers"] = config.http_headers
 
         return openai.AsyncAzureOpenAI(**kwargs)
 
