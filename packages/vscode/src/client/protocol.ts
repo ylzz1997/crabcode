@@ -52,12 +52,24 @@ export interface PushContextCommand {
   language_id: string | null;
 }
 
+export interface SwitchModelCommand {
+  type: "switch_model";
+  name: string;
+}
+
+export interface SetPermissionModeCommand {
+  type: "set_permission_mode";
+  mode: "default" | "run_everything";
+}
+
 /** Union of all commands the client can send over the WebSocket. */
 export type WsCommand =
   | SendMessageCommand
   | PermissionResponseCommand
   | ChoiceResponseCommand
-  | PushContextCommand;
+  | PushContextCommand
+  | SwitchModelCommand
+  | SetPermissionModeCommand;
 
 // ── Builder helpers ───────────────────────────────────────────────
 
@@ -137,4 +149,14 @@ export function buildPushContextCommand(
  */
 export function serializeCommand(cmd: WsCommand): string {
   return JSON.stringify(cmd);
+}
+
+export function buildSwitchModelCommand(name: string): SwitchModelCommand {
+  return { type: "switch_model", name };
+}
+
+export function buildSetPermissionModeCommand(
+  mode: "default" | "run_everything",
+): SetPermissionModeCommand {
+  return { type: "set_permission_mode", mode };
 }

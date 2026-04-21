@@ -85,6 +85,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "requestHistory":
           this.postMessage({ type: "history", messages: this.messages });
           break;
+        case "requestOptions":
+          this.pushChatOptions();
+          break;
+        case "setModel":
+          if (typeof msg.name === "string" && msg.name.length > 0) {
+            this.connection.sendSwitchModel(msg.name);
+            void vscode.workspace
+              .getConfiguration("crabcode")
+              .update("chatModelDefault", msg.name, vscode.ConfigurationTarget.Global);
+          }
+          break;
+        case "setPermissionMode":
+          if (msg.mode === "default" || msg.mode === "run_everything") {
+            void vscode.workspace
+              .getConfiguration("crabcode")
+              .update("permissionMode", msg.mode, vscode.ConfigurationTarget.Global);
+            this.connection.sendSetPermissionMode(msg.mode);
+          }
+          break;
+        case "pickFiles":
+          void this.pickFilesForChat();
+          break;
+        case "screenshotHint":
+          void vscode.window.showInformationMessage(
+            "CrabCode：请用系统截图（如 macOS ⌘⇧4 / ⌘⇧5，Windows Win+Shift+S），再在本聊天输入框中粘贴即可。",
+          );
+          break;
         case "toggleToolCard":
           this.toggleToolCard(msg.id);
           break;
@@ -93,6 +120,136 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
       }
     });
+
+    this.pushChatOptions();
+  }
+
+  /** 将 CrabCode 扩展配置（模型列表、权限模式）推送到 Webview。 */
+  public notifyConfigurationChanged(): void {
+    this.pushChatOptions();
+  }
+
+  /** After WebSocket connects, align server session with workspace settings. */
+  public syncSessionPreferencesFromSettings(): void {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const models = cfg.get<string[]>("chatModels", []) ?? [];
+    const defaultModel = cfg.get<string>("chatModelDefault", "") ?? "";
+    const permissionMode = cfg.get<string>("permissionMode", "default");
+    const mode: "default" | "run_everything" =
+      permissionMode === "run_everything" ? "run_everything" : "default";
+
+    if (models.length > 0) {
+      const pick =
+        defaultModel && models.includes(defaultModel) ? defaultModel : models[0];
+      this.connection.sendSwitchModel(pick);
+    }
+    this.connection.sendSetPermissionMode(mode);
+  }
+
+  private pushChatOptions(): void {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const models = cfg.get<string[]>("chatModels", []) ?? [];
+    const defaultModel = cfg.get<string>("chatModelDefault", "") ?? "";
+    const permissionMode = cfg.get<string>("permissionMode", "default");
+    const mode: "default" | "run_everything" =
+      permissionMode === "run_everything" ? "run_everything" : "default";
+    this.postMessage({
+      type: "options",
+      models,
+      defaultModel,
+      permissionMode: mode,
+    });
+  }
+
+  private async pickFilesForChat(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      title: "CrabCode：选择要附加的文件",
+      canSelectMany: true,
+      openLabel: "添加",
+      filters: {
+        Images: ["png", "jpg", "jpeg", "gif", "webp"],
+        "Text / code": [
+          "txt",
+          "md",
+          "json",
+          "py",
+          "ts",
+          "tsx",
+          "js",
+          "jsx",
+          "mjs",
+          "cjs",
+          "css",
+          "html",
+          "yml",
+          "yaml",
+          "toml",
+          "rs",
+          "go",
+          "java",
+          "kt",
+          "swift",
+          "c",
+          "h",
+          "cpp",
+          "hpp",
+          "cs",
+          "rb",
+          "php",
+          "sh",
+          "vue",
+          "svelte",
+        ],
+        "All files": ["*"],
+      },
+    });
+    if (!picked?.length) {
+      return;
+    }
+
+    const images: ImageAttachment[] = [];
+    const textSnippets: { name: string; text: string }[] = [];
+    const maxBytes = 20 * 1024 * 1024;
+    const maxTextChars = 200_000;
+
+    for (const uri of picked) {
+      try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.size > maxBytes) {
+          void vscode.window.showWarningMessage(`CrabCode：已跳过过大文件（>20MB）\n${uri.fsPath}`);
+          continue;
+        }
+        const buf = await vscode.workspace.fs.readFile(uri);
+        const base = uri.fsPath.split(/[/\\]/).pop() || "file";
+        const ext = base.includes(".") ? base.split(".").pop()!.toLowerCase() : "";
+        const imageExts: Record<string, string> = {
+          png: "image/png",
+          jpg: "image/jpeg",
+          jpeg: "image/jpeg",
+          gif: "image/gif",
+          webp: "image/webp",
+        };
+        if (ext && imageExts[ext]) {
+          images.push({
+            media_type: imageExts[ext],
+            data: Buffer.from(buf).toString("base64"),
+          });
+        } else {
+          const decoder = new TextDecoder("utf-8", { fatal: false });
+          let text = decoder.decode(buf);
+          if (text.length > maxTextChars) {
+            text = text.slice(0, maxTextChars) + "\n…(已截断)";
+          }
+          textSnippets.push({ name: base, text });
+        }
+      } catch {
+        void vscode.window.showWarningMessage(`CrabCode：无法读取文件\n${uri.fsPath}`);
+      }
+    }
+
+    if (images.length > 0 || textSnippets.length > 0) {
+      this.postMessage({ type: "addAttachments", images, textSnippets });
+    }
   }
 
   // ── Public API used by commands ────────────────────────────────
@@ -132,7 +289,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.appendAssistantText(payload.text);
         break;
       case "thinking":
-        this.appendAssistantText(`[thinking] ${payload.text}`);
+        this.appendAssistantText(`[CrabCode 思考] ${payload.text}`);
         break;
       case "tool_use":
         this.handleToolUse(payload as ToolUsePayload);
@@ -144,7 +301,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.handleFileChange(payload as FileChangePayload);
         break;
       case "error":
-        this.addMessage("system", `⚠ ${payload.message}`);
+        this.addMessage("system", `CrabCode：${payload.message}`);
         break;
       case "turn_complete":
         break;
@@ -255,9 +412,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       display: flex; flex-direction: column; height: 100vh;
     }
     #messages {
-      flex: 1; overflow-y: auto; padding: 8px;
+      flex: 1; overflow-y: auto; padding: 10px 10px 16px;
     }
-    .msg { margin-bottom: 8px; padding: 6px 8px; border-radius: 6px; }
+    .msg { margin-bottom: 10px; padding: 8px 11px; border-radius: 10px; }
     .msg.user { background: var(--vscode-input-background); }
     .msg.assistant { background: var(--vscode-editor-background); }
     .msg.system { background: var(--vscode-editorWarning-background, #553300); opacity: 0.85; }
@@ -316,53 +473,237 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       text-underline-offset: 2px;
     }
 
-    #input-area {
-      display: flex; flex-direction: column; padding: 6px;
-      border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #333));
+    /* ── Composer (Cursor-style compact card) ─────────────────── */
+    #composer-wrap {
+      flex-shrink: 0;
+      padding: 8px 10px 10px;
+      display: flex; flex-direction: column; gap: 8px;
+      background: var(--vscode-sideBar-background);
+      border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border, #333) 70%, transparent);
     }
-    #input-row {
-      display: flex; align-items: flex-end;
+    #composer-wrap.drag-hover #composer-card {
+      outline: 1px dashed var(--vscode-focusBorder, #007fd4);
+      outline-offset: 2px;
     }
-    #input {
-      flex: 1; resize: none; border: none; outline: none;
-      background: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      padding: 6px 8px; border-radius: 4px;
-      font-family: var(--font); font-size: var(--vscode-font-size);
+    #composer-card {
+      border-radius: 12px;
+      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 85%, transparent);
+      background: color-mix(in srgb, var(--vscode-input-background) 92%, var(--vscode-sideBar-background));
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
-    .input-btn {
-      margin-left: 4px; padding: 6px 8px;
-      background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
-      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-      border: 1px solid var(--vscode-panel-border, #333); border-radius: 4px; cursor: pointer;
-      font-size: 1em;
+    .composer-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 60%, transparent);
+      background: color-mix(in srgb, var(--vscode-editor-background) 35%, transparent);
+      min-height: 36px;
     }
-    .input-btn:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground)); }
-    #send-btn {
-      margin-left: 4px; padding: 6px 12px;
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      border: none; border-radius: 4px; cursor: pointer;
+    .ctx-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      font-family: var(--font);
+      font-size: 12px;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 6px;
+      opacity: 0.92;
     }
-    #send-btn:hover { background: var(--vscode-button-hoverBackground); }
-
-    /* Image attachments in input area */
+    .ctx-toggle:hover { background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
+    .ctx-chevron {
+      display: inline-block;
+      font-size: 14px;
+      width: 14px;
+      text-align: center;
+      color: var(--vscode-descriptionForeground);
+      transition: transform 0.18s ease;
+      transform: rotate(0deg);
+    }
+    #composer-card.ctx-open .ctx-chevron { transform: rotate(90deg); }
+    #ctx-summary { color: var(--vscode-descriptionForeground); font-weight: 500; }
+    .meta-spacer { flex: 1; }
+    .meta-link {
+      border: none;
+      background: transparent;
+      color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+      opacity: 0.85;
+    }
+    .meta-link:hover { background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
+    #ctx-attachments {
+      padding: 6px 10px 2px;
+      max-height: 100px;
+      overflow-y: auto;
+      border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 45%, transparent);
+    }
+    #composer-card:not(.ctx-open) #ctx-attachments { display: none; }
+    #composer-card:not(.has-attachments) #ctx-attachments { display: none; border-bottom: none; }
+    #composer-card:not(.has-attachments) .ctx-chevron { display: none; }
+    #composer-tip {
+      font-size: 11px;
+      line-height: 1.35;
+      color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent);
+      padding: 6px 12px 2px;
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: max-height 0.2s ease, opacity 0.2s ease, padding 0.2s ease;
+    }
+    #composer-tip kbd {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 65%, transparent);
+      background: color-mix(in srgb, var(--vscode-input-background) 85%, transparent);
+    }
+    #composer-card.tip-visible #composer-tip {
+      max-height: 56px;
+      opacity: 1;
+      padding-top: 8px;
+    }
     #attachment-bar {
-      display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0;
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start;
     }
     .attachment-thumb {
-      position: relative; width: 60px; height: 60px; border-radius: 4px;
-      border: 1px solid var(--vscode-panel-border, #333); overflow: hidden;
+      position: relative; width: 52px; height: 52px; border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 70%, transparent);
+      overflow: hidden;
     }
-    .attachment-thumb img {
-      width: 100%; height: 100%; object-fit: cover;
-    }
+    .attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
     .attachment-thumb .remove-btn {
-      position: absolute; top: 2px; right: 2px; width: 16px; height: 16px;
-      background: rgba(0,0,0,0.6); color: #fff; border: none; border-radius: 50%;
-      font-size: 10px; line-height: 16px; text-align: center; cursor: pointer; padding: 0;
+      position: absolute; top: 3px; right: 3px; width: 18px; height: 18px;
+      background: rgba(0,0,0,0.55); color: #fff; border: none; border-radius: 50%;
+      font-size: 11px; line-height: 18px; text-align: center; cursor: pointer; padding: 0;
     }
-    .attachment-thumb .remove-btn:hover { background: rgba(200,0,0,0.8); }
+    .attachment-thumb .remove-btn:hover { background: rgba(180,40,40,0.95); }
+    .text-file-chip {
+      display: inline-flex; align-items: center; gap: 6px; max-width: 200px;
+      padding: 4px 10px; border-radius: 999px; font-size: 11px;
+      background: color-mix(in srgb, var(--vscode-input-background) 70%, var(--vscode-badge-background, #333));
+      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 55%, transparent);
+    }
+    .text-file-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .text-file-chip .remove-btn {
+      background: transparent; border: none; color: var(--vscode-foreground); cursor: pointer; padding: 0 2px; opacity: 0.75;
+    }
+    .text-file-chip .remove-btn:hover { opacity: 1; }
+    #input {
+      display: block; width: 100%; min-height: 80px; max-height: 220px;
+      resize: vertical; border: none; outline: none;
+      background: transparent;
+      color: var(--vscode-input-foreground);
+      padding: 12px 14px 10px;
+      font-family: var(--font);
+      font-size: calc(var(--vscode-font-size) * 1.02);
+      line-height: 1.45;
+    }
+    #input::placeholder { color: color-mix(in srgb, var(--vscode-input-foreground) 38%, transparent); }
+    .composer-toolbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px 10px;
+      border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 40%, transparent);
+      background: color-mix(in srgb, var(--vscode-sideBar-background) 40%, transparent);
+    }
+    .toolbar-left {
+      display: flex; align-items: center; gap: 8px;
+      flex: 1; min-width: 0;
+    }
+    .tb-left-wrap { position: relative; flex-shrink: 0; }
+    .tb-icon-btn {
+      width: 32px; height: 32px; border-radius: 999px; border: none;
+      background: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      font-size: 1.15rem;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.12s ease;
+    }
+    .tb-icon-btn:hover { background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
+    .plus-menu {
+      position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 168px;
+      background: var(--vscode-menu-background); color: var(--vscode-menu-foreground);
+      border: 1px solid var(--vscode-menu-border, #444); border-radius: 10px;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45); z-index: 30;
+      padding: 4px 0;
+    }
+    .plus-menu.hidden { display: none; }
+    .plus-menu button {
+      display: block; width: 100%; text-align: left; padding: 8px 12px;
+      border: none; background: transparent; color: inherit; cursor: pointer; font-size: 12px;
+    }
+    .plus-menu button:hover { background: var(--vscode-menu-selectionBackground, rgba(127,127,127,0.22)); }
+    .model-pill-wrap { flex: 1; min-width: 0; max-width: 100%; }
+    .tb-model {
+      width: 100%;
+      max-width: 100%;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 50%, transparent);
+      background: color-mix(in srgb, var(--vscode-input-background) 55%, transparent);
+      color: var(--vscode-foreground);
+      font-family: var(--font);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .tb-model:hover {
+      border-color: color-mix(in srgb, var(--vscode-focusBorder) 55%, var(--vscode-widget-border));
+      background: color-mix(in srgb, var(--vscode-input-background) 75%, transparent);
+    }
+    .tb-model:disabled { opacity: 0.55; cursor: not-allowed; }
+    .tb-send-circle {
+      flex-shrink: 0;
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: color-mix(in srgb, var(--vscode-foreground) 88%, transparent);
+      color: color-mix(in srgb, var(--vscode-editor-background) 95%, #0a0a0a);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.12s ease, filter 0.12s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    }
+    .tb-send-circle:hover {
+      filter: brightness(1.08);
+      transform: scale(1.04);
+    }
+    .tb-send-circle:active { transform: scale(0.96); }
+    .tb-send-circle svg { display: block; }
+    #footer-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 0 4px 2px;
+      font-size: 11px;
+    }
+    .footer-left.muted { color: var(--vscode-descriptionForeground); letter-spacing: 0.02em; }
+    .footer-select {
+      flex: 0 1 58%;
+      max-width: 200px;
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #444) 45%, transparent);
+      background: color-mix(in srgb, var(--vscode-input-background) 50%, transparent);
+      color: var(--vscode-foreground);
+      font-size: 11px;
+      font-family: var(--font);
+    }
 
     /* Images in user messages */
     .msg-images {
@@ -377,37 +718,79 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div id="messages"></div>
-  <div id="input-area">
-    <div id="attachment-bar"></div>
-    <div id="input-row">
-      <textarea id="input" rows="2" placeholder="Ask CrabCode…"></textarea>
-      <button class="input-btn" id="attach-btn" title="Attach image">📎</button>
-      <button id="send-btn">Send</button>
+  <div id="composer-wrap">
+    <div id="composer-card" class="ctx-open">
+      <div class="composer-meta">
+        <button type="button" class="ctx-toggle" id="ctx-toggle" aria-expanded="true" title="展开或折叠附件">
+          <span class="ctx-chevron">›</span>
+          <span id="ctx-summary">CrabCode：添加上下文（拖拽 / 粘贴）</span>
+        </button>
+        <span class="meta-spacer"></span>
+        <button type="button" class="meta-link" id="tip-toggle">提示</button>
+      </div>
+      <div id="ctx-attachments">
+        <div id="attachment-bar"></div>
+      </div>
+      <div id="composer-tip">CrabCode 提示：输入 <kbd>/help</kbd> 查看命令。支持拖入文件或图片、粘贴截图，或通过左下角「+」添加。</div>
+      <textarea id="input" rows="3" placeholder="输入问题或命令（如 /help）…"></textarea>
+      <div id="input-toolbar" class="composer-toolbar">
+        <div class="toolbar-left">
+          <div class="tb-left-wrap">
+            <button type="button" class="tb-icon-btn" id="plus-btn" title="添加文件或图片">+</button>
+            <div id="plus-menu" class="plus-menu hidden">
+              <button type="button" data-action="image">添加图片…</button>
+              <button type="button" data-action="file">添加文件…</button>
+              <button type="button" data-action="screenshot">屏幕截图说明</button>
+            </div>
+          </div>
+          <div class="model-pill-wrap">
+            <select id="model-select" class="tb-model" title="模型"></select>
+          </div>
+        </div>
+        <button type="button" class="tb-send-circle" id="send-btn" title="发送 (⌘↵ / Ctrl+Enter)" aria-label="发送">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5.5L17.5 14H14v6h-4v-6H6.5L12 5.5z"/></svg>
+        </button>
+      </div>
     </div>
-    <input type="file" id="file-input" accept="image/*" multiple hidden />
+    <div id="footer-bar">
+      <span class="footer-left muted">CrabCode</span>
+      <select id="permission-select" class="footer-select" title="权限">
+        <option value="default">默认</option>
+        <option value="run_everything">run_everything</option>
+      </select>
+    </div>
+    <input type="file" id="file-input-image" accept="image/*" multiple hidden />
   </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const msgContainer = document.getElementById('messages');
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send-btn');
-    const attachBtn = document.getElementById('attach-btn');
-    const fileInput = document.getElementById('file-input');
     const attachmentBar = document.getElementById('attachment-bar');
+    const composerWrap = document.getElementById('composer-wrap');
+    const composerCard = document.getElementById('composer-card');
+    const ctxToggle = document.getElementById('ctx-toggle');
+    const tipToggle = document.getElementById('tip-toggle');
+    const plusBtn = document.getElementById('plus-btn');
+    const plusMenu = document.getElementById('plus-menu');
+    const fileInputImage = document.getElementById('file-input-image');
+    const modelSelect = document.getElementById('model-select');
+    const permissionSelect = document.getElementById('permission-select');
 
     // ── Tool card state ──────────────────────────────────────────
     const toolCards = new Map();
 
-    // ── Image attachment state ────────────────────────────────────
-    // pendingImages: array of { media_type, data, dataUrl }
+    // pendingImages: { media_type, data, dataUrl }; pendingTextFiles: { name, text }
     const pendingImages = [];
-    const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
+    const pendingTextFiles = [];
+    const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+    const MAX_TEXT_FILE = 20 * 1024 * 1024;
 
     function addMessageEl(msg) {
       const div = document.createElement('div');
       div.className = 'msg ' + msg.role;
       div.id = 'msg-' + msg.id;
-      let html = '<div class="role">' + capitalize(msg.role) + '</div><div class="text">' + escapeHtml(msg.text) + '</div>';
+      let html = '<div class="role">' + roleLabel(msg.role) + '</div><div class="text">' + escapeHtml(msg.text) + '</div>';
       // Render images in user messages
       if (msg.images && msg.images.length > 0) {
         html += '<div class="msg-images">';
@@ -462,10 +845,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       let statusHtml = '';
       if (card.result !== null) {
         statusHtml = card.isError
-          ? '<span class="status error">error</span>'
-          : '<span class="status ok">done</span>';
+          ? '<span class="status error">失败</span>'
+          : '<span class="status ok">完成</span>';
       } else {
-        statusHtml = '<span class="status">running…</span>';
+        statusHtml = '<span class="status">运行中…</span>';
       }
 
       const inputStr = formatToolInput(card.toolName, card.input);
@@ -531,7 +914,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+    function roleLabel(role) {
+      if (role === 'user') return '你';
+      if (role === 'assistant') return 'CrabCode';
+      if (role === 'system') return '系统';
+      return role;
+    }
     function escapeHtml(t) {
       if (t == null) return '';
       return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -541,26 +929,60 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    // ── Image handling ───────────────────────────────────────────
+    // ── Attachments (images + text files) ───────────────────────
+
+    function guessImageMime(name, mime) {
+      if (mime && mime.startsWith('image/')) return mime;
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      const map = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+      return map[ext] || '';
+    }
 
     function addImageFile(file) {
-      if (!file.type.startsWith('image/')) return;
+      const mime = file.type || guessImageMime(file.name, '');
+      if (!mime.startsWith('image/')) return;
       if (file.size > MAX_IMAGE_SIZE) {
-        alert('Image too large (max 20MB): ' + file.name);
+        alert('CrabCode：图片过大（最大 20MB）\\n' + file.name);
         return;
       }
       const reader = new FileReader();
       reader.onload = function(e) {
         const dataUrl = e.target.result;
         const base64 = dataUrl.split(',')[1];
-        pendingImages.push({ media_type: file.type, data: base64, dataUrl: dataUrl });
+        pendingImages.push({ media_type: mime, data: base64, dataUrl: dataUrl });
         renderAttachmentBar();
       };
       reader.readAsDataURL(file);
     }
 
+    function addTextFile(file) {
+      if (file.size > MAX_TEXT_FILE) {
+        alert('CrabCode：文件过大（最大 20MB）\\n' + file.name);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = function() {
+        let t = reader.result || '';
+        if (t.length > 200000) t = t.slice(0, 200000) + '\\n…(已截断)';
+        pendingTextFiles.push({ name: file.name, text: t });
+        renderAttachmentBar();
+      };
+      reader.readAsText(file);
+    }
+
+    function addDroppedOrPickedFile(file) {
+      const mime = file.type || guessImageMime(file.name, '');
+      if (mime.startsWith('image/')) addImageFile(file);
+      else addTextFile(file);
+    }
+
     function removeImage(index) {
       pendingImages.splice(index, 1);
+      renderAttachmentBar();
+    }
+
+    function removeTextFile(index) {
+      pendingTextFiles.splice(index, 1);
       renderAttachmentBar();
     }
 
@@ -569,58 +991,185 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pendingImages.forEach(function(img, idx) {
         const thumb = document.createElement('div');
         thumb.className = 'attachment-thumb';
-        thumb.innerHTML = '<img src="' + escapeAttr(img.dataUrl) + '" alt="attachment" />' +
-          '<button class="remove-btn" data-idx="' + idx + '" title="Remove">✕</button>';
+        thumb.innerHTML = '<img src="' + escapeAttr(img.dataUrl) + '" alt="" />' +
+          '<button type="button" class="remove-btn" data-kind="img" data-idx="' + idx + '" title="移除">✕</button>';
         attachmentBar.appendChild(thumb);
       });
-      // Wire remove buttons
+      pendingTextFiles.forEach(function(f, idx) {
+        const chip = document.createElement('div');
+        chip.className = 'text-file-chip';
+        chip.innerHTML = '<span class="name" title="' + escapeAttr(f.name) + '">' + escapeHtml(f.name) + '</span>' +
+          '<button type="button" class="remove-btn" data-kind="txt" data-idx="' + idx + '" title="移除">✕</button>';
+        attachmentBar.appendChild(chip);
+      });
       attachmentBar.querySelectorAll('.remove-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
-          removeImage(parseInt(btn.dataset.idx));
+          const k = btn.getAttribute('data-kind');
+          const i = parseInt(btn.getAttribute('data-idx'), 10);
+          if (k === 'img') removeImage(i);
+          else removeTextFile(i);
         });
       });
+      syncComposerChrome();
+    }
+
+    let prevAttachCount = 0;
+    function syncComposerChrome() {
+      const n = pendingImages.length + pendingTextFiles.length;
+      composerCard.classList.toggle('has-attachments', n > 0);
+      const sum = document.getElementById('ctx-summary');
+      if (sum) sum.textContent = n ? ('CrabCode：' + n + ' 个附件') : 'CrabCode：添加上下文（拖拽 / 粘贴）';
+      if (n > 0 && prevAttachCount === 0) composerCard.classList.add('ctx-open');
+      ctxToggle.setAttribute('aria-expanded', composerCard.classList.contains('ctx-open') ? 'true' : 'false');
+      prevAttachCount = n;
+    }
+
+    function mergeHostAttachments(msg) {
+      (msg.images || []).forEach(function(img) {
+        const url = 'data:' + img.media_type + ';base64,' + img.data;
+        pendingImages.push({ media_type: img.media_type, data: img.data, dataUrl: url });
+      });
+      (msg.textSnippets || []).forEach(function(s) {
+        pendingTextFiles.push({ name: s.name, text: s.text });
+      });
+      renderAttachmentBar();
+    }
+
+    function applyOptions(msg) {
+      const models = msg.models || [];
+      modelSelect.innerHTML = '';
+      if (models.length === 0) {
+        const o = document.createElement('option');
+        o.value = '';
+        o.textContent = '（请在 CrabCode 设置中配置 chatModels）';
+        o.disabled = true;
+        modelSelect.appendChild(o);
+      } else {
+        models.forEach(function(m) {
+          const o = document.createElement('option');
+          o.value = m;
+          o.textContent = m;
+          modelSelect.appendChild(o);
+        });
+        const pick = msg.defaultModel && models.indexOf(msg.defaultModel) >= 0 ? msg.defaultModel : models[0];
+        modelSelect.value = pick;
+      }
+      permissionSelect.value = msg.permissionMode === 'run_everything' ? 'run_everything' : 'default';
     }
 
     // ── Send ─────────────────────────────────────────────────────
 
     function send() {
-      const text = input.value.trim();
-      if (!text && pendingImages.length === 0) return;
+      let text = input.value.trim();
+      let extra = '';
+      const bt = String.fromCharCode(96);
+      pendingTextFiles.forEach(function(f) {
+        extra += '\\n\\n[附加文件: ' + f.name + ']\\n' + bt + bt + bt + '\\n' + f.text + '\\n' + bt + bt + bt + '\\n';
+      });
+      text = (text + extra).trim();
+      if (!text && pendingImages.length === 0 && pendingTextFiles.length === 0) return;
       const images = pendingImages.map(function(img) {
         return { media_type: img.media_type, data: img.data };
       });
-      vscode.postMessage({ type: 'sendMessage', text, images: images.length > 0 ? images : undefined });
+      vscode.postMessage({ type: 'sendMessage', text: text, images: images.length > 0 ? images : undefined });
       input.value = '';
       pendingImages.length = 0;
+      pendingTextFiles.length = 0;
       renderAttachmentBar();
     }
 
     sendBtn.addEventListener('click', send);
-    input.addEventListener('keydown', e => {
+    input.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
     });
 
-    // ── File input & paste ───────────────────────────────────────
+    // ── Plus menu & file inputs ─────────────────────────────────
 
-    attachBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files) {
-        Array.from(fileInput.files).forEach(addImageFile);
-      }
-      fileInput.value = '';  // Reset so same file can be re-selected
+    function closePlusMenu() { plusMenu.classList.add('hidden'); }
+    plusBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      plusMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', function() { closePlusMenu(); });
+    plusMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+    plusMenu.querySelectorAll('button[data-action]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        const act = btn.getAttribute('data-action');
+        closePlusMenu();
+        if (act === 'image') fileInputImage.click();
+        else if (act === 'file') vscode.postMessage({ type: 'pickFiles' });
+        else if (act === 'screenshot') vscode.postMessage({ type: 'screenshotHint' });
+      });
+    });
+    fileInputImage.addEventListener('change', function() {
+      if (fileInputImage.files) Array.from(fileInputImage.files).forEach(addImageFile);
+      fileInputImage.value = '';
     });
 
-    // Paste images from clipboard
-    document.addEventListener('paste', (e) => {
-      const items = e.clipboardData?.items;
+    modelSelect.addEventListener('change', function() {
+      if (modelSelect.value) vscode.postMessage({ type: 'setModel', name: modelSelect.value });
+    });
+    permissionSelect.addEventListener('change', function() {
+      const m = permissionSelect.value === 'run_everything' ? 'run_everything' : 'default';
+      vscode.postMessage({ type: 'setPermissionMode', mode: m });
+    });
+
+    ctxToggle.addEventListener('click', function() {
+      const n = pendingImages.length + pendingTextFiles.length;
+      if (n === 0) {
+        composerCard.classList.toggle('tip-visible');
+        return;
+      }
+      composerCard.classList.toggle('ctx-open');
+      ctxToggle.setAttribute('aria-expanded', composerCard.classList.contains('ctx-open') ? 'true' : 'false');
+    });
+    tipToggle.addEventListener('click', function(e) {
+      e.stopPropagation();
+      composerCard.classList.toggle('tip-visible');
+    });
+
+    // ── Drag & drop on composer ─────────────────────────────────
+
+    ;['dragenter', 'dragover'].forEach(function(ev) {
+      composerWrap.addEventListener(ev, function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        composerWrap.classList.add('drag-hover');
+      });
+    });
+    composerWrap.addEventListener('dragleave', function(e) {
+      e.preventDefault();
+      const rel = e.relatedTarget;
+      if (!rel || !composerWrap.contains(rel)) composerWrap.classList.remove('drag-hover');
+    });
+    composerWrap.addEventListener('drop', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      composerWrap.classList.remove('drag-hover');
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length) Array.from(files).forEach(addDroppedOrPickedFile);
+    });
+
+    // ── Paste: images + files ───────────────────────────────────
+
+    input.addEventListener('paste', function(e) {
+      const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) addImageFile(file);
+      let handled = false;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file') {
+          const f = item.getAsFile();
+          if (f) {
+            handled = true;
+            addDroppedOrPickedFile(f);
+          }
+        } else if (item.type && item.type.indexOf('image/') === 0) {
+          const f = item.getAsFile();
+          if (f) { handled = true; addImageFile(f); }
         }
       }
+      if (handled) e.preventDefault();
     });
 
     window.addEventListener('message', event => {
@@ -665,10 +1214,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'fileChange':
           addFileChangePill(msg.payload);
           break;
+        case 'options':
+          applyOptions(msg);
+          break;
+        case 'addAttachments':
+          mergeHostAttachments(msg);
+          break;
       }
     });
 
+    syncComposerChrome();
+
     vscode.postMessage({ type: 'requestHistory' });
+    vscode.postMessage({ type: 'requestOptions' });
   </script>
 </body>
 </html>`;

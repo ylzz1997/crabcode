@@ -69,6 +69,8 @@ class CoreSession:
         self._current_plan: Any = None  # ExecutionPlan | None
         self._title_generation_task: asyncio.Task[None] | None = None
         self._team_manager: Any = None  # TeamManager
+        # Extension UI override: "default" | "run_everything" | None (follow file init only)
+        self._client_permission_mode_override: str | None = None
 
     async def initialize(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
@@ -164,6 +166,7 @@ class CoreSession:
         self._permission_manager = PermissionManager(
             settings=merged.permissions,
         )
+        self._sync_client_permission_mode()
         from crabcode_core.hooks.manager import HookManager
 
         self._hook_manager = HookManager(merged.hooks)
@@ -902,6 +905,30 @@ class CoreSession:
 
         return True
 
+    def _sync_client_permission_mode(self) -> None:
+        """Apply VS Code / client footer permission override when not in plan mode."""
+        if self._permission_manager is None or self._agent_mode == "plan":
+            return
+        if self._client_permission_mode_override not in ("default", "run_everything"):
+            return
+        from crabcode_core.permissions.manager import PermissionMode
+
+        if self._client_permission_mode_override == "run_everything":
+            self._permission_manager.mode = PermissionMode.BYPASS
+        else:
+            self._permission_manager.mode = PermissionMode.DEFAULT
+
+    def set_client_permission_mode(self, mode: str) -> bool:
+        """Set tool permission behavior from the extension chat footer.
+
+        ``default`` uses normal allow/ask/deny rules. ``run_everything`` auto-approves tools.
+        """
+        if mode not in ("default", "run_everything"):
+            return False
+        self._client_permission_mode_override = mode
+        self._sync_client_permission_mode()
+        return True
+
     def switch_mode(self, mode: str) -> bool:
         """Switch between 'agent' and 'plan' mode.
 
@@ -926,6 +953,7 @@ class CoreSession:
                     else PermissionMode.DEFAULT
                 )
                 self._saved_permission_mode = None
+                self._sync_client_permission_mode()
         return True
 
     @property

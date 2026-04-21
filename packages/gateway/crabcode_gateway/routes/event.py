@@ -75,6 +75,10 @@ async def websocket_endpoint(ws: WebSocket):
                 await _handle_send_message(ws, msg)
             elif msg_type == "push_context":
                 await _handle_push_context(ws, msg)
+            elif msg_type == "switch_model":
+                await _handle_switch_model(ws, msg)
+            elif msg_type == "set_permission_mode":
+                await _handle_set_permission_mode(ws, msg)
             else:
                 await ws.send_text(json.dumps({
                     "type": "error",
@@ -170,3 +174,41 @@ async def _handle_push_context(ws: WebSocket, msg: dict) -> None:
     session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
     if session_id:
         contexts[session_id] = msg
+
+
+async def _handle_switch_model(ws: WebSocket, msg: dict) -> None:
+    """Switch named model profile on the active session (VS Code chat selector)."""
+    sessions: dict = ws.app.state.sessions
+    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
+
+    session = sessions.get(session_id) if session_id else None
+    if not session:
+        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        return
+
+    name = msg.get("name", "")
+    await session.initialize()
+    ok = session.switch_model(name)
+    if not ok:
+        await ws.send_text(
+            json.dumps({"type": "error", "message": f"model not found: {name}"}),
+        )
+
+
+async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
+    """Apply extension chat footer permission mode (default vs run_everything)."""
+    sessions: dict = ws.app.state.sessions
+    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
+
+    session = sessions.get(session_id) if session_id else None
+    if not session:
+        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        return
+
+    mode = msg.get("mode", "default")
+    await session.initialize()
+    ok = session.set_client_permission_mode(mode)
+    if not ok:
+        await ws.send_text(
+            json.dumps({"type": "error", "message": f"invalid permission mode: {mode}"}),
+        )

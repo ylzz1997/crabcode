@@ -12,6 +12,8 @@ import * as vscode from "vscode";
 import {
   buildSendMessageCommand,
   buildPushContextCommand,
+  buildSwitchModelCommand,
+  buildSetPermissionModeCommand,
   serializeCommand,
   type WsCommand,
 } from "./client/protocol";
@@ -144,6 +146,16 @@ export class CrabCodeConnection implements vscode.Disposable {
       ...context,
     };
     const cmd = buildPushContextCommand(full);
+    this.sendCommand(cmd);
+  }
+
+  sendSwitchModel(name: string): void {
+    const cmd = buildSwitchModelCommand(name);
+    this.sendCommand(cmd);
+  }
+
+  sendSetPermissionMode(mode: "default" | "run_everything"): void {
+    const cmd = buildSetPermissionModeCommand(mode);
     this.sendCommand(cmd);
   }
 

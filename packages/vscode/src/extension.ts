@@ -1,9 +1,7 @@
 /**
- * CrabCode VS Code extension — main entry point.
+ * CrabCode 编辑器扩展 — 入口。
  *
- * Wires together the WebSocket connection, chat panel, permission/choice
- * handlers, context provider, file-change handler, status bar, and all
- * registered commands.
+ * 连接 WebSocket、聊天面板、权限/选择处理、上下文推送、文件变更与状态栏等。
  */
 
 import * as vscode from "vscode";
@@ -45,15 +43,15 @@ class PermissionHandler implements vscode.Disposable {
 
     const detail =
       (reason ? `${reason}\n\n` : "") +
-      `Tool: ${tool_name}`;
+      `工具：${tool_name}`;
 
-    const allowItem = "Allow";
-    const alwaysAllowItem = "Always Allow";
-    const denyItem = "Deny";
+    const allowItem = "允许";
+    const alwaysAllowItem = "始终允许";
+    const denyItem = "拒绝";
 
     vscode.window
       .showInformationMessage(
-        `CrabCode Permission Request`,
+        `CrabCode：需要你的授权才能执行工具`,
         { modal: true, detail },
         allowItem,
         alwaysAllowItem,
@@ -88,7 +86,7 @@ class ChoiceHandler implements vscode.Disposable {
       vscode.window
         .showQuickPick(
           options.map((o) => ({ label: o })),
-          { canPickMany: true, placeHolder: question },
+          { title: "CrabCode", canPickMany: true, placeHolder: question },
         )
         .then((picked) => {
           const selected = picked ? picked.map((p) => p.label) : [];
@@ -103,7 +101,7 @@ class ChoiceHandler implements vscode.Disposable {
       vscode.window
         .showQuickPick(
           options.map((o) => ({ label: o })),
-          { placeHolder: question },
+          { title: "CrabCode", placeHolder: question },
         )
         .then((picked) => {
           const selected = picked ? [picked.label] : [];
@@ -191,8 +189,7 @@ class FileChangeHandler implements vscode.Disposable {
     // Auto-reload the document if it's open in the editor
     for (const doc of vscode.workspace.textDocuments) {
       if (doc.uri.fsPath === path) {
-        // VSCode auto-detects external changes, but we can force a revert
-        // if the file watcher hasn't picked it up yet
+        // 编辑器可能稍后检测到外部变更；此处仅作占位遍历
         break;
       }
     }
@@ -201,14 +198,15 @@ class FileChangeHandler implements vscode.Disposable {
 
     if (showDiff && diff && (action === "modify" || action === "create")) {
       // Show a virtual diff document
-      const name = `CrabCode: ${path.split("/").pop()} (${action})`;
+      const actionZh =
+        action === "create" ? "创建" : action === "modify" ? "修改" : action === "delete" ? "删除" : action;
+      const name = `CrabCode：${path.split("/").pop()}（${actionZh}）`;
       const content = diff;
       showDiffDocument(name, content, path);
     } else {
-      vscode.window.setStatusBarMessage(
-        `CrabCode: ${action} ${path.split("/").pop()}`,
-        3000,
-      );
+      const actionZh =
+        action === "create" ? "已创建" : action === "modify" ? "已修改" : action === "delete" ? "已删除" : action;
+      vscode.window.setStatusBarMessage(`CrabCode：${actionZh} ${path.split("/").pop()}`, 3000);
     }
   }
 
@@ -235,7 +233,7 @@ async function showDiffDocument(
     await vscode.languages.setTextDocumentLanguage(doc, "diff");
   } catch {
     // Fallback: just show status message
-    vscode.window.setStatusBarMessage(`CrabCode: ${name}`, 4000);
+    vscode.window.setStatusBarMessage(`CrabCode：${name}`, 4000);
   }
 }
 
@@ -250,14 +248,14 @@ function createStatusBar(
   );
 
   item.command = "crabcode.openSettings";
-  item.tooltip = "CrabCode — click to open settings";
+  item.tooltip = "CrabCode：打开本扩展的设置";
 
   function update() {
     if (connection.connected) {
-      item.text = `$(circle-filled) CrabCode${connection.modelName ? ` — ${connection.modelName}` : ""}`;
+      item.text = `$(circle-filled) CrabCode${connection.modelName ? `：${connection.modelName}` : ""}`;
       item.backgroundColor = undefined;
     } else {
-      item.text = "$(circle-slash) CrabCode — Disconnected";
+      item.text = "$(circle-slash) CrabCode：未连接";
       item.backgroundColor = new vscode.ThemeColor(
         "statusBarItem.errorBackground",
       );
@@ -294,7 +292,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Explain this code:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("Select some code first.");
+        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
       }
     }),
   );
@@ -308,7 +306,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Fix the issues in this code:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("Select some code first.");
+        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
       }
     }),
   );
@@ -322,7 +320,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Refactor this code for clarity and efficiency:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("Select some code first.");
+        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
       }
     }),
   );
@@ -336,7 +334,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Write tests for this code:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("Select some code first.");
+        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
       }
     }),
   );
@@ -350,7 +348,7 @@ function registerCommands(
       if (text) {
         chatProvider.prefillInput(text);
       } else {
-        vscode.window.showWarningMessage("Select some code first.");
+        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
       }
     }),
   );
@@ -394,7 +392,7 @@ function registerCommands(
       const cwd =
         vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ?? null;
       connection.sendNewSession(cwd);
-      vscode.window.setStatusBarMessage("CrabCode: New session created", 3000);
+      vscode.window.setStatusBarMessage("CrabCode：已创建新会话", 3000);
     }),
   );
 }
@@ -446,7 +444,7 @@ async function autoConnect(
   // Show warning if not connected after initial attempt
   if (!connection.connected) {
     vscode.window.showWarningMessage(
-      "CrabCode: Could not connect to server. Will retry automatically. Check your serverUrl setting.",
+      "CrabCode：无法连接到网关，将自动重试。请检查配置项 crabcode.serverUrl。",
     );
   } else {
     // Create a session with the workspace root as cwd
@@ -475,6 +473,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ChatPanelProvider.viewType,
       chatProvider,
     ),
+  );
+
+  push(
+    connection.on("connected", () => {
+      chatProvider?.syncSessionPreferencesFromSettings();
+    }),
+  );
+
+  push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("crabcode")) {
+        chatProvider?.notifyConfigurationChanged();
+      }
+    }),
   );
 
   // 4. Register PermissionHandler and ChoiceHandler
