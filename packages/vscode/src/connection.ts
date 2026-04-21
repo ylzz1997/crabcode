@@ -51,8 +51,17 @@ export class CrabCodeConnection implements vscode.Disposable {
   private _modelName: string | null = null;
   private _connected = false;
   private disposed = false;
+  private reconnectAttempts = 0;
+  private pendingSessionCommands: string[] = [];
+  private sessionRequestPending = false;
+  private static readonly MAX_RECONNECT_ATTEMPTS = 10;
+  private static readonly BASE_RECONNECT_DELAY = 1000; // 1s
+  private static readonly MAX_RECONNECT_DELAY = 30000; // 30s
 
-  constructor(private config: vscode.WorkspaceConfiguration) {}
+  constructor(
+    private config: vscode.WorkspaceConfiguration,
+    private outputChannel?: vscode.OutputChannel,
+  ) {}
 
   // ── Public state ───────────────────────────────────────────────
 
@@ -74,7 +83,14 @@ export class CrabCodeConnection implements vscode.Disposable {
     if (this.disposed) {
       return;
     }
-    const url = this.config.get<string>("serverUrl", "ws://localhost:8765");
+    // Close any existing connection before creating a new one
+    if (this.ws) {
+      this.ws.removeAllListeners();
+      this.ws.close();
+      this.ws = null;
+    }
+
+    const url = this.config.get<string>("serverUrl", "ws://localhost:4096/ws");
     const password = this.config.get<string>("password", "");
 
     try {
@@ -87,33 +103,49 @@ export class CrabCodeConnection implements vscode.Disposable {
 
       this.ws.on("open", () => {
         this._connected = true;
+        this._sessionId = null;
+        this.pendingSessionCommands = [];
+        this.sessionRequestPending = false;
+        this.reconnectAttempts = 0; // reset backoff on successful connect
+        this.log(`ws open url=${url}`);
         this.fire("connected", {} as any);
-        this.scheduleReconnect(0); // reset backoff on successful connect
       });
 
       this.ws.on("message", (data: WebSocket.Data) => {
         try {
           const payload: EventPayload = JSON.parse(data.toString());
+          this.log(`ws recv type=${payload.type ?? "unknown"}`);
           // Track model name from server events
           this.handleServerPayload(payload);
           this.fire("message", payload);
         } catch {
+          this.log("ws recv invalid JSON");
           // Ignore malformed messages
         }
       });
 
-      this.ws.on("close", () => {
+      this.ws.on("close", (code: number, reason: Buffer) => {
         this._connected = false;
+        this._sessionId = null;
+        this.pendingSessionCommands = [];
+        this.sessionRequestPending = false;
+        this.log(`ws close code=${code} reason=${reason.toString() || "(empty)"}`);
         this.fire("disconnected", undefined);
-        this.scheduleReconnect(3000);
+        // Code 4001 = server rejected (no session), don't reconnect
+        if (code === 4001) {
+          return;
+        }
+        this.scheduleReconnectWithBackoff();
       });
 
       this.ws.on("error", () => {
         this._connected = false;
+        this.log("ws error");
         this.fire("disconnected", undefined);
       });
     } catch {
-      this.scheduleReconnect(3000);
+      this.log("ws connect threw before open");
+      this.scheduleReconnectWithBackoff();
     }
   }
 
@@ -132,6 +164,10 @@ export class CrabCodeConnection implements vscode.Disposable {
   // ── Sending commands ───────────────────────────────────────────
 
   send(text: string, options?: { maxTurns?: number; sessionId?: string; images?: ImageAttachment[] }): void {
+    this.log(
+      `send_message requested session=${options?.sessionId ?? this._sessionId ?? "(none)"} ` +
+      `images=${options?.images?.length ?? 0} chars=${text.length}`,
+    );
     const cmd = buildSendMessageCommand(text, {
       maxTurns: options?.maxTurns,
       sessionId: options?.sessionId ?? this._sessionId ?? undefined,
@@ -161,8 +197,10 @@ export class CrabCodeConnection implements vscode.Disposable {
 
   sendInterrupt(): void {
     if (!this._sessionId) {
+      this.log("interrupt skipped: no session");
       return;
     }
+    this.log(`interrupt session=${this._sessionId}`);
     this.sendRaw(JSON.stringify({
       type: "interrupt",
       session_id: this._sessionId,
@@ -170,10 +208,28 @@ export class CrabCodeConnection implements vscode.Disposable {
   }
 
   sendNewSession(cwd: string | null): void {
+    this.sessionRequestPending = true;
+    this.log(`new_session requested cwd=${cwd ?? "(none)"}`);
     this.sendRaw(JSON.stringify({
       type: "new_session",
       cwd,
     }));
+  }
+
+  ensureSession(cwd: string | null): void {
+    if (!this._connected) {
+      this.log("ensureSession skipped: ws not connected");
+      return;
+    }
+    if (this._sessionId) {
+      this.log(`ensureSession skipped: session already ready session=${this._sessionId}`);
+      return;
+    }
+    if (this.sessionRequestPending) {
+      this.log("ensureSession skipped: request already pending");
+      return;
+    }
+    this.sendNewSession(cwd);
   }
 
   // ── Event subscription ─────────────────────────────────────────
@@ -193,7 +249,14 @@ export class CrabCodeConnection implements vscode.Disposable {
   // ── Internals ──────────────────────────────────────────────────
 
   private sendCommand(cmd: WsCommand): void {
-    this.sendRaw(serializeCommand(cmd));
+    const payload = serializeCommand(cmd);
+    if (this.requiresActiveSession(cmd) && !this._sessionId) {
+      this.pendingSessionCommands.push(payload);
+      this.log(`queued ${cmd.type} until session ready queue=${this.pendingSessionCommands.length}`);
+      return;
+    }
+    this.log(`send ${cmd.type} session=${this._sessionId ?? "(none)"}`);
+    this.sendRaw(payload);
   }
 
   sendRaw(data: string): void {
@@ -224,7 +287,10 @@ export class CrabCodeConnection implements vscode.Disposable {
       case "server.connected":
         this._modelName = (payload.properties?.model as string) ?? null;
         if (payload.properties?.session_id) {
+          this.sessionRequestPending = false;
           this._sessionId = payload.properties.session_id as string;
+          this.log(`session ready session=${this._sessionId}`);
+          this.flushPendingSessionCommands();
         }
         break;
       case "server.heartbeat":
@@ -232,7 +298,10 @@ export class CrabCodeConnection implements vscode.Disposable {
           this._modelName = payload.properties.model as string;
         }
         if (payload.properties?.session_id) {
+          this.sessionRequestPending = false;
           this._sessionId = payload.properties.session_id as string;
+          this.log(`heartbeat session=${this._sessionId}`);
+          this.flushPendingSessionCommands();
         }
         break;
       case "turn_complete":
@@ -241,15 +310,57 @@ export class CrabCodeConnection implements vscode.Disposable {
     }
   }
 
-  private scheduleReconnect(delayMs: number): void {
+  private requiresActiveSession(cmd: WsCommand): boolean {
+    switch (cmd.type) {
+      case "send_message":
+      case "push_context":
+      case "switch_model":
+      case "set_permission_mode":
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private flushPendingSessionCommands(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this._sessionId) {
+      return;
+    }
+    const queued = this.pendingSessionCommands;
+    this.pendingSessionCommands = [];
+    this.log(`flushing queued commands count=${queued.length} session=${this._sessionId}`);
+    for (const payload of queued) {
+      this.sendRaw(payload);
+    }
+  }
+
+  private scheduleReconnectWithBackoff(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
     if (this.disposed) {
       return;
     }
+    if (this.reconnectAttempts >= CrabCodeConnection.MAX_RECONNECT_ATTEMPTS) {
+      return;
+    }
+    this.reconnectAttempts++;
+    const delay = Math.min(
+      CrabCodeConnection.BASE_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1),
+      CrabCodeConnection.MAX_RECONNECT_DELAY,
+    );
+    this.log(`schedule reconnect attempt=${this.reconnectAttempts} delay_ms=${delay}`);
     this.reconnectTimer = setTimeout(() => {
       this.connect();
-    }, delayMs);
+    }, delay);
+  }
+
+  /** Reset reconnect attempts (call when user explicitly requests reconnect). */
+  resetReconnect(): void {
+    this.reconnectAttempts = 0;
+  }
+
+  private log(message: string): void {
+    this.outputChannel?.appendLine(`[CrabCode][WS] ${message}`);
   }
 }

@@ -6,9 +6,11 @@
 import { execFile, spawn, type ChildProcess } from "child_process";
 import * as vscode from "vscode";
 import * as net from "net";
+import { existsSync } from "fs";
+import * as path from "path";
 
-const GATEWAY_PKG = "crabcode[all]";
-const GATEWAY_MODULE = "crabcode_gateway";
+const GATEWAY_PKG = "crabcode[gateway]";
+const GATEWAY_CLI_MODULE = "crabcode_cli";
 const MIN_PYTHON_MAJOR = 3;
 const MIN_PYTHON_MINOR = 10;
 
@@ -179,11 +181,61 @@ function buildCondaPythonPath(envPath: string): string {
   return `${envPath}/bin/python3`;
 }
 
+type PythonLaunchOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  usingWorkspaceSources: boolean;
+};
+
+function getPythonLaunchOptions(): PythonLaunchOptions {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+  if (!workspaceRoot) {
+    return { usingWorkspaceSources: false };
+  }
+
+  const packageRoots = [
+    path.join(workspaceRoot, "packages", "cli"),
+    path.join(workspaceRoot, "packages", "core"),
+    path.join(workspaceRoot, "packages", "gateway"),
+    path.join(workspaceRoot, "packages", "search"),
+  ];
+
+  const required = [
+    path.join(workspaceRoot, "packages", "cli", "crabcode_cli"),
+    path.join(workspaceRoot, "packages", "core", "crabcode_core"),
+    path.join(workspaceRoot, "packages", "gateway", "crabcode_gateway"),
+  ];
+
+  if (!required.every((p) => existsSync(p))) {
+    return { usingWorkspaceSources: false };
+  }
+
+  const delimiter = process.platform === "win32" ? ";" : ":";
+  const existing = process.env.PYTHONPATH?.trim();
+  const env = { ...process.env };
+  env.PYTHONPATH = existing
+    ? `${packageRoots.join(delimiter)}${delimiter}${existing}`
+    : packageRoots.join(delimiter);
+
+  return {
+    cwd: workspaceRoot,
+    env,
+    usingWorkspaceSources: true,
+  };
+}
+
 // ── Gateway check / install ──────────────────────────────────────────
 
-/** Check if crabcode-gateway is importable in the given Python. */
-async function isGatewayInstalled(python: string): Promise<boolean> {
-  const { code } = await execAsync(python, ["-c", `import ${GATEWAY_MODULE}; print(1)`]);
+/** Check if crabcode-cli (with gateway support) is importable in the given Python. */
+async function isGatewayInstalled(
+  python: string,
+  launchOptions?: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<boolean> {
+  const { code } = await execAsync(
+    python,
+    ["-c", `import crabcode_cli; import crabcode_gateway; print(1)`],
+    launchOptions,
+  );
   return code === 0;
 }
 
@@ -239,6 +291,7 @@ export class GatewayProcess implements vscode.Disposable {
     host: string,
     port: number,
     outputChannel: vscode.OutputChannel,
+    launchOptions?: { cwd?: string; env?: NodeJS.ProcessEnv; usingWorkspaceSources?: boolean },
   ): Promise<boolean> {
     // Already running?
     if (await probePort(host, port)) {
@@ -248,11 +301,19 @@ export class GatewayProcess implements vscode.Disposable {
     }
 
     outputChannel.appendLine(`[CrabCode] 正在启动网关 (${host}:${port}) ...`);
+    if (launchOptions?.usingWorkspaceSources) {
+      outputChannel.appendLine(`[CrabCode] 使用当前工作区源码启动网关`);
+    }
 
     this.proc = spawn(
       python,
-      ["-m", GATEWAY_MODULE, "--host", host, "--port", String(port)],
-      { stdio: ["ignore", "pipe", "pipe"], detached: false },
+      ["-m", GATEWAY_CLI_MODULE, "gateway", "--host", host, "--port", String(port)],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+        cwd: launchOptions?.cwd,
+        env: launchOptions?.env,
+      },
     );
 
     this.proc.stdout?.on("data", (d: Buffer) => outputChannel.append(d.toString()));
@@ -314,8 +375,9 @@ export async function ensureGateway(
   outputChannel: vscode.OutputChannel,
   gatewayProc: GatewayProcess,
 ): Promise<GatewayEnsureResult> {
-  const serverUrl = config.get<string>("serverUrl", "ws://localhost:4096");
+  const serverUrl = config.get<string>("serverUrl", "ws://localhost:4096/ws");
   const { host, port } = parseWsUrl(serverUrl);
+  const launchOptions = getPythonLaunchOptions();
 
   // 1. Detect Python
   const python = await detectPython(config);
@@ -333,7 +395,12 @@ export async function ensureGateway(
   }
 
   // 3. Check if gateway package is installed
-  const installed = await isGatewayInstalled(python);
+  if (launchOptions.usingWorkspaceSources) {
+    outputChannel.appendLine(`[CrabCode] 检测到当前工作区源码，跳过已安装包检查`);
+  }
+  const installed = launchOptions.usingWorkspaceSources
+    ? true
+    : await isGatewayInstalled(python, launchOptions);
   const autoInstall = config.get<boolean>("gatewayAutoInstall", true);
 
   if (!installed) {
@@ -372,12 +439,12 @@ export async function ensureGateway(
       title: "CrabCode：正在启动网关",
       cancellable: false,
     },
-    () => gatewayProc.start(python, host, port, outputChannel),
+    () => gatewayProc.start(python, host, port, outputChannel, launchOptions),
   );
 
   if (!started) {
     vscode.window.showErrorMessage(
-      `CrabCode：网关启动失败，请检查输出面板或手动运行 python -m ${GATEWAY_MODULE}`,
+      `CrabCode：网关启动失败，请检查输出面板或手动运行 python -m crabcode_cli gateway`,
     );
   }
 

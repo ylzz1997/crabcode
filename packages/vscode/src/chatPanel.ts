@@ -20,6 +20,11 @@ import type {
   ImageAttachment,
 } from "./client/types";
 
+interface GatewayModelInfo {
+  name: string;
+  description?: string;
+}
+
 // ── Chat message stored locally for rendering ─────────────────────
 
 export type ChatMessageRole = "user" | "assistant" | "system";
@@ -75,6 +80,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     };
 
     webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+    this.ensureSessionIfNeeded();
+
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this.ensureSessionIfNeeded();
+      }
+    });
 
     // Handle messages from the webview
     webviewView.webview.onDidReceiveMessage((msg: any) => {
@@ -86,7 +98,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.postMessage({ type: "history", messages: this.messages });
           break;
         case "requestOptions":
-          this.pushChatOptions();
+          void this.pushChatOptions();
           break;
         case "setModel":
           if (typeof msg.name === "string" && msg.name.length > 0) {
@@ -126,13 +138,55 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 将 CrabCode 扩展配置（模型列表、权限模式）推送到 Webview。 */
   public notifyConfigurationChanged(): void {
-    this.pushChatOptions();
+    void this.pushChatOptions();
+  }
+
+  private async resolveModelsFromSettingsOrGateway(): Promise<string[]> {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const configuredModels = cfg.get<string[]>("chatModels", []) ?? [];
+    if (configuredModels.length > 0) {
+      return configuredModels;
+    }
+
+    // Try fetching from gateway HTTP API when connected (sessionId or just connected)
+    if (!this.connection.connected) {
+      return [];
+    }
+
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const password = cfg.get<string>("password", "");
+
+    try {
+      const url = new URL(wsUrl);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = "/config/models";
+      url.search = "";
+
+      const headers: Record<string, string> = {};
+      if (password) {
+        headers.Authorization = `Bearer ${password}`;
+      }
+
+      const response = await fetch(url.toString(), { headers });
+      if (!response.ok) {
+        return [];
+      }
+
+      const models = (await response.json()) as GatewayModelInfo[];
+      return models.map((model) => model.name).filter((name) => name.length > 0);
+    } catch {
+      return [];
+    }
   }
 
   /** After WebSocket connects, align server session with workspace settings. */
-  public syncSessionPreferencesFromSettings(): void {
+  public async syncSessionPreferencesFromSettings(): Promise<void> {
+    if (!this.connection.connected) {
+      return;
+    }
+
     const cfg = vscode.workspace.getConfiguration("crabcode");
-    const models = cfg.get<string[]>("chatModels", []) ?? [];
+    const models = await this.resolveModelsFromSettingsOrGateway();
     const defaultModel = cfg.get<string>("chatModelDefault", "") ?? "";
     const permissionMode = cfg.get<string>("permissionMode", "default");
     const mode: "default" | "run_everything" =
@@ -144,11 +198,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.connection.sendSwitchModel(pick);
     }
     this.connection.sendSetPermissionMode(mode);
+    void this.pushChatOptions();
   }
 
-  private pushChatOptions(): void {
+  private async pushChatOptions(): Promise<void> {
     const cfg = vscode.workspace.getConfiguration("crabcode");
-    const models = cfg.get<string[]>("chatModels", []) ?? [];
+    const models = await this.resolveModelsFromSettingsOrGateway();
     const defaultModel = cfg.get<string>("chatModelDefault", "") ?? "";
     const permissionMode = cfg.get<string>("permissionMode", "default");
     const mode: "default" | "run_everything" =
@@ -158,6 +213,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       models,
       defaultModel,
       permissionMode: mode,
+      connected: this.connection.connected,
     });
   }
 
@@ -256,6 +312,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** Reveal the chat panel in the sidebar. */
   public reveal(): void {
+    this.ensureSessionIfNeeded();
     if (this.view) {
       this.view.show?.(true);
     } else {
@@ -266,6 +323,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** Send a pre-composed prompt (e.g. from context-menu commands). */
   public sendPrompt(text: string): void {
     this.addMessage("user", text);
+    this.ensureSessionIfNeeded();
     this.connection.send(text);
     this.reveal();
   }
@@ -280,7 +338,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private handleUserMessage(text: string, images?: ImageAttachment[]): void {
     this.addMessage("user", text, images);
+    this.ensureSessionIfNeeded();
     this.connection.send(text, { images });
+  }
+
+  private ensureSessionIfNeeded(): void {
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ?? null;
+    this.connection.ensureSession(cwd);
   }
 
   private handleServerEvent(payload: EventPayload): void {
@@ -1253,7 +1317,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (models.length === 0) {
         const o = document.createElement('option');
         o.value = '';
-        o.textContent = '（请在 CrabCode 设置中配置 chatModels）';
+        o.textContent = msg.connected ? '（网关未返回可用模型）' : '（正在连接网关…）';
         o.disabled = true;
         modelSelect.appendChild(o);
       } else {

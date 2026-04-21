@@ -32,7 +32,12 @@ def get_logger(name: str | None = None) -> logging.Logger:
 def get_logs_dir(cwd: str) -> Path:
     """Return the per-project logs directory."""
     logs_dir = Path(cwd).resolve() / LOGS_DIR_NAME
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # cwd may be read-only (e.g. "/" on macOS) — fall back to home dir
+        logs_dir = Path.home() / LOGS_DIR_NAME
+        logs_dir.mkdir(parents=True, exist_ok=True)
     return logs_dir
 
 
@@ -42,7 +47,11 @@ def get_log_path(cwd: str, settings: LoggingSettings | None = None) -> Path:
         configured = Path(settings.file)
         if not configured.is_absolute():
             configured = Path(cwd).resolve() / configured
-        configured.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            configured.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            configured = Path.home() / LOGS_DIR_NAME / configured.name
+            configured.parent.mkdir(parents=True, exist_ok=True)
         return configured
     return get_logs_dir(cwd) / LOG_FILE_NAME
 

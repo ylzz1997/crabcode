@@ -124,6 +124,10 @@ class ChoiceHandler implements vscode.Disposable {
 class ContextProvider implements vscode.Disposable {
   private activeEditor: vscode.TextEditor | undefined;
 
+  public syncNow(): void {
+    this.pushContext();
+  }
+
   constructor(private readonly connection: CrabCodeConnection) {
     this.activeEditor = vscode.window.activeTextEditor;
     this.pushContext();
@@ -143,7 +147,7 @@ class ContextProvider implements vscode.Disposable {
 
   private pushContext(): void {
     const editor = this.activeEditor;
-    if (!editor) {
+    if (!editor || !this.connection.sessionId) {
       return;
     }
 
@@ -368,6 +372,7 @@ function registerCommands(
   push(
     vscode.commands.registerCommand("crabcode.connect", () => {
       if (!connection.connected) {
+        connection.resetReconnect();
         connection.connect();
       }
     }),
@@ -477,10 +482,6 @@ async function autoConnect(
     vscode.window.showWarningMessage(
       "CrabCode：无法连接到网关，将自动重试。请检查配置项 crabcode.serverUrl。",
     );
-  } else {
-    // Create a session with the workspace root as cwd
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ?? null;
-    connection.sendNewSession(cwd);
   }
 }
 
@@ -503,42 +504,56 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   push(gatewayProc);
 
   // 3. Create connection
-  connection = new CrabCodeConnection(config);
-  push(connection);
+  const activeConnection = new CrabCodeConnection(config, outputChannel);
+  connection = activeConnection;
+  push(activeConnection);
 
   // 4. Register ChatProvider as WebviewViewProvider
-  chatProvider = new ChatPanelProvider(context.extensionUri, connection);
+  const activeChatProvider = new ChatPanelProvider(context.extensionUri, activeConnection);
+  chatProvider = activeChatProvider;
   push(
     vscode.window.registerWebviewViewProvider(
       ChatPanelProvider.viewType,
-      chatProvider,
+      activeChatProvider,
     ),
   );
 
   push(
-    connection.on("connected", () => {
-      chatProvider?.syncSessionPreferencesFromSettings();
+    activeConnection.on("connected", () => {
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ?? null;
+      activeConnection.ensureSession(cwd);
+    }),
+  );
+
+  push(
+    activeConnection.on("disconnected", () => {
+      activeChatProvider.notifyConfigurationChanged();
     }),
   );
 
   push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("crabcode")) {
-        chatProvider?.notifyConfigurationChanged();
+        activeChatProvider.notifyConfigurationChanged();
       }
     }),
   );
 
   // 5. Register PermissionHandler and ChoiceHandler
-  const permissionHandler = new PermissionHandler(connection);
+  const permissionHandler = new PermissionHandler(activeConnection);
   push(permissionHandler);
 
-  const choiceHandler = new ChoiceHandler(connection);
+  const choiceHandler = new ChoiceHandler(activeConnection);
   push(choiceHandler);
+
+  // 6. Register ContextProvider and FileChangeHandler
+  const contextProvider = new ContextProvider(activeConnection);
+  push(contextProvider);
+  push(new FileChangeHandler(activeConnection, context));
 
   // Wire server events to handlers
   push(
-    connection.on("message", (payload: EventPayload) => {
+    activeConnection.on("message", (payload: EventPayload) => {
       switch (payload.type) {
         case "permission_request":
           permissionHandler.handle(payload as PermissionRequestPayload);
@@ -546,22 +561,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         case "choice_request":
           choiceHandler.handle(payload as ChoiceRequestPayload);
           break;
+        case "server.connected":
+          if (activeConnection.sessionId) {
+            void activeChatProvider.syncSessionPreferencesFromSettings();
+            contextProvider.syncNow();
+          }
+          break;
       }
     }),
   );
 
-  // 6. Register ContextProvider and FileChangeHandler
-  push(new ContextProvider(connection));
-  push(new FileChangeHandler(connection, context));
-
   // 7. Register all commands
-  registerCommands(chatProvider, connection);
+  registerCommands(activeChatProvider, activeConnection);
 
   // 8. Status bar item
-  push(createStatusBar(connection));
+  push(createStatusBar(activeConnection));
 
   // 9. Auto-connect
-  await autoConnect(connection, config);
+  await autoConnect(activeConnection, config);
 
   // Push remaining disposables into the extension context
   context.subscriptions.push(...disposables);

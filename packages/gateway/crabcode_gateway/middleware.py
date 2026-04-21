@@ -1,55 +1,90 @@
 """Gateway middleware — auth, logging, CORS, error handling.
 
 Mirrors OpenCode's middleware.ts pattern.
+
+NOTE: All custom middleware below are pure ASGI middleware (not
+BaseHTTPMiddleware) because BaseHTTPMiddleware rejects WebSocket
+upgrade requests with 403 by design.
 """
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.requests import ClientDisconnect
 
 from crabcode_core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
 
+# ── Helper: check if scope is a WebSocket request ────────────────
+
+
+def _is_websocket(scope: Scope) -> bool:
+    return scope.get("type") == "websocket"
+
+
 # ── Auth middleware ──────────────────────────────────────────────
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
+class AuthMiddleware:
     """Basic auth or bearer token authentication.
 
     Skipped if no password is configured.
+    WebSocket requests are always passed through (auth is checked
+    inside the WebSocket handler if needed).
     """
 
-    def __init__(self, app: Any, username: str = "crabcode", password: str | None = None) -> None:
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, username: str = "crabcode", password: str | None = None) -> None:
+        self.app = app
         self.username = username
         self.password = password
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if _is_websocket(scope):
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Build a Request to inspect headers conveniently
+        request = Request(scope, receive, send)
+
         # Skip auth for OPTIONS (CORS preflight)
         if request.method == "OPTIONS":
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         if not self.password:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # Check auth_token query param → translate to Basic header
         auth_token = request.query_params.get("auth_token")
         if auth_token:
             import base64
             token = base64.b64encode(f"{self.username}:{auth_token}".encode()).decode()
-            # Mutate scope headers (Starlette internal detail)
-            request.scope["headers"].append(
-                (b"authorization", f"Basic {token}".encode())
-            )
+            scope.setdefault("headers", [])
+            headers = list(scope["headers"])
+            headers.append((b"authorization", f"Basic {token}".encode()))
+            scope["headers"] = headers
 
         auth_header = request.headers.get("authorization", "")
+
+        # Support Bearer token (treat token value as the password)
+        if auth_header.startswith("Bearer "):
+            token_value = auth_header[7:]
+            if token_value == self.password:
+                await self.app(scope, receive, send)
+                return
 
         if auth_header.startswith("Basic "):
             import base64
@@ -57,58 +92,96 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 decoded = base64.b64decode(auth_header[6:]).decode()
                 user, pw = decoded.split(":", 1)
                 if user == self.username and pw == self.password:
-                    return await call_next(request)
+                    await self.app(scope, receive, send)
+                    return
             except Exception:
                 pass
 
-        return Response(
+        # Not authenticated
+        response = Response(
             content='{"detail":"Unauthorized"}',
             status_code=401,
             media_type="application/json",
             headers={"WWW-Authenticate": 'Basic realm="crabcode"'},
         )
+        await response(scope, receive, send)
 
 
 # ── Logging middleware ──────────────────────────────────────────
 
 
-class LoggerMiddleware(BaseHTTPMiddleware):
+class LoggerMiddleware:
     """Log incoming requests and their duration."""
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if _is_websocket(scope):
+            # Log WebSocket connections briefly
+            path = scope.get("path", "/")
+            logger.info("WebSocket %s", path)
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive, send)
+
         # Skip noisy endpoints
         if request.url.path in ("/health", "/event"):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         start = time.monotonic()
         logger.info("request %s %s", request.method, request.url.path)
 
-        response = await call_next(request)
+        # Capture status code from the inner app's response
+        status_code: int = 0
+
+        async def send_wrapper(message: dict) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status", 0)
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
         elapsed = time.monotonic() - start
         logger.info(
             "request %s %s → %d (%.3fs)",
             request.method,
             request.url.path,
-            response.status_code,
+            status_code,
             elapsed,
         )
-        return response
 
 
 # ── Error middleware ─────────────────────────────────────────────
 
 
-class ErrorMiddleware(BaseHTTPMiddleware):
+class ErrorMiddleware:
     """Catch unhandled exceptions and return structured JSON errors."""
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if _is_websocket(scope):
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         try:
-            return await call_next(request)
+            await self.app(scope, receive, send)
         except Exception as exc:
-            logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-            import json
-            return Response(
+            logger.exception("Unhandled error on %s", scope.get("path", "unknown"))
+            response = Response(
                 content=json.dumps({
                     "type": "error",
                     "message": str(exc),
@@ -118,6 +191,7 @@ class ErrorMiddleware(BaseHTTPMiddleware):
                 status_code=500,
                 media_type="application/json",
             )
+            await response(scope, receive, send)
 
 
 # ── CORS setup ──────────────────────────────────────────────────

@@ -73,6 +73,10 @@ async def websocket_endpoint(ws: WebSocket):
                 await _handle_choice_response(ws, msg)
             elif msg_type == "send_message":
                 await _handle_send_message(ws, msg)
+            elif msg_type == "new_session":
+                await _handle_new_session(ws, msg)
+            elif msg_type == "interrupt":
+                await _handle_interrupt(ws, msg)
             elif msg_type == "push_context":
                 await _handle_push_context(ws, msg)
             elif msg_type == "switch_model":
@@ -94,15 +98,19 @@ async def websocket_endpoint(ws: WebSocket):
             pass
 
 
+def _resolve_session(ws: WebSocket, msg: dict):
+    sessions: dict = ws.app.state.sessions
+    session_id = msg.get("session_id") or ws.query_params.get("session_id") or ws.app.state.default_session_id
+    return sessions.get(session_id) if session_id else None
+
+
 async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
     """Route a permission response from the client to the session."""
     from crabcode_core.types.event import PermissionResponseEvent
 
-    sessions: dict = ws.app.state.sessions
-    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
-
-    session = sessions.get(session_id) if session_id else None
+    session = _resolve_session(ws, msg)
     if not session:
+        logger.warning("ws permission_response rejected: no active session")
         await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
         return
 
@@ -119,11 +127,9 @@ async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
     """Route a choice response from the client to the session."""
     from crabcode_core.types.event import ChoiceResponseEvent
 
-    sessions: dict = ws.app.state.sessions
-    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
-
-    session = sessions.get(session_id) if session_id else None
+    session = _resolve_session(ws, msg)
     if not session:
+        logger.warning("ws choice_response rejected: no active session")
         await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
         return
 
@@ -138,18 +144,23 @@ async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
 
 async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
     """Start a query loop from a WebSocket message."""
-    sessions: dict = ws.app.state.sessions
     event_bus: EventBus = ws.app.state.event_bus
-    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
-
-    session = sessions.get(session_id) if session_id else None
+    session = _resolve_session(ws, msg)
     if not session:
+        logger.warning("ws send_message rejected: no active session")
         await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
         return
 
     text = msg.get("text", "")
     max_turns = msg.get("max_turns", 0)
     images = msg.get("images")  # Optional list of {media_type, data} dicts
+    logger.info(
+        "ws send_message accepted session=%s chars=%d images=%d max_turns=%s",
+        session.session_id,
+        len(text),
+        len(images) if isinstance(images, list) else 0,
+        max_turns,
+    )
 
     async def _run():
         try:
@@ -158,7 +169,9 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                 kwargs["images"] = images
             async for event in session.send_message(text, **kwargs):
                 await event_bus.publish(session.session_id, event)
+            logger.info("ws send_message completed session=%s", session.session_id)
         except Exception as exc:
+            logger.exception("ws send_message failed session=%s", session.session_id)
             from crabcode_core.types.event import ErrorEvent
             await event_bus.publish(
                 session.session_id,
@@ -168,21 +181,57 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
     asyncio.create_task(_run())
 
 
+async def _handle_new_session(ws: WebSocket, msg: dict) -> None:
+    """Create a new session and publish its id to connected clients."""
+    import os
+    from crabcode_core.session import CoreSession
+    from crabcode_core.types.config import CrabCodeSettings
+    from crabcode_gateway.schemas import ServerConnectedPayload
+
+    cwd = msg.get("cwd") or os.getcwd()
+    settings = CrabCodeSettings()
+    session = CoreSession(cwd=cwd, settings=settings)
+    await session.initialize()
+    session.new_session()
+
+    sessions: dict = ws.app.state.sessions
+    sessions[session.session_id] = session
+    ws.app.state.default_session_id = session.session_id
+    logger.info("ws new_session created session=%s cwd=%s", session.session_id, cwd)
+
+    await ws.send_text(
+        ServerConnectedPayload(properties={"session_id": session.session_id}).model_dump_json()
+    )
+
+
+async def _handle_interrupt(ws: WebSocket, msg: dict) -> None:
+    """Interrupt the current query loop for the active session."""
+    session = _resolve_session(ws, msg)
+    if not session:
+        logger.warning("ws interrupt rejected: no active session")
+        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        return
+
+    logger.info("ws interrupt session=%s", session.session_id)
+    await session.interrupt()
+
+
 async def _handle_push_context(ws: WebSocket, msg: dict) -> None:
     """Store client-pushed context."""
     contexts: dict = ws.app.state.client_contexts
-    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
-    if session_id:
-        contexts[session_id] = msg
+    session = _resolve_session(ws, msg)
+    if session:
+        contexts[session.session_id] = msg
+        logger.info("ws push_context session=%s active_file=%s", session.session_id, msg.get("active_file"))
+    else:
+        logger.warning("ws push_context ignored: no active session")
 
 
 async def _handle_switch_model(ws: WebSocket, msg: dict) -> None:
     """Switch named model profile on the active session (VS Code chat selector)."""
-    sessions: dict = ws.app.state.sessions
-    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
-
-    session = sessions.get(session_id) if session_id else None
+    session = _resolve_session(ws, msg)
     if not session:
+        logger.warning("ws switch_model rejected: no active session")
         await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
         return
 
@@ -190,18 +239,19 @@ async def _handle_switch_model(ws: WebSocket, msg: dict) -> None:
     await session.initialize()
     ok = session.switch_model(name)
     if not ok:
+        logger.warning("ws switch_model failed session=%s name=%s", session.session_id, name)
         await ws.send_text(
             json.dumps({"type": "error", "message": f"model not found: {name}"}),
         )
+        return
+    logger.info("ws switch_model session=%s name=%s", session.session_id, name)
 
 
 async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
     """Apply extension chat footer permission mode (default vs run_everything)."""
-    sessions: dict = ws.app.state.sessions
-    session_id = ws.query_params.get("session_id") or ws.app.state.default_session_id
-
-    session = sessions.get(session_id) if session_id else None
+    session = _resolve_session(ws, msg)
     if not session:
+        logger.warning("ws set_permission_mode rejected: no active session")
         await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
         return
 
@@ -209,6 +259,9 @@ async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
     await session.initialize()
     ok = session.set_client_permission_mode(mode)
     if not ok:
+        logger.warning("ws set_permission_mode failed session=%s mode=%s", session.session_id, mode)
         await ws.send_text(
             json.dumps({"type": "error", "message": f"invalid permission mode: {mode}"}),
         )
+        return
+    logger.info("ws set_permission_mode session=%s mode=%s", session.session_id, mode)

@@ -159,10 +159,14 @@ class EventBus:
         sub = self.subscribe(session_id)
         try:
             while True:
-                data = await asyncio.wait_for(
-                    sub.next(),
-                    timeout=_HEARTBEAT_INTERVAL,
-                )
+                try:
+                    data = await asyncio.wait_for(
+                        sub.next(),
+                        timeout=_HEARTBEAT_INTERVAL,
+                    )
+                except asyncio.TimeoutError:
+                    await ws.send_text(ServerHeartbeatPayload().model_dump_json())
+                    continue
                 if data is None:
                     return
                 if isinstance(data, str):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from crabcode_core.config.manager import ConfigManager
 from crabcode_gateway.schemas import (
     ContextPushRequest,
     ModelInfo,
@@ -23,17 +24,35 @@ def _get_session(request: Request, session_id: str | None = None):
     return sessions[sid]
 
 
+def _list_models_from_settings() -> list[ModelInfo]:
+    """Read model list directly from settings (works without a session)."""
+    settings = ConfigManager().get()
+    result: list[ModelInfo] = []
+    for name, cfg in settings.models.items():
+        parts = []
+        if cfg.provider:
+            parts.append(cfg.provider)
+        if cfg.model:
+            parts.append(cfg.model)
+        desc = "/".join(parts) if parts else "(no model set)"
+        result.append(ModelInfo(name=name, description=desc))
+    return result
+
+
 @router.get("/config/models", response_model=list[ModelInfo])
 async def list_models(request: Request) -> list[ModelInfo]:
-    """List available named models."""
-    session = _get_session(request)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    """List available named models.
 
-    return [
-        ModelInfo(name=name, description=desc)
-        for name, desc in session.list_models().items()
-    ]
+    Tries the active session first; falls back to reading settings
+    directly so the endpoint works even before a session is created.
+    """
+    session = _get_session(request)
+    if session:
+        return [
+            ModelInfo(name=name, description=desc)
+            for name, desc in session.list_models().items()
+        ]
+    return _list_models_from_settings()
 
 
 @router.post("/config/switch-model")

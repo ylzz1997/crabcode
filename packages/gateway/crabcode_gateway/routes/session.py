@@ -37,6 +37,7 @@ async def new_session(req: NewSessionRequest, request: Request) -> SessionInfo:
     settings = CrabCodeSettings()
     session = CoreSession(cwd=cwd, settings=settings)
     await session.initialize()
+    session.new_session()
 
     sessions: dict = request.app.state.sessions
     sessions[session.session_id] = session

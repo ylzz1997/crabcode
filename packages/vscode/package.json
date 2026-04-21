@@ -105,7 +105,7 @@
       "properties": {
         "crabcode.serverUrl": {
           "type": "string",
-          "default": "ws://localhost:4096",
+          "default": "ws://localhost:4096/ws",
           "description": "CrabCode 网关 WebSocket 地址（与 CrabCode 网关配置一致）"
         },
         "crabcode.password": {
