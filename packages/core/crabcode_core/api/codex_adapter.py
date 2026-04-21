@@ -10,6 +10,8 @@ import json
 import os
 from typing import Any, AsyncGenerator
 
+import httpx
+
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
@@ -202,6 +204,57 @@ def _response_to_stream_chunks(response: Any) -> list[StreamChunk]:
     return chunks
 
 
+async def _iter_sse_payloads(
+    response: httpx.Response,
+) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+    """Yield parsed SSE payloads, tolerating split event/data frames.
+
+    Some OpenAI-compatible proxies emit:
+
+        event: response.created
+
+        data: {...}
+
+    which inserts an extra blank line between the event name and payload.
+    The official OpenAI Python SDK treats that as two separate SSE events and
+    fails to decode the empty payload. We keep the pending event name across
+    blank lines until a data block arrives.
+    """
+
+    current_event: str | None = None
+    data_lines: list[str] = []
+
+    async for raw_line in response.aiter_lines():
+        line = raw_line.rstrip("\r")
+
+        if line.startswith("event:"):
+            if data_lines:
+                data = "\n".join(data_lines)
+                if data and data != "[DONE]":
+                    yield current_event or "", json.loads(data)
+                data_lines = []
+            current_event = line.split(":", 1)[1].strip()
+            continue
+
+        if line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].lstrip())
+            continue
+
+        if line == "":
+            if not data_lines:
+                continue
+            data = "\n".join(data_lines)
+            data_lines = []
+            if data and data != "[DONE]":
+                yield current_event or "", json.loads(data)
+            current_event = None
+
+    if data_lines:
+        data = "\n".join(data_lines)
+        if data and data != "[DONE]":
+            yield current_event or "", json.loads(data)
+
+
 class CodexAdapter(APIAdapter):
     """Adapter for OpenAI's Responses API (Codex / o-series models).
 
@@ -217,6 +270,7 @@ class CodexAdapter(APIAdapter):
             api_key = os.environ.get(config.api_key_env)
         if not api_key:
             api_key = os.environ.get("OPENAI_API_KEY")
+        self._api_key = api_key
 
         kwargs: dict[str, Any] = {}
         if api_key:
@@ -227,6 +281,155 @@ class CodexAdapter(APIAdapter):
             kwargs["default_headers"] = config.http_headers
 
         self.client = openai.AsyncOpenAI(**kwargs)
+
+    def _raw_responses_headers(self) -> dict[str, str]:
+        headers = dict(self.config.http_headers or {})
+        if self._api_key:
+            headers.setdefault("Authorization", f"Bearer {self._api_key}")
+        headers.setdefault("Content-Type", "application/json")
+        headers.setdefault("Accept", "text/event-stream")
+        return headers
+
+    async def _stream_via_httpx(
+        self,
+        params: dict[str, Any],
+    ) -> AsyncGenerator[StreamChunk, None]:
+        url = f"{(self.config.base_url or 'https://api.openai.com/v1').rstrip('/')}/responses"
+        active_calls: dict[str, dict[str, str]] = {}
+
+        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=self._raw_responses_headers(),
+                json=safe_utf8_json_tree(params),
+            ) as response:
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError:
+                    body = (await response.aread()).decode("utf-8", "replace").strip()
+                    yield StreamChunk(
+                        type="error",
+                        error=safe_utf8_str(body or f"HTTP {response.status_code}"),
+                    )
+                    return
+
+                async for sse_event, payload in _iter_sse_payloads(response):
+                    event_type = payload.get("type") or sse_event
+
+                    if event_type == "response.output_text.delta":
+                        yield StreamChunk(
+                            type="text",
+                            text=safe_utf8_str(str(payload.get("delta", ""))),
+                        )
+
+                    elif event_type == "response.function_call_arguments.delta":
+                        item_id = str(payload.get("item_id", ""))
+                        if item_id not in active_calls:
+                            active_calls[item_id] = {
+                                "call_id": "",
+                                "name": "",
+                                "arguments": "",
+                            }
+                        buf = active_calls[item_id]
+                        delta = str(payload.get("delta", ""))
+                        buf["arguments"] += delta
+                        call_id = buf.get("call_id", "") or item_id
+                        yield StreamChunk(
+                            type="tool_use_delta",
+                            tool_use_id=call_id,
+                            tool_input_json=delta,
+                        )
+
+                    elif event_type == "response.output_item.added":
+                        item = payload.get("item", {}) or {}
+                        if item.get("type") == "function_call":
+                            item_id = str(item.get("id", ""))
+                            call_id = str(item.get("call_id", "") or item_id)
+                            name = str(item.get("name", ""))
+                            if item_id:
+                                active_calls[item_id] = {
+                                    "call_id": call_id,
+                                    "name": name,
+                                    "arguments": "",
+                                }
+                            yield StreamChunk(
+                                type="tool_use_start",
+                                tool_use_id=call_id,
+                                tool_name=name,
+                            )
+
+                    elif event_type == "response.function_call_arguments.done":
+                        item_id = str(payload.get("item_id", ""))
+                        buf = active_calls.get(item_id, {})
+                        yield StreamChunk(
+                            type="tool_use_end",
+                            tool_use_id=buf.get("call_id", item_id),
+                            tool_name=buf.get("name", ""),
+                            tool_input_json=str(
+                                payload.get("arguments", buf.get("arguments", ""))
+                            ),
+                        )
+                        active_calls.pop(item_id, None)
+
+                    elif event_type == "response.output_item.done":
+                        item = payload.get("item", {}) or {}
+                        if item.get("type") == "function_call":
+                            item_id = str(item.get("id", ""))
+                            if item_id and item_id in active_calls:
+                                buf = active_calls.pop(item_id)
+                                yield StreamChunk(
+                                    type="tool_use_end",
+                                    tool_use_id=buf.get("call_id", item_id),
+                                    tool_name=buf.get("name", ""),
+                                    tool_input_json=buf.get("arguments", ""),
+                                )
+
+                    elif event_type == "response.reasoning_summary_text.delta":
+                        yield StreamChunk(
+                            type="thinking",
+                            text=safe_utf8_str(str(payload.get("delta", ""))),
+                        )
+
+                    elif event_type == "response.completed":
+                        usage_payload = (
+                            payload.get("response", {}) or {}
+                        ).get("usage", {}) or {}
+                        usage = {
+                            "input_tokens": int(usage_payload.get("input_tokens", 0) or 0),
+                            "output_tokens": int(usage_payload.get("output_tokens", 0) or 0),
+                        }
+                        yield StreamChunk(
+                            type="message_stop",
+                            stop_reason="end_turn",
+                            usage=usage,
+                        )
+
+                    elif event_type == "response.failed":
+                        error_payload = ((payload.get("response", {}) or {}).get("error", {}) or {})
+                        yield StreamChunk(
+                            type="error",
+                            error=safe_utf8_str(
+                                str(error_payload.get("message", "Response failed"))
+                            ),
+                        )
+
+                    elif event_type == "response.incomplete":
+                        yield StreamChunk(
+                            type="error",
+                            error="Response incomplete (max output tokens or content filter)",
+                        )
+
+                    elif event_type in {"response.error", "error"}:
+                        error_payload = payload.get("error", {})
+                        if isinstance(error_payload, dict):
+                            error_msg = error_payload.get("message", "")
+                        else:
+                            error_msg = str(error_payload)
+                        yield StreamChunk(
+                            type="error",
+                            error=safe_utf8_str(error_msg or "Unknown error"),
+                        )
 
     async def stream_message(
         self,
@@ -404,10 +607,7 @@ class CodexAdapter(APIAdapter):
             if emitted_stream_event:
                 raise
 
-            fallback_params = dict(params)
-            fallback_params.pop("stream", None)
-            response = await self.client.responses.create(**fallback_params)
-            for chunk in _response_to_stream_chunks(response):
+            async for chunk in self._stream_via_httpx(params):
                 yield chunk
 
     async def count_tokens(

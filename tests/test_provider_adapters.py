@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -15,8 +17,10 @@ from crabcode_core.api import (
 )
 from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW, lookup_context_window
 from crabcode_core.api.openai_adapter import OpenAIAdapter
-from crabcode_core.api.codex_adapter import CodexAdapter
+from crabcode_core.api.codex_adapter import CodexAdapter, _iter_sse_payloads
 from crabcode_core.api.anthropic_adapter import AnthropicAdapter
+from crabcode_core.api.base import ModelConfig
+from crabcode_core.types.message import create_user_message
 from crabcode_core.types.config import ApiConfig
 
 
@@ -373,6 +377,120 @@ class TestCustomHeaders:
         assert mock_client.call_args.kwargs["default_headers"] == {
             "X-Test-Header": "azure"
         }
+
+
+class _FakeSSEHTTPResponse:
+    def __init__(self, lines: list[str]):
+        self.status_code = 200
+        self._lines = lines
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class TestCodexSSEFallback:
+    def test_iter_sse_payloads_handles_split_event_and_data_blocks(self):
+        async def run():
+            response = _FakeSSEHTTPResponse(
+                [
+                    "event: response.created",
+                    "",
+                    'data: {"type":"response.created"}',
+                    "",
+                    "event: response.output_text.delta",
+                    "",
+                    'data: {"type":"response.output_text.delta","delta":"你好"}',
+                    "",
+                ]
+            )
+            items = []
+            async for event_name, payload in _iter_sse_payloads(response):
+                items.append((event_name, payload))
+            return items
+
+        items = asyncio.run(run())
+        assert items == [
+            ("response.created", {"type": "response.created"}),
+            (
+                "response.output_text.delta",
+                {"type": "response.output_text.delta", "delta": "你好"},
+            ),
+        ]
+
+    def test_codex_adapter_uses_httpx_stream_when_sdk_sse_parse_fails(self):
+        class _FakeStreamResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            async def aiter_lines(self):
+                for line in [
+                    "event: response.output_text.delta",
+                    "",
+                    'data: {"type":"response.output_text.delta","delta":"你好"}',
+                    "",
+                    "event: response.completed",
+                    "",
+                    'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":2}}}',
+                    "",
+                ]:
+                    yield line
+
+            async def aread(self):
+                return b""
+
+        class _FakeStreamContext:
+            async def __aenter__(self):
+                return _FakeStreamResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeHTTPClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, *args, **kwargs):
+                return _FakeStreamContext()
+
+        async def run():
+            config = ApiConfig(
+                provider="codex",
+                model="gpt-5.4",
+                base_url="https://example.invalid/v1",
+                api_key_env="TEST_CODEX_API_KEY",
+                http_headers={"User-Agent": "codex-test"},
+            )
+            fake_openai_client = MagicMock()
+            fake_openai_client.responses.create = MagicMock(
+                side_effect=json.JSONDecodeError("bad json", "", 0)
+            )
+            with patch.dict(os.environ, {"TEST_CODEX_API_KEY": "test-key"}, clear=False):
+                with patch("openai.AsyncOpenAI", return_value=fake_openai_client):
+                    adapter = CodexAdapter(config)
+                with patch("crabcode_core.api.codex_adapter.httpx.AsyncClient", _FakeHTTPClient):
+                    return [
+                        chunk
+                        async for chunk in adapter.stream_message(
+                            messages=[create_user_message("hi")],
+                            system=["system"],
+                            tools=[],
+                            config=ModelConfig(model="gpt-5.4", max_tokens=32),
+                        )
+                    ]
+
+        chunks = asyncio.run(run())
+        assert [(chunk.type, chunk.text) for chunk in chunks[:1]] == [("text", "你好")]
+        assert chunks[-1].type == "message_stop"
+        assert chunks[-1].usage == {"input_tokens": 1, "output_tokens": 2}
 
 
 # ---------------------------------------------------------------------------
