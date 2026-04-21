@@ -8,6 +8,7 @@ import * as vscode from "vscode";
 
 import { CrabCodeConnection } from "./connection";
 import { ChatPanelProvider } from "./chatPanel";
+import { ensureGateway, GatewayProcess } from "./gatewayManager";
 
 import {
   buildPermissionResponseCommand,
@@ -395,6 +396,26 @@ function registerCommands(
       vscode.window.setStatusBarMessage("CrabCode：已创建新会话", 3000);
     }),
   );
+
+  // Restart Gateway
+  push(
+    vscode.commands.registerCommand("crabcode.restartGateway", async () => {
+      if (!gatewayProc || !outputChannel) return;
+
+      gatewayProc.dispose();
+      gatewayProc = new GatewayProcess();
+      push(gatewayProc);
+
+      const config = vscode.workspace.getConfiguration("crabcode");
+      const result = await ensureGateway(config, outputChannel, gatewayProc);
+      if (result.gatewayReady) {
+        if (!connection.connected) {
+          connection.connect();
+        }
+        vscode.window.setStatusBarMessage("CrabCode：网关已重启", 3000);
+      }
+    }),
+  );
 }
 
 // ── Auto-connect ────────────────────────────────────────────────────
@@ -406,6 +427,16 @@ async function autoConnect(
   const autoConnectEnabled = config.get<boolean>("autoConnect", true);
   if (!autoConnectEnabled) {
     return;
+  }
+
+  // Ensure the gateway is ready before attempting WebSocket connection
+  if (gatewayProc && outputChannel) {
+    const result = await ensureGateway(config, outputChannel, gatewayProc);
+    if (!result.gatewayReady) {
+      vscode.window.showWarningMessage(
+        "CrabCode：网关未就绪，将自动重试连接。请检查输出面板。",
+      );
+    }
   }
 
   connection.connect();
@@ -457,16 +488,25 @@ async function autoConnect(
 
 let connection: CrabCodeConnection | undefined;
 let chatProvider: ChatPanelProvider | undefined;
+let gatewayProc: GatewayProcess | undefined;
+let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // 1. Read configuration
   const config = vscode.workspace.getConfiguration("crabcode");
 
-  // 2. Create connection
+  // 2. Create output channel & gateway process manager
+  outputChannel = vscode.window.createOutputChannel("CrabCode");
+  push(outputChannel);
+
+  gatewayProc = new GatewayProcess();
+  push(gatewayProc);
+
+  // 3. Create connection
   connection = new CrabCodeConnection(config);
   push(connection);
 
-  // 3. Register ChatProvider as WebviewViewProvider
+  // 4. Register ChatProvider as WebviewViewProvider
   chatProvider = new ChatPanelProvider(context.extensionUri, connection);
   push(
     vscode.window.registerWebviewViewProvider(
@@ -489,7 +529,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // 4. Register PermissionHandler and ChoiceHandler
+  // 5. Register PermissionHandler and ChoiceHandler
   const permissionHandler = new PermissionHandler(connection);
   push(permissionHandler);
 
@@ -510,17 +550,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // 5. Register ContextProvider and FileChangeHandler
+  // 6. Register ContextProvider and FileChangeHandler
   push(new ContextProvider(connection));
   push(new FileChangeHandler(connection, context));
 
-  // 6. Register all commands
+  // 7. Register all commands
   registerCommands(chatProvider, connection);
 
-  // 7. Status bar item
+  // 8. Status bar item
   push(createStatusBar(connection));
 
-  // 8. Auto-connect
+  // 9. Auto-connect
   await autoConnect(connection, config);
 
   // Push remaining disposables into the extension context
@@ -538,4 +578,6 @@ export function deactivate(): void {
   disposables.length = 0;
   connection = undefined;
   chatProvider = undefined;
+  gatewayProc = undefined;
+  outputChannel = undefined;
 }
