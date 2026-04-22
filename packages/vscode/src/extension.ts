@@ -122,27 +122,83 @@ class ChoiceHandler implements vscode.Disposable {
 // ── ContextProvider ─────────────────────────────────────────────────
 
 class ContextProvider implements vscode.Disposable {
+  private static readonly PUSH_DEBOUNCE_MS = 250;
   private activeEditor: vscode.TextEditor | undefined;
+  private pushTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastContextSignature: string | null = null;
 
   public syncNow(): void {
-    this.pushContext();
+    this.schedulePush(0);
   }
 
   constructor(private readonly connection: CrabCodeConnection) {
     this.activeEditor = vscode.window.activeTextEditor;
-    this.pushContext();
+    this.schedulePush(0);
 
     push(
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         this.activeEditor = editor;
-        this.pushContext();
+        this.schedulePush(0);
       }),
     );
     push(
-      vscode.workspace.onDidChangeTextDocument(() => {
-        this.pushContext();
+      vscode.window.onDidChangeTextEditorSelection((event) => {
+        if (event.textEditor === this.activeEditor) {
+          this.schedulePush();
+        }
       }),
     );
+    push(
+      vscode.window.onDidChangeVisibleTextEditors(() => {
+        this.schedulePush();
+      }),
+    );
+    push(
+      vscode.workspace.onDidChangeTextDocument((event) => {
+        if (this.activeEditor && event.document === this.activeEditor.document) {
+          this.schedulePush();
+        }
+      }),
+    );
+  }
+
+  private schedulePush(delay = ContextProvider.PUSH_DEBOUNCE_MS): void {
+    if (this.pushTimer) {
+      clearTimeout(this.pushTimer);
+    }
+    this.pushTimer = setTimeout(() => {
+      this.pushTimer = null;
+      this.pushContext();
+    }, delay);
+  }
+
+  private isSupportedDocument(document: vscode.TextDocument): boolean {
+    return document.uri.scheme === "file"
+      || document.uri.scheme === "untitled"
+      || document.uri.scheme === "vscode-remote";
+  }
+
+  private getDocumentIdentity(document: vscode.TextDocument): string {
+    return document.uri.fsPath || document.uri.toString();
+  }
+
+  private getOpenFiles(): string[] {
+    const seen = new Set<string>();
+    const openFiles: string[] = [];
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (!this.isSupportedDocument(editor.document)) {
+        continue;
+      }
+      const id = this.getDocumentIdentity(editor.document);
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      openFiles.push(id);
+    }
+
+    return openFiles;
   }
 
   private pushContext(): void {
@@ -152,19 +208,36 @@ class ContextProvider implements vscode.Disposable {
     }
 
     const doc = editor.document;
+    if (!this.isSupportedDocument(doc)) {
+      return;
+    }
     const selection = editor.selection;
-
-    this.connection.pushContext({
-      active_file: doc.uri.fsPath,
+    const context = {
+      active_file: this.getDocumentIdentity(doc),
       selected_text: doc.getText(selection) || null,
       cursor_line: selection.active.line,
       cursor_column: selection.active.character,
-      open_files: vscode.window.visibleTextEditors.map((e) => e.document.uri.fsPath),
+      open_files: this.getOpenFiles(),
       language_id: doc.languageId,
+    };
+    const signature = JSON.stringify({
+      session_id: this.connection.sessionId,
+      ...context,
     });
+    if (signature === this.lastContextSignature) {
+      return;
+    }
+    this.lastContextSignature = signature;
+
+    this.connection.pushContext(context);
   }
 
-  dispose(): void {}
+  dispose(): void {
+    if (this.pushTimer) {
+      clearTimeout(this.pushTimer);
+      this.pushTimer = null;
+    }
+  }
 }
 
 // ── FileChangeHandler ───────────────────────────────────────────────
@@ -522,6 +595,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeConnection.on("connected", () => {
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ?? null;
       activeConnection.ensureSession(cwd);
+      activeChatProvider.notifyConfigurationChanged();
     }),
   );
 
@@ -556,10 +630,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeConnection.on("message", (payload: EventPayload) => {
       switch (payload.type) {
         case "permission_request":
-          permissionHandler.handle(payload as PermissionRequestPayload);
+          // Prefer in-panel interaction when the chat panel is visible.
+          // Fallback to modal quick actions when the panel is hidden.
+          if (!activeChatProvider.isVisible()) {
+            permissionHandler.handle(payload as PermissionRequestPayload);
+          }
           break;
         case "choice_request":
-          choiceHandler.handle(payload as ChoiceRequestPayload);
+          // Avoid double responses: when panel UI is visible it owns choice handling.
+          if (!activeChatProvider.isVisible()) {
+            choiceHandler.handle(payload as ChoiceRequestPayload);
+          }
           break;
         case "server.connected":
           if (activeConnection.sessionId) {

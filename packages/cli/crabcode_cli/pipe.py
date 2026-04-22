@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
 
 from crabcode_core.events import CoreSession
@@ -20,6 +22,13 @@ from crabcode_core.types.event import (
     ToolUseEvent,
     TurnCompleteEvent,
 )
+
+_DEBUG_TOOL_PAYLOAD = os.getenv("CRABCODE_DEBUG_TOOL_PAYLOAD", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 async def run_pipe(
@@ -39,6 +48,9 @@ async def run_pipe(
                 pass
             elif isinstance(event, ToolUseEvent):
                 sys.stderr.write(f"\n[Tool: {event.tool_name}]\n")
+                if _DEBUG_TOOL_PAYLOAD:
+                    pretty = json.dumps(event.tool_input, ensure_ascii=False, indent=2)
+                    sys.stderr.write(f"{pretty}\n")
                 sys.stderr.flush()
             elif isinstance(event, PermissionRequestEvent):
                 await session.respond_permission(

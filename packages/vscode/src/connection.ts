@@ -57,6 +57,7 @@ export class CrabCodeConnection implements vscode.Disposable {
   private static readonly MAX_RECONNECT_ATTEMPTS = 10;
   private static readonly BASE_RECONNECT_DELAY = 1000; // 1s
   private static readonly MAX_RECONNECT_DELAY = 30000; // 30s
+  private static readonly RAW_LOG_MAX_CHARS = 8000;
 
   constructor(
     private config: vscode.WorkspaceConfiguration,
@@ -104,7 +105,6 @@ export class CrabCodeConnection implements vscode.Disposable {
       this.ws.on("open", () => {
         this._connected = true;
         this._sessionId = null;
-        this.pendingSessionCommands = [];
         this.sessionRequestPending = false;
         this.reconnectAttempts = 0; // reset backoff on successful connect
         this.log(`ws open url=${url}`);
@@ -112,8 +112,10 @@ export class CrabCodeConnection implements vscode.Disposable {
       });
 
       this.ws.on("message", (data: WebSocket.Data) => {
+        const rawText = this.coerceWebSocketDataToText(data);
+        this.logRawPayload("recv", rawText);
         try {
-          const payload: EventPayload = JSON.parse(data.toString());
+          const payload: EventPayload = JSON.parse(rawText);
           this.log(`ws recv type=${payload.type ?? "unknown"}`);
           // Track model name from server events
           this.handleServerPayload(payload);
@@ -127,7 +129,6 @@ export class CrabCodeConnection implements vscode.Disposable {
       this.ws.on("close", (code: number, reason: Buffer) => {
         this._connected = false;
         this._sessionId = null;
-        this.pendingSessionCommands = [];
         this.sessionRequestPending = false;
         this.log(`ws close code=${code} reason=${reason.toString() || "(empty)"}`);
         this.fire("disconnected", undefined);
@@ -186,6 +187,7 @@ export class CrabCodeConnection implements vscode.Disposable {
   }
 
   sendSwitchModel(name: string): void {
+    this._modelName = name;
     const cmd = buildSwitchModelCommand(name);
     this.sendCommand(cmd);
   }
@@ -260,6 +262,7 @@ export class CrabCodeConnection implements vscode.Disposable {
   }
 
   sendRaw(data: string): void {
+    this.logRawPayload("send", data);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(data);
     }
@@ -362,5 +365,33 @@ export class CrabCodeConnection implements vscode.Disposable {
 
   private log(message: string): void {
     this.outputChannel?.appendLine(`[CrabCode][WS] ${message}`);
+  }
+
+  private logRawPayload(direction: "send" | "recv", raw: string): void {
+    if (!this.config.get<boolean>("debugLogRawWsPayload", false)) {
+      return;
+    }
+    const oneLine = raw.replace(/\s+/g, " ").trim();
+    const clipped =
+      oneLine.length > CrabCodeConnection.RAW_LOG_MAX_CHARS
+        ? `${oneLine.slice(0, CrabCodeConnection.RAW_LOG_MAX_CHARS)}…(truncated)`
+        : oneLine;
+    this.log(`ws ${direction} raw=${clipped}`);
+  }
+
+  private coerceWebSocketDataToText(data: WebSocket.Data): string {
+    if (typeof data === "string") {
+      return data;
+    }
+    if (data instanceof Buffer) {
+      return data.toString("utf-8");
+    }
+    if (Array.isArray(data)) {
+      return Buffer.concat(data).toString("utf-8");
+    }
+    if (data instanceof ArrayBuffer) {
+      return Buffer.from(data).toString("utf-8");
+    }
+    return "";
   }
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import sys
 import time
@@ -518,6 +519,27 @@ def _tool_summary(name: str, inp: dict) -> str:
     return (raw[:200] + "…") if len(raw) > 200 else raw
 
 
+def _debug_tool_payload_enabled() -> bool:
+    return os.getenv("CRABCODE_DEBUG_TOOL_PAYLOAD", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _render_full_tool_payload(tool_name: str, tool_input: dict) -> None:
+    payload = json.dumps(tool_input, ensure_ascii=False, indent=2)
+    console.print(
+        Panel(
+            Text(payload, style="dim"),
+            title=f"[bold yellow]Debug Payload: {tool_name}[/]",
+            border_style="yellow",
+            expand=False,
+        )
+    )
+
+
 def _render_saved_partial_reply(text: str) -> None:
     """Echo assistant text that was persisted after interrupt (visible in scrollback)."""
     body = text.rstrip()
@@ -560,6 +582,8 @@ def _render_tool_use(event: ToolUseEvent) -> None:
             expand=False,
         )
     )
+    if _debug_tool_payload_enabled():
+        _render_full_tool_payload(event.tool_name, event.tool_input)
 
 
 def _truncate_display(display: str, max_lines: int = 50, max_chars: int = 50_000) -> str:

@@ -154,6 +154,11 @@
           "type": "boolean",
           "default": true,
           "description": "当检测不到 crabcode-gateway 时是否自动安装并启动"
+        },
+        "crabcode.debugLogRawWsPayload": {
+          "type": "boolean",
+          "default": false,
+          "description": "调试用：在 CrabCode 输出中打印 WebSocket 收发原始 JSON（会截断，可能包含敏感文本）"
         }
       }
     },
