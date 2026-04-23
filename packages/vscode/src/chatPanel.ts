@@ -18,11 +18,13 @@ import {
   serializeCommand,
 } from "./client/protocol";
 import type {
+  AgentOutputPayload,
   ChoiceRequestPayload,
   EventPayload,
   FileChangePayload,
   ImageAttachment,
   PermissionRequestPayload,
+  StreamModePayload,
   ToolResultPayload,
   ToolUsePayload,
 } from "./client/types";
@@ -115,6 +117,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private isBusy = false;
   private latestModelRequestId = 0;
   private lastNonEmptyModels: string[] = [];
+  private webviewReady = false;
+  private pendingWebviewMessages: any[] = [];
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -134,6 +138,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     _token: vscode.CancellationToken,
   ): void {
     this.view = webviewView;
+    this.webviewReady = false;
+    this.pendingWebviewMessages = [];
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -142,6 +148,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // Handle messages from the webview
     webviewView.webview.onDidReceiveMessage((msg: any) => {
+      if (!this.webviewReady) {
+        this.webviewReady = true;
+        this.flushPendingWebviewMessages();
+      }
       switch (msg.type) {
         case "sendMessage":
           this.handleUserMessage(msg.text, msg.images);
@@ -151,6 +161,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "requestOptions":
           void this.pushChatOptions();
+          break;
+        case "webviewReady":
+          this.postMessage({ type: "history", items: this.history });
+          void this.pushChatOptions();
+          this.postMessage({ type: "busyState", busy: this.isBusy });
           break;
         case "setModel":
           if (typeof msg.name === "string" && msg.name.length > 0) {
@@ -223,11 +238,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const configuredModels = cfg.get<string[]>("chatModels", []) ?? [];
     if (configuredModels.length > 0) {
       return configuredModels;
-    }
-
-    // Try fetching from gateway HTTP API when connected (sessionId or just connected)
-    if (!this.connection.connected) {
-      return [];
     }
 
     const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
@@ -464,6 +474,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "thinking":
         this.handleThinking(payload.text);
         break;
+      case "stream_mode":
+        this.handleStreamMode(payload as StreamModePayload);
+        break;
+      case "agent_output":
+        this.handleAgentOutput(payload as AgentOutputPayload);
+        break;
       case "tool_use":
         this.finalizeThinking();
         this.handleToolUse(payload as ToolUsePayload);
@@ -530,6 +546,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (this.isBusy === busy) return;
     this.isBusy = busy;
     this.postMessage({ type: "busyState", busy });
+  }
+
+  private handleStreamMode(payload: StreamModePayload): void {
+    switch (payload.mode) {
+      case "requesting":
+      case "thinking":
+      case "responding":
+      case "tool-input":
+      case "tool-running":
+        this.setBusy(true);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private handleAgentOutput(payload: AgentOutputPayload): void {
+    switch (payload.stream) {
+      case "text":
+        this.finalizeThinking();
+        this.appendAssistantText(payload.text);
+        this.setBusy(true);
+        break;
+      case "thinking":
+        this.setBusy(true);
+        break;
+      default:
+        break;
+    }
   }
 
   private handleToolUse(payload: ToolUsePayload): void {
@@ -687,7 +732,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private postMessage(msg: any): void {
-    this.view?.webview.postMessage(msg);
+    if (!this.view) {
+      return;
+    }
+    if (!this.webviewReady) {
+      this.pendingWebviewMessages.push(msg);
+      return;
+    }
+    void this.view.webview.postMessage(msg);
+  }
+
+  private flushPendingWebviewMessages(): void {
+    if (!this.view || !this.webviewReady || this.pendingWebviewMessages.length === 0) {
+      return;
+    }
+    const queue = this.pendingWebviewMessages;
+    this.pendingWebviewMessages = [];
+    for (const msg of queue) {
+      void this.view.webview.postMessage(msg);
+    }
   }
 
   // ── HTML ───────────────────────────────────────────────────────
@@ -2294,13 +2357,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line) continue;
-        const titleMatch = line.match(/^📋\s+(.+)$/);
+        const titleMatch = line.match(/^📋\\s+(.+)$/);
         if (titleMatch) {
           if (current) blocks.push(current);
           current = { title: titleMatch[1], items: [], done: 0, total: 0 };
           continue;
         }
-        const itemMatch = line.match(/^(✅|◻)\s+(\d+)\.\s+(.+)$/);
+        const itemMatch = line.match(/^(✅|◻)\\s+(\\d+)\\.\\s+(.+)$/);
         if (itemMatch && current) {
           current.items.push({
             text: itemMatch[3],
@@ -2308,7 +2371,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           });
           continue;
         }
-        const progressMatch = line.match(/^\((\d+)\/(\d+)\s+completed\)$/i);
+        const progressMatch = line.match(/^\\((\\d+)\\/(\\d+)\\s+completed\\)$/i);
         if (progressMatch && current) {
           current.done = parseInt(progressMatch[1], 10);
           current.total = parseInt(progressMatch[2], 10);
@@ -2372,7 +2435,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (blocks.length === 0) {
         return '<div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>';
       }
-      const firstBlockIndex = String(text).split('\\n').findIndex(line => /^(\s*)📋\s+/.test(line));
+      const firstBlockIndex = String(text).split('\\n').findIndex(line => /^(\\s*)📋\\s+/.test(line));
       const prefix = firstBlockIndex > 0
         ? String(text).split('\\n').slice(0, firstBlockIndex).map(line => line.trim()).filter(Boolean).join(' ')
         : '';
@@ -2960,6 +3023,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     window.addEventListener('message', event => {
       const msg = event.data;
       if (!msg) return;
+      try {
       switch (msg.type) {
         case 'newMessage':
           addMessageEl(msg.message);
@@ -3120,11 +3184,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           mergeHostAttachments(msg);
           break;
       }
+      } catch (error) {
+        console.error(error);
+      }
     });
 
     syncComposerChrome();
     updatePanelWidthMode();
 
+    vscode.postMessage({ type: 'webviewReady' });
     vscode.postMessage({ type: 'requestHistory' });
     vscode.postMessage({ type: 'requestOptions' });
     let optionsRetryCount = 0;

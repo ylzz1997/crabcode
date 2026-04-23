@@ -67,7 +67,7 @@ export class CrabCodeConnection implements vscode.Disposable {
   // ── Public state ───────────────────────────────────────────────
 
   get connected(): boolean {
-    return this._connected;
+    return this._connected || this.ws?.readyState === WebSocket.OPEN;
   }
 
   get sessionId(): string | null {
@@ -103,6 +103,10 @@ export class CrabCodeConnection implements vscode.Disposable {
       this.ws = new WebSocket(url, { headers });
 
       this.ws.on("open", () => {
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
         this._connected = true;
         this._sessionId = null;
         this.sessionRequestPending = false;
@@ -139,10 +143,14 @@ export class CrabCodeConnection implements vscode.Disposable {
         this.scheduleReconnectWithBackoff();
       });
 
-      this.ws.on("error", () => {
-        this._connected = false;
-        this.log("ws error");
-        this.fire("disconnected", undefined);
+      this.ws.on("error", (err: Error) => {
+        const state = this.ws?.readyState;
+        this.log(`ws error state=${state ?? "unknown"} message=${err.message}`);
+        // Let the close event drive the actual disconnected transition.
+        // Some transient errors can be emitted while the socket is still open.
+        if (state === WebSocket.CONNECTING) {
+          this._connected = false;
+        }
       });
     } catch {
       this.log("ws connect threw before open");
