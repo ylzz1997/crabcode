@@ -5,6 +5,7 @@
   "version": "0.1.2",
   "publisher": "crabcode",
   "license": "MIT",
+  "icon": "logo.png",
   "engines": {
     "vscode": "^1.85.0"
   },
