@@ -460,6 +460,13 @@ _COMPACT_EMPTY_RESPONSE_RETRY_PROMPT = (
 )
 
 
+def _compact_recovery_reasoning_effort(effort: str | None) -> str | None:
+    """Keep compact recovery calls from spending the whole response budget thinking."""
+    if effort in {None, "none", "minimal", "low"}:
+        return effort
+    return "low"
+
+
 def _append_compact_resume_prompt(messages: list[Message]) -> list[Message]:
     """Append a lightweight resume prompt after emergency compaction."""
     if not messages:
@@ -501,6 +508,11 @@ async def query_loop(
     effective_max_tokens = cfg.max_tokens if cfg else 16384
     effective_thinking = cfg.thinking_enabled if cfg else True
     effective_thinking_budget = cfg.thinking_budget if cfg else 10000
+    effective_reasoning_effort = (
+        cfg.reasoning_effort
+        if cfg and cfg.reasoning_effort is not None
+        else getattr(adapter_config, "reasoning_effort", None)
+    )
     effective_timeout = (
         cfg.timeout if cfg
         else getattr(adapter_config, "timeout", 300)
@@ -573,6 +585,30 @@ async def query_loop(
                         "Reducing max_tokens to %d to fit context window", max_tokens
                     )
 
+        request_thinking = effective_thinking
+        request_thinking_budget = effective_thinking_budget
+        request_reasoning_effort = effective_reasoning_effort
+        if _awaiting_compact_resume:
+            request_reasoning_effort = _compact_recovery_reasoning_effort(
+                request_reasoning_effort
+            )
+            if request_reasoning_effort is None:
+                request_reasoning_effort = "low"
+            if _compact_resume_retries > 0:
+                request_thinking = False
+                request_thinking_budget = 0
+            elif request_thinking:
+                request_thinking_budget = min(
+                    request_thinking_budget,
+                    max(1024, max_tokens // 4),
+                )
+
+        if request_thinking and request_thinking_budget >= max_tokens:
+            request_thinking_budget = max_tokens - 1024
+            if request_thinking_budget < 1024:
+                request_thinking = False
+                request_thinking_budget = 0
+
         logger.warning(
             "Sending API request: model=%s, max_tokens=%d, msgs=%d, context_window=%d",
             effective_model, max_tokens, len(messages_for_api), context_window,
@@ -580,10 +616,11 @@ async def query_loop(
         model_config = ModelConfig(
             model=effective_model,
             max_tokens=max_tokens,
-            thinking_enabled=effective_thinking,
-            thinking_budget=effective_thinking_budget,
+            thinking_enabled=request_thinking,
+            thinking_budget=request_thinking_budget,
             timeout=effective_timeout,
             context_window=context_window,
+            reasoning_effort=request_reasoning_effort,
         )
 
         last_request_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
@@ -848,7 +885,12 @@ async def query_loop(
         if current_text:
             assistant_content.append(TextBlock(text=current_text))
 
-        if assistant_content:
+        has_visible_or_actionable_output = any(
+            isinstance(block, (TextBlock, ToolUseBlock))
+            for block in assistant_content
+        )
+
+        if has_visible_or_actionable_output:
             assistant_msg = create_assistant_message(content=assistant_content)
             messages.append(assistant_msg)
             _awaiting_compact_resume = False
@@ -865,6 +907,15 @@ async def query_loop(
                 turn_count -= 1
                 continue
             logger.warning("Empty response, ending turn (awaiting_resume=%s)", _awaiting_compact_resume)
+            if _awaiting_compact_resume:
+                yield ErrorEvent(
+                    message=(
+                        "Model returned no visible content after emergency compact; "
+                        "the compacted context was preserved."
+                    ),
+                    recoverable=True,
+                    error_type="empty_response",
+                )
             yield _turn_complete_event("empty_response", messages)
             params.messages[:] = messages
             return

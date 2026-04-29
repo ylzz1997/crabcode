@@ -482,10 +482,15 @@ class CodexAdapter(APIAdapter):
         if self.config.prompt_cache_retention:
             extra_body["prompt_cache_retention"] = self.config.prompt_cache_retention
 
-            # For o-series models, configure reasoning
-        if self.config.reasoning_effort:
+        # For o-series models, configure reasoning
+        reasoning_effort = (
+            config.reasoning_effort
+            if config.reasoning_effort is not None
+            else self.config.reasoning_effort
+        )
+        if reasoning_effort and reasoning_effort != "none":
             params["reasoning"] = {
-                "effort": self.config.reasoning_effort,
+                "effort": reasoning_effort,
                 "summary": "auto",
             }
         elif config.thinking_enabled:

@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 
-from crabcode_core.types.message import ContentBlock, Message
+from crabcode_core.types.message import Message
 
 
 @dataclass
@@ -20,6 +20,7 @@ class ModelConfig:
     stop_sequences: list[str] | None = None
     timeout: int = 300  # seconds
     context_window: int = 0  # 0 means unknown / not resolved yet
+    reasoning_effort: str | None = None  # call-level override for Responses-style APIs
 
 
 @dataclass
