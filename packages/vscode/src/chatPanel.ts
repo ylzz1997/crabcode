@@ -2178,16 +2178,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return turn.status === 'running' ? '处理中' : '已处理';
     }
 
-    function hasExpandedDetailCards(turn) {
-      return turn.toolIds.some(id => {
-        const card = toolCards.get(id);
-        return card && !card.collapsed;
-      }) || turn.thinkingIds.some(id => {
-        const card = thinkingCards.get(id);
-        return card && !card.collapsed;
-      });
-    }
-
     function updateTurnSummary(turn) {
       const hasDetails = turn.detailCount > 0;
       turn.summaryEl.style.display = hasDetails ? 'inline-flex' : 'none';
@@ -2206,7 +2196,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!activeTurn) return;
       activeTurn.status = 'done';
       activeTurn.endTime = Date.now();
-      activeTurn.expanded = hasExpandedDetailCards(activeTurn);
       updateTurnSummary(activeTurn);
       activeTurn = null;
     }
@@ -3303,7 +3292,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
           const turn = getTurnById(toolCardTurns.get(msg.card ? msg.card.id : undefined));
           if (turn) {
-            turn.expanded = hasExpandedDetailCards(turn);
             updateTurnSummary(turn);
           }
           updateBusyLabel();
@@ -3318,7 +3306,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             if (el) updateToolCard(el, card);
             const turn = getTurnById(toolCardTurns.get(msg.id));
             if (turn) {
-              turn.expanded = hasExpandedDetailCards(turn);
               updateTurnSummary(turn);
             }
           }
@@ -3352,7 +3339,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             if (el) updateThinkingCard(el, tc2);
             const turn = getTurnById(thinkingCardTurns.get(msg.id));
             if (turn) {
-              turn.expanded = hasExpandedDetailCards(turn);
               updateTurnSummary(turn);
             }
           }
@@ -3368,7 +3354,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             if (el) updateThinkingCard(el, tc3);
             const turn = getTurnById(thinkingCardTurns.get(msg.id));
             if (turn) {
-              turn.expanded = hasExpandedDetailCards(turn);
               updateTurnSummary(turn);
             }
           }
