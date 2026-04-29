@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -377,6 +377,78 @@ class TestCustomHeaders:
         assert mock_client.call_args.kwargs["default_headers"] == {
             "X-Test-Header": "azure"
         }
+
+
+class TestCodexRequestBody:
+    """Codex-only request body options are passed through to Responses API."""
+
+    def _create_kwargs(self, config: ApiConfig) -> dict:
+        class _EmptyStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        async def run():
+            fake_openai_client = MagicMock()
+            fake_openai_client.responses.create = AsyncMock(return_value=_EmptyStream())
+
+            with patch("openai.AsyncOpenAI", return_value=fake_openai_client):
+                adapter = CodexAdapter(config)
+
+            chunks = [
+                chunk
+                async for chunk in adapter.stream_message(
+                    messages=[create_user_message("hi")],
+                    system=["system"],
+                    tools=[],
+                    config=ModelConfig(model="gpt-5.5", max_tokens=32),
+                )
+            ]
+
+            return chunks, fake_openai_client.responses.create.call_args.kwargs
+
+        chunks, kwargs = asyncio.run(run())
+        assert chunks == []
+        return kwargs
+
+    def test_prompt_cache_key_passes_via_extra_body(self):
+        config = ApiConfig(
+            provider="codex",
+            model="gpt-5.5",
+            prompt_cache_key="crabcode-sky-router-session",
+        )
+
+        kwargs = self._create_kwargs(config)
+
+        assert kwargs["extra_body"] == {
+            "prompt_cache_key": "crabcode-sky-router-session"
+        }
+
+    def test_prompt_cache_key_defaults_to_session_id_header(self):
+        config = ApiConfig(
+            provider="codex",
+            model="gpt-5.5",
+            http_headers={"session_id": "crabcode-sky-router-session"},
+        )
+
+        kwargs = self._create_kwargs(config)
+
+        assert kwargs["extra_body"] == {
+            "prompt_cache_key": "crabcode-sky-router-session"
+        }
+
+    def test_reasoning_effort_is_passed_directly(self):
+        config = ApiConfig(
+            provider="codex",
+            model="gpt-5.5",
+            reasoning_effort="xhigh",
+        )
+
+        kwargs = self._create_kwargs(config)
+
+        assert kwargs["reasoning"] == {"effort": "xhigh", "summary": "auto"}
 
 
 class _FakeSSEHTTPResponse:

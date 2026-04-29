@@ -55,8 +55,12 @@ class ApiConfig(BaseModel):
     max_tokens: int = 16384
     thinking_enabled: bool = True
     thinking_budget: int = 10000
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
     timeout: int = 300  # seconds, for API calls
     context_window: int | None = None  # override auto-detected context window
+    prompt_cache_key: str | None = None  # OpenAI Responses API prompt cache routing key
+    prompt_cache_retention: Literal["in_memory", "24h"] | None = None
+    extra_body: dict[str, Any] = Field(default_factory=dict)
     azure_endpoint: str | None = None  # Azure OpenAI endpoint URL
     azure_api_version: str | None = None  # Azure API version
     azure_deployment: str | None = None  # Azure deployment name (if model field is not used for this)

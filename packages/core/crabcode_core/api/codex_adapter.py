@@ -290,6 +290,16 @@ class CodexAdapter(APIAdapter):
         headers.setdefault("Accept", "text/event-stream")
         return headers
 
+    def _prompt_cache_key(self) -> str | None:
+        if self.config.prompt_cache_key:
+            return safe_utf8_str(self.config.prompt_cache_key)
+
+        session_id = (self.config.http_headers or {}).get("session_id")
+        if session_id:
+            return safe_utf8_str(session_id)
+
+        return None
+
     async def _stream_via_httpx(
         self,
         params: dict[str, Any],
@@ -465,9 +475,21 @@ class CodexAdapter(APIAdapter):
         if api_tools:
             params["tools"] = api_tools
 
-        # For o-series models, configure reasoning
-        if config.thinking_enabled:
-            # Map thinking_budget to reasoning effort
+        extra_body = safe_utf8_json_tree(dict(self.config.extra_body or {}))
+        prompt_cache_key = self._prompt_cache_key()
+        if prompt_cache_key:
+            extra_body["prompt_cache_key"] = prompt_cache_key
+        if self.config.prompt_cache_retention:
+            extra_body["prompt_cache_retention"] = self.config.prompt_cache_retention
+
+            # For o-series models, configure reasoning
+        if self.config.reasoning_effort:
+            params["reasoning"] = {
+                "effort": self.config.reasoning_effort,
+                "summary": "auto",
+            }
+        elif config.thinking_enabled:
+            # Backward-compatible mapping from thinking_budget to reasoning effort
             budget = config.thinking_budget
             if budget >= 20000:
                 effort = "high"
@@ -477,11 +499,19 @@ class CodexAdapter(APIAdapter):
                 effort = "low"
             params["reasoning"] = {"effort": effort, "summary": "auto"}
 
+        sdk_params = dict(params)
+        if extra_body:
+            sdk_params["extra_body"] = extra_body
+
+        raw_params = dict(params)
+        if extra_body:
+            raw_params.update(extra_body)
+
         # Track active function calls by item_id
         active_calls: dict[str, dict[str, str]] = {}
         emitted_stream_event = False
         try:
-            stream = await self.client.responses.create(**params)
+            stream = await self.client.responses.create(**sdk_params)
             async for event in stream:
                 emitted_stream_event = True
                 event_type = getattr(event, "type", "")
@@ -607,7 +637,7 @@ class CodexAdapter(APIAdapter):
             if emitted_stream_event:
                 raise
 
-            async for chunk in self._stream_via_httpx(params):
+            async for chunk in self._stream_via_httpx(raw_params):
                 yield chunk
 
     async def count_tokens(

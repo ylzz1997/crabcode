@@ -270,9 +270,13 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `format` | Router 模式下的协议格式：`anthropic` \| `openai` \| `codex` \| `ollama` \| `gemini` \| `azure` | — |
 | `thinking_enabled` | 是否启用思考模式（不支持该功能的模型需设为 `false`） | `true` |
 | `thinking_budget` | 思考 token 预算 | `10000` |
+| `reasoning_effort` | OpenAI Responses/Codex 推理强度；显式配置时优先于 `thinking_budget` 映射。可选：`none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | — |
 | `max_tokens` | 最大输出 token 数 | `16384` |
 | `timeout` | API 调用超时时间（秒），防止网络卡住时无限等待 | `300` |
 | `context_window` | 覆盖模型的上下文窗口大小（token 数）。当自动检测失败或不准确时使用——详见下方[上下文窗口管理](#上下文窗口管理)。 | 自动检测 |
+| `prompt_cache_key` | OpenAI Responses/Codex 请求的 Prompt Cache 路由 key；未配置时默认使用 `http_headers.session_id` | — |
+| `prompt_cache_retention` | OpenAI Responses/Codex Prompt Cache 保留策略：`in_memory` \| `24h` | — |
+| `extra_body` | 追加到请求 JSON body 的 provider 专用字段 | `{}` |
 
 `env` 字段用于直接在配置文件中定义环境变量，启动时会自动注入，无需在 shell 中 `export`。
 

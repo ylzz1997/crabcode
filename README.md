@@ -270,9 +270,13 @@ Or configure in `~/.crabcode/settings.json`:
 | `format` | Wire format for router mode: `anthropic` \| `openai` \| `codex` | — |
 | `thinking_enabled` | Enable extended thinking (set `false` for models that don't support it) | `true` |
 | `thinking_budget` | Thinking token budget | `10000` |
+| `reasoning_effort` | OpenAI Responses/Codex reasoning effort; when set, this takes precedence over the `thinking_budget` mapping. Options: `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | — |
 | `max_tokens` | Maximum output tokens | `16384` |
 | `timeout` | API call timeout in seconds (prevents hanging on slow/unresponsive APIs) | `300` |
 | `context_window` | Override the model's context window size (tokens). Used when auto-detection fails or is inaccurate — see [Context Window](#context-window) below. | auto-detected |
+| `prompt_cache_key` | Prompt cache routing key for OpenAI Responses/Codex requests; defaults to `http_headers.session_id` when omitted | — |
+| `prompt_cache_retention` | OpenAI Responses/Codex prompt cache retention policy: `in_memory` \| `24h` | — |
+| `extra_body` | Provider-specific fields appended to the request JSON body | `{}` |
 
 The `env` map lets you define environment variables directly in the config file — they are injected at startup so you don't need to `export` them in your shell.
 
