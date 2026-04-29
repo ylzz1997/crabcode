@@ -10,6 +10,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -65,6 +66,42 @@ def _supports_ansi_output() -> bool:
 
 _ANSI_ENABLED = _supports_ansi_output()
 console = Console(no_color=not _ANSI_ENABLED, force_terminal=_ANSI_ENABLED)
+
+
+def _format_token_count(tokens: int) -> str:
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}M"
+    if tokens >= 1_000:
+        return f"{tokens // 1_000}k"
+    return str(tokens)
+
+
+def _format_percent(percent: float) -> str:
+    rounded = round(percent)
+    if abs(percent - rounded) < 0.05:
+        return f"{rounded}%"
+    return f"{percent:.1f}%"
+
+
+def _render_context_usage(event: TurnCompleteEvent) -> None:
+    used = max(0, int(getattr(event, "context_used_tokens", 0) or 0))
+    window = max(0, int(getattr(event, "context_window_tokens", 0) or 0))
+    if not used and not window:
+        return
+
+    if window:
+        used_percent = max(0.0, float(getattr(event, "context_used_percent", 0.0) or 0.0))
+        remaining_percent = max(0.0, 100.0 - used_percent)
+        console.print(
+            "  [dim]Context: "
+            f"{_format_percent(used_percent)} used "
+            f"({_format_percent(remaining_percent)} remaining) · "
+            f"{_format_token_count(used)} tokens used of {_format_token_count(window)}[/]"
+        )
+    else:
+        console.print(
+            f"  [dim]Context: {_format_token_count(used)} tokens used (window unknown)[/]"
+        )
 
 
 # Slash commands with their arguments for auto-completion
@@ -1501,6 +1538,11 @@ async def run_repl(
 
                     elif isinstance(event, TurnCompleteEvent):
                         await _stop_spinner_with_thinking()
+                        if streamed_text:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            streamed_text = ""
+                        _render_context_usage(event)
                         if getattr(session, '_current_plan', None) and session.agent_mode == "agent":
                             plan_pending = True
 

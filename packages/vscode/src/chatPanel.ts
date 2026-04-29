@@ -27,6 +27,7 @@ import type {
   StreamModePayload,
   ToolResultPayload,
   ToolUsePayload,
+  TurnCompletePayload,
 } from "./client/types";
 
 interface GatewayModelInfo {
@@ -45,6 +46,28 @@ function uniqNonEmpty(values: Array<string | null | undefined>): string[] {
     result.push(trimmed);
   }
   return result;
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.floor(tokens / 1_000)}k`;
+  return `${tokens}`;
+}
+
+function formatPercent(percent: number): string {
+  const rounded = Math.round(percent);
+  return Math.abs(percent - rounded) < 0.05 ? `${rounded}%` : `${percent.toFixed(1)}%`;
+}
+
+function formatContextUsage(payload: TurnCompletePayload): string | null {
+  const used = Math.max(0, Math.trunc(payload.context_used_tokens ?? 0));
+  const window = Math.max(0, Math.trunc(payload.context_window_tokens ?? 0));
+  if (!used && !window) return null;
+  if (!window) return `Context: ${formatTokenCount(used)} tokens used (window unknown)`;
+
+  const usedPercent = Math.max(0, payload.context_used_percent ?? 0);
+  const remainingPercent = Math.max(0, 100 - usedPercent);
+  return `Context: ${formatPercent(usedPercent)} used (${formatPercent(remainingPercent)} remaining) · ${formatTokenCount(used)} tokens used of ${formatTokenCount(window)}`;
 }
 
 // ── Chat message stored locally for rendering ─────────────────────
@@ -500,10 +523,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.setBusy(false);
         this.addMessage("system", `CrabCode：${payload.message}`);
         break;
-      case "turn_complete":
+      case "turn_complete": {
         this.finalizeThinking();
+        const usageText = formatContextUsage(payload as TurnCompletePayload);
+        if (usageText) {
+          this.addMessage("system", usageText);
+        }
         this.setBusy(false);
         break;
+      }
       case "server.connected":
       case "server.heartbeat":
         this.notifyConfigurationChanged();

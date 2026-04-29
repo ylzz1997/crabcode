@@ -84,6 +84,10 @@ class TurnCompleteEvent:
     reason: str = "end_turn"
     turn_count: int = 0
     usage: dict[str, Any] = field(default_factory=dict)
+    context_used_tokens: int = 0
+    context_window_tokens: int = 0
+    context_remaining_tokens: int = 0
+    context_used_percent: float = 0.0
 
 
 @dataclass

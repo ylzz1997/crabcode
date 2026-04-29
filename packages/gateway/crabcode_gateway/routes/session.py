@@ -122,7 +122,8 @@ async def send_message(req: SendMessageRequest, request: Request):
 
     async def _run():
         try:
-            async for event in session.send_message(req.text, max_turns=req.max_turns):
+            images = [img.model_dump() for img in req.images] if req.images else None
+            async for event in session.send_message(req.text, max_turns=req.max_turns, images=images):
                 await event_bus.publish(session.session_id, event)
         except Exception as exc:
             from crabcode_core.types.event import ErrorEvent

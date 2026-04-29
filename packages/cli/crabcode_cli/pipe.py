@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
@@ -29,6 +28,38 @@ _DEBUG_TOOL_PAYLOAD = os.getenv("CRABCODE_DEBUG_TOOL_PAYLOAD", "").strip().lower
     "yes",
     "on",
 }
+
+
+def _format_token_count(tokens: int) -> str:
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}M"
+    if tokens >= 1_000:
+        return f"{tokens // 1_000}k"
+    return str(tokens)
+
+
+def _format_percent(percent: float) -> str:
+    rounded = round(percent)
+    if abs(percent - rounded) < 0.05:
+        return f"{rounded}%"
+    return f"{percent:.1f}%"
+
+
+def _format_context_usage(event: TurnCompleteEvent) -> str | None:
+    used = max(0, int(getattr(event, "context_used_tokens", 0) or 0))
+    window = max(0, int(getattr(event, "context_window_tokens", 0) or 0))
+    if not used and not window:
+        return None
+    if not window:
+        return f"Context: {_format_token_count(used)} tokens used (window unknown)"
+
+    used_percent = max(0.0, float(getattr(event, "context_used_percent", 0.0) or 0.0))
+    remaining_percent = max(0.0, 100.0 - used_percent)
+    return (
+        f"Context: {_format_percent(used_percent)} used "
+        f"({_format_percent(remaining_percent)} remaining) · "
+        f"{_format_token_count(used)} tokens used of {_format_token_count(window)}"
+    )
 
 
 async def run_pipe(
@@ -77,7 +108,10 @@ async def run_pipe(
                 if not event.recoverable:
                     sys.exit(1)
             elif isinstance(event, TurnCompleteEvent):
-                pass
+                usage_text = _format_context_usage(event)
+                if usage_text:
+                    sys.stderr.write(f"\n{usage_text}\n")
+                    sys.stderr.flush()
     finally:
         await session.close()
 

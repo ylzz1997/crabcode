@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Coroutine
 
-from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
+from crabcode_core.api.base import APIAdapter, ModelConfig
+from crabcode_core.compact.compact import compact_conversation, estimate_token_count
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.types.event import (
@@ -477,11 +478,6 @@ async def query_loop(
     Sends messages to the API, processes streaming response, executes
     tool calls, and loops until no more tool calls are made.
     """
-    from crabcode_core.compact.compact import (
-        compact_conversation,
-        estimate_token_count,
-    )
-
     messages = list(params.messages)
     turn_count = 0
     _context_retries = 0
@@ -586,6 +582,37 @@ async def query_loop(
             context_window=context_window,
         )
 
+        last_request_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+
+        def _turn_complete_event(reason: str, snapshot: list[Message]) -> TurnCompleteEvent:
+            context_used = estimate_token_count(
+                _prepend_user_context(snapshot, params.user_context),
+                system=full_system,
+            )
+            exact_context_used = last_request_usage["input_tokens"] + last_request_usage["output_tokens"]
+            if exact_context_used > 0:
+                context_used = max(context_used, exact_context_used)
+            context_window_tokens = max(0, context_window or 0)
+            context_remaining = (
+                max(context_window_tokens - context_used, 0)
+                if context_window_tokens
+                else 0
+            )
+            context_percent = (
+                round(context_used / context_window_tokens * 100, 1)
+                if context_window_tokens
+                else 0.0
+            )
+            return TurnCompleteEvent(
+                reason=reason,
+                turn_count=turn_count,
+                usage=total_usage,
+                context_used_tokens=context_used,
+                context_window_tokens=context_window_tokens,
+                context_remaining_tokens=context_remaining,
+                context_used_percent=context_percent,
+            )
+
         assistant_content: list[ContentBlock] = []
         tool_use_blocks: list[ToolUseBlock] = []
         current_text = ""
@@ -686,14 +713,27 @@ async def query_loop(
 
                 elif chunk.type == "message_start":
                     if chunk.usage:
-                        total_usage["input_tokens"] += chunk.usage.get("input_tokens", 0)
+                        input_tokens = int(chunk.usage.get("input_tokens", 0) or 0)
+                        output_tokens = int(chunk.usage.get("output_tokens", 0) or 0)
+                        total_usage["input_tokens"] += input_tokens
+                        total_usage["output_tokens"] += output_tokens
+                        last_request_usage["input_tokens"] += input_tokens
+                        last_request_usage["output_tokens"] += output_tokens
 
                 elif chunk.type == "message_delta":
                     if chunk.usage:
-                        total_usage["output_tokens"] += chunk.usage.get("output_tokens", 0)
+                        output_tokens = int(chunk.usage.get("output_tokens", 0) or 0)
+                        total_usage["output_tokens"] += output_tokens
+                        last_request_usage["output_tokens"] += output_tokens
 
                 elif chunk.type == "message_stop":
-                    pass
+                    if chunk.usage:
+                        input_tokens = int(chunk.usage.get("input_tokens", 0) or 0)
+                        output_tokens = int(chunk.usage.get("output_tokens", 0) or 0)
+                        total_usage["input_tokens"] += input_tokens
+                        total_usage["output_tokens"] += output_tokens
+                        last_request_usage["input_tokens"] += input_tokens
+                        last_request_usage["output_tokens"] += output_tokens
 
                 elif chunk.type == "error":
                     is_ctx_err = (
@@ -813,20 +853,12 @@ async def query_loop(
                 turn_count -= 1
                 continue
             logger.warning("Empty response, ending turn (awaiting_resume=%s)", _awaiting_compact_resume)
-            yield TurnCompleteEvent(
-                reason="empty_response",
-                turn_count=turn_count,
-                usage=total_usage,
-            )
+            yield _turn_complete_event("empty_response", messages)
             params.messages[:] = messages
             return
 
         if not tool_use_blocks:
-            yield TurnCompleteEvent(
-                reason="end_turn",
-                turn_count=turn_count,
-                usage=total_usage,
-            )
+            yield _turn_complete_event("end_turn", messages)
             params.messages[:] = messages
             return
 
@@ -954,19 +986,11 @@ async def query_loop(
                     yield item
 
             if should_end_turn_after_tools:
-                yield TurnCompleteEvent(
-                    reason="mode_switch_requested",
-                    turn_count=turn_count,
-                    usage=total_usage,
-                )
+                yield _turn_complete_event("mode_switch_requested", messages)
                 params.messages[:] = messages
                 return
 
         if params.max_turns and turn_count >= params.max_turns:
-            yield TurnCompleteEvent(
-                reason="max_turns_reached",
-                turn_count=turn_count,
-                usage=total_usage,
-            )
+            yield _turn_complete_event("max_turns_reached", messages)
             params.messages[:] = messages
             return

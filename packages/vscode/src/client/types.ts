@@ -8,17 +8,19 @@
  * ──────────────────────────────────────────────────────────────────
  */
 
+// ── Shared types ─────────────────────────────────────────────────────
+export interface ImageAttachment {
+  media_type: string;
+  data: string;
+}
+
+
 // ── Request types ────────────────────────────────────────────────────
 export interface SendMessageRequest {
   text: string;
   max_turns?: number;
   session_id?: string | null;
   images?: ImageAttachment[];
-}
-
-export interface ImageAttachment {
-  media_type: string;  // e.g. "image/png", "image/jpeg", "image/gif", "image/webp"
-  data: string;        // base64-encoded image data
 }
 
 export interface NewSessionRequest {
@@ -228,6 +230,10 @@ export interface TurnCompletePayload {
   reason?: string;
   turn_count?: number;
   usage?: Record<string, unknown>;
+  context_used_tokens?: number;
+  context_window_tokens?: number;
+  context_remaining_tokens?: number;
+  context_used_percent?: number;
 }
 
 export interface StreamModePayload {

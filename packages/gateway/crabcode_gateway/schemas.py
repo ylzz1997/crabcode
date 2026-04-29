@@ -14,10 +14,16 @@ from pydantic import BaseModel, Field
 # ── Request schemas ──────────────────────────────────────────────
 
 
+class ImageAttachment(BaseModel):
+    media_type: str
+    data: str
+
+
 class SendMessageRequest(BaseModel):
     text: str
     max_turns: int = 0
     session_id: str | None = None
+    images: list[ImageAttachment] = Field(default_factory=list)
 
 
 class NewSessionRequest(BaseModel):
@@ -231,6 +237,10 @@ class TurnCompletePayload(BaseModel):
     reason: str = "end_turn"
     turn_count: int = 0
     usage: dict[str, Any] = Field(default_factory=dict)
+    context_used_tokens: int = 0
+    context_window_tokens: int = 0
+    context_remaining_tokens: int = 0
+    context_used_percent: float = 0.0
 
 
 class StreamModePayload(BaseModel):
@@ -455,6 +465,10 @@ def core_event_to_payload(event: Any) -> EventPayload:
             reason=event.reason,
             turn_count=event.turn_count,
             usage=event.usage,
+            context_used_tokens=event.context_used_tokens,
+            context_window_tokens=event.context_window_tokens,
+            context_remaining_tokens=event.context_remaining_tokens,
+            context_used_percent=event.context_used_percent,
         )
     if isinstance(event, StreamModeEvent):
         return StreamModePayload(mode=event.mode, agent_id=event.agent_id)

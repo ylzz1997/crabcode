@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import re
 import sys
 from dataclasses import dataclass, field as dc_field
 from pathlib import Path
@@ -115,8 +114,6 @@ class FieldInfo:
     optional: bool  # has a default value OR is X | None
     default_ts: str | None  # TS representation of the default
 
-
-from dataclasses import dataclass, field as dc_field
 
 
 @dataclass
@@ -293,6 +290,20 @@ def generate_ts(models: list[ModelInfo], event_payload_variants: list[str]) -> s
     """Produce the full TypeScript file content."""
     out = HEADER
 
+    # ── Shared types ──
+    response_keywords = ("Info", "Response")
+    shared_models = [
+        m
+        for m in models
+        if not m.is_payload
+        and not m.name.endswith("Request")
+        and not any(m.name.endswith(kw) for kw in response_keywords)
+    ]
+    if shared_models:
+        out += _section_comment("Shared types")
+        for m in shared_models:
+            out += _emit_interface(m)
+
     # ── Request types ──
     request_models = [
         m for m in models if m.name.endswith("Request") and not m.is_payload
@@ -303,7 +314,6 @@ def generate_ts(models: list[ModelInfo], event_payload_variants: list[str]) -> s
             out += _emit_interface(m)
 
     # ── Response / info types ──
-    response_keywords = ("Info", "Response")
     response_models = [
         m
         for m in models
