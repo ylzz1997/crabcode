@@ -156,6 +156,36 @@ export interface PermissionCard {
   allowed: boolean | null;
 }
 
+export interface PendingEditFileSummary {
+  id: string;
+  path: string;
+  shortPath: string;
+  action: "create" | "modify";
+  added: number;
+  removed: number;
+  hunkCount: number;
+}
+
+export interface PendingEditReviewSummary {
+  totalFiles: number;
+  totalHunks: number;
+  files: PendingEditFileSummary[];
+}
+
+export interface PendingEditActionMessage {
+  action:
+    | "undoAll"
+    | "keepAll"
+    | "reviewAll"
+    | "undoFile"
+    | "keepFile"
+    | "reviewFile"
+    | "undoHunk"
+    | "keepHunk";
+  changeId?: string;
+  hunkId?: string;
+}
+
 type HistoryItem =
   | { kind: "message"; message: ChatMessage }
   | { kind: "tool"; card: ToolCard }
@@ -183,6 +213,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private latestContextUsage: ContextUsageStatus | null = null;
   private webviewReady = false;
   private pendingWebviewMessages: any[] = [];
+  private pendingEditReview: PendingEditReviewSummary | null = null;
+  private readonly pendingEditActionEmitter = new vscode.EventEmitter<PendingEditActionMessage>();
+  public readonly onPendingEditAction = this.pendingEditActionEmitter.event;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -233,6 +266,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (this.latestContextUsage) {
             this.postMessage({ type: "contextUsage", usage: this.latestContextUsage });
           }
+          this.postMessage({ type: "pendingEditReview", summary: this.pendingEditReview });
           break;
         case "setModel":
           if (typeof msg.name === "string" && msg.name.length > 0) {
@@ -275,6 +309,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "interrupt":
           this.connection.sendInterrupt();
+          break;
+        case "pendingEditAction":
+          this.pendingEditActionEmitter.fire({
+            action: msg.action,
+            changeId: typeof msg.changeId === "string" ? msg.changeId : undefined,
+            hunkId: typeof msg.hunkId === "string" ? msg.hunkId : undefined,
+          });
           break;
         case "expandAllCards":
           this.expandAllCards();
@@ -516,6 +557,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public prefillInput(text: string): void {
     this.postMessage({ type: "prefill", text });
     this.reveal();
+  }
+
+  public setPendingEditReview(summary: PendingEditReviewSummary | null): void {
+    this.pendingEditReview = summary;
+    this.postMessage({ type: "pendingEditReview", summary });
   }
 
   // ── Internals ──────────────────────────────────────────────────
@@ -1534,6 +1580,109 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .file-change .path:hover { text-decoration: underline; }
 
+    /* ── Pending edits review bar ──────────────────────────────── */
+    .pending-edits {
+      flex-shrink: 0;
+      width: 100%;
+      min-width: 0;
+      padding: 7px 9px;
+      border-top: 1px solid var(--border);
+      background: color-mix(in srgb, var(--vscode-editor-background) 72%, var(--vscode-sideBar-background));
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      box-shadow: 0 -4px 14px rgba(0,0,0,0.14);
+    }
+    .pending-edits.hidden { display: none; }
+    .pending-edits-header,
+    .pending-edit-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .pending-edits-title {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      font-weight: 650;
+      color: var(--vscode-foreground);
+    }
+    .pending-edits-title .chevron {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .pending-edits-actions,
+    .pending-edit-actions {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .pending-edit-row {
+      padding-top: 2px;
+      color: var(--text-muted);
+      font-size: 11.5px;
+    }
+    .pending-edit-icon {
+      flex: 0 0 auto;
+      opacity: 0.8;
+      font-size: 13px;
+    }
+    .pending-edit-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      border: none;
+      background: transparent;
+      text-align: left;
+      padding: 0;
+      font: inherit;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+    }
+    .pending-edit-name:hover {
+      color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+      text-decoration: underline;
+    }
+    .pending-edit-stats {
+      flex: 0 0 auto;
+      color: var(--vscode-terminal-ansiGreen, #89d185);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+    }
+    .pending-edit-stats .removed {
+      color: var(--vscode-terminal-ansiRed, #f48771);
+    }
+    .pending-edit-btn {
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      border-radius: 6px;
+      padding: 3px 6px;
+      font-size: 11.5px;
+      line-height: 1.25;
+      opacity: 0.82;
+    }
+    .pending-edit-btn:hover {
+      background: var(--accent-muted);
+      opacity: 1;
+    }
+    .pending-edit-btn.primary {
+      background: color-mix(in srgb, var(--vscode-button-background, var(--accent)) 82%, transparent);
+      color: var(--vscode-button-foreground, #fff);
+      opacity: 1;
+    }
+    .pending-edit-btn.primary:hover {
+      background: var(--vscode-button-hoverBackground, var(--vscode-button-background, var(--accent)));
+    }
+
     /* ── Composer ──────────────────────────────────────────────── */
     #composer-wrap {
       flex-shrink: 0;
@@ -1855,16 +2004,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       color: color-mix(in srgb, var(--vscode-foreground) 86%, transparent);
     }
     .plus-menu {
-      position: absolute;
-      bottom: calc(100% + 6px);
+      position: fixed;
+      top: 0;
       left: 0;
-      min-width: 160px;
+      min-width: min(160px, calc(100vw - 16px));
+      max-width: calc(100vw - 16px);
       background: var(--vscode-menu-background);
       color: var(--vscode-menu-foreground);
       border: 1px solid var(--vscode-menu-border, #444);
       border-radius: 10px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-      z-index: 30;
+      z-index: 100;
       padding: 3px 0;
     }
     .plus-menu.hidden { display: none; }
@@ -2038,6 +2188,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     <span class="busy-dots"><span></span><span></span><span></span></span>
     <span class="busy-label">CrabCode 正在处理</span>
   </div>
+  <div id="pending-edits-bar" class="pending-edits hidden"></div>
   <div id="composer-wrap">
     <div id="composer-card">
       <div class="composer-meta">
@@ -2054,12 +2205,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <div id="input-toolbar" class="composer-toolbar">
         <div class="toolbar-left">
           <div class="tb-left-wrap">
-            <button type="button" class="tb-icon-btn" id="plus-btn" title="添加文件或图片">+</button>
-            <div id="plus-menu" class="plus-menu hidden">
-              <button type="button" data-action="image">添加图片…</button>
-              <button type="button" data-action="file">添加文件…</button>
-              <button type="button" data-action="screenshot">屏幕截图说明</button>
-            </div>
+            <button type="button" class="tb-icon-btn" id="plus-btn" title="添加文件或图片" aria-haspopup="menu" aria-expanded="false">+</button>
           </div>
           <div class="model-pill-wrap">
             <div id="model-select-wrap" class="tb-model-wrap is-empty">
@@ -2086,6 +2232,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <input type="file" id="file-input-image" accept="image/*" multiple hidden />
   </div>
+  <div id="plus-menu" class="plus-menu hidden" role="menu">
+    <button type="button" role="menuitem" data-action="image">添加图片…</button>
+    <button type="button" role="menuitem" data-action="file">添加文件…</button>
+    <button type="button" role="menuitem" data-action="screenshot">屏幕截图说明</button>
+  </div>
   <script nonce="${nonce}">
     (function() {
       try {
@@ -2106,6 +2257,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const contextMeter = document.getElementById('context-meter');
         const contextTooltip = document.getElementById('context-tooltip');
         const permissionSelect = document.getElementById('permission-select');
+        const pendingEditsBar = document.getElementById('pending-edits-bar');
 
     // ── Tool card state ──────────────────────────────────────────
     const toolCards = new Map();
@@ -2322,6 +2474,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     window.addEventListener('resize', () => {
       updatePanelWidthMode();
+      if (!plusMenu.classList.contains('hidden')) {
+        positionPlusMenu();
+      }
       if (stickToBottom) {
         scrollMessagesToBottom(true);
       }
@@ -2330,6 +2485,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (typeof ResizeObserver !== 'undefined') {
       new ResizeObserver(() => {
         updatePanelWidthMode();
+        if (!plusMenu.classList.contains('hidden')) {
+          positionPlusMenu();
+        }
         if (stickToBottom) {
           scrollMessagesToBottom(true);
         }
@@ -2937,6 +3095,59 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    function renderPendingEdits(summary) {
+      if (!pendingEditsBar) return;
+      const files = summary && Array.isArray(summary.files) ? summary.files : [];
+      if (!summary || files.length === 0) {
+        pendingEditsBar.classList.add('hidden');
+        pendingEditsBar.innerHTML = '';
+        return;
+      }
+
+      const title = summary.totalFiles + (summary.totalFiles === 1 ? ' File' : ' Files');
+      const shownFiles = files.slice(0, 4);
+      const hiddenCount = Math.max(0, files.length - shownFiles.length);
+      const rows = shownFiles.map(function(file) {
+        const stats = '<span>+' + escapeHtml(String(file.added || 0)) + '</span> ' +
+          '<span class="removed">-' + escapeHtml(String(file.removed || 0)) + '</span>';
+        return '<div class="pending-edit-row">' +
+          '<span class="pending-edit-icon">' + (file.action === 'create' ? '+' : '↔') + '</span>' +
+          '<button type="button" class="pending-edit-name" data-pending-action="reviewFile" data-change-id="' + escapeAttr(file.id) + '" title="' + escapeAttr(file.path) + '">' + escapeHtml(file.shortPath || file.path) + '</button>' +
+          '<span class="pending-edit-stats">' + stats + '</span>' +
+          '<span class="pending-edit-actions">' +
+            '<button type="button" class="pending-edit-btn" data-pending-action="undoFile" data-change-id="' + escapeAttr(file.id) + '">Undo</button>' +
+            '<button type="button" class="pending-edit-btn primary" data-pending-action="keepFile" data-change-id="' + escapeAttr(file.id) + '">Keep</button>' +
+          '</span>' +
+        '</div>';
+      }).join('');
+      const more = hiddenCount > 0
+        ? '<div class="pending-edit-row"><span class="pending-edit-icon"></span><span class="pending-edit-name">还有 ' + hiddenCount + ' 个文件</span></div>'
+        : '';
+
+      pendingEditsBar.classList.remove('hidden');
+      pendingEditsBar.innerHTML =
+        '<div class="pending-edits-header">' +
+          '<div class="pending-edits-title"><span class="chevron">⌄</span><span>' + title + '</span></div>' +
+          '<div class="pending-edits-actions">' +
+            '<button type="button" class="pending-edit-btn" data-pending-action="undoAll">Undo</button>' +
+            '<button type="button" class="pending-edit-btn primary" data-pending-action="keepAll">Keep</button>' +
+            '<button type="button" class="pending-edit-btn" data-pending-action="reviewAll">Review</button>' +
+          '</div>' +
+        '</div>' +
+        rows +
+        more;
+
+      pendingEditsBar.querySelectorAll('[data-pending-action]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          vscode.postMessage({
+            type: 'pendingEditAction',
+            action: btn.getAttribute('data-pending-action'),
+            changeId: btn.getAttribute('data-change-id') || undefined,
+          });
+        });
+      });
+    }
+
     // ── Attachments (images + text files) ───────────────────────
 
     function guessImageMime(name, mime) {
@@ -3123,10 +3334,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // ── Plus menu & file inputs ─────────────────────────────────
 
-    function closePlusMenu() { plusMenu.classList.add('hidden'); }
+    function positionPlusMenu() {
+      plusMenu.classList.remove('hidden');
+      plusMenu.style.visibility = 'hidden';
+      plusMenu.style.left = '0px';
+      plusMenu.style.top = '0px';
+      const btnRect = plusBtn.getBoundingClientRect();
+      const cardRect = composerCard.getBoundingClientRect();
+      const menuRect = plusMenu.getBoundingClientRect();
+      const margin = 8;
+      const gap = 6;
+      const maxLeft = Math.max(margin, window.innerWidth - menuRect.width - margin);
+      const maxTop = Math.max(margin, window.innerHeight - menuRect.height - margin);
+      const left = Math.min(Math.max(btnRect.left, margin), maxLeft);
+      const top = Math.min(Math.max(cardRect.top - menuRect.height - gap, margin), maxTop);
+      plusMenu.style.left = left + 'px';
+      plusMenu.style.top = top + 'px';
+      plusMenu.style.visibility = '';
+    }
+
+    function openPlusMenu() {
+      positionPlusMenu();
+      plusBtn.setAttribute('aria-expanded', 'true');
+    }
+
+    function closePlusMenu() {
+      plusMenu.classList.add('hidden');
+      plusMenu.style.visibility = '';
+      plusBtn.setAttribute('aria-expanded', 'false');
+    }
+
     plusBtn.addEventListener('click', function(e) {
       e.stopPropagation();
-      plusMenu.classList.toggle('hidden');
+      if (plusMenu.classList.contains('hidden')) openPlusMenu();
+      else closePlusMenu();
     });
     document.addEventListener('click', function() { closePlusMenu(); });
     plusMenu.addEventListener('click', function(e) { e.stopPropagation(); });
@@ -3364,6 +3605,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'contextUsage':
           renderContextUsage(msg.usage);
+          break;
+        case 'pendingEditReview':
+          renderPendingEdits(msg.summary);
           break;
         case 'fileChange':
           addFileChangePill(msg.payload);

@@ -9,6 +9,7 @@ import * as vscode from "vscode";
 import { CrabCodeConnection } from "./connection";
 import { ChatPanelProvider } from "./chatPanel";
 import { ensureGateway, GatewayProcess } from "./gatewayManager";
+import { PendingEditManager } from "./pendingEdits";
 
 import {
   buildPermissionResponseCommand,
@@ -624,6 +625,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const contextProvider = new ContextProvider(activeConnection);
   push(contextProvider);
   push(new FileChangeHandler(activeConnection, context));
+  push(new PendingEditManager(activeConnection, activeChatProvider));
 
   // Wire server events to handlers
   push(
