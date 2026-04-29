@@ -559,6 +559,7 @@ class AgentManager:
                     result=event.result,
                     is_error=event.is_error,
                     result_for_display=event.result_for_display,
+                    tool_input=event.tool_input,
                     agent_id=agent_id,
                 )
             )

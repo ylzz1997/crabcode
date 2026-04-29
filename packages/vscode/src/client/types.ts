@@ -173,6 +173,7 @@ export interface ToolResultPayload {
   type?: "tool_result";
   is_error?: boolean;
   result_for_display?: string | null;
+  tool_input?: Record<string, unknown>;
   agent_id?: string | null;
 }
 

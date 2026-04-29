@@ -72,7 +72,21 @@ class FileEditTool(Tool):
         )
 
     async def validate_input(self, tool_input: dict[str, Any]) -> str | None:
-        if tool_input.get("old_string") == tool_input.get("new_string"):
+        missing = [
+            key
+            for key in ("file_path", "old_string", "new_string")
+            if key not in tool_input
+        ]
+        if missing:
+            return f"missing required field(s): {', '.join(missing)}"
+
+        old_string = tool_input.get("old_string")
+        new_string = tool_input.get("new_string")
+        if not isinstance(old_string, str) or not isinstance(new_string, str):
+            return "old_string and new_string must be strings"
+        if old_string == "":
+            return "old_string must not be empty"
+        if old_string == new_string:
             return "old_string and new_string must be different"
         return None
 

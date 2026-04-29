@@ -207,6 +207,7 @@ async def _run_tools(
                 tool_name=block.name,
                 result=f"Error: unknown tool '{block.name}'",
                 is_error=True,
+                tool_input=block.input,
             )
             return [msg], event
 
@@ -223,6 +224,7 @@ async def _run_tools(
                 tool_name=block.name,
                 result=f"Validation error: {validation_error}",
                 is_error=True,
+                tool_input=block.input,
             )
             return [msg], event
 
@@ -258,6 +260,7 @@ async def _run_tools(
                     tool_name=block.name,
                     result=f"Hook blocked tool call: {reason}",
                     is_error=True,
+                    tool_input=block.input,
                 )
                 return [*extra_messages, msg], event
 
@@ -310,6 +313,7 @@ async def _run_tools(
             result=result.result_for_model,
             is_error=result.is_error,
             result_for_display=result.result_for_display,
+            tool_input=block.input,
         )
         return [*extra_messages, msg], event
 
@@ -584,14 +588,34 @@ async def query_loop(
 
         last_request_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
+        def _usage_int(usage: dict[str, Any], key: str) -> int:
+            try:
+                return int(usage.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _set_request_usage(usage: dict[str, Any]) -> None:
+            """Record this API request's latest usage snapshot.
+
+            Some providers stream usage as partial snapshots and Codex commonly
+            reports the final request usage on message_stop. Keep total_usage in
+            sync by applying only the difference from the prior snapshot.
+            """
+            for key in ("input_tokens", "output_tokens"):
+                if key not in usage:
+                    continue
+                value = _usage_int(usage, key)
+                previous = last_request_usage[key]
+                last_request_usage[key] = value
+                total_usage[key] += value - previous
+
         def _turn_complete_event(reason: str, snapshot: list[Message]) -> TurnCompleteEvent:
-            context_used = estimate_token_count(
+            estimated_context_used = estimate_token_count(
                 _prepend_user_context(snapshot, params.user_context),
                 system=full_system,
             )
             exact_context_used = last_request_usage["input_tokens"] + last_request_usage["output_tokens"]
-            if exact_context_used > 0:
-                context_used = max(context_used, exact_context_used)
+            context_used = exact_context_used if exact_context_used > 0 else estimated_context_used
             context_window_tokens = max(0, context_window or 0)
             context_remaining = (
                 max(context_window_tokens - context_used, 0)
@@ -713,27 +737,15 @@ async def query_loop(
 
                 elif chunk.type == "message_start":
                     if chunk.usage:
-                        input_tokens = int(chunk.usage.get("input_tokens", 0) or 0)
-                        output_tokens = int(chunk.usage.get("output_tokens", 0) or 0)
-                        total_usage["input_tokens"] += input_tokens
-                        total_usage["output_tokens"] += output_tokens
-                        last_request_usage["input_tokens"] += input_tokens
-                        last_request_usage["output_tokens"] += output_tokens
+                        _set_request_usage(chunk.usage)
 
                 elif chunk.type == "message_delta":
                     if chunk.usage:
-                        output_tokens = int(chunk.usage.get("output_tokens", 0) or 0)
-                        total_usage["output_tokens"] += output_tokens
-                        last_request_usage["output_tokens"] += output_tokens
+                        _set_request_usage(chunk.usage)
 
                 elif chunk.type == "message_stop":
                     if chunk.usage:
-                        input_tokens = int(chunk.usage.get("input_tokens", 0) or 0)
-                        output_tokens = int(chunk.usage.get("output_tokens", 0) or 0)
-                        total_usage["input_tokens"] += input_tokens
-                        total_usage["output_tokens"] += output_tokens
-                        last_request_usage["input_tokens"] += input_tokens
-                        last_request_usage["output_tokens"] += output_tokens
+                        _set_request_usage(chunk.usage)
 
                 elif chunk.type == "error":
                     is_ctx_err = (
@@ -930,6 +942,7 @@ async def query_loop(
                     tool_name=effective_block.name,
                     result=f"Permission denied: {reason}",
                     is_error=True,
+                    tool_input=effective_block.input,
                 )
             elif merged_perm.behavior == PermissionBehavior.ASK:
                 yield PermissionRequestEvent(
@@ -961,6 +974,7 @@ async def query_loop(
                         tool_name=effective_block.name,
                         result="Permission denied by user.",
                         is_error=True,
+                        tool_input=effective_block.input,
                     )
             else:
                 approved_blocks.append(effective_block)

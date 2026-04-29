@@ -180,6 +180,7 @@ class ToolResultPayload(BaseModel):
     result: str
     is_error: bool = False
     result_for_display: str | None = None
+    tool_input: dict[str, Any] = Field(default_factory=dict)
     agent_id: str | None = None
 
 
@@ -415,6 +416,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             result=event.result,
             is_error=event.is_error,
             result_for_display=event.result_for_display,
+            tool_input=event.tool_input,
             agent_id=event.agent_id,
         )
     if isinstance(event, PermissionRequestEvent):

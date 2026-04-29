@@ -39,6 +39,7 @@ class ToolResultEvent:
     result: str
     is_error: bool = False
     result_for_display: str | None = None
+    tool_input: dict[str, Any] = field(default_factory=dict)
     agent_id: str | None = None
 
 
