@@ -59,15 +59,55 @@ function formatPercent(percent: number): string {
   return Math.abs(percent - rounded) < 0.05 ? `${rounded}%` : `${percent.toFixed(1)}%`;
 }
 
-function formatContextUsage(payload: TurnCompletePayload): string | null {
+interface ContextUsageStatus {
+  usedTokens: number;
+  windowTokens: number;
+  remainingTokens: number;
+  usedPercent: number;
+  remainingPercent: number;
+  details: string[];
+}
+
+function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStatus | null {
   const used = Math.max(0, Math.trunc(payload.context_used_tokens ?? 0));
   const window = Math.max(0, Math.trunc(payload.context_window_tokens ?? 0));
   if (!used && !window) return null;
-  if (!window) return `Context: ${formatTokenCount(used)} tokens used (window unknown)`;
+  if (!window) {
+    return {
+      usedTokens: used,
+      windowTokens: 0,
+      remainingTokens: 0,
+      usedPercent: 0,
+      remainingPercent: 0,
+      details: [
+        "背景信息窗口：",
+        `已用 ${formatTokenCount(used)} 标记`,
+        "总量未知",
+      ],
+    };
+  }
 
-  const usedPercent = Math.max(0, payload.context_used_percent ?? 0);
+  const usedPercent = Math.min(
+    100,
+    Math.max(0, payload.context_used_percent ?? (used / window) * 100),
+  );
   const remainingPercent = Math.max(0, 100 - usedPercent);
-  return `Context: ${formatPercent(usedPercent)} used (${formatPercent(remainingPercent)} remaining) · ${formatTokenCount(used)} tokens used of ${formatTokenCount(window)}`;
+  const remainingTokens = Math.max(
+    0,
+    Math.trunc(payload.context_remaining_tokens ?? window - used),
+  );
+  return {
+    usedTokens: used,
+    windowTokens: window,
+    remainingTokens,
+    usedPercent,
+    remainingPercent,
+    details: [
+      "背景信息窗口：",
+      `${formatPercent(usedPercent)} 已用（剩余 ${formatPercent(remainingPercent)}）`,
+      `已用 ${formatTokenCount(used)} 标记，共 ${formatTokenCount(window)}`,
+    ],
+  };
 }
 
 // ── Chat message stored locally for rendering ─────────────────────
@@ -140,6 +180,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private isBusy = false;
   private latestModelRequestId = 0;
   private lastNonEmptyModels: string[] = [];
+  private latestContextUsage: ContextUsageStatus | null = null;
   private webviewReady = false;
   private pendingWebviewMessages: any[] = [];
 
@@ -189,6 +230,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.postMessage({ type: "history", items: this.history });
           void this.pushChatOptions();
           this.postMessage({ type: "busyState", busy: this.isBusy });
+          if (this.latestContextUsage) {
+            this.postMessage({ type: "contextUsage", usage: this.latestContextUsage });
+          }
           break;
         case "setModel":
           if (typeof msg.name === "string" && msg.name.length > 0) {
@@ -525,9 +569,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       case "turn_complete": {
         this.finalizeThinking();
-        const usageText = formatContextUsage(payload as TurnCompletePayload);
-        if (usageText) {
-          this.addMessage("system", usageText);
+        const usage = buildContextUsageStatus(payload as TurnCompletePayload);
+        if (usage) {
+          this.latestContextUsage = usage;
+          this.postMessage({ type: "contextUsage", usage });
         }
         this.setBusy(false);
         break;
@@ -1712,6 +1757,103 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
       opacity: 1;
     }
+    .context-meter {
+      --ctx-progress: 0%;
+      --ctx-ring-active: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+      --ctx-ring-track: color-mix(in srgb, var(--vscode-foreground) 17%, transparent);
+      position: relative;
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--vscode-foreground);
+      opacity: 0.78;
+      cursor: default;
+    }
+    .context-meter[hidden] { display: none; }
+    .context-meter:hover,
+    .context-meter:focus {
+      background: var(--accent-muted);
+      opacity: 1;
+    }
+    .context-meter:focus-visible {
+      outline: 1.5px solid var(--accent);
+      outline-offset: 1px;
+    }
+    .context-meter.is-warn {
+      --ctx-ring-active: var(--vscode-editorWarning-foreground, #ffcc66);
+    }
+    .context-meter.is-danger {
+      --ctx-ring-active: var(--vscode-errorForeground, #f48771);
+    }
+    .ctx-ring {
+      position: relative;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: conic-gradient(from -90deg, var(--ctx-ring-active) var(--ctx-progress), var(--ctx-ring-track) 0);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+    }
+    .ctx-ring::after {
+      content: '';
+      position: absolute;
+      inset: 3px;
+      border-radius: 50%;
+      background: var(--surface-elevated);
+    }
+    .context-tooltip {
+      position: absolute;
+      right: -42px;
+      bottom: calc(100% + 8px);
+      min-width: 210px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--vscode-editorWidget-border, var(--border));
+      background: var(--vscode-editorWidget-background, var(--vscode-menu-background));
+      color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+      box-shadow: 0 8px 22px rgba(0,0,0,0.34);
+      font-size: 12px;
+      line-height: 1.55;
+      text-align: center;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(2px);
+      transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+      z-index: 45;
+    }
+    .context-tooltip::after {
+      content: '';
+      position: absolute;
+      right: 49px;
+      bottom: -5px;
+      width: 9px;
+      height: 9px;
+      background: inherit;
+      border-right: 1px solid var(--vscode-editorWidget-border, var(--border));
+      border-bottom: 1px solid var(--vscode-editorWidget-border, var(--border));
+      transform: rotate(45deg);
+    }
+    .context-meter:hover .context-tooltip,
+    .context-meter:focus .context-tooltip {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
+    }
+    .context-tooltip-title {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .context-tooltip-usage {
+      font-weight: 700;
+      color: var(--vscode-foreground);
+    }
+    .context-tooltip-detail {
+      color: color-mix(in srgb, var(--vscode-foreground) 86%, transparent);
+    }
     .plus-menu {
       position: absolute;
       bottom: calc(100% + 6px);
@@ -1925,6 +2067,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               <select id="model-select" class="tb-model" title="模型"></select>
             </div>
           </div>
+          <div id="context-meter" class="context-meter" hidden tabindex="0" role="img" aria-label="背景信息窗口用量" aria-describedby="context-tooltip">
+            <span class="ctx-ring" aria-hidden="true"></span>
+            <div id="context-tooltip" class="context-tooltip" role="tooltip"></div>
+          </div>
         </div>
         <button type="button" class="tb-send-circle" id="send-btn" title="发送 (⌘↵ / Ctrl+Enter)" aria-label="发送">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
@@ -1957,6 +2103,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const modelSelect = document.getElementById('model-select');
         const modelSelectWrap = document.getElementById('model-select-wrap');
         const modelSelectLabel = document.getElementById('model-select-label');
+        const contextMeter = document.getElementById('context-meter');
+        const contextTooltip = document.getElementById('context-tooltip');
         const permissionSelect = document.getElementById('permission-select');
 
     // ── Tool card state ──────────────────────────────────────────
@@ -2773,6 +2921,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
+    function renderContextUsage(usage) {
+      if (!contextMeter) return;
+      if (!usage) {
+        contextMeter.hidden = true;
+        return;
+      }
+
+      const percent = Math.max(0, Math.min(100, Number(usage.usedPercent) || 0));
+      const details = Array.isArray(usage.details) ? usage.details : [];
+      const title = details[0] || '背景信息窗口：';
+      const usageLine = details[1] || '用量未知';
+      const detailLine = details[2] || '';
+
+      contextMeter.hidden = false;
+      contextMeter.style.setProperty('--ctx-progress', percent.toFixed(2) + '%');
+      contextMeter.classList.toggle('is-warn', percent >= 70 && percent < 90);
+      contextMeter.classList.toggle('is-danger', percent >= 90);
+      contextMeter.setAttribute('aria-label', [title, usageLine, detailLine].filter(Boolean).join(' '));
+
+      if (contextTooltip) {
+        contextTooltip.innerHTML =
+          '<div class="context-tooltip-title">' + escapeHtml(title) + '</div>' +
+          '<div class="context-tooltip-usage">' + escapeHtml(usageLine) + '</div>' +
+          (detailLine ? '<div class="context-tooltip-detail">' + escapeHtml(detailLine) + '</div>' : '');
+      }
+    }
+
     // ── Attachments (images + text files) ───────────────────────
 
     function guessImageMime(name, mime) {
@@ -3201,6 +3376,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         case 'busyState':
           setBusyState(msg.busy);
+          break;
+        case 'contextUsage':
+          renderContextUsage(msg.usage);
           break;
         case 'fileChange':
           addFileChangePill(msg.payload);
