@@ -62,29 +62,6 @@ interface DiffResult {
   stats: DiffStats;
 }
 
-interface ReviewState {
-  files: Array<{
-    id: string;
-    shortPath: string;
-    path: string;
-    action: PendingEditAction;
-    added: number;
-    removed: number;
-    hunkCount: number;
-  }>;
-  currentIndex: number;
-  totalFiles: number;
-  file: {
-    id: string;
-    shortPath: string;
-    path: string;
-    action: PendingEditAction;
-    added: number;
-    removed: number;
-    hunks: Array<PendingHunk & { index: number; total: number }>;
-  } | null;
-}
-
 interface TextRead {
   exists: boolean;
   content: string;
@@ -95,16 +72,15 @@ const MAX_LCS_CELLS = 8_000_000;
 const CONTEXT_LINES = 3;
 const REVIEW_REVEAL_DELAY_MS = 120;
 
-export class PendingEditManager implements vscode.Disposable, vscode.CodeLensProvider {
+export class PendingEditManager implements vscode.Disposable, vscode.CodeLensProvider, vscode.InlayHintsProvider {
   private readonly toolSnapshots = new Map<string, ToolSnapshot>();
   private readonly changes = new Map<string, PendingChange>();
   private readonly changeByPath = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly codeLensEmitter = new vscode.EventEmitter<void>();
+  private readonly inlayHintEmitter = new vscode.EventEmitter<void>();
   private readonly contentEmitter = new vscode.EventEmitter<vscode.Uri>();
   private readonly virtualDocuments = new Map<string, string>();
-  private reviewPanel: vscode.WebviewPanel | undefined;
-  private activeReviewChangeId: string | null = null;
   private readonly decorationType = vscode.window.createTextEditorDecorationType({
     isWholeLine: true,
     backgroundColor: "rgba(46, 160, 67, 0.22)",
@@ -113,6 +89,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
   });
 
   public readonly onDidChangeCodeLenses = this.codeLensEmitter.event;
+  public readonly onDidChangeInlayHints = this.inlayHintEmitter.event;
 
   constructor(
     connection: CrabCodeConnection,
@@ -132,6 +109,10 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         [{ scheme: "file" }, { scheme: VIRTUAL_DIFF_SCHEME }],
         this,
       ),
+      vscode.languages.registerInlayHintsProvider(
+        [{ scheme: "file" }, { scheme: VIRTUAL_DIFF_SCHEME }],
+        this,
+      ),
       vscode.workspace.registerTextDocumentContentProvider(
         VIRTUAL_DIFF_SCHEME,
         {
@@ -147,6 +128,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         if (this.changeByPath.has(filePath)) {
           this.refreshDecorations();
           this.codeLensEmitter.fire();
+          this.inlayHintEmitter.fire();
         }
       }),
       vscode.commands.registerCommand("crabcode.pendingEdits.undoFile", (changeId: string) => {
@@ -158,16 +140,19 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       vscode.commands.registerCommand("crabcode.pendingEdits.reviewFile", (changeId: string) => {
         void this.reviewFile(changeId);
       }),
+      vscode.commands.registerCommand("crabcode.pendingEdits.openFile", (changeId: string) => {
+        void this.openChangedFile(changeId);
+      }),
       vscode.commands.registerCommand(
         "crabcode.pendingEdits.previousFile",
         (changeId: string) => {
-          void this.reviewFileByOffset(changeId, -1);
+          void this.moveFileByOffset(changeId, -1);
         },
       ),
       vscode.commands.registerCommand(
         "crabcode.pendingEdits.nextFile",
         (changeId: string) => {
-          void this.reviewFileByOffset(changeId, 1);
+          void this.moveFileByOffset(changeId, 1);
         },
       ),
       vscode.commands.registerCommand(
@@ -216,10 +201,9 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     this.changes.clear();
     this.changeByPath.clear();
     this.virtualDocuments.clear();
-    this.reviewPanel?.dispose();
-    this.reviewPanel = undefined;
     this.decorationType.dispose();
     this.codeLensEmitter.dispose();
+    this.inlayHintEmitter.dispose();
     this.contentEmitter.dispose();
     this.chatPanel.setPendingEditReview(null);
   }
@@ -235,18 +219,19 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     const changes = this.sortedChanges();
     const fileIndex = Math.max(0, changes.findIndex((candidate) => candidate.id === change.id));
     const canMoveFiles = changes.length > 1;
+    const isNativeReview = document.uri.scheme === VIRTUAL_DIFF_SCHEME;
     const lenses = [
       new vscode.CodeLens(top, {
-        title: canMoveFiles ? "‹ File" : "‹",
+        title: "‹ File",
         command: canMoveFiles ? "crabcode.pendingEdits.previousFile" : "crabcode.pendingEdits.noop",
         arguments: [change.id],
       }),
       new vscode.CodeLens(top, {
-        title: `${fileIndex + 1} of ${Math.max(1, changes.length)}`,
+        title: `File ${fileIndex + 1} of ${Math.max(1, changes.length)}`,
         command: "crabcode.pendingEdits.noop",
       }),
       new vscode.CodeLens(top, {
-        title: canMoveFiles ? "File ›" : "›",
+        title: "File ›",
         command: canMoveFiles ? "crabcode.pendingEdits.nextFile" : "crabcode.pendingEdits.noop",
         arguments: [change.id],
       }),
@@ -261,8 +246,8 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         arguments: [change.id],
       }),
       new vscode.CodeLens(top, {
-        title: "Review File",
-        command: "crabcode.pendingEdits.reviewFile",
+        title: isNativeReview ? "Open File" : "Open Diff",
+        command: isNativeReview ? "crabcode.pendingEdits.openFile" : "crabcode.pendingEdits.reviewFile",
         arguments: [change.id],
       }),
     ];
@@ -273,31 +258,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       const hasManyHunks = change.hunks.length > 1;
       lenses.push(
         new vscode.CodeLens(range, {
-          title: canMoveFiles ? "‹" : "‹",
-          command: canMoveFiles ? "crabcode.pendingEdits.previousFile" : "crabcode.pendingEdits.noop",
-          arguments: [change.id],
-        }),
-        new vscode.CodeLens(range, {
-          title: `${fileIndex + 1} of ${Math.max(1, changes.length)}`,
-          command: "crabcode.pendingEdits.noop",
-        }),
-        new vscode.CodeLens(range, {
-          title: canMoveFiles ? "›" : "›",
-          command: canMoveFiles ? "crabcode.pendingEdits.nextFile" : "crabcode.pendingEdits.noop",
-          arguments: [change.id],
-        }),
-        new vscode.CodeLens(range, {
-          title: "Undo File",
-          command: "crabcode.pendingEdits.undoFile",
-          arguments: [change.id],
-        }),
-        new vscode.CodeLens(range, {
-          title: "Keep File",
-          command: "crabcode.pendingEdits.keepFile",
-          arguments: [change.id],
-        }),
-        new vscode.CodeLens(range, {
-          title: hasManyHunks ? "‹ Block" : "‹",
+          title: "‹ Block",
           command: hasManyHunks ? "crabcode.pendingEdits.previousHunk" : "crabcode.pendingEdits.noop",
           arguments: [change.id, hunk.id],
         }),
@@ -306,7 +267,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
           command: "crabcode.pendingEdits.noop",
         }),
         new vscode.CodeLens(range, {
-          title: hasManyHunks ? "Block ›" : "›",
+          title: "Block ›",
           command: hasManyHunks ? "crabcode.pendingEdits.nextHunk" : "crabcode.pendingEdits.noop",
           arguments: [change.id, hunk.id],
         }),
@@ -324,6 +285,134 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     }
 
     return lenses;
+  }
+
+  provideInlayHints(
+    document: vscode.TextDocument,
+    visibleRange: vscode.Range,
+    _token: vscode.CancellationToken,
+  ): vscode.InlayHint[] {
+    const lensTarget = this.resolveLensTarget(document);
+    const change = lensTarget?.change;
+    if (!change) {
+      return [];
+    }
+
+    const hints: vscode.InlayHint[] = [];
+    if (visibleRange.start.line <= 0 && visibleRange.end.line >= 0) {
+      hints.push(this.createFileInlayHint(document, change));
+    }
+
+    for (let index = 0; index < change.hunks.length; index++) {
+      const hunk = change.hunks[index];
+      const range = rangeForHunk(document, hunk);
+      if (!visibleRange.intersection(range)) {
+        continue;
+      }
+      hints.push(this.createHunkInlayHint(document, change, hunk, index));
+    }
+
+    return hints;
+  }
+
+  private createFileInlayHint(
+    document: vscode.TextDocument,
+    change: PendingChange,
+  ): vscode.InlayHint {
+    const changes = this.sortedChanges();
+    const fileIndex = Math.max(0, changes.findIndex((candidate) => candidate.id === change.id));
+    const canMoveFiles = changes.length > 1;
+    const isNativeReview = document.uri.scheme === VIRTUAL_DIFF_SCHEME;
+    const parts = [
+      textPart(` CrabCode File ${fileIndex + 1}/${Math.max(1, changes.length)} `),
+      commandPart("‹", "Previous file", "crabcode.pendingEdits.previousFile", [change.id], canMoveFiles),
+      textPart(" "),
+      commandPart("›", "Next file", "crabcode.pendingEdits.nextFile", [change.id], canMoveFiles),
+      textPart(" | "),
+      commandPart("Undo File", `Undo ${change.shortPath}`, "crabcode.pendingEdits.undoFile", [change.id]),
+      textPart(" "),
+      commandPart("Keep File", `Keep ${change.shortPath}`, "crabcode.pendingEdits.keepFile", [change.id]),
+      textPart(" "),
+      commandPart(
+        isNativeReview ? "Open File" : "Open Diff",
+        isNativeReview ? "Open changed file" : "Open VS Code diff",
+        isNativeReview ? "crabcode.pendingEdits.openFile" : "crabcode.pendingEdits.reviewFile",
+        [change.id],
+      ),
+    ];
+    const hint = new vscode.InlayHint(new vscode.Position(0, 0), parts, vscode.InlayHintKind.Type);
+    hint.paddingRight = true;
+    return hint;
+  }
+
+  private createHunkInlayHint(
+    document: vscode.TextDocument,
+    change: PendingChange,
+    hunk: PendingHunk,
+    index: number,
+  ): vscode.InlayHint {
+    const range = rangeForHunk(document, hunk);
+    const hasManyHunks = change.hunks.length > 1;
+    const parts = [
+      textPart(` Block ${index + 1}/${change.hunks.length} `),
+      commandPart("‹", "Previous block", "crabcode.pendingEdits.previousHunk", [change.id, hunk.id], hasManyHunks),
+      textPart(" "),
+      commandPart("›", "Next block", "crabcode.pendingEdits.nextHunk", [change.id, hunk.id], hasManyHunks),
+      textPart(" | "),
+      commandPart("Undo Block", "Undo this block", "crabcode.pendingEdits.undoHunk", [change.id, hunk.id]),
+      textPart(" "),
+      commandPart("Keep Block", "Keep this block", "crabcode.pendingEdits.keepHunk", [change.id, hunk.id]),
+    ];
+    const hint = new vscode.InlayHint(range.start, parts, vscode.InlayHintKind.Parameter);
+    hint.paddingRight = true;
+    hint.tooltip = this.buildHunkHover(change, hunk, index);
+    return hint;
+  }
+
+  private buildHunkHover(
+    change: PendingChange,
+    hunk: PendingHunk,
+    index: number,
+  ): vscode.MarkdownString {
+    const changes = this.sortedChanges();
+    const fileIndex = Math.max(0, changes.findIndex((candidate) => candidate.id === change.id));
+    const md = new vscode.MarkdownString(undefined, true);
+    md.isTrusted = {
+      enabledCommands: [
+        "crabcode.pendingEdits.previousFile",
+        "crabcode.pendingEdits.nextFile",
+        "crabcode.pendingEdits.undoFile",
+        "crabcode.pendingEdits.keepFile",
+        "crabcode.pendingEdits.reviewFile",
+        "crabcode.pendingEdits.openFile",
+        "crabcode.pendingEdits.previousHunk",
+        "crabcode.pendingEdits.nextHunk",
+        "crabcode.pendingEdits.undoHunk",
+        "crabcode.pendingEdits.keepHunk",
+      ],
+    };
+    md.appendMarkdown(`**CrabCode pending edit**  \n`);
+    md.appendMarkdown(`${escapeMarkdown(change.shortPath)} · File ${fileIndex + 1}/${Math.max(1, changes.length)} · Block ${index + 1}/${change.hunks.length}  \n\n`);
+    md.appendMarkdown(
+      [
+        `[Undo Block](${commandUri("crabcode.pendingEdits.undoHunk", [change.id, hunk.id])})`,
+        `[Keep Block](${commandUri("crabcode.pendingEdits.keepHunk", [change.id, hunk.id])})`,
+        `[‹ Block](${commandUri("crabcode.pendingEdits.previousHunk", [change.id, hunk.id])})`,
+        `[Block ›](${commandUri("crabcode.pendingEdits.nextHunk", [change.id, hunk.id])})`,
+      ].join(" · "),
+    );
+    md.appendMarkdown("\n\n");
+    md.appendMarkdown(
+      [
+        `[Undo File](${commandUri("crabcode.pendingEdits.undoFile", [change.id])})`,
+        `[Keep File](${commandUri("crabcode.pendingEdits.keepFile", [change.id])})`,
+        `[Open Diff](${commandUri("crabcode.pendingEdits.reviewFile", [change.id])})`,
+        `[Open File](${commandUri("crabcode.pendingEdits.openFile", [change.id])})`,
+        `[‹ File](${commandUri("crabcode.pendingEdits.previousFile", [change.id])})`,
+        `[File ›](${commandUri("crabcode.pendingEdits.nextFile", [change.id])})`,
+      ].join(" · "),
+    );
+    return md;
   }
 
   private async handleServerEvent(payload: EventPayload): Promise<void> {
@@ -410,7 +499,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     this.changeByPath.set(normalizeFilePath(change.filePath), change.id);
     this.syncVirtualDocuments(change);
     this.updatePresentation();
-    await this.reviewFile(change.id);
+    await this.revealChange(change);
     vscode.window.setStatusBarMessage(`CrabCode：待确认 ${change.shortPath}`, 3000);
   }
 
@@ -528,15 +617,16 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
   }
 
   private async reviewFile(changeId: string): Promise<void> {
+    await this.reviewFileNative(changeId);
+  }
+
+  private async openChangedFile(changeId: string): Promise<void> {
     const change = this.changes.get(changeId);
     if (!change) {
       return;
     }
 
-    this.activeReviewChangeId = change.id;
-    this.ensureReviewPanel();
-    this.reviewPanel?.reveal(vscode.ViewColumn.Beside, false);
-    this.postReviewState();
+    await this.revealChange(change);
   }
 
   private async reviewFileNative(changeId: string): Promise<void> {
@@ -568,6 +658,40 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       `CrabCode Review: ${change.shortPath}`,
       { preview: true },
     );
+
+    const firstHunk = change.hunks[0];
+    if (firstHunk) {
+      setTimeout(() => {
+        const editor = vscode.window.visibleTextEditors.find((candidate) => {
+          const info = parseReviewUri(candidate.document.uri);
+          return info?.changeId === change.id && info.side === "after";
+        });
+        if (editor) {
+          revealHunkInEditor(editor, firstHunk);
+        }
+      }, REVIEW_REVEAL_DELAY_MS);
+    }
+  }
+
+  private async moveFileByOffset(changeId: string, offset: number): Promise<void> {
+    const activeEditor = vscode.window.activeTextEditor;
+    const activeInfo = activeEditor ? parseReviewUri(activeEditor.document.uri) : null;
+    if (activeInfo) {
+      await this.reviewFileByOffset(changeId, offset);
+      return;
+    }
+    await this.revealFileByOffset(changeId, offset);
+  }
+
+  private async revealFileByOffset(changeId: string, offset: number): Promise<void> {
+    const changes = this.sortedChanges();
+    if (changes.length === 0) {
+      return;
+    }
+    const currentIndex = changes.findIndex((change) => change.id === changeId);
+    const startIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (startIndex + offset + changes.length) % changes.length;
+    await this.revealChange(changes[nextIndex]);
   }
 
   private async reviewFileByOffset(changeId: string, offset: number): Promise<void> {
@@ -579,135 +703,6 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     const startIndex = currentIndex >= 0 ? currentIndex : 0;
     const nextIndex = (startIndex + offset + changes.length) % changes.length;
     await this.reviewFile(changes[nextIndex].id);
-  }
-
-  private ensureReviewPanel(): void {
-    if (this.reviewPanel) {
-      return;
-    }
-
-    const panel = vscode.window.createWebviewPanel(
-      "crabcode.pendingEditReview",
-      "CrabCode Review",
-      vscode.ViewColumn.Beside,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-      },
-    );
-    this.reviewPanel = panel;
-    panel.webview.html = this.getReviewHtml(panel.webview);
-    panel.webview.onDidReceiveMessage((msg: any) => {
-      void this.handleReviewMessage(msg);
-    });
-    panel.onDidDispose(() => {
-      this.reviewPanel = undefined;
-    });
-  }
-
-  private async handleReviewMessage(msg: any): Promise<void> {
-    const action = typeof msg?.action === "string" ? msg.action : "";
-    const changeId = typeof msg?.changeId === "string" ? msg.changeId : this.activeReviewChangeId ?? "";
-    const hunkId = typeof msg?.hunkId === "string" ? msg.hunkId : "";
-
-    switch (msg?.type) {
-      case "ready":
-        this.postReviewState();
-        return;
-      case "selectFile":
-        if (this.changes.has(changeId)) {
-          this.activeReviewChangeId = changeId;
-          this.postReviewState();
-        }
-        return;
-      case "moveFile":
-        await this.reviewFileByOffset(changeId, Number(msg.offset) || 0);
-        return;
-      case "openNativeDiff":
-        await this.reviewFileNative(changeId);
-        return;
-      case "openFile": {
-        const change = this.changes.get(changeId);
-        if (change) {
-          await this.revealChange(change);
-        }
-        return;
-      }
-      case "reviewAction":
-        break;
-      default:
-        return;
-    }
-
-    switch (action) {
-      case "undoFile":
-        await this.undoFile(changeId);
-        break;
-      case "keepFile":
-        await this.keepFile(changeId);
-        break;
-      case "undoHunk":
-        if (hunkId) await this.undoHunk(changeId, hunkId);
-        break;
-      case "keepHunk":
-        if (hunkId) await this.keepHunk(changeId, hunkId);
-        break;
-    }
-    this.ensureActiveReviewChange();
-    this.postReviewState();
-  }
-
-  private postReviewState(): void {
-    if (!this.reviewPanel) {
-      return;
-    }
-    void this.reviewPanel.webview.postMessage({
-      type: "reviewState",
-      state: this.buildReviewState(),
-    });
-  }
-
-  private ensureActiveReviewChange(): void {
-    if (this.activeReviewChangeId && this.changes.has(this.activeReviewChangeId)) {
-      return;
-    }
-    this.activeReviewChangeId = this.sortedChanges()[0]?.id ?? null;
-  }
-
-  private buildReviewState(): ReviewState {
-    const changes = this.sortedChanges();
-    this.ensureActiveReviewChange();
-    const activeId = this.activeReviewChangeId;
-    const currentIndex = Math.max(0, changes.findIndex((change) => change.id === activeId));
-    const current = changes[currentIndex] ?? null;
-    return {
-      totalFiles: changes.length,
-      currentIndex,
-      files: changes.map((change) => ({
-        id: change.id,
-        shortPath: change.shortPath,
-        path: change.filePath,
-        action: change.action,
-        added: change.stats.added,
-        removed: change.stats.removed,
-        hunkCount: change.hunks.length,
-      })),
-      file: current
-        ? {
-            id: current.id,
-            shortPath: current.shortPath,
-            path: current.filePath,
-            action: current.action,
-            added: current.stats.added,
-            removed: current.stats.removed,
-            hunks: current.hunks.map((hunk, index) => ({
-              ...hunk,
-              index,
-              total: current.hunks.length,
-            })),
-          }
-        : null,
-    };
   }
 
   private async revealHunkByOffset(changeId: string, hunkId: string, offset: number): Promise<void> {
@@ -811,10 +806,6 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       this.changeByPath.delete(normalizeFilePath(change.filePath));
     }
     this.changes.delete(changeId);
-    if (this.activeReviewChangeId === changeId) {
-      this.activeReviewChangeId = null;
-      this.ensureActiveReviewChange();
-    }
     if (update) {
       this.updatePresentation();
     }
@@ -829,7 +820,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     this.chatPanel.setPendingEditReview(this.buildReviewSummary());
     this.refreshDecorations();
     this.codeLensEmitter.fire();
-    this.postReviewState();
+    this.inlayHintEmitter.fire();
   }
 
   private buildReviewSummary(): PendingEditReviewSummary | null {
@@ -854,13 +845,15 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
 
   private refreshDecorations(): void {
     for (const editor of vscode.window.visibleTextEditors) {
-      const change = editor.document.uri.scheme === "file"
-        ? this.getChangeForPath(editor.document.uri.fsPath)
-        : undefined;
-      const ranges = change
-        ? change.hunks.map((hunk) => rangeForHunk(editor.document, hunk))
+      const target = this.resolveLensTarget(editor.document);
+      const change = target?.change;
+      const options = change
+        ? change.hunks.map((hunk, index) => ({
+            range: rangeForHunk(editor.document, hunk),
+            hoverMessage: this.buildHunkHover(change, hunk, index),
+          }))
         : [];
-      editor.setDecorations(this.decorationType, ranges);
+      editor.setDecorations(this.decorationType, options);
     }
   }
 
@@ -1418,6 +1411,37 @@ function firstString(...values: unknown[]): string | null {
     }
   }
   return null;
+}
+
+function textPart(value: string): vscode.InlayHintLabelPart {
+  return new vscode.InlayHintLabelPart(value);
+}
+
+function commandPart(
+  value: string,
+  tooltip: string,
+  command: string,
+  args: unknown[],
+  enabled = true,
+): vscode.InlayHintLabelPart {
+  const part = new vscode.InlayHintLabelPart(value);
+  part.tooltip = tooltip;
+  if (enabled) {
+    part.command = {
+      title: value,
+      command,
+      arguments: args,
+    };
+  }
+  return part;
+}
+
+function commandUri(command: string, args: unknown[]): string {
+  return `command:${command}?${encodeURIComponent(JSON.stringify(args))}`;
+}
+
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}[\]()#+\-.!|>]/g, "\\$&");
 }
 
 async function readTextFile(filePath: string): Promise<TextRead> {
