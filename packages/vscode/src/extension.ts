@@ -583,7 +583,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   push(activeConnection);
 
   // 4. Register ChatProvider as WebviewViewProvider
-  const activeChatProvider = new ChatPanelProvider(context.extensionUri, activeConnection);
+  const activeChatProvider = new ChatPanelProvider(context.extensionUri, activeConnection, outputChannel);
   chatProvider = activeChatProvider;
   push(
     vscode.window.registerWebviewViewProvider(

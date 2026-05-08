@@ -227,6 +227,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly connection: CrabCodeConnection,
+    private readonly outputChannel?: vscode.OutputChannel,
   ) {
     // Forward server events to the webview
     connection.on("message", (payload: EventPayload) => {
@@ -350,6 +351,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "clearMessages":
           this.history = [];
           this.postMessage({ type: "history", items: [] });
+          break;
+        case "webviewError":
+          this.outputChannel?.appendLine(`[CrabCode][WebviewError] ${msg.message}`);
+          if (msg.stack) this.outputChannel?.appendLine(msg.stack);
+          break;
+        case "localMessage":
+          this.addMessage(msg.role as ChatMessageRole, msg.text);
           break;
         case "switchMode":
           void this.switchMode(msg.mode as "agent" | "plan");
@@ -3867,7 +3875,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // ── Send ─────────────────────────────────────────────────────
 
     // Commands handled directly without going to the model
+    function addLocalSystemMessage(text) {
+      vscode.postMessage({ type: 'localMessage', role: 'system', text: text });
+    }
+
     const DIRECT_COMMANDS = {
+      '/help': function() {
+        const bt = String.fromCharCode(96);
+        const lines = BUILTIN_COMMANDS.map(function(c) {
+          return '- ' + bt + c.name + bt + ' — ' + c.desc;
+        });
+        if (slashSkills.length > 0) {
+          lines.push('');
+          lines.push('**Skills**');
+          slashSkills.forEach(function(s) {
+            lines.push('- ' + bt + '/' + s.name + bt + ' — ' + (s.description || ''));
+          });
+        }
+        addLocalSystemMessage('## CrabCode 命令\\n\\n' + lines.join('\\n'));
+        return true;
+      },
       '/model': function(args) {
         if (args) vscode.postMessage({ type: 'setModel', name: args });
         return !!args;
@@ -3882,6 +3909,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
       '/clear': function() {
         vscode.postMessage({ type: 'clearMessages' });
+        return true;
+      },
+      '/plan': function() {
+        vscode.postMessage({ type: 'switchMode', mode: 'plan' });
+        updateModeButton('plan');
+        return true;
+      },
+      '/agent': function() {
+        vscode.postMessage({ type: 'switchMode', mode: 'agent' });
+        updateModeButton('agent');
         return true;
       },
     };
@@ -3938,12 +3975,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function updateModeButton(mode) {
       currentMode = mode;
       if (modeLabel) modeLabel.textContent = mode === 'plan' ? 'Plan' : 'Agent';
-      modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
+      if (modeMenu) modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
         el.classList.toggle('active', el.getAttribute('data-mode') === mode);
       });
     }
 
     function positionModeMenu() {
+      if (!modeMenu || !modeBtn) return;
       modeMenu.classList.remove('hidden');
       modeMenu.style.visibility = 'hidden';
       modeMenu.style.left = '0px';
@@ -3961,21 +3999,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function openModeMenu() {
       positionModeMenu();
-      modeBtn.setAttribute('aria-expanded', 'true');
+      if (modeBtn) modeBtn.setAttribute('aria-expanded', 'true');
     }
 
     function closeModeMenu() {
-      modeMenu.classList.add('hidden');
-      modeBtn.setAttribute('aria-expanded', 'false');
+      if (modeMenu) modeMenu.classList.add('hidden');
+      if (modeBtn) modeBtn.setAttribute('aria-expanded', 'false');
     }
 
-    modeBtn.addEventListener('click', function(e) {
+    modeBtn && modeBtn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (modeMenu.classList.contains('hidden')) openModeMenu();
       else closeModeMenu();
     });
 
-    modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
+    modeMenu && modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
       el.addEventListener('click', function() {
         const mode = el.getAttribute('data-mode');
         updateModeButton(mode);
@@ -3985,7 +4023,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     });
 
     document.addEventListener('click', function() { closeModeMenu(); });
-    modeMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+    modeMenu && modeMenu.addEventListener('click', function(e) { e.stopPropagation(); });
 
     // ── Plus menu & file inputs ─────────────────────────────────
 
@@ -4307,8 +4345,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       optionsRetryCount += 1;
       vscode.postMessage({ type: 'requestOptions' });
     }, 500);
-    } catch (error) {
-      console.error(error);
+    } catch (outerInitError) {
+      console.error('[CrabCode webview init error]', outerInitError);
+      try {
+        vscode.postMessage({
+          type: 'webviewError',
+          message: outerInitError instanceof Error ? outerInitError.message : String(outerInitError),
+          stack: outerInitError instanceof Error ? outerInitError.stack : undefined,
+        });
+      } catch (_) { /* vscode may not be available if acquireVsCodeApi failed */ }
     }
     })();
   </script>
