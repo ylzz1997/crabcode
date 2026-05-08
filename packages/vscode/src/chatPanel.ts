@@ -2545,6 +2545,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .tb-perm-btn:hover { background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent); }
     .tb-perm-btn .perm-chevron { font-size: 9px; opacity: 0.6; }
     .tb-perm-btn .perm-icon { font-size: 11px; }
+    .tb-perm-btn.perm-danger { color: #e8b84b; }
     .perm-menu {
       position: fixed;
       top: 0; left: 0;
@@ -4305,8 +4306,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       const newPerm = msg.permissionMode === 'run_everything' ? 'run_everything' : 'default';
       if (permBtn && permLabel && permIcon && permMenu) {
-        permLabel.textContent = newPerm === 'run_everything' ? '全部允许' : '默认权限';
+        permLabel.textContent = newPerm === 'run_everything' ? '全部允许 ⚠️' : '默认权限';
         permIcon.textContent = newPerm === 'run_everything' ? '⚡' : '🛡';
+        permBtn.classList.toggle('perm-danger', newPerm === 'run_everything');
         permMenu.querySelectorAll('.perm-item').forEach(function(el) {
           el.classList.toggle('active', el.getAttribute('data-perm') === newPerm);
         });
@@ -4746,8 +4748,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     permMenu && permMenu.querySelectorAll('.perm-item').forEach(function(el) {
       el.addEventListener('click', function() {
         const perm = el.getAttribute('data-perm');
-        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '全部允许' : '默认权限';
+        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '全部允许 ⚠️' : '默认权限';
         if (permIcon) permIcon.textContent = perm === 'run_everything' ? '⚡' : '🛡';
+        if (permBtn) permBtn.classList.toggle('perm-danger', perm === 'run_everything');
         permMenu.querySelectorAll('.perm-item').forEach(function(item) {
           item.classList.toggle('active', item.getAttribute('data-perm') === perm);
         });
