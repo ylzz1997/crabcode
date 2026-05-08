@@ -2280,54 +2280,80 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       width: 100%;
       min-width: 0;
     }
-    .tb-model-wrap::after {
-      content: '▾';
-      position: absolute;
-      right: 10px;
-      top: 50%;
-      transform: translateY(-50%);
-      color: var(--text-muted);
-      font-size: 11px;
-      pointer-events: none;
+    .tb-model-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      width: 100%;
+      padding: 4px 8px 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--vscode-input-background) 50%, transparent);
+      color: var(--vscode-foreground);
+      font-size: 11.5px;
+      cursor: pointer;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
     }
+    .tb-model-btn:hover {
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent);
+    }
+    .tb-model-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .tb-model-label {
-      position: absolute;
-      left: 10px;
-      right: 26px;
-      top: 50%;
-      transform: translateY(-50%);
+      flex: 1;
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      pointer-events: none;
-      color: var(--vscode-foreground);
       font-size: 11.5px;
     }
-    .tb-model-wrap.is-empty .tb-model-label {
-      color: var(--text-muted);
+    .tb-model-wrap.is-empty .tb-model-label { color: var(--text-muted); }
+    .tb-model-btn .model-chevron { font-size: 9px; opacity: 0.6; flex-shrink: 0; }
+    .model-menu {
+      position: fixed;
+      top: 0; left: 0;
+      background: var(--vscode-menu-background);
+      color: var(--vscode-menu-foreground);
+      border: 1px solid var(--vscode-menu-border, #444);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 200;
+      padding: 6px 0 4px;
+      min-width: 180px;
+      max-width: 280px;
     }
-    .tb-model {
+    .model-menu.hidden { display: none; }
+    .model-search-wrap { padding: 0 8px 6px; }
+    .model-search {
       width: 100%;
-      max-width: 100%;
-      padding: 4px 28px 4px 10px;
+      box-sizing: border-box;
+      padding: 5px 8px;
       border-radius: 6px;
       border: 1px solid var(--border);
-      background: color-mix(in srgb, var(--vscode-input-background) 50%, transparent);
-      color: transparent;
-      font-size: 11.5px;
-      cursor: pointer;
-      appearance: none;
-      -webkit-appearance: none;
-    }
-    .tb-model:hover {
-      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-      background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent);
-    }
-    .tb-model:disabled { opacity: 0.5; cursor: not-allowed; }
-    .tb-model option {
+      background: color-mix(in srgb, var(--vscode-input-background) 60%, transparent);
       color: var(--vscode-foreground);
+      font-size: 11.5px;
+      outline: none;
     }
+    .model-search:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+    .model-menu-list { max-height: 240px; overflow-y: auto; }
+    .model-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .model-menu-item:hover { background: var(--vscode-menu-selectionBackground, rgba(127,127,127,0.18)); }
+    .model-menu-item.active { font-weight: 600; }
+    .model-menu-item .model-check { width: 14px; text-align: center; opacity: 0; font-size: 11px; flex-shrink: 0; }
+    .model-menu-item.active .model-check { opacity: 1; }
+    .model-menu-item .model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .tb-send-circle {
       flex-shrink: 0;
       width: 30px;
@@ -2417,6 +2443,52 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-foreground);
       font-size: 10.5px;
     }
+    .tb-perm-wrap { position: relative; flex-shrink: 0; }
+    .tb-perm-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 22px;
+      padding: 0 7px 0 7px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--vscode-badge-background, #555) 18%, transparent);
+      color: var(--vscode-foreground);
+      font-size: 10.5px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tb-perm-btn:hover { background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent); }
+    .tb-perm-btn .perm-chevron { font-size: 9px; opacity: 0.6; }
+    .tb-perm-btn .perm-icon { font-size: 11px; }
+    .perm-menu {
+      position: fixed;
+      top: 0; left: 0;
+      background: var(--vscode-menu-background);
+      color: var(--vscode-menu-foreground);
+      border: 1px solid var(--vscode-menu-border, #444);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 200;
+      padding: 3px 0;
+      min-width: 150px;
+    }
+    .perm-menu.hidden { display: none; }
+    .perm-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .perm-item:hover { background: var(--vscode-menu-selectionBackground, rgba(127,127,127,0.18)); }
+    .perm-item-icon { font-size: 13px; width: 16px; text-align: center; }
+    .perm-item-text { flex: 1; }
+    .perm-item .perm-check { width: 14px; text-align: center; opacity: 0; font-size: 11px; }
+    .perm-item.active .perm-check { opacity: 1; }
+    .perm-item[data-perm="run_everything"] .perm-item-text { color: #e5c300; }
 
     /* ── Images in messages ────────────────────────────────────── */
     .msg-images {
@@ -2497,8 +2569,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           </div>
           <div class="model-pill-wrap">
             <div id="model-select-wrap" class="tb-model-wrap is-empty">
-              <span id="model-select-label" class="tb-model-label">（正在连接网关…）</span>
-              <select id="model-select" class="tb-model" title="模型"></select>
+              <button type="button" class="tb-model-btn" id="model-btn" title="选择模型" aria-haspopup="menu" aria-expanded="false" disabled>
+                <span id="model-select-label" class="tb-model-label">（正在连接网关…）</span>
+                <span class="model-chevron">▾</span>
+              </button>
             </div>
           </div>
           <div id="context-meter" class="context-meter" hidden tabindex="0" role="img" aria-label="背景信息窗口用量" aria-describedby="context-tooltip">
@@ -2519,10 +2593,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           <span class="mode-chevron">▾</span>
         </button>
       </div>
-      <select id="permission-select" class="footer-select" title="权限">
-        <option value="default">默认</option>
-        <option value="run_everything">run_everything</option>
-      </select>
+      <div class="tb-perm-wrap">
+        <button type="button" class="tb-perm-btn" id="perm-btn" title="切换权限模式" aria-haspopup="menu" aria-expanded="false">
+          <span id="perm-icon" class="perm-icon">🛡</span>
+          <span id="perm-label">默认</span>
+          <span class="perm-chevron">▾</span>
+        </button>
+      </div>
     </div>
     <input type="file" id="file-input-image" accept="image/*" multiple hidden />
   </div>
@@ -2542,6 +2619,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <span class="mode-check">✓</span>Plan
     </div>
   </div>
+  <div id="perm-menu" class="perm-menu hidden" role="menu">
+    <div class="perm-item active" data-perm="default" role="menuitem">
+      <span class="perm-item-icon">🛡</span>
+      <span class="perm-item-text">默认权限</span>
+      <span class="perm-check">✓</span>
+    </div>
+    <div class="perm-item" data-perm="run_everything" role="menuitem">
+      <span class="perm-item-icon">⚡</span>
+      <span class="perm-item-text">全部允许</span>
+      <span class="perm-check">✓</span>
+    </div>
+  </div>
+  <div id="model-menu" class="model-menu hidden" role="listbox" aria-label="选择模型">
+    <div class="model-search-wrap">
+      <input type="text" id="model-search" class="model-search" placeholder="搜索模型…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div id="model-menu-list" class="model-menu-list"></div>
+  </div>
   <script nonce="${nonce}">
     (function() {
       try {
@@ -2558,16 +2653,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const slashPopup = document.getElementById('slash-popup');
         const slashPopupList = document.getElementById('slash-popup-list');
         const fileInputImage = document.getElementById('file-input-image');
-        const modelSelect = document.getElementById('model-select');
         const modelSelectWrap = document.getElementById('model-select-wrap');
         const modelSelectLabel = document.getElementById('model-select-label');
+        const modelBtn = document.getElementById('model-btn');
+        const modelMenu = document.getElementById('model-menu');
+        const modelMenuList = document.getElementById('model-menu-list');
+        const modelSearch = document.getElementById('model-search');
         const contextMeter = document.getElementById('context-meter');
         const contextTooltip = document.getElementById('context-tooltip');
-        const permissionSelect = document.getElementById('permission-select');
         const pendingEditsBar = document.getElementById('pending-edits-bar');
         const modeBtn = document.getElementById('mode-btn');
         const modeLabel = document.getElementById('mode-label');
         const modeMenu = document.getElementById('mode-menu');
+        const permBtn = document.getElementById('perm-btn');
+        const permLabel = document.getElementById('perm-label');
+        const permIcon = document.getElementById('perm-icon');
+        const permMenu = document.getElementById('perm-menu');
 
     // ── Tool card state ──────────────────────────────────────────
     const toolCards = new Map();
@@ -2582,6 +2683,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let isBusy = false;
     let stickToBottom = true;
     let hasReceivedOptions = false;
+    let currentModelValue = '';
+    let currentModelList = [];
     let pendingEditsCollapsed = false;
     let pendingEditsVisibleFiles = 5;
     let currentPendingEditSummary = null;
@@ -3586,49 +3689,41 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function applyOptions(msg) {
       hasReceivedOptions = true;
       const models = msg.models || [];
-      const previousValue = modelSelect.value;
-      modelSelect.innerHTML = '';
+      const previousValue = currentModelValue;
       if (models.length === 0) {
-        const o = document.createElement('option');
-        o.value = '';
-        o.textContent = msg.connected ? '（网关未返回可用模型）' : '（正在连接网关…）';
-        o.disabled = true;
-        modelSelect.appendChild(o);
-        modelSelect.disabled = true;
+        currentModelList = [];
+        currentModelValue = '';
+        if (modelBtn) modelBtn.disabled = true;
         if (modelSelectLabel) {
-          modelSelectLabel.textContent = o.textContent;
-          modelSelectLabel.title = o.textContent;
+          modelSelectLabel.textContent = msg.connected ? '（网关未返回可用模型）' : '（正在连接网关…）';
+          modelSelectLabel.title = modelSelectLabel.textContent;
         }
         if (modelSelectWrap) modelSelectWrap.classList.add('is-empty');
       } else {
-        models.forEach(function(m) {
-          const o = document.createElement('option');
-          o.value = m;
-          o.textContent = m;
-          modelSelect.appendChild(o);
-        });
+        currentModelList = models;
         const preferred = [
           msg.selectedModel,
           msg.defaultModel,
           previousValue,
           models[0],
-        ].find(function(v) {
-          return !!v && models.indexOf(v) >= 0;
-        }) || models[0];
-        modelSelect.disabled = false;
-        modelSelect.value = preferred;
-        if (modelSelect.selectedIndex < 0 && modelSelect.options.length > 0) {
-          modelSelect.selectedIndex = 0;
-        }
-        const selectedOption = modelSelect.selectedIndex >= 0 ? modelSelect.options[modelSelect.selectedIndex] : null;
-        const selectedText = (selectedOption ? selectedOption.textContent : '') || preferred;
+        ].find(function(v) { return !!v && models.indexOf(v) >= 0; }) || models[0];
+        currentModelValue = preferred;
+        if (modelBtn) modelBtn.disabled = false;
         if (modelSelectLabel) {
-          modelSelectLabel.textContent = selectedText;
-          modelSelectLabel.title = selectedText;
+          modelSelectLabel.textContent = preferred;
+          modelSelectLabel.title = preferred;
         }
         if (modelSelectWrap) modelSelectWrap.classList.remove('is-empty');
+        renderModelMenuItems(models, preferred, '');
       }
-      permissionSelect.value = msg.permissionMode === 'run_everything' ? 'run_everything' : 'default';
+      const newPerm = msg.permissionMode === 'run_everything' ? 'run_everything' : 'default';
+      if (permBtn && permLabel && permIcon && permMenu) {
+        permLabel.textContent = newPerm === 'run_everything' ? '全部允许' : '默认权限';
+        permIcon.textContent = newPerm === 'run_everything' ? '⚡' : '🛡';
+        permMenu.querySelectorAll('.perm-item').forEach(function(el) {
+          el.classList.toggle('active', el.getAttribute('data-perm') === newPerm);
+        });
+      }
       const nextPendingEditsVisibleFiles = normalizePendingEditsVisibleFiles(msg.pendingEditsVisibleFiles);
       if (nextPendingEditsVisibleFiles !== pendingEditsVisibleFiles) {
         pendingEditsVisibleFiles = nextPendingEditsVisibleFiles;
@@ -3685,8 +3780,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // Commands that have sub-items (populated dynamically)
     const SUBCOMMAND_SOURCES = {
       '/model': function() {
-        return Array.from(modelSelect.options).map(function(o) {
-          return { name: o.value, desc: o.value };
+        return currentModelList.map(function(m) {
+          return { name: m, desc: m };
         });
       },
     };
@@ -4025,6 +4120,138 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     document.addEventListener('click', function() { closeModeMenu(); });
     modeMenu && modeMenu.addEventListener('click', function(e) { e.stopPropagation(); });
 
+    // ── Permission menu ──────────────────────────────────────────
+
+    function positionPermMenu() {
+      if (!permMenu || !permBtn) return;
+      permMenu.classList.remove('hidden');
+      permMenu.style.visibility = 'hidden';
+      permMenu.style.left = '0px';
+      permMenu.style.top = '0px';
+      const btnRect = permBtn.getBoundingClientRect();
+      const menuRect = permMenu.getBoundingClientRect();
+      const margin = 8;
+      const gap = 4;
+      const left = Math.min(Math.max(btnRect.right - menuRect.width, margin), window.innerWidth - menuRect.width - margin);
+      const top = Math.max(margin, btnRect.top - menuRect.height - gap);
+      permMenu.style.left = left + 'px';
+      permMenu.style.top = top + 'px';
+      permMenu.style.visibility = '';
+    }
+
+    function openPermMenu() {
+      positionPermMenu();
+      closeModeMenu();
+      if (permBtn) permBtn.setAttribute('aria-expanded', 'true');
+    }
+
+    function closePermMenu() {
+      if (permMenu) permMenu.classList.add('hidden');
+      if (permBtn) permBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    permBtn && permBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (permMenu.classList.contains('hidden')) openPermMenu();
+      else closePermMenu();
+    });
+
+    permMenu && permMenu.querySelectorAll('.perm-item').forEach(function(el) {
+      el.addEventListener('click', function() {
+        const perm = el.getAttribute('data-perm');
+        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '全部允许' : '默认权限';
+        if (permIcon) permIcon.textContent = perm === 'run_everything' ? '⚡' : '🛡';
+        permMenu.querySelectorAll('.perm-item').forEach(function(item) {
+          item.classList.toggle('active', item.getAttribute('data-perm') === perm);
+        });
+        vscode.postMessage({ type: 'setPermissionMode', mode: perm === 'run_everything' ? 'run_everything' : 'default' });
+        closePermMenu();
+      });
+    });
+
+    document.addEventListener('click', function() { closePermMenu(); });
+    permMenu && permMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+
+    // ── Model menu ────────────────────────────────────────────────
+
+    function renderModelMenuItems(models, selected, filter) {
+      if (!modelMenuList) return;
+      const q = filter.toLowerCase();
+      modelMenuList.innerHTML = '';
+      models.forEach(function(m) {
+        if (q && m.toLowerCase().indexOf(q) < 0) return;
+        const el = document.createElement('div');
+        el.className = 'model-menu-item' + (m === selected ? ' active' : '');
+        el.setAttribute('role', 'option');
+        el.setAttribute('data-model', m);
+        el.innerHTML =
+          '<span class="model-check">✓</span>' +
+          '<span class="model-name">' + m.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>';
+        el.addEventListener('click', function() {
+          selectModel(m);
+          closeModelMenu();
+        });
+        modelMenuList.appendChild(el);
+      });
+    }
+
+    function selectModel(m) {
+      currentModelValue = m;
+      if (modelSelectLabel) { modelSelectLabel.textContent = m; modelSelectLabel.title = m; }
+      if (modelSelectWrap) modelSelectWrap.classList.toggle('is-empty', !m);
+      renderModelMenuItems(currentModelList, m, modelSearch ? modelSearch.value : '');
+      vscode.postMessage({ type: 'setModel', name: m });
+    }
+
+    function positionModelMenu() {
+      if (!modelMenu || !modelBtn) return;
+      modelMenu.classList.remove('hidden');
+      modelMenu.style.visibility = 'hidden';
+      modelMenu.style.left = '0px';
+      modelMenu.style.top = '0px';
+      const btnRect = modelBtn.getBoundingClientRect();
+      const menuRect = modelMenu.getBoundingClientRect();
+      const margin = 8;
+      const gap = 4;
+      const left = Math.min(Math.max(btnRect.left, margin), window.innerWidth - menuRect.width - margin);
+      const top = Math.max(margin, btnRect.top - menuRect.height - gap);
+      modelMenu.style.left = left + 'px';
+      modelMenu.style.top = top + 'px';
+      modelMenu.style.visibility = '';
+    }
+
+    function openModelMenu() {
+      renderModelMenuItems(currentModelList, currentModelValue, '');
+      if (modelSearch) modelSearch.value = '';
+      positionModelMenu();
+      closePermMenu();
+      closeModeMenu();
+      if (modelBtn) modelBtn.setAttribute('aria-expanded', 'true');
+      if (modelSearch) setTimeout(function() { modelSearch.focus(); }, 0);
+    }
+
+    function closeModelMenu() {
+      if (modelMenu) modelMenu.classList.add('hidden');
+      if (modelBtn) modelBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    modelBtn && modelBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (modelMenu.classList.contains('hidden')) openModelMenu();
+      else closeModelMenu();
+    });
+
+    modelSearch && modelSearch.addEventListener('input', function() {
+      renderModelMenuItems(currentModelList, currentModelValue, modelSearch.value);
+    });
+
+    modelSearch && modelSearch.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { closeModelMenu(); modelBtn && modelBtn.focus(); }
+    });
+
+    document.addEventListener('click', function() { closeModelMenu(); });
+    modelMenu && modelMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+
     // ── Plus menu & file inputs ─────────────────────────────────
 
     function positionPlusMenu() {
@@ -4076,21 +4303,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     fileInputImage.addEventListener('change', function() {
       if (fileInputImage.files) Array.from(fileInputImage.files).forEach(addImageFile);
       fileInputImage.value = '';
-    });
-
-    modelSelect.addEventListener('change', function() {
-      const selectedOption = modelSelect.selectedIndex >= 0 ? modelSelect.options[modelSelect.selectedIndex] : null;
-      const selectedText = (selectedOption ? selectedOption.textContent : '') || modelSelect.value || '';
-      if (modelSelectLabel) {
-        modelSelectLabel.textContent = selectedText;
-        modelSelectLabel.title = selectedText;
-      }
-      if (modelSelectWrap) modelSelectWrap.classList.toggle('is-empty', !selectedText);
-      if (modelSelect.value) vscode.postMessage({ type: 'setModel', name: modelSelect.value });
-    });
-    permissionSelect.addEventListener('change', function() {
-      const m = permissionSelect.value === 'run_everything' ? 'run_everything' : 'default';
-      vscode.postMessage({ type: 'setPermissionMode', mode: m });
     });
 
     ctxToggle.addEventListener('click', function() {
@@ -4334,7 +4546,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     fetchSkills();
     let optionsRetryCount = 0;
     const optionsRetryTimer = setInterval(() => {
-      if (hasReceivedOptions && modelSelect.options.length > 0 && !modelSelect.options[0].disabled) {
+      if (hasReceivedOptions && currentModelList.length > 0) {
         clearInterval(optionsRetryTimer);
         return;
       }
