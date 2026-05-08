@@ -334,6 +334,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "expandAllCards":
           this.expandAllCards();
           break;
+        case "fetchSkills":
+          void this.fetchAndSendSkills();
+          break;
+        case "compact":
+          void this.triggerCompact();
+          break;
+        case "newSession": {
+          const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+          this.connection.sendNewSession(cwd);
+          this.history = [];
+          this.postMessage({ type: "history", items: [] });
+          break;
+        }
+        case "clearMessages":
+          this.history = [];
+          this.postMessage({ type: "history", items: [] });
+          break;
+        case "switchMode":
+          void this.switchMode(msg.mode as "agent" | "plan");
+          break;
       }
     });
 
@@ -353,6 +373,71 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 将 CrabCode 扩展配置（模型列表、权限模式）推送到 Webview。 */
   public notifyConfigurationChanged(): void {
     void this.pushChatOptions();
+  }
+
+  private async switchMode(mode: "agent" | "plan"): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const password = cfg.get<string>("password", "");
+    try {
+      const url = new URL(wsUrl);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = "/config/switch-mode";
+      url.search = "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (password) headers.Authorization = `Bearer ${password}`;
+      await fetch(url.toString(), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ mode }),
+      });
+      this.postMessage({ type: "modeChange", mode });
+    } catch {
+      // ignore
+    }
+  }
+
+  private async triggerCompact(): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const password = cfg.get<string>("password", "");
+    const sessionId = this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(wsUrl);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = "/compact";
+      url.search = "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (password) headers.Authorization = `Bearer ${password}`;
+      await fetch(url.toString(), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  private async fetchAndSendSkills(): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const password = cfg.get<string>("password", "");
+    try {
+      const url = new URL(wsUrl);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = "/skills";
+      url.search = "";
+      const headers: Record<string, string> = {};
+      if (password) headers.Authorization = `Bearer ${password}`;
+      const response = await fetch(url.toString(), { headers });
+      if (!response.ok) return;
+      const skills = (await response.json()) as Array<{ name: string; description: string }>;
+      this.postMessage({ type: "skills", skills });
+    } catch {
+      // gateway not ready yet — ignore
+    }
   }
 
   private async resolveModelsFromSettingsOrGateway(): Promise<string[]> {
@@ -644,6 +729,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "server.connected":
       case "server.heartbeat":
         this.notifyConfigurationChanged();
+        break;
+      case "mode_change":
+        this.postMessage({ type: "modeChange", mode: (payload as { mode: string }).mode });
         break;
     }
   }
@@ -1774,6 +1862,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border: 1px solid var(--border-strong);
       background: var(--surface-elevated);
       box-shadow: var(--shadow-md);
+      position: relative;
       width: 100%;
       min-width: 0;
       overflow: hidden;
@@ -1938,7 +2027,84 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     #input::placeholder { color: color-mix(in srgb, var(--vscode-input-foreground) 35%, transparent); }
 
-    /* ── Toolbar ───────────────────────────────────────────────── */
+    /* ── Slash command popup ───────────────────────────────────── */
+    #slash-popup {
+      position: fixed;
+      top: 0;
+      left: 0;
+      background: var(--vscode-menu-background, var(--vscode-input-background));
+      border: 1px solid var(--vscode-menu-border, var(--border));
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 200;
+      overflow: hidden;
+      max-height: 320px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    #slash-popup.hidden { display: none; }
+    .slash-popup-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px 6px;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+    }
+    .slash-popup-section {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
+      padding: 6px 12px 2px;
+      flex-shrink: 0;
+    }
+    .slash-popup-list {
+      overflow-y: auto;
+      flex: 1;
+    }
+    .slash-item {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 6px 12px;
+      cursor: pointer;
+      border-radius: 0;
+      transition: background 0.1s;
+    }
+    .slash-item:hover,
+    .slash-item.active {
+      background: color-mix(in srgb, var(--accent, var(--vscode-focusBorder)) 14%, var(--vscode-input-background));
+    }
+    .slash-item .slash-name {
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--vscode-foreground);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .slash-item .slash-name mark {
+      background: transparent;
+      color: var(--accent, var(--vscode-focusBorder));
+      font-weight: 700;
+    }
+    .slash-item .slash-desc {
+      font-size: 11.5px;
+      color: color-mix(in srgb, var(--vscode-foreground) 50%, transparent);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .slash-item .slash-badge {
+      margin-left: auto;
+      flex-shrink: 0;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--accent, var(--vscode-focusBorder)) 18%, transparent);
+      color: color-mix(in srgb, var(--accent, var(--vscode-focusBorder)) 80%, var(--vscode-foreground));
+    }
     .composer-toolbar {
       display: flex;
       align-items: center;
@@ -2175,6 +2341,50 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .tb-send-circle:active { transform: scale(0.95); }
     .tb-send-circle svg { display: block; }
 
+    /* ── Mode selector ─────────────────────────────────────────── */
+    .tb-mode-wrap { position: relative; flex-shrink: 0; }
+    .tb-mode-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 26px;
+      padding: 0 8px 0 9px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--vscode-foreground);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tb-mode-btn:hover { background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent); }
+    .tb-mode-btn .mode-chevron { font-size: 9px; opacity: 0.6; }
+    .mode-menu {
+      position: fixed;
+      top: 0; left: 0;
+      background: var(--vscode-menu-background);
+      color: var(--vscode-menu-foreground);
+      border: 1px solid var(--vscode-menu-border, #444);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 200;
+      padding: 3px 0;
+      min-width: 130px;
+    }
+    .mode-menu.hidden { display: none; }
+    .mode-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .mode-item:hover { background: var(--vscode-menu-selectionBackground, rgba(127,127,127,0.18)); }
+    .mode-item .mode-check { width: 14px; text-align: center; opacity: 0; font-size: 11px; }
+    .mode-item.active .mode-check { opacity: 1; }
+
     /* ── Footer ────────────────────────────────────────────────── */
     #footer-bar {
       display: flex;
@@ -2295,6 +2505,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="footer-bar">
       <span class="footer-left muted">CrabCode</span>
+      <div class="tb-mode-wrap">
+        <button type="button" class="tb-mode-btn" id="mode-btn" title="切换模式" aria-haspopup="menu" aria-expanded="false">
+          <span id="mode-label">Agent</span>
+          <span class="mode-chevron">▾</span>
+        </button>
+      </div>
       <select id="permission-select" class="footer-select" title="权限">
         <option value="default">默认</option>
         <option value="run_everything">run_everything</option>
@@ -2302,10 +2518,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <input type="file" id="file-input-image" accept="image/*" multiple hidden />
   </div>
+  <div id="slash-popup" class="hidden" role="listbox" aria-label="命令列表">
+    <div id="slash-popup-list" class="slash-popup-list"></div>
+  </div>
   <div id="plus-menu" class="plus-menu hidden" role="menu">
     <button type="button" role="menuitem" data-action="image">添加图片…</button>
     <button type="button" role="menuitem" data-action="file">添加文件…</button>
     <button type="button" role="menuitem" data-action="screenshot">屏幕截图说明</button>
+  </div>
+  <div id="mode-menu" class="mode-menu hidden" role="menu">
+    <div class="mode-item active" data-mode="agent" role="menuitem">
+      <span class="mode-check">✓</span>Agent
+    </div>
+    <div class="mode-item" data-mode="plan" role="menuitem">
+      <span class="mode-check">✓</span>Plan
+    </div>
   </div>
   <script nonce="${nonce}">
     (function() {
@@ -2320,6 +2547,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const ctxToggle = document.getElementById('ctx-toggle');
         const plusBtn = document.getElementById('plus-btn');
         const plusMenu = document.getElementById('plus-menu');
+        const slashPopup = document.getElementById('slash-popup');
+        const slashPopupList = document.getElementById('slash-popup-list');
         const fileInputImage = document.getElementById('file-input-image');
         const modelSelect = document.getElementById('model-select');
         const modelSelectWrap = document.getElementById('model-select-wrap');
@@ -2328,6 +2557,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const contextTooltip = document.getElementById('context-tooltip');
         const permissionSelect = document.getElementById('permission-select');
         const pendingEditsBar = document.getElementById('pending-edits-bar');
+        const modeBtn = document.getElementById('mode-btn');
+        const modeLabel = document.getElementById('mode-label');
+        const modeMenu = document.getElementById('mode-menu');
 
     // ── Tool card state ──────────────────────────────────────────
     const toolCards = new Map();
@@ -3396,7 +3628,263 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    // ── Slash command popup ───────────────────────────────────────
+
+    const BUILTIN_COMMANDS = [
+      { name: '/help',          desc: '显示帮助',                    badge: '' },
+      { name: '/plan',          desc: '切换到计划模式（只读分析）',    badge: '' },
+      { name: '/agent',         desc: '切换到 Agent 模式 / 查看 Agent', badge: '' },
+      { name: '/plan-status',   desc: '显示当前计划状态',             badge: '' },
+      { name: '/agents',        desc: '列出托管的 Agent',             badge: '' },
+      { name: '/status',        desc: '显示会话状态',                 badge: '' },
+      { name: '/model',         desc: '显示/切换模型',                badge: '' },
+      { name: '/new',           desc: '开始新会话',                   badge: '' },
+      { name: '/compact',       desc: '压缩对话上下文',               badge: '' },
+      { name: '/clear',         desc: '清除历史记录',                 badge: '' },
+      { name: '/sessions',      desc: '列出所有会话',                 badge: '' },
+      { name: '/recent',        desc: '列出最近的会话',               badge: '' },
+      { name: '/search',        desc: '搜索会话',                     badge: '' },
+      { name: '/archive',       desc: '归档会话',                     badge: '' },
+      { name: '/export',        desc: '导出会话 (md/json)',           badge: '' },
+      { name: '/stats',         desc: '使用统计',                     badge: '' },
+      { name: '/checkpoint',    desc: '创建检查点（含文件快照）',      badge: '' },
+      { name: '/checkpoints',   desc: '列出检查点',                   badge: '' },
+      { name: '/rollback',      desc: '回滚对话到检查点',             badge: '' },
+      { name: '/revert',        desc: '还原文件和对话到检查点',       badge: '' },
+      { name: '/undo',          desc: '撤销最后一个检查点',           badge: '' },
+      { name: '/resume',        desc: '恢复会话',                     badge: '' },
+      { name: '/logs',          desc: '显示后台日志',                 badge: '' },
+      { name: '/team',          desc: '团队管理',                     badge: '' },
+    ];
+
+    let slashSkills = [];
+    let slashActiveIndex = -1;
+    let slashItems = [];
+
+    function fetchSkills() {
+      vscode.postMessage({ type: 'fetchSkills' });
+    }
+
+    function highlight(text, query) {
+      if (!query) return escapeHtml(text);
+      const idx = text.toLowerCase().indexOf(query.toLowerCase());
+      if (idx < 0) return escapeHtml(text);
+      return escapeHtml(text.slice(0, idx)) +
+        '<mark>' + escapeHtml(text.slice(idx, idx + query.length)) + '</mark>' +
+        escapeHtml(text.slice(idx + query.length));
+    }
+
+    // Commands that have sub-items (populated dynamically)
+    const SUBCOMMAND_SOURCES = {
+      '/model': function() {
+        return Array.from(modelSelect.options).map(function(o) {
+          return { name: o.value, desc: o.value };
+        });
+      },
+    };
+
+    function buildSlashItems(query, subCmd) {
+      if (subCmd) {
+        // Sub-completion mode: show sub-items for the given command
+        const src = SUBCOMMAND_SOURCES[subCmd];
+        if (!src) return [];
+        const q = query.toLowerCase();
+        return src().filter(function(s) {
+          return !q || s.name.toLowerCase().startsWith(q);
+        }).map(function(s) {
+          return { name: s.name, desc: s.desc, type: 'sub', cmd: subCmd };
+        });
+      }
+      const q = query.toLowerCase();
+      const matchBuiltin = BUILTIN_COMMANDS.filter(c => c.name.slice(1).startsWith(q) || c.desc.toLowerCase().includes(q));
+      const matchSkills = slashSkills.filter(s => s.name.toLowerCase().startsWith(q) || (s.description || '').toLowerCase().includes(q));
+      return [
+        ...matchBuiltin.map(c => ({ ...c, type: 'builtin' })),
+        ...matchSkills.map(s => ({ name: '/' + s.name, desc: s.description || '', badge: 'skill', type: 'skill' })),
+      ];
+    }
+
+    function renderSlashPopup(query, subCmd) {
+      slashItems = buildSlashItems(query, subCmd);
+      if (slashItems.length === 0) { closeSlashPopup(); return; }
+
+      const builtins = slashItems.filter(i => i.type === 'builtin');
+      const skills = slashItems.filter(i => i.type === 'skill');
+      const subs = slashItems.filter(i => i.type === 'sub');
+
+      let html = '';
+      if (subs.length > 0) {
+        html += '<div class="slash-popup-section">' + escapeHtml(subCmd) + '</div>';
+        subs.forEach(function(item, idx) {
+          const activeClass = idx === slashActiveIndex ? ' active' : '';
+          html += '<div class="slash-item' + activeClass + '" data-index="' + idx + '" role="option">' +
+            '<span class="slash-name">' + highlight(item.name, query) + '</span>' +
+            '<span class="slash-desc">' + escapeHtml(item.desc) + '</span>' +
+            '</div>';
+        });
+      }
+      if (builtins.length > 0) {
+        html += '<div class="slash-popup-section">命令</div>';
+        builtins.forEach(function(item, idx) {
+          const activeClass = idx === slashActiveIndex ? ' active' : '';
+          html += '<div class="slash-item' + activeClass + '" data-index="' + idx + '" role="option">' +
+            '<span class="slash-name">' + highlight(item.name, '/' + query) + '</span>' +
+            '<span class="slash-desc">' + escapeHtml(item.desc) + '</span>' +
+            '</div>';
+        });
+      }
+      if (skills.length > 0) {
+        html += '<div class="slash-popup-section">Skills</div>';
+        skills.forEach(function(item, idx) {
+          const globalIdx = builtins.length + idx;
+          const activeClass = globalIdx === slashActiveIndex ? ' active' : '';
+          html += '<div class="slash-item' + activeClass + '" data-index="' + globalIdx + '" role="option">' +
+            '<span class="slash-name">' + highlight(item.name, '/' + query) + '</span>' +
+            '<span class="slash-desc">' + escapeHtml(item.desc) + '</span>' +
+            '<span class="slash-badge">skill</span>' +
+            '</div>';
+        });
+      }
+
+      slashPopupList.innerHTML = html;
+      slashPopup.classList.remove('hidden');
+      positionSlashPopup();
+
+      slashPopupList.querySelectorAll('.slash-item').forEach(function(el) {
+        el.addEventListener('mousedown', function(e) {
+          e.preventDefault();
+          const idx = parseInt(el.getAttribute('data-index'), 10);
+          selectSlashItem(idx);
+        });
+        el.addEventListener('mouseover', function() {
+          const idx = parseInt(el.getAttribute('data-index'), 10);
+          setSlashActive(idx);
+        });
+      });
+    }
+
+    function positionSlashPopup() {
+      const cardRect = composerCard.getBoundingClientRect();
+      const popupRect = slashPopup.getBoundingClientRect();
+      const margin = 8;
+      const gap = 6;
+      const left = Math.max(margin, cardRect.left);
+      const width = cardRect.width;
+      const top = Math.max(margin, cardRect.top - popupRect.height - gap);
+      slashPopup.style.left = left + 'px';
+      slashPopup.style.top = top + 'px';
+      slashPopup.style.width = width + 'px';
+    }
+
+    function setSlashActive(idx) {
+      slashActiveIndex = idx;
+      slashPopupList.querySelectorAll('.slash-item').forEach(function(el, i) {
+        el.classList.toggle('active', i === idx);
+      });
+      const activeEl = slashPopupList.querySelector('.slash-item.active');
+      if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function selectSlashItem(idx) {
+      const item = slashItems[idx];
+      if (!item) return;
+      if (item.type === 'sub') {
+        // Fill in full command + sub-value, ready to send
+        input.value = item.cmd + ' ' + item.name;
+        input.focus();
+        closeSlashPopup();
+      } else if (SUBCOMMAND_SOURCES[item.name]) {
+        // Has sub-items — fill with trailing space to trigger sub-completion
+        input.value = item.name + ' ';
+        input.focus();
+        slashActiveIndex = -1;
+        renderSlashPopup('', item.name);
+      } else {
+        input.value = item.name + ' ';
+        input.focus();
+        closeSlashPopup();
+      }
+    }
+
+    function closeSlashPopup() {
+      slashPopup.classList.add('hidden');
+      slashActiveIndex = -1;
+      slashItems = [];
+    }
+
+    function getSlashQuery() {
+      const val = input.value;
+      if (!val.startsWith('/')) return null;
+      const spaceIdx = val.indexOf(' ');
+      if (spaceIdx < 0) {
+        // Still typing the command name
+        return { query: val.slice(1), subCmd: null };
+      }
+      // Has a space — check if the command has sub-items
+      const cmd = val.slice(0, spaceIdx);
+      if (SUBCOMMAND_SOURCES[cmd]) {
+        return { query: val.slice(spaceIdx + 1), subCmd: cmd };
+      }
+      return null; // Unknown sub-command, close popup
+    }
+
+    input.addEventListener('input', function() {
+      const result = getSlashQuery();
+      if (result !== null) {
+        slashActiveIndex = -1;
+        renderSlashPopup(result.query, result.subCmd);
+      } else {
+        closeSlashPopup();
+      }
+    });
+
+    input.addEventListener('keydown', function(e) {
+      if (slashPopup.classList.contains('hidden')) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashActive(Math.min(slashActiveIndex + 1, slashItems.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashActive(Math.max(slashActiveIndex - 1, 0));
+      } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+        if (slashActiveIndex >= 0) {
+          e.preventDefault();
+          selectSlashItem(slashActiveIndex);
+        }
+      } else if (e.key === 'Escape') {
+        closeSlashPopup();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        const nextIdx = slashActiveIndex < 0 ? 0 : (slashActiveIndex + 1) % slashItems.length;
+        setSlashActive(nextIdx);
+      }
+    });
+
+    document.addEventListener('click', function(e) {
+      if (!slashPopup.contains(e.target) && e.target !== input) closeSlashPopup();
+    });
+
     // ── Send ─────────────────────────────────────────────────────
+
+    // Commands handled directly without going to the model
+    const DIRECT_COMMANDS = {
+      '/model': function(args) {
+        if (args) vscode.postMessage({ type: 'setModel', name: args });
+        return !!args;
+      },
+      '/compact': function() {
+        vscode.postMessage({ type: 'compact' });
+        return true;
+      },
+      '/new': function() {
+        vscode.postMessage({ type: 'newSession' });
+        return true;
+      },
+      '/clear': function() {
+        vscode.postMessage({ type: 'clearMessages' });
+        return true;
+      },
+    };
 
     function send() {
       if (isBusy) {
@@ -3411,6 +3899,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       text = (text + extra).trim();
       if (!text && pendingImages.length === 0 && pendingTextFiles.length === 0) return;
+
+      // Intercept slash commands before sending to model
+      if (text.startsWith('/') && pendingImages.length === 0 && pendingTextFiles.length === 0) {
+        const spaceIdx = text.indexOf(' ');
+        const cmd = spaceIdx < 0 ? text : text.slice(0, spaceIdx);
+        const args = spaceIdx < 0 ? '' : text.slice(spaceIdx + 1).trim();
+        const handler = DIRECT_COMMANDS[cmd];
+        if (handler && handler(args)) {
+          input.value = '';
+          pendingImages.length = 0;
+          pendingTextFiles.length = 0;
+          renderAttachmentBar();
+          closeSlashPopup();
+          return;
+        }
+      }
+
       const images = pendingImages.map(function(img) {
         return { media_type: img.media_type, data: img.data };
       });
@@ -3425,6 +3930,62 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     input.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
     });
+
+    // ── Mode menu ────────────────────────────────────────────────
+
+    let currentMode = 'agent';
+
+    function updateModeButton(mode) {
+      currentMode = mode;
+      if (modeLabel) modeLabel.textContent = mode === 'plan' ? 'Plan' : 'Agent';
+      modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
+        el.classList.toggle('active', el.getAttribute('data-mode') === mode);
+      });
+    }
+
+    function positionModeMenu() {
+      modeMenu.classList.remove('hidden');
+      modeMenu.style.visibility = 'hidden';
+      modeMenu.style.left = '0px';
+      modeMenu.style.top = '0px';
+      const btnRect = modeBtn.getBoundingClientRect();
+      const menuRect = modeMenu.getBoundingClientRect();
+      const margin = 8;
+      const gap = 4;
+      const left = Math.min(Math.max(btnRect.left, margin), window.innerWidth - menuRect.width - margin);
+      const top = Math.max(margin, btnRect.top - menuRect.height - gap);
+      modeMenu.style.left = left + 'px';
+      modeMenu.style.top = top + 'px';
+      modeMenu.style.visibility = '';
+    }
+
+    function openModeMenu() {
+      positionModeMenu();
+      modeBtn.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeModeMenu() {
+      modeMenu.classList.add('hidden');
+      modeBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    modeBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (modeMenu.classList.contains('hidden')) openModeMenu();
+      else closeModeMenu();
+    });
+
+    modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
+      el.addEventListener('click', function() {
+        const mode = el.getAttribute('data-mode');
+        updateModeButton(mode);
+        vscode.postMessage({ type: 'switchMode', mode: mode });
+        closeModeMenu();
+      });
+    });
+
+    document.addEventListener('click', function() { closeModeMenu(); });
+    modeMenu.addEventListener('click', function(e) { e.stopPropagation(); });
 
     // ── Plus menu & file inputs ─────────────────────────────────
 
@@ -3585,6 +4146,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           input.value = msg.text;
           input.focus();
           break;
+        case 'skills':
+          if (Array.isArray(msg.skills)) {
+            slashSkills = msg.skills;
+          }
+          break;
+        case 'modeChange':
+          updateModeButton(msg.mode);
+          break;
         case 'toolUse':
           renderToolCard(msg.card);
           updateBusyLabel();
@@ -3724,6 +4293,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     vscode.postMessage({ type: 'webviewReady' });
     vscode.postMessage({ type: 'requestHistory' });
     vscode.postMessage({ type: 'requestOptions' });
+    fetchSkills();
     let optionsRetryCount = 0;
     const optionsRetryTimer = setInterval(() => {
       if (hasReceivedOptions && modelSelect.options.length > 0 && !modelSelect.options[0].disabled) {

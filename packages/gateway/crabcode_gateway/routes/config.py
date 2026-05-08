@@ -1,13 +1,15 @@
-"""Configuration and context routes — /config/*, /context, /tools."""
+"""Configuration and context routes — /config/*, /context, /tools, /skills."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
 from crabcode_core.config.manager import ConfigManager
+from crabcode_core.skills.loader import load_skills
 from crabcode_gateway.schemas import (
     ContextPushRequest,
     ModelInfo,
+    SkillInfo,
     SwitchModeRequest,
     SwitchModelRequest,
     ToolInfo,
@@ -97,6 +99,23 @@ async def list_tools(request: Request) -> list[ToolInfo]:
         )
         for t in session.tools
     ]
+
+
+@router.get("/skills", response_model=list[SkillInfo])
+async def list_skills(request: Request) -> list[SkillInfo]:
+    """List all skills visible from the current working directory."""
+    session = _get_session(request)
+    if session and hasattr(session, "skills") and session.skills:
+        return [
+            SkillInfo(name=s.name, description=s.description or "")
+            for s in session.skills
+        ]
+    # Fallback: load from cwd when no session is active yet
+    import os
+
+    cwd = os.getcwd()
+    skills = load_skills(cwd)
+    return [SkillInfo(name=s.name, description=s.description or "") for s in skills]
 
 
 @router.post("/context")

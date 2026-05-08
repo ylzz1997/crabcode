@@ -140,6 +140,11 @@ class ToolInfo(BaseModel):
     is_enabled: bool = True
 
 
+class SkillInfo(BaseModel):
+    name: str
+    description: str = ""
+
+
 class ModelInfo(BaseModel):
     name: str
     description: str = ""
