@@ -90,15 +90,35 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
 
 @router.get("/list", response_model=list[SessionInfo])
 async def list_sessions(request: Request) -> list[SessionInfo]:
-    """List all active sessions."""
+    """List all persisted sessions for the current working directory.
+
+    Uses SessionStorage.list_sessions (disk-based) so sub-agent sessions
+    are never included — only top-level user conversations appear here.
+    """
+    import os
+    from crabcode_core.session.storage import SessionStorage
+
+    # Determine cwd from the active session, or fall back to process cwd
     sessions: dict = request.app.state.sessions
+    default_id = request.app.state.default_session_id
+    cwd = os.getcwd()
+    if default_id and default_id in sessions:
+        cwd = getattr(sessions[default_id], "cwd", cwd)
+
+    try:
+        stored = SessionStorage.list_sessions(cwd)
+    except Exception:
+        stored = []
+
     result = []
-    for sid, s in sessions.items():
+    for s in stored:
         result.append(SessionInfo(
-            session_id=sid,
-            message_count=len(s.messages),
-            model="",
-            provider="",
+            session_id=s["session_id"],
+            message_count=s.get("message_count", 0),
+            model=s.get("model", ""),
+            provider=s.get("provider", ""),
+            created_at=s.get("modified", ""),
+            title=s.get("title", ""),
         ))
     return result
 

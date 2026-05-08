@@ -337,6 +337,11 @@ export interface ServerHeartbeatPayload {
   properties?: Record<string, unknown>;
 }
 
+export interface SessionHistoryPayload {
+  type?: "session_history";
+  messages?: Array<{ id: string; role: string; text: string }>;
+}
+
 
 // ── Tagged union ─────────────────────────────────────────────────────
 export type EventPayload =
@@ -363,7 +368,8 @@ export type EventPayload =
   SnapshotPayload |
   RevertPayload |
   ServerConnectedPayload |
-  ServerHeartbeatPayload;
+  ServerHeartbeatPayload |
+  SessionHistoryPayload;
 
 // ── Type discriminator helper ────────────────────────────────────────
 export type EventPayloadType = EventPayload["type"];

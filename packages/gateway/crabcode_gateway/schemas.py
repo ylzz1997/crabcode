@@ -118,6 +118,7 @@ class SessionInfo(BaseModel):
     model: str = ""
     provider: str = ""
     created_at: str = ""
+    title: str = ""
 
 
 class AgentInfo(BaseModel):

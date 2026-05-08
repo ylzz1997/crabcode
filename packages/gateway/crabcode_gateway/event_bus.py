@@ -7,6 +7,7 @@ multiple subscribers per session with 10 s heartbeat keep-alive.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, AsyncIterator
 
 from crabcode_core.logging_utils import get_logger
@@ -100,7 +101,9 @@ class EventBus:
     async def publish(self, session_id: str, event: Any) -> None:
         """Publish a CoreEvent to all subscribers of the session."""
         payload = core_event_to_payload(event)
-        data = payload.model_dump_json()
+        data_dict = json.loads(payload.model_dump_json())
+        data_dict["session_id"] = session_id
+        data = json.dumps(data_dict)
 
         targets = list(self._subscribers.get(session_id, []))
         targets.extend(self._global_subscribers)
@@ -111,7 +114,9 @@ class EventBus:
     def publish_nowait(self, session_id: str, event: Any) -> None:
         """Non-async publish (for use from sync contexts)."""
         payload = core_event_to_payload(event)
-        data = payload.model_dump_json()
+        data_dict = json.loads(payload.model_dump_json())
+        data_dict["session_id"] = session_id
+        data = json.dumps(data_dict)
 
         targets = list(self._subscribers.get(session_id, []))
         targets.extend(self._global_subscribers)

@@ -41,20 +41,15 @@ async def event_stream(request: Request):
 async def websocket_endpoint(ws: WebSocket):
     """Bidirectional WebSocket endpoint.
 
-    Incoming messages are commands (permission_response, choice_response, etc.).
-    Outgoing messages are CoreEvent payloads (same JSON format as SSE).
-
-    This is the preferred transport for VSCode extensions and other
-    rich clients that need two-way communication without the overhead
-    of separate HTTP requests for each interaction.
+    Uses a global subscription — events from ALL sessions are forwarded
+    to the client (each tagged with session_id). The client filters by
+    active session. This ensures no events are lost when switching sessions.
     """
     await ws.accept()
     event_bus: EventBus = ws.app.state.event_bus
 
-    session_id = ws.query_params.get("session_id")
-
-    # Start event push task
-    push_task = asyncio.create_task(event_bus.ws_stream(ws, session_id))
+    # Global subscription: receive events from all sessions
+    push_task = asyncio.create_task(event_bus.ws_stream(ws, None))
 
     try:
         while True:
@@ -75,6 +70,8 @@ async def websocket_endpoint(ws: WebSocket):
                 await _handle_send_message(ws, msg)
             elif msg_type == "new_session":
                 await _handle_new_session(ws, msg)
+            elif msg_type == "resume_session":
+                await _handle_resume_session(ws, msg)
             elif msg_type == "interrupt":
                 await _handle_interrupt(ws, msg)
             elif msg_type == "push_context":
@@ -265,3 +262,78 @@ async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
         )
         return
     logger.info("ws set_permission_mode session=%s mode=%s", session.session_id, mode)
+
+
+async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
+    """Resume an existing session by ID and make it the active WS session."""
+    import os
+    from crabcode_core.session import CoreSession
+    from crabcode_core.types.config import CrabCodeSettings
+    from crabcode_gateway.schemas import ServerConnectedPayload
+
+    session_id = msg.get("session_id")
+    if not session_id:
+        await ws.send_text(json.dumps({"type": "error", "message": "session_id required"}))
+        return
+
+    sessions: dict = ws.app.state.sessions
+
+    # Reuse already-loaded session if available
+    if session_id in sessions:
+        session = sessions[session_id]
+        ws.app.state.default_session_id = session_id
+        logger.info("ws resume_session reused in-memory session=%s", session_id)
+        await ws.send_text(
+            ServerConnectedPayload(properties={"session_id": session_id}).model_dump_json()
+        )
+        await _send_session_history(ws, session)
+        return
+
+    # Load from disk
+    cwd = os.getcwd()
+    current_id = ws.app.state.default_session_id
+    if current_id and current_id in sessions:
+        cwd = getattr(sessions[current_id], "cwd", cwd)
+
+    settings = CrabCodeSettings()
+    session = CoreSession(cwd=cwd, settings=settings)
+    await session.initialize()
+    ok = await session.resume(session_id)
+    if not ok:
+        await ws.send_text(json.dumps({"type": "error", "message": f"session {session_id} not found"}))
+        return
+
+    sessions[session.session_id] = session
+    ws.app.state.default_session_id = session.session_id
+    logger.info("ws resume_session loaded session=%s messages=%d", session.session_id, len(session.messages))
+
+    await ws.send_text(
+        ServerConnectedPayload(properties={"session_id": session.session_id}).model_dump_json()
+    )
+    await _send_session_history(ws, session)
+
+
+async def _send_session_history(ws: WebSocket, session: Any) -> None:
+    """Send existing conversation messages as a session_history payload."""
+    messages = getattr(session, "messages", [])
+    if not messages:
+        return
+
+    history_items = []
+    for msg in messages:
+        role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        text = msg.text_content if hasattr(msg, "text_content") else ""
+        if not text:
+            continue
+        history_items.append({
+            "id": getattr(msg, "uuid", ""),
+            "role": role,
+            "text": text,
+        })
+
+    if history_items:
+        await ws.send_text(json.dumps({
+            "type": "session_history",
+            "messages": history_items,
+        }))
+

@@ -200,29 +200,83 @@ type HistoryItem =
   | { kind: "permission"; card: PermissionCard }
   | { kind: "fileChange"; payload: FileChangePayload };
 
+interface SessionState {
+  messages: ChatMessage[];
+  history: HistoryItem[];
+  toolCards: Map<string, ToolCard>;
+  thinkingCards: Map<string, ThinkingCard>;
+  choiceCards: Map<string, ChoiceCard>;
+  permissionCards: Map<string, PermissionCard>;
+  activeThinkingId: string | null;
+  isBusy: boolean;
+  contextUsage: ContextUsageStatus | null;
+}
+
+function createEmptySessionState(): SessionState {
+  return {
+    messages: [],
+    history: [],
+    toolCards: new Map(),
+    thinkingCards: new Map(),
+    choiceCards: new Map(),
+    permissionCards: new Map(),
+    activeThinkingId: null,
+    isBusy: false,
+    contextUsage: null,
+  };
+}
+
 // ── Provider ──────────────────────────────────────────────────────
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "crabcode.chatPanel";
 
   private view: vscode.WebviewView | undefined;
-  private messages: ChatMessage[] = [];
-  private history: HistoryItem[] = [];
-  private toolCards = new Map<string, ToolCard>();
-  private thinkingCards = new Map<string, ThinkingCard>();
-  private choiceCards = new Map<string, ChoiceCard>();
-  private permissionCards = new Map<string, PermissionCard>();
-  private activeThinkingId: string | null = null;
-  private isBusy = false;
+  private sessionStates = new Map<string, SessionState>();
+  private displayedSessionId: string | null = null;
+  private busySessions = new Set<string>();
   private interruptRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private latestModelRequestId = 0;
   private lastNonEmptyModels: string[] = [];
-  private latestContextUsage: ContextUsageStatus | null = null;
   private webviewReady = false;
   private pendingWebviewMessages: any[] = [];
   private pendingEditReview: PendingEditReviewSummary | null = null;
   private readonly pendingEditActionEmitter = new vscode.EventEmitter<PendingEditActionMessage>();
   public readonly onPendingEditAction = this.pendingEditActionEmitter.event;
+
+  /** Get or create session state for a given session ID. */
+  private getSessionState(sessionId: string): SessionState {
+    let state = this.sessionStates.get(sessionId);
+    if (!state) {
+      state = createEmptySessionState();
+      this.sessionStates.set(sessionId, state);
+    }
+    return state;
+  }
+
+  /** Get the state for the currently displayed session. */
+  private get currentState(): SessionState {
+    if (this.displayedSessionId) {
+      return this.getSessionState(this.displayedSessionId);
+    }
+    return createEmptySessionState();
+  }
+
+  // Convenience accessors for the displayed session state
+  private get messages(): ChatMessage[] { return this.currentState.messages; }
+  private set messages(v: ChatMessage[]) { if (this.displayedSessionId) this.getSessionState(this.displayedSessionId).messages = v; }
+  private get history(): HistoryItem[] { return this.currentState.history; }
+  private set history(v: HistoryItem[]) { if (this.displayedSessionId) this.getSessionState(this.displayedSessionId).history = v; }
+  private get toolCards(): Map<string, ToolCard> { return this.currentState.toolCards; }
+  private get thinkingCards(): Map<string, ThinkingCard> { return this.currentState.thinkingCards; }
+  private get choiceCards(): Map<string, ChoiceCard> { return this.currentState.choiceCards; }
+  private get permissionCards(): Map<string, PermissionCard> { return this.currentState.permissionCards; }
+  private get activeThinkingId(): string | null { return this.currentState.activeThinkingId; }
+  private set activeThinkingId(v: string | null) { if (this.displayedSessionId) this.getSessionState(this.displayedSessionId).activeThinkingId = v; }
+  private get isBusy(): boolean { return this.currentState.isBusy; }
+  private set isBusy(v: boolean) { if (this.displayedSessionId) this.getSessionState(this.displayedSessionId).isBusy = v; }
+  private get latestContextUsage(): ContextUsageStatus | null { return this.currentState.contextUsage; }
+  private set latestContextUsage(v: ContextUsageStatus | null) { if (this.displayedSessionId) this.getSessionState(this.displayedSessionId).contextUsage = v; }
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -343,9 +397,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "newSession": {
           const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+          this.displayedSessionId = null; // will be set by server.connected
           this.connection.sendNewSession(cwd);
-          this.history = [];
           this.postMessage({ type: "history", items: [] });
+          this.postMessage({ type: "busyState", busy: false });
           break;
         }
         case "fetchSessions":
@@ -360,7 +415,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           void vscode.commands.executeCommand("workbench.action.openSettings", "crabcode");
           break;
         case "clearMessages":
-          this.history = [];
+          if (this.displayedSessionId) {
+            const state = this.getSessionState(this.displayedSessionId);
+            state.history = [];
+            state.messages = [];
+          }
           this.postMessage({ type: "history", items: [] });
           break;
         case "webviewError":
@@ -395,9 +454,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private sendCurrentSessionInfo(): void {
-    const sid = this.connection.sessionId;
+    const sid = this.displayedSessionId || this.connection.sessionId;
     if (sid) {
-      this.postMessage({ type: "sessionInfo", sessionId: sid, title: null, status: this.isBusy ? "running" : "done" });
+      const status = this.busySessions.has(sid) ? "running" : "done";
+      this.postMessage({ type: "sessionInfo", sessionId: sid, title: null, status });
+    }
+  }
+
+  private async fetchAndSendCurrentTitle(): Promise<void> {
+    const sid = this.connection.sessionId;
+    if (!sid) return;
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const password = cfg.get<string>("password", "");
+    try {
+      const url = new URL(wsUrl);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = "/session/list";
+      url.search = "";
+      const headers: Record<string, string> = {};
+      if (password) headers.Authorization = `Bearer ${password}`;
+      const response = await fetch(url.toString(), { headers });
+      if (!response.ok) return;
+      const sessions = (await response.json()) as Array<{ session_id: string; title?: string }>;
+      const found = sessions.find((s) => s.session_id === sid);
+      if (found?.title) {
+        this.postMessage({ type: "sessionInfo", sessionId: sid, title: found.title, status: null });
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -486,14 +571,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         created_at?: string;
         title?: string;
       }>;
-      const currentId = this.connection.sessionId;
       const sessionList = sessions.map((s) => ({
         session_id: s.session_id,
         message_count: s.message_count,
         model: s.model,
         created_at: s.created_at,
         title: s.title ?? s.session_id.slice(0, 12),
-        status: s.session_id === currentId ? (this.isBusy ? "running" : "done") : "done",
+        status: this.busySessions.has(s.session_id) ? "running" : "done",
       }));
       this.postMessage({ type: "sessionList", sessions: sessionList });
     } catch {
@@ -502,31 +586,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async resumeSession(sessionId: string): Promise<void> {
-    const cfg = vscode.workspace.getConfiguration("crabcode");
-    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
-    const password = cfg.get<string>("password", "");
-    try {
-      const url = new URL(wsUrl);
-      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-      url.pathname = "/session/resume";
-      url.search = "";
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (password) headers.Authorization = `Bearer ${password}`;
-      const response = await fetch(url.toString(), {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ session_id: sessionId }),
-      });
-      if (!response.ok) return;
-      // Clear local history and request fresh history from server
-      this.history = [];
+    // Switch to the target session
+    this.displayedSessionId = sessionId;
+
+    // If we already have cached state for this session, render it immediately
+    const cached = this.sessionStates.get(sessionId);
+    if (cached) {
+      this.postMessage({ type: "history", items: cached.history });
+      this.postMessage({ type: "busyState", busy: cached.isBusy });
+      if (cached.contextUsage) {
+        this.postMessage({ type: "contextUsage", usage: cached.contextUsage });
+      }
+    } else {
+      // No cached state — request from server
       this.postMessage({ type: "history", items: [] });
-      this.postMessage({ type: "sessionInfo", sessionId, title: sessionId.slice(0, 12) });
-      // Tell connection to use the resumed session
-      this.connection.sendRaw(JSON.stringify({ type: "new_session", cwd: null }));
-    } catch {
-      // ignore
+      this.postMessage({ type: "busyState", busy: this.busySessions.has(sessionId) });
+      this.connection.sendRaw(JSON.stringify({ type: "resume_session", session_id: sessionId }));
     }
+
+    this.sendCurrentSessionInfo();
+    setTimeout(() => void this.fetchAndSendCurrentTitle(), 500);
   }
 
   private async resolveModelsFromSettingsOrGateway(): Promise<string[]> {
@@ -771,90 +850,164 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleServerEvent(payload: EventPayload): void {
-    switch (payload.type) {
-      case "stream_text":
-        this.finalizeThinking();
-        this.appendAssistantText(payload.text);
-        break;
-      case "thinking":
-        this.handleThinking(payload.text);
-        break;
-      case "stream_mode":
-        this.handleStreamMode(payload as StreamModePayload);
-        break;
-      case "agent_output":
-        this.handleAgentOutput(payload as AgentOutputPayload);
-        break;
-      case "tool_use":
-        this.finalizeThinking();
-        this.handleToolUse(payload as ToolUsePayload);
-        break;
-      case "tool_result":
-        this.handleToolResult(payload as ToolResultPayload);
-        break;
-      case "permission_request":
-        this.handlePermissionRequest(payload as PermissionRequestPayload);
-        break;
-      case "choice_request":
-        this.handleChoiceRequest(payload as ChoiceRequestPayload);
-        break;
-      case "file_change":
-        this.handleFileChange(payload as FileChangePayload);
-        break;
-      case "error":
-        this.setBusy(false);
-        this.addMessage("system", `CrabCode：${payload.message}`);
-        break;
-      case "turn_complete": {
-        this.finalizeThinking();
-        const usage = buildContextUsageStatus(payload as TurnCompletePayload);
-        if (usage) {
-          this.latestContextUsage = usage;
-          this.postMessage({ type: "contextUsage", usage });
-        }
-        this.setBusy(false);
-        break;
+    const eventSessionId = (payload as any).session_id as string | undefined;
+    const isSessionEvent = !!eventSessionId;
+
+    if (isSessionEvent) {
+      // Track busy state per-session for session list status dots
+      if (payload.type === "turn_complete" || payload.type === "error") {
+        this.busySessions.delete(eventSessionId!);
+      } else if (payload.type === "stream_text" || payload.type === "thinking" || payload.type === "tool_use") {
+        this.busySessions.add(eventSessionId!);
       }
+
+      // Ensure we have a state object for this session
+      const targetState = this.getSessionState(eventSessionId!);
+      const isDisplayed = !this.displayedSessionId || eventSessionId === this.displayedSessionId;
+
+      // Route event to the target session state (even if not displayed)
+      this.routeEventToState(payload, targetState, isDisplayed);
+      return;
+    }
+
+    // Session-agnostic events (server.connected, server.heartbeat, session_history)
+    switch (payload.type) {
       case "server.connected":
-      case "server.heartbeat":
+      case "server.heartbeat": {
+        const connSid = this.connection.sessionId;
+        if (connSid) {
+          this.displayedSessionId = connSid;
+          // Ensure state exists for this session
+          this.getSessionState(connSid);
+        }
         this.sendCurrentSessionInfo();
         this.notifyConfigurationChanged();
         break;
+      }
       case "mode_change":
         this.postMessage({ type: "modeChange", mode: (payload as { mode: string }).mode });
+        break;
+      case "session_history":
+        this.handleSessionHistory(payload as { messages: Array<{ id: string; role: string; text: string }> });
         break;
     }
   }
 
+  private routeEventToState(payload: EventPayload, state: SessionState, updateWebview: boolean): void {
+    switch (payload.type) {
+      case "stream_text":
+        this.finalizeThinkingOnState(state, updateWebview);
+        this.appendAssistantTextOnState(state, payload.text, updateWebview);
+        break;
+      case "thinking":
+        this.handleThinkingOnState(state, payload.text, updateWebview);
+        break;
+      case "stream_mode":
+        this.handleStreamModeOnState(state, payload as StreamModePayload, updateWebview);
+        break;
+      case "agent_output":
+        this.handleAgentOutputOnState(state, payload as AgentOutputPayload, updateWebview);
+        break;
+      case "tool_use":
+        this.finalizeThinkingOnState(state, updateWebview);
+        this.handleToolUseOnState(state, payload as ToolUsePayload, updateWebview);
+        break;
+      case "tool_result":
+        this.handleToolResultOnState(state, payload as ToolResultPayload, updateWebview);
+        break;
+      case "permission_request":
+        this.handlePermissionRequestOnState(state, payload as PermissionRequestPayload, updateWebview);
+        break;
+      case "choice_request":
+        this.handleChoiceRequestOnState(state, payload as ChoiceRequestPayload, updateWebview);
+        break;
+      case "file_change":
+        this.handleFileChangeOnState(state, payload as FileChangePayload, updateWebview);
+        break;
+      case "error":
+        state.isBusy = false;
+        this.addMessageOnState(state, "system", `CrabCode：${payload.message}`, updateWebview);
+        if (updateWebview) this.postMessage({ type: "busyState", busy: false });
+        break;
+      case "turn_complete": {
+        this.finalizeThinkingOnState(state, updateWebview);
+        const usage = buildContextUsageStatus(payload as TurnCompletePayload);
+        if (usage) {
+          state.contextUsage = usage;
+          if (updateWebview) this.postMessage({ type: "contextUsage", usage });
+        }
+        state.isBusy = false;
+        if (updateWebview) {
+          this.postMessage({ type: "busyState", busy: false });
+          setTimeout(() => void this.fetchAndSendCurrentTitle(), 2000);
+        }
+        break;
+      }
+    }
+  }
+
+  private handleSessionHistory(payload: { messages: Array<{ id: string; role: string; text: string }> }): void {
+    if (!this.displayedSessionId) return;
+    const state = this.getSessionState(this.displayedSessionId);
+    state.history = [];
+    state.messages = [];
+    state.toolCards.clear();
+    state.thinkingCards.clear();
+    state.choiceCards.clear();
+    state.permissionCards.clear();
+    state.activeThinkingId = null;
+    for (const msg of payload.messages ?? []) {
+      const role = (msg.role === "user" || msg.role === "assistant" || msg.role === "system")
+        ? msg.role as ChatMessageRole
+        : "system";
+      const chatMsg: ChatMessage = {
+        id: msg.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        role,
+        text: msg.text,
+        timestamp: Date.now(),
+      };
+      state.messages.push(chatMsg);
+      state.history.push({ kind: "message", message: chatMsg });
+    }
+    this.postMessage({ type: "history", items: state.history });
+  }
+
   private handleThinking(chunk: string): void {
-    this.setBusy(true);
-    if (this.activeThinkingId) {
-      // Append to existing thinking card
-      const card = this.thinkingCards.get(this.activeThinkingId);
+    this.handleThinkingOnState(this.currentState, chunk, true);
+  }
+
+  private handleThinkingOnState(state: SessionState, chunk: string, updateWebview: boolean): void {
+    state.isBusy = true;
+    if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+    if (state.activeThinkingId) {
+      const card = state.thinkingCards.get(state.activeThinkingId);
       if (card) {
         card.text += chunk;
-        this.postMessage({ type: "appendThinking", id: card.id, chunk });
+        if (updateWebview) this.postMessage({ type: "appendThinking", id: card.id, chunk });
       }
     } else {
-      // Create a new thinking card
       const id = `thinking-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const card: ThinkingCard = { id, text: chunk, collapsed: false };
-      this.activeThinkingId = id;
-      this.thinkingCards.set(id, card);
-      this.history.push({ kind: "thinking", card });
-      this.postMessage({ type: "thinkingStart", card });
+      state.activeThinkingId = id;
+      state.thinkingCards.set(id, card);
+      state.history.push({ kind: "thinking", card });
+      if (updateWebview) this.postMessage({ type: "thinkingStart", card });
     }
   }
 
   /** Finalize the current thinking block (collapse it). */
   private finalizeThinking(): void {
-    if (!this.activeThinkingId) return;
-    const card = this.thinkingCards.get(this.activeThinkingId);
+    this.finalizeThinkingOnState(this.currentState, true);
+  }
+
+  private finalizeThinkingOnState(state: SessionState, updateWebview: boolean): void {
+    if (!state.activeThinkingId) return;
+    const card = state.thinkingCards.get(state.activeThinkingId);
     if (card) {
       card.collapsed = true;
-      this.postMessage({ type: "thinkingEnd", id: card.id, collapsed: true });
+      if (updateWebview) this.postMessage({ type: "thinkingEnd", id: card.id, collapsed: true });
     }
-    this.activeThinkingId = null;
+    state.activeThinkingId = null;
   }
 
   private setBusy(busy: boolean): void {
@@ -892,13 +1045,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleStreamMode(payload: StreamModePayload): void {
+    this.handleStreamModeOnState(this.currentState, payload, true);
+  }
+
+  private handleStreamModeOnState(state: SessionState, payload: StreamModePayload, updateWebview: boolean): void {
     switch (payload.mode) {
       case "requesting":
       case "thinking":
       case "responding":
       case "tool-input":
       case "tool-running":
-        this.setBusy(true);
+        state.isBusy = true;
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
         break;
       default:
         break;
@@ -906,14 +1064,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleAgentOutput(payload: AgentOutputPayload): void {
+    this.handleAgentOutputOnState(this.currentState, payload, true);
+  }
+
+  private handleAgentOutputOnState(state: SessionState, payload: AgentOutputPayload, updateWebview: boolean): void {
     switch (payload.stream) {
       case "text":
-        this.finalizeThinking();
-        this.appendAssistantText(payload.text);
-        this.setBusy(true);
+        this.finalizeThinkingOnState(state, updateWebview);
+        this.appendAssistantTextOnState(state, payload.text, updateWebview);
+        state.isBusy = true;
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
         break;
       case "thinking":
-        this.setBusy(true);
+        state.isBusy = true;
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
         break;
       default:
         break;
@@ -921,6 +1085,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleToolUse(payload: ToolUsePayload): void {
+    this.handleToolUseOnState(this.currentState, payload, true);
+  }
+
+  private handleToolUseOnState(state: SessionState, payload: ToolUsePayload, updateWebview: boolean): void {
     const card: ToolCard = {
       id: payload.tool_use_id,
       toolName: payload.tool_name,
@@ -929,22 +1097,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       isError: false,
       collapsed: false,
     };
-    this.toolCards.set(payload.tool_use_id, card);
-    this.history.push({ kind: "tool", card });
-    this.postMessage({ type: "toolUse", card });
+    state.toolCards.set(payload.tool_use_id, card);
+    state.history.push({ kind: "tool", card });
+    if (updateWebview) this.postMessage({ type: "toolUse", card });
   }
 
   private handleToolResult(payload: ToolResultPayload): void {
-    const card = this.toolCards.get(payload.tool_use_id);
+    this.handleToolResultOnState(this.currentState, payload, true);
+  }
+
+  private handleToolResultOnState(state: SessionState, payload: ToolResultPayload, updateWebview: boolean): void {
+    const card = state.toolCards.get(payload.tool_use_id);
     if (card) {
       card.result = payload.result_for_display ?? payload.result;
       card.isError = payload.is_error ?? false;
-      card.collapsed = !card.isError; // Keep errors expanded so they stay visible
-      this.postMessage({ type: "toolResult", card });
+      card.collapsed = !card.isError;
+      if (updateWebview) this.postMessage({ type: "toolResult", card });
     }
   }
 
   private handleChoiceRequest(payload: ChoiceRequestPayload): void {
+    this.handleChoiceRequestOnState(this.currentState, payload, true);
+  }
+
+  private handleChoiceRequestOnState(state: SessionState, payload: ChoiceRequestPayload, updateWebview: boolean): void {
     const card: ChoiceCard = {
       id: payload.tool_use_id,
       question: payload.question,
@@ -955,12 +1131,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       completed: false,
       cancelled: false,
     };
-    this.choiceCards.set(payload.tool_use_id, card);
-    this.history.push({ kind: "choice", card });
-    this.postMessage({ type: "choiceRequest", card });
+    state.choiceCards.set(payload.tool_use_id, card);
+    state.history.push({ kind: "choice", card });
+    if (updateWebview) this.postMessage({ type: "choiceRequest", card });
   }
 
   private handlePermissionRequest(payload: PermissionRequestPayload): void {
+    this.handlePermissionRequestOnState(this.currentState, payload, true);
+  }
+
+  private handlePermissionRequestOnState(state: SessionState, payload: PermissionRequestPayload, updateWebview: boolean): void {
     const card: PermissionCard = {
       id: payload.tool_use_id,
       toolName: payload.tool_name,
@@ -968,9 +1148,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       reason: payload.reason ?? null,
       allowed: null,
     };
-    this.permissionCards.set(payload.tool_use_id, card);
-    this.history.push({ kind: "permission", card });
-    this.postMessage({ type: "permissionRequest", card });
+    state.permissionCards.set(payload.tool_use_id, card);
+    state.history.push({ kind: "permission", card });
+    if (updateWebview) this.postMessage({ type: "permissionRequest", card });
   }
 
   private respondToChoice(id: string, selected: string[] = [], cancelled = false): void {
@@ -999,8 +1179,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleFileChange(payload: FileChangePayload): void {
-    this.history.push({ kind: "fileChange", payload });
-    this.postMessage({ type: "fileChange", payload });
+    this.handleFileChangeOnState(this.currentState, payload, true);
+  }
+
+  private handleFileChangeOnState(state: SessionState, payload: FileChangePayload, updateWebview: boolean): void {
+    state.history.push({ kind: "fileChange", payload });
+    if (updateWebview) this.postMessage({ type: "fileChange", payload });
   }
 
   private toggleToolCard(id: string): void {
@@ -1051,6 +1235,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private addMessage(role: ChatMessageRole, text: string, images?: ImageAttachment[]): void {
+    this.addMessageOnState(this.currentState, role, text, true, images);
+  }
+
+  private addMessageOnState(state: SessionState, role: ChatMessageRole, text: string, updateWebview: boolean, images?: ImageAttachment[]): void {
     const msg: ChatMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
@@ -1058,19 +1246,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       timestamp: Date.now(),
       images,
     };
-    this.messages.push(msg);
-    this.history.push({ kind: "message", message: msg });
-    this.postMessage({ type: "newMessage", message: msg });
+    state.messages.push(msg);
+    state.history.push({ kind: "message", message: msg });
+    if (updateWebview) this.postMessage({ type: "newMessage", message: msg });
   }
 
   /** Append text to the last assistant message (streaming). */
   private appendAssistantText(chunk: string): void {
-    const last = this.messages[this.messages.length - 1];
+    this.appendAssistantTextOnState(this.currentState, chunk, true);
+  }
+
+  private appendAssistantTextOnState(state: SessionState, chunk: string, updateWebview: boolean): void {
+    const last = state.messages[state.messages.length - 1];
     if (last && last.role === "assistant") {
       last.text += chunk;
-      this.postMessage({ type: "appendText", id: last.id, chunk });
+      if (updateWebview) this.postMessage({ type: "appendText", id: last.id, chunk });
     } else {
-      this.addMessage("assistant", chunk);
+      this.addMessageOnState(state, "assistant", chunk, updateWebview);
     }
   }
 
