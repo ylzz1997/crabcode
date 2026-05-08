@@ -348,6 +348,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.postMessage({ type: "history", items: [] });
           break;
         }
+        case "fetchSessions":
+          void this.fetchAndSendSessions();
+          break;
+        case "resumeSession":
+          if (typeof msg.sessionId === "string") {
+            void this.resumeSession(msg.sessionId);
+          }
+          break;
+        case "openSettings":
+          void vscode.commands.executeCommand("workbench.action.openSettings", "crabcode");
+          break;
         case "clearMessages":
           this.history = [];
           this.postMessage({ type: "history", items: [] });
@@ -381,6 +392,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 将 CrabCode 扩展配置（模型列表、权限模式）推送到 Webview。 */
   public notifyConfigurationChanged(): void {
     void this.pushChatOptions();
+  }
+
+  private sendCurrentSessionInfo(): void {
+    const sid = this.connection.sessionId;
+    if (sid) {
+      this.postMessage({ type: "sessionInfo", sessionId: sid, title: null, status: this.isBusy ? "running" : "done" });
+    }
   }
 
   private async switchMode(mode: "agent" | "plan"): Promise<void> {
@@ -445,6 +463,69 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.postMessage({ type: "skills", skills });
     } catch {
       // gateway not ready yet — ignore
+    }
+  }
+
+  private async fetchAndSendSessions(): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const password = cfg.get<string>("password", "");
+    try {
+      const url = new URL(wsUrl);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = "/session/list";
+      url.search = "";
+      const headers: Record<string, string> = {};
+      if (password) headers.Authorization = `Bearer ${password}`;
+      const response = await fetch(url.toString(), { headers });
+      if (!response.ok) return;
+      const sessions = (await response.json()) as Array<{
+        session_id: string;
+        message_count?: number;
+        model?: string;
+        created_at?: string;
+        title?: string;
+      }>;
+      const currentId = this.connection.sessionId;
+      const sessionList = sessions.map((s) => ({
+        session_id: s.session_id,
+        message_count: s.message_count,
+        model: s.model,
+        created_at: s.created_at,
+        title: s.title ?? s.session_id.slice(0, 12),
+        status: s.session_id === currentId ? (this.isBusy ? "running" : "done") : "done",
+      }));
+      this.postMessage({ type: "sessionList", sessions: sessionList });
+    } catch {
+      // gateway not ready yet — ignore
+    }
+  }
+
+  private async resumeSession(sessionId: string): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const password = cfg.get<string>("password", "");
+    try {
+      const url = new URL(wsUrl);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = "/session/resume";
+      url.search = "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (password) headers.Authorization = `Bearer ${password}`;
+      const response = await fetch(url.toString(), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      if (!response.ok) return;
+      // Clear local history and request fresh history from server
+      this.history = [];
+      this.postMessage({ type: "history", items: [] });
+      this.postMessage({ type: "sessionInfo", sessionId, title: sessionId.slice(0, 12) });
+      // Tell connection to use the resumed session
+      this.connection.sendRaw(JSON.stringify({ type: "new_session", cwd: null }));
+    } catch {
+      // ignore
     }
   }
 
@@ -736,6 +817,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       case "server.connected":
       case "server.heartbeat":
+        this.sendCurrentSessionInfo();
         this.notifyConfigurationChanged();
         break;
       case "mode_change":
@@ -1057,6 +1139,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       display: flex;
       flex-direction: column;
       height: 100%;
+      position: relative;
       width: 100%;
       min-height: 0;
       min-width: 0;
@@ -2540,9 +2623,334 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--vscode-foreground) 15%, transparent); border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); }
+
+    /* ── Session header bar ────────────────────────────────────────── */
+    #session-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--vscode-sideBar-background);
+      flex-shrink: 0;
+      min-height: 34px;
+      gap: 4px;
+    }
+    .session-header-left {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      flex: 1;
+    }
+    .session-back-btn {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.7;
+      font-size: 14px;
+      padding: 0;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .session-back-btn:hover { opacity: 1; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
+    .session-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--vscode-foreground);
+      opacity: 0.85;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .session-header-right {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .session-hdr-btn {
+      width: 26px;
+      height: 26px;
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.6;
+      padding: 0;
+      transition: opacity 0.15s, background 0.15s;
+      flex-shrink: 0;
+    }
+    .session-hdr-btn:hover { opacity: 1; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
+    .session-hdr-btn svg { display: block; }
+
+    /* ── Session list panel ────────────────────────────────────────── */
+    #session-list-panel {
+      position: absolute;
+      inset: 0;
+      background: var(--vscode-sideBar-background);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(-100%);
+      transition: transform 0.2s ease;
+      overflow: hidden;
+    }
+    #session-list-panel.visible { transform: translateX(0); }
+    .session-list-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .session-list-header-title {
+      font-size: 12px;
+      font-weight: 600;
+      flex: 1;
+      color: var(--vscode-foreground);
+      opacity: 0.85;
+    }
+    .session-list-new-btn {
+      width: 26px;
+      height: 26px;
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.65;
+      font-size: 16px;
+      padding: 0;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .session-list-new-btn:hover { opacity: 1; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
+    #session-list-items {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+    .session-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 0;
+      transition: background 0.12s;
+    }
+    .session-item:hover { background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent); }
+    .session-item.active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .session-item-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .session-item-dot.done { background: #3fb950; }
+    .session-item-dot.running {
+      background: #58a6ff;
+      animation: dot-breathe 1.6s ease-in-out infinite;
+    }
+    .session-item-dot.error { background: #f85149; }
+    @keyframes dot-breathe {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.6); }
+      50% { opacity: 0.7; box-shadow: 0 0 0 4px rgba(88, 166, 255, 0); }
+    }
+    .session-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .session-item-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .session-item-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .session-list-empty {
+      padding: 20px 14px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* ── History overlay panel ─────────────────────────────────────── */
+    #history-panel {
+      position: absolute;
+      inset: 0;
+      background: var(--vscode-sideBar-background);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.2s ease;
+      overflow: hidden;
+    }
+    #history-panel.visible { transform: translateX(0); }
+    .history-panel-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .history-panel-title {
+      font-size: 12px;
+      font-weight: 600;
+      flex: 1;
+      color: var(--vscode-foreground);
+      opacity: 0.85;
+    }
+    .history-close-btn {
+      width: 26px;
+      height: 26px;
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.65;
+      font-size: 14px;
+      padding: 0;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .history-close-btn:hover { opacity: 1; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
+    .history-search-wrap {
+      padding: 8px 10px;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+      flex-shrink: 0;
+    }
+    .history-search {
+      width: 100%;
+      padding: 5px 9px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+      color: var(--vscode-foreground);
+      font-size: 12px;
+      outline: none;
+    }
+    .history-search:focus { border-color: var(--accent); }
+    #history-list-items {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .history-item:hover { background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent); }
+    .history-item-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #3fb950;
+      flex-shrink: 0;
+    }
+    .history-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .history-item-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .history-item-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .history-list-empty {
+      padding: 20px 14px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
   </style>
 </head>
 <body>
+  <div id="session-list-panel">
+    <div class="session-list-header">
+      <button type="button" class="session-back-btn" id="session-list-close-btn" title="返回">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="session-list-header-title">会话列表</span>
+      <button type="button" class="session-list-new-btn" id="session-list-new-btn" title="新建会话">+</button>
+    </div>
+    <div id="session-list-items">
+      <div class="session-list-empty">暂无会话</div>
+    </div>
+  </div>
+  <div id="history-panel">
+    <div class="history-panel-header">
+      <button type="button" class="history-close-btn" id="history-close-btn" title="关闭">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="history-panel-title">历史会话</span>
+    </div>
+    <div class="history-search-wrap">
+      <input type="text" id="history-search" class="history-search" placeholder="搜索历史会话…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div id="history-list-items">
+      <div class="history-list-empty">暂无历史记录</div>
+    </div>
+  </div>
+  <div id="session-header">
+    <div class="session-header-left">
+      <button type="button" class="session-back-btn" id="session-back-btn" title="所有会话">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="session-title" id="session-title">新会话</span>
+    </div>
+    <div class="session-header-right">
+      <button type="button" class="session-hdr-btn" id="hdr-new-btn" title="新建会话">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <button type="button" class="session-hdr-btn" id="hdr-settings-btn" title="设置">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button type="button" class="session-hdr-btn" id="hdr-history-btn" title="历史会话">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </button>
+    </div>
+  </div>
   <div id="messages"></div>
   <div id="busy-indicator">
     <span class="busy-dots"><span></span><span></span><span></span></span>
@@ -2669,6 +3077,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const permLabel = document.getElementById('perm-label');
         const permIcon = document.getElementById('perm-icon');
         const permMenu = document.getElementById('perm-menu');
+        const sessionListPanel = document.getElementById('session-list-panel');
+        const sessionListItems = document.getElementById('session-list-items');
+        const sessionListCloseBtn = document.getElementById('session-list-close-btn');
+        const sessionListNewBtn = document.getElementById('session-list-new-btn');
+        const sessionBackBtn = document.getElementById('session-back-btn');
+        const sessionTitleEl = document.getElementById('session-title');
+        const hdrNewBtn = document.getElementById('hdr-new-btn');
+        const hdrSettingsBtn = document.getElementById('hdr-settings-btn');
+        const hdrHistoryBtn = document.getElementById('hdr-history-btn');
+        const historyPanel = document.getElementById('history-panel');
+        const historyCloseBtn = document.getElementById('history-close-btn');
+        const historySearchInput = document.getElementById('history-search');
+        const historyListItems = document.getElementById('history-list-items');
 
     // ── Tool card state ──────────────────────────────────────────
     const toolCards = new Map();
@@ -2699,6 +3120,172 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const pendingTextFiles = [];
     const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
     const MAX_TEXT_FILE = 20 * 1024 * 1024;
+
+    // ── Session management state ────────────────────────────────────
+    let allSessions = [];          // { session_id, message_count, status, title }
+    let currentSessionId = null;
+    let currentSessionTitle = '新会话';
+    let sessionListVisible = false;
+    let historyPanelVisible = false;
+    let historySearchQuery = '';
+
+    function setSessionTitle(title) {
+      currentSessionTitle = title || '新会话';
+      if (sessionTitleEl) sessionTitleEl.textContent = currentSessionTitle;
+    }
+
+    function showSessionList() {
+      sessionListVisible = true;
+      if (sessionListPanel) sessionListPanel.classList.add('visible');
+      vscode.postMessage({ type: 'fetchSessions' });
+    }
+
+    function hideSessionList() {
+      sessionListVisible = false;
+      if (sessionListPanel) sessionListPanel.classList.remove('visible');
+    }
+
+    function showHistoryPanel() {
+      historyPanelVisible = true;
+      if (historyPanel) historyPanel.classList.add('visible');
+      vscode.postMessage({ type: 'fetchSessions' });
+    }
+
+    function hideHistoryPanel() {
+      historyPanelVisible = false;
+      if (historyPanel) historyPanel.classList.remove('visible');
+    }
+
+    function getSessionDotClass(session) {
+      if (session.status === 'running') return 'running';
+      if (session.status === 'error') return 'error';
+      return 'done';
+    }
+
+    function formatSessionMeta(session) {
+      const parts = [];
+      if (session.message_count != null) parts.push(session.message_count + ' 条消息');
+      if (session.created_at) {
+        try {
+          const d = new Date(session.created_at);
+          const now = new Date();
+          const diffMs = now - d;
+          const diffMin = Math.floor(diffMs / 60000);
+          const diffHr = Math.floor(diffMin / 60);
+          const diffDay = Math.floor(diffHr / 24);
+          if (diffMin < 1) parts.push('刚刚');
+          else if (diffMin < 60) parts.push(diffMin + ' 分钟前');
+          else if (diffHr < 24) parts.push(diffHr + ' 小时前');
+          else parts.push(diffDay + ' 天前');
+        } catch { /* ignore */ }
+      }
+      return parts.join(' · ');
+    }
+
+    function renderSessionList(sessions) {
+      allSessions = sessions || [];
+      if (!sessionListItems) return;
+      if (allSessions.length === 0) {
+        sessionListItems.innerHTML = '<div class="session-list-empty">暂无会话</div>';
+        return;
+      }
+      sessionListItems.innerHTML = allSessions.map(function(s) {
+        const dotClass = getSessionDotClass(s);
+        const isActive = s.session_id === currentSessionId;
+        const title = s.title || s.session_id.slice(0, 12) + '…';
+        const meta = formatSessionMeta(s);
+        return '<div class="session-item' + (isActive ? ' active' : '') + '" data-session-id="' + escapeHtml(s.session_id) + '">' +
+          '<div class="session-item-dot ' + dotClass + '"></div>' +
+          '<div class="session-item-info">' +
+            '<div class="session-item-title">' + escapeHtml(title) + '</div>' +
+            (meta ? '<div class="session-item-meta">' + escapeHtml(meta) + '</div>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+      sessionListItems.querySelectorAll('.session-item').forEach(function(el) {
+        el.addEventListener('click', function() {
+          const sid = el.getAttribute('data-session-id');
+          if (sid && sid !== currentSessionId) {
+            vscode.postMessage({ type: 'resumeSession', sessionId: sid });
+          }
+          hideSessionList();
+        });
+      });
+    }
+
+    function renderHistoryList(sessions, query) {
+      if (!historyListItems) return;
+      let items = sessions || allSessions;
+      if (query) {
+        const q = query.toLowerCase();
+        items = items.filter(function(s) {
+          const title = (s.title || s.session_id || '').toLowerCase();
+          return title.includes(q);
+        });
+      }
+      if (items.length === 0) {
+        historyListItems.innerHTML = '<div class="history-list-empty">' + (query ? '无匹配结果' : '暂无历史记录') + '</div>';
+        return;
+      }
+      historyListItems.innerHTML = items.map(function(s) {
+        const title = s.title || s.session_id.slice(0, 12) + '…';
+        const meta = formatSessionMeta(s);
+        return '<div class="history-item" data-session-id="' + escapeHtml(s.session_id) + '">' +
+          '<div class="history-item-dot"></div>' +
+          '<div class="history-item-info">' +
+            '<div class="history-item-title">' + escapeHtml(title) + '</div>' +
+            (meta ? '<div class="history-item-meta">' + escapeHtml(meta) + '</div>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+      historyListItems.querySelectorAll('.history-item').forEach(function(el) {
+        el.addEventListener('click', function() {
+          const sid = el.getAttribute('data-session-id');
+          if (sid) {
+            vscode.postMessage({ type: 'resumeSession', sessionId: sid });
+          }
+          hideHistoryPanel();
+        });
+      });
+    }
+
+    // ── Session header button events ────────────────────────────────
+    if (sessionBackBtn) {
+      sessionBackBtn.addEventListener('click', function() { showSessionList(); });
+    }
+    if (hdrNewBtn) {
+      hdrNewBtn.addEventListener('click', function() {
+        vscode.postMessage({ type: 'newSession' });
+        setSessionTitle('新会话');
+      });
+    }
+    if (hdrSettingsBtn) {
+      hdrSettingsBtn.addEventListener('click', function() {
+        vscode.postMessage({ type: 'openSettings' });
+      });
+    }
+    if (hdrHistoryBtn) {
+      hdrHistoryBtn.addEventListener('click', function() { showHistoryPanel(); });
+    }
+    if (sessionListCloseBtn) {
+      sessionListCloseBtn.addEventListener('click', function() { hideSessionList(); });
+    }
+    if (sessionListNewBtn) {
+      sessionListNewBtn.addEventListener('click', function() {
+        hideSessionList();
+        vscode.postMessage({ type: 'newSession' });
+        setSessionTitle('新会话');
+      });
+    }
+    if (historyCloseBtn) {
+      historyCloseBtn.addEventListener('click', function() { hideHistoryPanel(); });
+    }
+    if (historySearchInput) {
+      historySearchInput.addEventListener('input', function() {
+        historySearchQuery = historySearchInput.value;
+        renderHistoryList(null, historySearchQuery);
+      });
+    }
 
     function isNearBottom() {
       return msgContainer.scrollHeight - msgContainer.scrollTop - msgContainer.clientHeight <= 24;
@@ -4530,6 +5117,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'addAttachments':
           mergeHostAttachments(msg);
+          break;
+        case 'sessionList':
+          renderSessionList(msg.sessions);
+          renderHistoryList(msg.sessions, historySearchQuery);
+          break;
+        case 'sessionInfo':
+          if (msg.sessionId) currentSessionId = msg.sessionId;
+          if (msg.title) setSessionTitle(msg.title);
+          if (msg.status && currentSessionId) {
+            const s = allSessions.find(function(x) { return x.session_id === currentSessionId; });
+            if (s) { s.status = msg.status; renderSessionList(allSessions); renderHistoryList(allSessions, historySearchQuery); }
+          }
           break;
       }
       } catch (error) {
