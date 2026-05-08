@@ -205,16 +205,21 @@ export class CrabCodeConnection implements vscode.Disposable {
     this.sendCommand(cmd);
   }
 
-  sendInterrupt(): void {
+  sendInterrupt(): "sent" | "no_session" | "disconnected" {
     if (!this._sessionId) {
       this.log("interrupt skipped: no session");
-      return;
+      return "no_session";
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.log("interrupt skipped: ws not open");
+      return "disconnected";
     }
     this.log(`interrupt session=${this._sessionId}`);
     this.sendRaw(JSON.stringify({
       type: "interrupt",
       session_id: this._sessionId,
     }));
+    return "sent";
   }
 
   sendNewSession(cwd: string | null): void {

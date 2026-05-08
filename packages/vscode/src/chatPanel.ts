@@ -59,6 +59,12 @@ function formatPercent(percent: number): string {
   return Math.abs(percent - rounded) < 0.05 ? `${rounded}%` : `${percent.toFixed(1)}%`;
 }
 
+function normalizePendingEditsVisibleFiles(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 5;
+  return Math.min(50, Math.max(1, Math.floor(parsed)));
+}
+
 interface ContextUsageStatus {
   usedTokens: number;
   windowTokens: number;
@@ -208,6 +214,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private permissionCards = new Map<string, PermissionCard>();
   private activeThinkingId: string | null = null;
   private isBusy = false;
+  private interruptRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private latestModelRequestId = 0;
   private lastNonEmptyModels: string[] = [];
   private latestContextUsage: ContextUsageStatus | null = null;
@@ -307,9 +314,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "respondToPermission":
           this.respondToPermission(msg.id, msg.allowed, msg.alwaysAllow);
           break;
-        case "interrupt":
-          this.connection.sendInterrupt();
+        case "interrupt": {
+          const result = this.connection.sendInterrupt();
+          this.postMessage({ type: "interruptResult", result });
+          if (result === "sent") {
+            this.scheduleInterruptRetry();
+          } else if (result === "disconnected") {
+            this.setBusy(false);
+          }
           break;
+        }
         case "pendingEditAction":
           this.pendingEditActionEmitter.fire({
             action: msg.action,
@@ -422,6 +436,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const permissionMode = cfg.get<string>("permissionMode", "default");
     const mode: "default" | "run_everything" =
       permissionMode === "run_everything" ? "run_everything" : "default";
+    const pendingEditsVisibleFiles = normalizePendingEditsVisibleFiles(
+      cfg.get<number>("pendingEditsVisibleFiles", 5),
+    );
     const selectedModel =
       this.connection.modelName && models.includes(this.connection.modelName)
         ? this.connection.modelName
@@ -432,6 +449,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       defaultModel,
       selectedModel,
       permissionMode: mode,
+      pendingEditsVisibleFiles,
       connected: this.connection.connected,
     });
   }
@@ -664,7 +682,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private setBusy(busy: boolean): void {
     if (this.isBusy === busy) return;
     this.isBusy = busy;
+    if (!busy) {
+      this.clearInterruptRetry();
+    }
     this.postMessage({ type: "busyState", busy });
+  }
+
+  private scheduleInterruptRetry(): void {
+    this.clearInterruptRetry();
+    this.interruptRetryTimer = setTimeout(() => {
+      if (!this.isBusy) return;
+      const result = this.connection.sendInterrupt();
+      if (result === "sent") {
+        this.interruptRetryTimer = setTimeout(() => {
+          if (this.isBusy) {
+            this.setBusy(false);
+            this.postMessage({ type: "interruptResult", result: "timeout" });
+          }
+        }, 5000);
+      } else {
+        this.setBusy(false);
+      }
+    }, 3000);
+  }
+
+  private clearInterruptRetry(): void {
+    if (this.interruptRetryTimer) {
+      clearTimeout(this.interruptRetryTimer);
+      this.interruptRetryTimer = null;
+    }
   }
 
   private handleStreamMode(payload: StreamModePayload): void {
@@ -1609,11 +1655,34 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       gap: 6px;
       font-size: 11.5px;
       font-weight: 650;
+      font-family: inherit;
+      line-height: 1.25;
       color: var(--vscode-foreground);
+      border: none;
+      background: transparent;
+      text-align: left;
+      padding: 0;
+      cursor: pointer;
     }
     .pending-edits-title .chevron {
+      display: inline-block;
       color: var(--text-muted);
       font-size: 12px;
+      transition: transform 0.15s ease;
+    }
+    .pending-edits.is-collapsed .pending-edits-title .chevron {
+      transform: rotate(-90deg);
+    }
+    .pending-edits-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: var(--pending-edit-list-max-height, 140px);
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .pending-edits.is-collapsed .pending-edits-list {
+      display: none;
     }
     .pending-edits-actions,
     .pending-edit-actions {
@@ -1626,6 +1695,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding-top: 2px;
       color: var(--text-muted);
       font-size: 11.5px;
+      min-height: 24px;
     }
     .pending-edit-icon {
       flex: 0 0 auto;
@@ -2272,6 +2342,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let isBusy = false;
     let stickToBottom = true;
     let hasReceivedOptions = false;
+    let pendingEditsCollapsed = false;
+    let pendingEditsVisibleFiles = 5;
+    let currentPendingEditSummary = null;
     let turnCounter = 0;
     let activeTurn = null;
     const turns = [];
@@ -2304,6 +2377,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (shouldStick) {
         scrollMessagesToBottom(true);
       }
+    }
+
+    function normalizePendingEditsVisibleFiles(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return 5;
+      return Math.min(50, Math.max(1, Math.floor(parsed)));
     }
 
     function formatTurnDuration(ms) {
@@ -3099,15 +3178,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!pendingEditsBar) return;
       const files = summary && Array.isArray(summary.files) ? summary.files : [];
       if (!summary || files.length === 0) {
+        currentPendingEditSummary = null;
+        pendingEditsCollapsed = false;
         pendingEditsBar.classList.add('hidden');
         pendingEditsBar.innerHTML = '';
         return;
       }
 
+      currentPendingEditSummary = summary;
       const title = summary.totalFiles + (summary.totalFiles === 1 ? ' File' : ' Files');
-      const shownFiles = files.slice(0, 4);
-      const hiddenCount = Math.max(0, files.length - shownFiles.length);
-      const rows = shownFiles.map(function(file) {
+      const toggleTitle = pendingEditsCollapsed ? '展开待审核文件' : '折叠待审核文件';
+      const rows = files.map(function(file) {
         const stats = '<span>+' + escapeHtml(String(file.added || 0)) + '</span> ' +
           '<span class="removed">-' + escapeHtml(String(file.removed || 0)) + '</span>';
         return '<div class="pending-edit-row">' +
@@ -3120,22 +3201,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           '</span>' +
         '</div>';
       }).join('');
-      const more = hiddenCount > 0
-        ? '<div class="pending-edit-row"><span class="pending-edit-icon"></span><span class="pending-edit-name">还有 ' + hiddenCount + ' 个文件</span></div>'
-        : '';
 
       pendingEditsBar.classList.remove('hidden');
+      pendingEditsBar.classList.toggle('is-collapsed', pendingEditsCollapsed);
+      pendingEditsBar.style.setProperty('--pending-edit-list-max-height', (pendingEditsVisibleFiles * 28) + 'px');
       pendingEditsBar.innerHTML =
         '<div class="pending-edits-header">' +
-          '<div class="pending-edits-title"><span class="chevron">⌄</span><span>' + title + '</span></div>' +
+          '<button type="button" class="pending-edits-title" data-pending-toggle aria-expanded="' + (pendingEditsCollapsed ? 'false' : 'true') + '" title="' + toggleTitle + '">' +
+            '<span class="chevron">⌄</span><span>' + title + '</span>' +
+          '</button>' +
           '<div class="pending-edits-actions">' +
             '<button type="button" class="pending-edit-btn" data-pending-action="undoAll">Undo</button>' +
             '<button type="button" class="pending-edit-btn primary" data-pending-action="keepAll">Keep</button>' +
             '<button type="button" class="pending-edit-btn" data-pending-action="reviewAll">Review</button>' +
           '</div>' +
         '</div>' +
-        rows +
-        more;
+        '<div class="pending-edits-list">' + rows + '</div>';
+
+      const toggle = pendingEditsBar.querySelector('[data-pending-toggle]');
+      if (toggle) {
+        toggle.addEventListener('click', function() {
+          pendingEditsCollapsed = !pendingEditsCollapsed;
+          renderPendingEdits(currentPendingEditSummary);
+        });
+      }
 
       pendingEditsBar.querySelectorAll('[data-pending-action]').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -3300,6 +3389,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (modelSelectWrap) modelSelectWrap.classList.remove('is-empty');
       }
       permissionSelect.value = msg.permissionMode === 'run_everything' ? 'run_everything' : 'default';
+      const nextPendingEditsVisibleFiles = normalizePendingEditsVisibleFiles(msg.pendingEditsVisibleFiles);
+      if (nextPendingEditsVisibleFiles !== pendingEditsVisibleFiles) {
+        pendingEditsVisibleFiles = nextPendingEditsVisibleFiles;
+        if (currentPendingEditSummary) renderPendingEdits(currentPendingEditSummary);
+      }
     }
 
     // ── Send ─────────────────────────────────────────────────────

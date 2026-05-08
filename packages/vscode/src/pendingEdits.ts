@@ -87,6 +87,13 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     overviewRulerColor: "rgba(46, 160, 67, 0.85)",
     overviewRulerLane: vscode.OverviewRulerLane.Right,
   });
+  private readonly deletedContentDecorationType = vscode.window.createTextEditorDecorationType({});
+  private readonly deletionMarkerDecorationType = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    borderWidth: "2px 0 0 0",
+    borderStyle: "dashed",
+    borderColor: "rgba(248, 81, 73, 0.5)",
+  });
 
   public readonly onDidChangeCodeLenses = this.codeLensEmitter.event;
   public readonly onDidChangeInlayHints = this.inlayHintEmitter.event;
@@ -202,6 +209,8 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     this.changeByPath.clear();
     this.virtualDocuments.clear();
     this.decorationType.dispose();
+    this.deletedContentDecorationType.dispose();
+    this.deletionMarkerDecorationType.dispose();
     this.codeLensEmitter.dispose();
     this.inlayHintEmitter.dispose();
     this.contentEmitter.dispose();
@@ -719,7 +728,12 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
   private async undoHunk(changeId: string, hunkId: string): Promise<void> {
     const change = this.changes.get(changeId);
     const hunk = change?.hunks.find((candidate) => candidate.id === hunkId);
-    if (!change || !hunk) {
+    if (!change) {
+      vscode.window.showWarningMessage("CrabCode：这个待确认修改已不存在或已处理。");
+      return;
+    }
+    if (!hunk) {
+      vscode.window.showWarningMessage(`CrabCode：${change.shortPath} 的这个 block 已不存在或已处理。`);
       return;
     }
 
@@ -746,12 +760,18 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     this.recomputeChange(change);
     this.updatePresentation();
     await this.revealChange(change, true);
+    vscode.window.setStatusBarMessage(`CrabCode：已撤销 ${change.shortPath} 的 block`, 3000);
   }
 
   private async keepHunk(changeId: string, hunkId: string): Promise<void> {
     const change = this.changes.get(changeId);
     const hunk = change?.hunks.find((candidate) => candidate.id === hunkId);
-    if (!change || !hunk) {
+    if (!change) {
+      vscode.window.showWarningMessage("CrabCode：这个待确认修改已不存在或已处理。");
+      return;
+    }
+    if (!hunk) {
+      vscode.window.showWarningMessage(`CrabCode：${change.shortPath} 的这个 block 已不存在或已处理。`);
       return;
     }
 
@@ -762,6 +782,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     }
     this.recomputeChange(change);
     this.updatePresentation();
+    vscode.window.setStatusBarMessage(`CrabCode：已保留 ${change.shortPath} 的 block`, 3000);
   }
 
   private async confirmIfDrifted(change: PendingChange, verb: string): Promise<boolean> {
@@ -848,12 +869,90 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       const target = this.resolveLensTarget(editor.document);
       const change = target?.change;
       const options = change
-        ? change.hunks.map((hunk, index) => ({
-            range: rangeForHunk(editor.document, hunk),
-            hoverMessage: this.buildHunkHover(change, hunk, index),
-          }))
+        ? change.hunks.flatMap((hunk, index) =>
+            hunk.newLineCount > 0
+              ? [{ range: rangeForHunk(editor.document, hunk), hoverMessage: this.buildHunkHover(change, hunk, index) }]
+              : [],
+          )
         : [];
       editor.setDecorations(this.decorationType, options);
+
+      const deletedOptions: vscode.DecorationOptions[] = [];
+      const markerOptions: vscode.DecorationOptions[] = [];
+
+      if (change) {
+        for (const hunk of change.hunks) {
+          if (hunk.oldLineCount > 0 && hunk.newLineCount > 0) {
+            const start = Math.max(hunk.newStartLine - 1, 0);
+            const mappedCount = Math.min(hunk.oldLineCount, hunk.newLineCount);
+            for (let i = 0; i < mappedCount; i++) {
+              const line = start + i;
+              if (line >= editor.document.lineCount) break;
+              const oldText = hunk.oldLines[i] ?? "";
+              deletedOptions.push({
+                range: new vscode.Range(line, 0, line, 0),
+                renderOptions: {
+                  before: {
+                    contentText: oldText || " ",
+                    color: "rgba(248, 81, 73, 0.7)",
+                    textDecoration: "line-through",
+                    margin: "0 12px 0 0",
+                  },
+                },
+              });
+            }
+            if (hunk.oldLineCount > hunk.newLineCount) {
+              const lastLine = start + mappedCount - 1;
+              if (lastLine < editor.document.lineCount) {
+                const excess = hunk.oldLines.slice(mappedCount);
+                const summary = excess.map((l) => l.trim()).join(" | ");
+                deletedOptions.push({
+                  range: new vscode.Range(lastLine, editor.document.lineAt(lastLine).range.end.character, lastLine, editor.document.lineAt(lastLine).range.end.character),
+                  renderOptions: {
+                    after: {
+                      contentText: `  [−${excess.length}: ${summary}]`,
+                      color: "rgba(248, 81, 73, 0.6)",
+                      fontStyle: "italic",
+                    },
+                  },
+                });
+              }
+            }
+          } else if (hunk.oldLineCount > 0 && hunk.newLineCount === 0) {
+            const line = Math.min(Math.max(hunk.newStartLine - 1, 0), Math.max(0, editor.document.lineCount - 1));
+            markerOptions.push({
+              range: new vscode.Range(line, 0, line, 0),
+              hoverMessage: buildDeletedLinesHover(hunk),
+            });
+            const MAX_INLINE = 8;
+            const displayLines = hunk.oldLines.slice(0, MAX_INLINE);
+            const hasMore = hunk.oldLines.length > MAX_INLINE;
+            const summary = displayLines.map((l) => l.trim() || "·").join(" ┃ ");
+            const contentText = hasMore
+              ? `  ${summary} … (+${hunk.oldLines.length - MAX_INLINE} more)`
+              : `  ${summary}`;
+            deletedOptions.push({
+              range: new vscode.Range(
+                line,
+                editor.document.lineAt(line).range.end.character,
+                line,
+                editor.document.lineAt(line).range.end.character,
+              ),
+              renderOptions: {
+                after: {
+                  contentText,
+                  color: "rgba(248, 81, 73, 0.7)",
+                  textDecoration: "line-through",
+                  fontStyle: "italic",
+                },
+              },
+            });
+          }
+        }
+      }
+
+      editor.setDecorations(this.deletedContentDecorationType, deletedOptions);
+      editor.setDecorations(this.deletionMarkerDecorationType, markerOptions);
     }
   }
 
@@ -1774,6 +1873,13 @@ function formatStats(stats: DiffStats): string {
     parts.push(`-${stats.removed}`);
   }
   return parts.join(" ") || "no line changes";
+}
+
+function buildDeletedLinesHover(hunk: PendingHunk): vscode.MarkdownString {
+  const md = new vscode.MarkdownString(undefined, true);
+  md.appendMarkdown(`**CrabCode: ${hunk.oldLineCount} line(s) deleted here**\n\n`);
+  md.appendCodeblock(hunk.oldLines.join("\n"), "");
+  return md;
 }
 
 function getNonce(): string {
