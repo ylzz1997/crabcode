@@ -893,10 +893,11 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
                 range: new vscode.Range(line, 0, line, 0),
                 renderOptions: {
                   before: {
-                    contentText: oldText || " ",
-                    color: "rgba(248, 81, 73, 0.7)",
-                    textDecoration: "line-through",
-                    margin: "0 12px 0 0",
+                    contentText: (oldText || " ") + "  ",
+                    color: "rgba(248, 81, 73, 0.85)",
+                    backgroundColor: "rgba(248, 81, 73, 0.15)",
+                    textDecoration: "line-through rgba(248, 81, 73, 0.7)",
+                    margin: "0 6px 0 0",
                   },
                 },
               });
@@ -905,13 +906,18 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
               const lastLine = start + mappedCount - 1;
               if (lastLine < editor.document.lineCount) {
                 const excess = hunk.oldLines.slice(mappedCount);
-                const summary = excess.map((l) => l.trim()).join(" | ");
                 deletedOptions.push({
-                  range: new vscode.Range(lastLine, editor.document.lineAt(lastLine).range.end.character, lastLine, editor.document.lineAt(lastLine).range.end.character),
+                  range: new vscode.Range(
+                    lastLine,
+                    editor.document.lineAt(lastLine).range.end.character,
+                    lastLine,
+                    editor.document.lineAt(lastLine).range.end.character,
+                  ),
                   renderOptions: {
                     after: {
-                      contentText: `  [−${excess.length}: ${summary}]`,
-                      color: "rgba(248, 81, 73, 0.6)",
+                      contentText: `  [−${excess.length}: ${excess.map((l) => l.trim()).join(" | ")}]`,
+                      color: "rgba(248, 81, 73, 0.7)",
+                      textDecoration: "line-through rgba(248, 81, 73, 0.6)",
                       fontStyle: "italic",
                     },
                   },
@@ -924,26 +930,18 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
               range: new vscode.Range(line, 0, line, 0),
               hoverMessage: buildDeletedLinesHover(hunk),
             });
-            const MAX_INLINE = 8;
-            const displayLines = hunk.oldLines.slice(0, MAX_INLINE);
-            const hasMore = hunk.oldLines.length > MAX_INLINE;
-            const summary = displayLines.map((l) => l.trim() || "·").join(" ┃ ");
-            const contentText = hasMore
-              ? `  ${summary} … (+${hunk.oldLines.length - MAX_INLINE} more)`
-              : `  ${summary}`;
+            const MAX_PREVIEW = 3;
+            const preview = hunk.oldLines.slice(0, MAX_PREVIEW).map((l) => l.trim() || "·").join("  │  ");
+            const extra = hunk.oldLines.length > MAX_PREVIEW ? `  [+${hunk.oldLines.length - MAX_PREVIEW} more]` : "";
             deletedOptions.push({
-              range: new vscode.Range(
-                line,
-                editor.document.lineAt(line).range.end.character,
-                line,
-                editor.document.lineAt(line).range.end.character,
-              ),
+              range: new vscode.Range(line, 0, line, 0),
               renderOptions: {
-                after: {
-                  contentText,
-                  color: "rgba(248, 81, 73, 0.7)",
-                  textDecoration: "line-through",
+                before: {
+                  contentText: preview + extra + "  ",
+                  color: "rgba(248, 81, 73, 0.85)",
+                  backgroundColor: "rgba(248, 81, 73, 0.15)",
                   fontStyle: "italic",
+                  margin: "0 6px 0 0",
                 },
               },
             });
