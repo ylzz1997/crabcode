@@ -237,6 +237,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private busySessions = new Set<string>();
   private interruptRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private latestModelRequestId = 0;
+  private _lastModelsFetchTime = 0;
+  private _modelsFetchInProgress = false;
+  private static readonly MODELS_FETCH_COOLDOWN_MS = 30_000;
   private lastNonEmptyModels: string[] = [];
   private webviewReady = false;
   private pendingWebviewMessages: any[] = [];
@@ -500,6 +503,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 将 CrabCode 扩展配置（模型列表、权限模式）推送到 Webview。 */
   public notifyConfigurationChanged(): void {
+    // Reset cooldown so the next pushChatOptions actually fetches
+    this._lastModelsFetchTime = 0;
     void this.pushChatOptions();
   }
 
@@ -998,10 +1003,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const requestId = ++this.latestModelRequestId;
     const cfg = vscode.workspace.getConfiguration("crabcode");
     let fetchedModels: string[];
-    try {
-      fetchedModels = await this.resolveModelsFromSettingsOrGateway();
-    } catch {
-      fetchedModels = [];
+
+    // Throttle: skip the HTTP fetch if we recently fetched and a fetch is
+    // already in-flight.  Heartbeats every 10 s were causing a flood of
+    // /config/models requests that could starve the event loop.
+    const now = Date.now();
+    const skipFetch =
+      this._modelsFetchInProgress ||
+      (now - this._lastModelsFetchTime < ChatPanelProvider.MODELS_FETCH_COOLDOWN_MS &&
+        this.lastNonEmptyModels.length > 0);
+
+    if (skipFetch) {
+      fetchedModels = this.lastNonEmptyModels;
+    } else {
+      try {
+        this._modelsFetchInProgress = true;
+        fetchedModels = await this.resolveModelsFromSettingsOrGateway();
+        this._lastModelsFetchTime = Date.now();
+      } catch {
+        fetchedModels = [];
+      } finally {
+        this._modelsFetchInProgress = false;
+      }
     }
     if (requestId !== this.latestModelRequestId) {
       return;
@@ -1203,8 +1226,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // Session-agnostic events (server.connected, server.heartbeat, session_history)
     switch (payload.type) {
-      case "server.connected":
-      case "server.heartbeat": {
+      case "server.connected": {
         const connSid = this.connection.sessionId;
         if (connSid) {
           this.displayedSessionId = connSid;
@@ -1213,6 +1235,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         this.sendCurrentSessionInfo();
         this.notifyConfigurationChanged();
+        break;
+      }
+      case "server.heartbeat": {
+        // Only update session info on heartbeat — skip the expensive
+        // notifyConfigurationChanged / pushChatOptions /config/models fetch.
+        const connSid = this.connection.sessionId;
+        if (connSid) {
+          this.displayedSessionId = connSid;
+          this.getSessionState(connSid);
+        }
+        this.sendCurrentSessionInfo();
         break;
       }
       case "mode_change":

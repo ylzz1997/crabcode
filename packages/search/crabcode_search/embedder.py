@@ -205,8 +205,10 @@ def _detect_best_device() -> str:
 
 
 _GPU_PER_SAMPLE_MB = 80.0
+_MPS_PER_SAMPLE_MB = 150.0  # MPS has higher overhead than CUDA due to shared memory
 _CPU_PER_SAMPLE_MB = 50.0
-_MAX_BATCH = {"cuda": 64, "mps": 32, "cpu": 8}
+_MAX_BATCH = {"cuda": 64, "mps": 8, "cpu": 8}  # MPS capped low: Metal buffer
+                        # allocation failures are fatal (abort, not catchable)
 
 
 def _auto_batch_size(device: str = "cpu") -> int:
@@ -214,14 +216,21 @@ def _auto_batch_size(device: str = "cpu") -> int:
 
     Transformer attention memory scales quadratically with sequence length,
     so per-sample cost on GPU is much higher than the raw embedding size.
-    We use ~80 MB/sample for GPU/MPS and ~8 MB/sample for CPU.
 
     For CUDA, uses free VRAM (40% budget).  For MPS and CPU, uses available
     system RAM — on Apple Silicon the two share unified memory.
+
+    NOTE: MPS batch sizes are deliberately conservative because Metal buffer
+    allocation failures trigger a hard abort (C++ assertion) that kills the
+    process — they cannot be caught as Python exceptions.
     """
-    gpu = device in ("cuda", "mps")
-    per_sample = _GPU_PER_SAMPLE_MB if gpu else _CPU_PER_SAMPLE_MB
-    cap = _MAX_BATCH.get(device, 32)
+    if device == "mps":
+        per_sample = _MPS_PER_SAMPLE_MB
+    elif device == "cuda":
+        per_sample = _GPU_PER_SAMPLE_MB
+    else:
+        per_sample = _CPU_PER_SAMPLE_MB
+    cap = _MAX_BATCH.get(device, 8)
 
     try:
         if device == "cuda":
@@ -234,12 +243,13 @@ def _auto_batch_size(device: str = "cpu") -> int:
             import psutil
 
             available_mb = psutil.virtual_memory().available / (1024**2)
-            budget_ratio = 0.2 if gpu else 0.3
+            # MPS is very conservative — Metal buffer alloc failures are fatal
+            budget_ratio = 0.1 if device == "mps" else (0.2 if device != "cpu" else 0.3)
 
         size = max(1, int(available_mb * budget_ratio / per_sample))
         return min(size, cap)
     except Exception:
-        return 4 if gpu else 8
+        return 4 if device in ("cuda", "mps") else 8
 
 
 def _is_oom_error(exc: Exception) -> bool:
@@ -256,7 +266,41 @@ def _is_oom_error(exc: Exception) -> bool:
         "out of memory" in msg
         or "oom" in msg
         or "invalid buffer size" in msg
+        or "failed to allocate" in msg
     )
+
+
+# Minimum available memory (MB) to safely use MPS for embedding inference.
+# Metal buffer allocation failures are fatal (hard abort, uncatchable), so we
+# need a generous safety margin.  0.6B embedding models + batch overhead
+# typically need ~2-3 GB; we require at least 4 GB free to proceed on MPS.
+_MPS_MIN_AVAILABLE_MB = 4096
+
+
+def _safe_mps_device() -> str:
+    """Return "mps" if safe to use, otherwise "cpu".
+
+    Metal buffer allocation failures on Apple Silicon trigger a C++ assertion
+    (abort) that kills the entire process — they cannot be caught as Python
+    exceptions.  This function checks available memory and downgrades to CPU
+    proactively when memory is too tight.
+    """
+    try:
+        import psutil
+
+        available_mb = psutil.virtual_memory().available / (1024**2)
+        if available_mb < _MPS_MIN_AVAILABLE_MB:
+            import sys
+            print(
+                f"[embedder] available memory {available_mb:.0f} MB < "
+                f"{_MPS_MIN_AVAILABLE_MB} MB safety threshold, "
+                f"falling back to CPU (MPS buffer alloc failures are fatal)",
+                file=sys.stderr,
+            )
+            return "cpu"
+    except Exception:
+        return "cpu"
+    return "mps"
 
 
 class HuggingFaceEmbedder(Embedder):
@@ -306,6 +350,12 @@ class HuggingFaceEmbedder(Embedder):
             self._device = self._requested_device
         else:
             self._device = _detect_best_device()
+
+        # MPS pre-flight: Metal buffer allocation failures trigger a hard C++
+        # assertion that aborts the process — they cannot be caught in Python.
+        # Downgrade to CPU proactively when available memory is tight.
+        if self._device == "mps":
+            self._device = _safe_mps_device()
 
         import sys
         print(f"[embedder] using device: {self._device}", file=sys.stderr)
