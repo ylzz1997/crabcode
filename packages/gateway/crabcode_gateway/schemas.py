@@ -109,6 +109,20 @@ class RevertRequest(BaseModel):
     checkpoint_id: str
 
 
+class SearchSessionsRequest(BaseModel):
+    query: str
+    limit: int = 20
+
+
+class ArchiveSessionRequest(BaseModel):
+    session_id: str
+
+
+class ExportSessionRequest(BaseModel):
+    session_id: str
+    format: Literal["md", "json"] = "md"
+
+
 # ── Response / event schemas ─────────────────────────────────────
 
 

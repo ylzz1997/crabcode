@@ -62,3 +62,26 @@ async def rollback_checkpoint(req: RevertRequest, request: Request) -> dict[str,
     if not ok:
         raise HTTPException(status_code=400, detail="Rollback failed or checkpoint not found")
     return {"success": True, "messages_count": len(session.messages)}
+
+
+@router.post("/undo")
+async def undo_last_checkpoint(request: Request) -> dict[str, Any]:
+    """Revert the most recent checkpoint (rollback conversation only)."""
+    body = await request.json()
+    session_id = body.get("session_id") if body else None
+
+    sessions: dict = request.app.state.sessions
+    sid = session_id or request.app.state.default_session_id
+    if not sid or sid not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[sid]
+
+    checkpoints = session.list_checkpoints()
+    if not checkpoints:
+        raise HTTPException(status_code=400, detail="No checkpoints to undo")
+
+    latest = checkpoints[0]
+    ok = session.rollback(latest["id"])
+    if not ok:
+        raise HTTPException(status_code=400, detail="Undo failed")
+    return {"success": True, "checkpoint_id": latest["id"], "messages_count": len(session.messages)}

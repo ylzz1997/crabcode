@@ -137,3 +137,48 @@ async def get_context(session_id: str, request: Request):
     if session_id not in contexts:
         return {"active_file": None, "selected_text": None, "open_files": []}
     return contexts[session_id]
+
+
+@router.get("/config/plan-status")
+async def plan_status(request: Request):
+    """Return the current plan mode status and plan content if available."""
+    session = _get_session(request)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    mode = getattr(session, "mode", "agent")
+    plan = getattr(session, "current_plan", None)
+    return {
+        "mode": mode,
+        "in_plan_mode": mode == "plan",
+        "plan": plan,
+    }
+
+
+@router.get("/logs")
+async def get_logs(lines: int = 100, request: Request = None):
+    """Return recent gateway log lines."""
+    import logging
+
+    handler = None
+    for h in logging.getLogger().handlers:
+        if hasattr(h, "buffer") or hasattr(h, "stream"):
+            handler = h
+            break
+
+    # Try to read from crabcode log file if available
+    import os
+    log_candidates = [
+        os.path.expanduser("~/.crabcode/gateway.log"),
+        "/tmp/crabcode-gateway.log",
+    ]
+    for path in log_candidates:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    all_lines = f.readlines()
+                return {"lines": [l.rstrip() for l in all_lines[-lines:]]}
+            except Exception:
+                pass
+
+    return {"lines": [], "note": "No log file found. Logs are written to stderr."}

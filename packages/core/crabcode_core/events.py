@@ -51,6 +51,9 @@ class CoreSession:
         self.skills: list = []
         self.on_tool_event: ToolEventCallback | None = None
 
+        self.last_context_used_tokens: int = 0
+        self.last_context_window_tokens: int = 0
+
         self._api_adapter: Any = None
         self._session_storage: Any = None
         self._permission_manager: Any = None
@@ -698,6 +701,9 @@ class CoreSession:
                     break
                 if isinstance(event, TurnCompleteEvent):
                     self.messages = params.messages
+                    if event.context_used_tokens or event.context_window_tokens:
+                        self.last_context_used_tokens = event.context_used_tokens
+                        self.last_context_window_tokens = event.context_window_tokens
 
                     if self._session_storage:
                         for msg in self.messages[pre_loop_count:]:

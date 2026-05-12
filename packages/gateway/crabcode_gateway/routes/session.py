@@ -5,10 +5,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from crabcode_gateway.schemas import (
+    ArchiveSessionRequest,
     CompactRequest,
+    ExportSessionRequest,
     InterruptRequest,
     NewSessionRequest,
     ResumeSessionRequest,
+    SearchSessionsRequest,
     SendMessageRequest,
     SessionInfo,
 )
@@ -179,3 +182,161 @@ async def interrupt_session(req: InterruptRequest, request: Request):
 
     await session.interrupt()
     return {"status": "ok"}
+
+
+@router.get("/status")
+async def session_status(session_id: str | None = None, request: Request = None):
+    """Return status information for the active (or specified) session."""
+    session = _get_session(request, session_id)
+    if not session:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    usage = getattr(session, "last_context_usage", None) or {}
+    return {
+        "session_id": session.session_id,
+        "message_count": len(session.messages),
+        "model": getattr(session, "model", ""),
+        "provider": getattr(session, "provider", ""),
+        "mode": getattr(session, "mode", "agent"),
+        "context_used_tokens": usage.get("used_tokens", 0),
+        "context_window_tokens": usage.get("window_tokens", 0),
+        "context_used_percent": usage.get("used_percent", 0.0),
+    }
+
+
+@router.get("/recent", response_model=list[SessionInfo])
+async def recent_sessions(limit: int = 10, request: Request = None):
+    """List recently updated sessions across all projects."""
+    import os
+    from crabcode_core.session.storage import SessionStorage
+
+    sessions: dict = request.app.state.sessions
+    default_id = request.app.state.default_session_id
+    cwd = os.getcwd()
+    if default_id and default_id in sessions:
+        cwd = getattr(sessions[default_id], "cwd", cwd)
+
+    try:
+        stored = SessionStorage.list_sessions(cwd)
+    except Exception:
+        stored = []
+
+    result = []
+    for s in stored[:limit]:
+        result.append(SessionInfo(
+            session_id=s["session_id"],
+            message_count=s.get("message_count", 0),
+            model=s.get("model", ""),
+            provider=s.get("provider", ""),
+            created_at=s.get("modified", ""),
+            title=s.get("title", ""),
+        ))
+    return result
+
+
+@router.post("/search", response_model=list[SessionInfo])
+async def search_sessions(req: SearchSessionsRequest, request: Request):
+    """Search sessions by title or first message content."""
+    from crabcode_core.session.storage import SessionStorage
+
+    try:
+        rows = SessionStorage.search_sessions(req.query, limit=req.limit)
+    except Exception:
+        rows = []
+
+    return [
+        SessionInfo(
+            session_id=r["id"],
+            message_count=r.get("message_count", 0),
+            model=r.get("model", ""),
+            provider=r.get("provider", ""),
+            created_at=str(r.get("created_at", "")),
+            title=r.get("title", ""),
+        )
+        for r in rows
+    ]
+
+
+@router.post("/archive")
+async def archive_session(req: ArchiveSessionRequest, request: Request):
+    """Archive a session so it no longer appears in the default list."""
+    try:
+        from crabcode_core.session.meta_db import SessionMetaStore
+        store = SessionMetaStore()
+        store.archive(req.session_id)
+        store.close()
+    except Exception as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    sessions: dict = request.app.state.sessions
+    sessions.pop(req.session_id, None)
+    if request.app.state.default_session_id == req.session_id:
+        request.app.state.default_session_id = None
+
+    return {"status": "ok", "session_id": req.session_id}
+
+
+@router.post("/export")
+async def export_session(req: ExportSessionRequest, request: Request):
+    """Export a session transcript as Markdown or JSON."""
+    import os
+    from crabcode_core.session.export import export_json, export_markdown
+
+    sessions: dict = request.app.state.sessions
+    default_id = request.app.state.default_session_id
+    cwd = os.getcwd()
+    if req.session_id in sessions:
+        cwd = getattr(sessions[req.session_id], "cwd", cwd)
+    elif default_id and default_id in sessions:
+        cwd = getattr(sessions[default_id], "cwd", cwd)
+
+    try:
+        if req.format == "json":
+            content = export_json(req.session_id, cwd)
+            media_type = "application/json"
+            filename = f"session-{req.session_id[:8]}.json"
+        else:
+            content = export_markdown(req.session_id, cwd)
+            media_type = "text/markdown"
+            filename = f"session-{req.session_id[:8]}.md"
+    except Exception as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    from fastapi.responses import Response
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/stats")
+async def session_stats(request: Request):
+    """Return usage statistics: global totals and per-project breakdown."""
+    import os
+    from crabcode_core.session.meta_db import SessionMetaStore
+
+    sessions: dict = request.app.state.sessions
+    default_id = request.app.state.default_session_id
+    cwd = os.getcwd()
+    if default_id and default_id in sessions:
+        cwd = getattr(sessions[default_id], "cwd", cwd)
+
+    try:
+        store = SessionMetaStore()
+        global_stats = store.stats_global()
+        project_stats = store.stats_by_project(cwd)
+        model_stats = store.stats_by_model()
+        store.close()
+    except Exception as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "global": global_stats,
+        "project": {**project_stats, "cwd": cwd},
+        "by_model": model_stats,
+    }

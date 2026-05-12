@@ -337,3 +337,19 @@ async def _send_session_history(ws: WebSocket, session: Any) -> None:
             "messages": history_items,
         }))
 
+    # Restore context usage so the frontend meter reflects the last turn
+    used = getattr(session, "last_context_used_tokens", 0) or 0
+    window = getattr(session, "last_context_window_tokens", 0) or 0
+    if used or window:
+        remaining = max(0, window - used)
+        percent = round(used / window * 100, 1) if window else 0.0
+        await ws.send_text(json.dumps({
+            "type": "turn_complete",
+            "session_id": getattr(session, "session_id", None),
+            "reason": "history_restore",
+            "context_used_tokens": used,
+            "context_window_tokens": window,
+            "context_remaining_tokens": remaining,
+            "context_used_percent": percent,
+        }))
+

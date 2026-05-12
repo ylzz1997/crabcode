@@ -325,9 +325,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.postMessage({ type: "history", items: this.history });
           void this.pushChatOptions();
           this.postMessage({ type: "busyState", busy: this.isBusy });
-          if (this.latestContextUsage) {
-            this.postMessage({ type: "contextUsage", usage: this.latestContextUsage });
-          }
+          this.postMessage({ type: "contextUsage", usage: this.latestContextUsage ?? null });
           this.postMessage({ type: "pendingEditReview", summary: this.pendingEditReview });
           break;
         case "setModel":
@@ -401,6 +399,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.connection.sendNewSession(cwd);
           this.postMessage({ type: "history", items: [] });
           this.postMessage({ type: "busyState", busy: false });
+          this.postMessage({ type: "contextUsage", usage: null });
           break;
         }
         case "fetchSessions":
@@ -429,8 +428,59 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "localMessage":
           this.addMessage(msg.role as ChatMessageRole, msg.text);
           break;
+        case "fetchStatus": {
+          const sid = this.displayedSessionId || this.connection.sessionId || "（未知）";
+          const usage = this.latestContextUsage;
+          const lines = [`**会话 ID：** \`${sid}\``];
+          if (usage) {
+            lines.push(`**背景窗口：** ${usage.usedTokens.toLocaleString()} / ${usage.windowTokens.toLocaleString()} tokens（${usage.usedPercent.toFixed(1)}% 已用，剩余 ${usage.remainingPercent.toFixed(1)}%）`);
+          } else {
+            lines.push("**背景窗口：** 暂无数据");
+          }
+          this.addMessage("system", lines.join("\n"));
+          break;
+        }
         case "switchMode":
           void this.switchMode(msg.mode as "agent" | "plan");
+          break;
+        case "fetchRecentSessions":
+          void this.fetchRecentSessions(typeof msg.limit === "number" ? msg.limit : 10);
+          break;
+        case "searchSessions":
+          if (typeof msg.query === "string") void this.searchSessions(msg.query);
+          break;
+        case "archiveSession":
+          if (typeof msg.sessionId === "string") void this.archiveSession(msg.sessionId);
+          break;
+        case "exportSession":
+          void this.exportSession(msg.format === "json" ? "json" : "md");
+          break;
+        case "fetchStats":
+          void this.fetchStats();
+          break;
+        case "createCheckpoint":
+          void this.createCheckpoint(typeof msg.label === "string" ? msg.label : "");
+          break;
+        case "fetchCheckpoints":
+          void this.fetchCheckpoints();
+          break;
+        case "rollbackCheckpoint":
+          if (typeof msg.checkpointId === "string") void this.rollbackCheckpoint(msg.checkpointId);
+          break;
+        case "revertCheckpoint":
+          if (typeof msg.checkpointId === "string") void this.revertCheckpoint(msg.checkpointId);
+          break;
+        case "undoCheckpoint":
+          void this.undoLastCheckpoint();
+          break;
+        case "fetchAgents":
+          void this.fetchAgents();
+          break;
+        case "fetchPlanStatus":
+          void this.fetchPlanStatus();
+          break;
+        case "fetchLogs":
+          void this.fetchLogs(typeof msg.lines === "number" ? msg.lines : 100);
           break;
       }
     });
@@ -594,18 +644,260 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (cached) {
       this.postMessage({ type: "history", items: cached.history });
       this.postMessage({ type: "busyState", busy: cached.isBusy });
-      if (cached.contextUsage) {
-        this.postMessage({ type: "contextUsage", usage: cached.contextUsage });
-      }
+      this.postMessage({ type: "contextUsage", usage: cached.contextUsage ?? null });
     } else {
-      // No cached state — request from server
+      // No cached state — clear display and request from server
       this.postMessage({ type: "history", items: [] });
       this.postMessage({ type: "busyState", busy: this.busySessions.has(sessionId) });
+      this.postMessage({ type: "contextUsage", usage: null });
       this.connection.sendRaw(JSON.stringify({ type: "resume_session", session_id: sessionId }));
     }
 
     this.sendCurrentSessionInfo();
     setTimeout(() => void this.fetchAndSendCurrentTitle(), 500);
+  }
+
+  private _gatewayUrl(path: string): string {
+    const cfg = vscode.workspace.getConfiguration("crabcode");
+    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
+    const url = new URL(wsUrl);
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    url.pathname = path;
+    url.search = "";
+    return url.toString();
+  }
+
+  private _gatewayHeaders(): Record<string, string> {
+    const password = vscode.workspace.getConfiguration("crabcode").get<string>("password", "");
+    const h: Record<string, string> = {};
+    if (password) h.Authorization = `Bearer ${password}`;
+    return h;
+  }
+
+  private async fetchRecentSessions(limit: number): Promise<void> {
+    try {
+      const url = new URL(this._gatewayUrl("/session/recent"));
+      url.searchParams.set("limit", String(limit));
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) return;
+      const sessions = (await response.json()) as Array<{
+        session_id: string; message_count?: number; model?: string; created_at?: string; title?: string;
+      }>;
+      const sessionList = sessions.map((s) => ({
+        session_id: s.session_id,
+        message_count: s.message_count,
+        model: s.model,
+        created_at: s.created_at,
+        title: s.title ?? s.session_id.slice(0, 12),
+        status: this.busySessions.has(s.session_id) ? "running" : "done",
+      }));
+      this.postMessage({ type: "sessionList", sessions: sessionList });
+    } catch { /* ignore */ }
+  }
+
+  private async searchSessions(query: string): Promise<void> {
+    try {
+      const response = await fetch(this._gatewayUrl("/session/search"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ query, limit: 20 }),
+      });
+      if (!response.ok) return;
+      const sessions = (await response.json()) as Array<{
+        session_id: string; message_count?: number; model?: string; created_at?: string; title?: string;
+      }>;
+      const sessionList = sessions.map((s) => ({
+        session_id: s.session_id,
+        message_count: s.message_count,
+        model: s.model,
+        created_at: s.created_at,
+        title: s.title ?? s.session_id.slice(0, 12),
+        status: this.busySessions.has(s.session_id) ? "running" : "done",
+      }));
+      this.postMessage({ type: "sessionList", sessions: sessionList });
+    } catch { /* ignore */ }
+  }
+
+  private async archiveSession(sessionId: string): Promise<void> {
+    try {
+      const response = await fetch(this._gatewayUrl("/session/archive"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      if (!response.ok) {
+        this.addMessage("system", `归档失败：${response.statusText}`);
+        return;
+      }
+      this.addMessage("system", `会话 \`${sessionId.slice(0, 8)}\` 已归档。`);
+    } catch { /* ignore */ }
+  }
+
+  private async exportSession(format: "md" | "json"): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) { this.addMessage("system", "暂无活跃会话。"); return; }
+    try {
+      const response = await fetch(this._gatewayUrl("/session/export"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, format }),
+      });
+      if (!response.ok) { this.addMessage("system", `导出失败：${response.statusText}`); return; }
+      const content = await response.text();
+      const ext = format === "json" ? "json" : "md";
+      const filename = `session-${sessionId.slice(0, 8)}.${ext}`;
+      const uri = vscode.Uri.joinPath(
+        vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file("/tmp"),
+        filename,
+      );
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf-8"));
+      this.addMessage("system", `会话已导出：\`${uri.fsPath}\``);
+    } catch { /* ignore */ }
+  }
+
+  private async fetchStats(): Promise<void> {
+    try {
+      const response = await fetch(this._gatewayUrl("/session/stats"), { headers: this._gatewayHeaders() });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        global: { total_sessions: number; total_tokens: number; total_messages: number; week_sessions: number; week_tokens: number };
+        project: { total_sessions: number; total_tokens: number; cwd: string };
+        by_model: Array<{ model: string; sessions: number; tokens: number }>;
+      };
+      const g = data.global;
+      const p = data.project;
+      const lines = [
+        "## 使用统计",
+        "",
+        `**全局：** ${g.total_sessions} 个会话，${g.total_messages.toLocaleString()} 条消息，${g.total_tokens.toLocaleString()} tokens`,
+        `**本周：** ${g.week_sessions} 个会话，${g.week_tokens.toLocaleString()} tokens`,
+        `**当前项目 (${p.cwd})：** ${p.total_sessions} 个会话，${p.total_tokens.toLocaleString()} tokens`,
+      ];
+      if (data.by_model.length > 0) {
+        lines.push("", "**按模型：**");
+        data.by_model.forEach((m) => lines.push(`- ${m.model}：${m.sessions} 个会话，${m.tokens.toLocaleString()} tokens`));
+      }
+      this.addMessage("system", lines.join("\n"));
+    } catch { /* ignore */ }
+  }
+
+  private async createCheckpoint(label: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) { this.addMessage("system", "暂无活跃会话。"); return; }
+    try {
+      const response = await fetch(this._gatewayUrl("/snapshot/checkpoint"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, label }),
+      });
+      if (!response.ok) { this.addMessage("system", `创建检查点失败：${response.statusText}`); return; }
+      const data = (await response.json()) as { checkpoint_id: string };
+      this.addMessage("system", `检查点已创建：\`${data.checkpoint_id.slice(0, 8)}\`${label ? `（${label}）` : ""}`);
+    } catch { /* ignore */ }
+  }
+
+  private async fetchCheckpoints(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) { this.addMessage("system", "暂无活跃会话。"); return; }
+    try {
+      const url = new URL(this._gatewayUrl("/snapshot/list"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) return;
+      const checkpoints = (await response.json()) as Array<{
+        id: string; label?: string; created_at?: number; message_index?: number;
+      }>;
+      if (checkpoints.length === 0) { this.addMessage("system", "无检查点。"); return; }
+      const lines = ["## 检查点", ""];
+      checkpoints.forEach((cp) => {
+        const ts = cp.created_at ? new Date(cp.created_at * 1000).toLocaleString() : "未知时间";
+        lines.push(`- \`${cp.id.slice(0, 8)}\`  ${cp.label ? `**${cp.label}**  ` : ""}${ts}  消息数：${cp.message_index ?? "?"}`);
+      });
+      this.addMessage("system", lines.join("\n"));
+    } catch { /* ignore */ }
+  }
+
+  private async rollbackCheckpoint(checkpointId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/snapshot/rollback"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, checkpoint_id: checkpointId }),
+      });
+      if (!response.ok) { this.addMessage("system", `回滚失败：${response.statusText}`); return; }
+      this.addMessage("system", `对话已回滚到检查点 \`${checkpointId.slice(0, 8)}\`（文件未还原）。`);
+      void this.fetchAndSendSessions();
+    } catch { /* ignore */ }
+  }
+
+  private async revertCheckpoint(checkpointId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/snapshot/revert"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, checkpoint_id: checkpointId }),
+      });
+      if (!response.ok) { this.addMessage("system", `还原失败：${response.statusText}`); return; }
+      this.addMessage("system", `对话和文件已还原到检查点 \`${checkpointId.slice(0, 8)}\`。`);
+    } catch { /* ignore */ }
+  }
+
+  private async undoLastCheckpoint(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    try {
+      const response = await fetch(this._gatewayUrl("/snapshot/undo"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      if (!response.ok) { this.addMessage("system", `撤销失败：${response.statusText}`); return; }
+      const data = (await response.json()) as { checkpoint_id: string };
+      this.addMessage("system", `已撤销到检查点 \`${data.checkpoint_id.slice(0, 8)}\`。`);
+    } catch { /* ignore */ }
+  }
+
+  private async fetchAgents(): Promise<void> {
+    try {
+      const response = await fetch(this._gatewayUrl("/agent/list"), { headers: this._gatewayHeaders() });
+      if (!response.ok) return;
+      const agents = (await response.json()) as Array<{
+        agent_id: string; title: string; status: string; subagent_type: string;
+      }>;
+      if (agents.length === 0) { this.addMessage("system", "无托管 Agent。"); return; }
+      const lines = ["## Agents", ""];
+      agents.forEach((a) => lines.push(`- \`${a.agent_id.slice(0, 8)}\`  **${a.title}**  [${a.subagent_type}]  ${a.status}`));
+      this.addMessage("system", lines.join("\n"));
+    } catch { /* ignore */ }
+  }
+
+  private async fetchPlanStatus(): Promise<void> {
+    try {
+      const response = await fetch(this._gatewayUrl("/config/plan-status"), { headers: this._gatewayHeaders() });
+      if (!response.ok) return;
+      const data = (await response.json()) as { mode: string; in_plan_mode: boolean; plan: unknown };
+      const lines = [`**模式：** ${data.mode}`, `**计划模式：** ${data.in_plan_mode ? "是" : "否"}`];
+      if (data.plan) lines.push("", "**当前计划：**", "```json", JSON.stringify(data.plan, null, 2), "```");
+      this.addMessage("system", lines.join("\n"));
+    } catch { /* ignore */ }
+  }
+
+  private async fetchLogs(lines: number): Promise<void> {
+    try {
+      const url = new URL(this._gatewayUrl("/logs"));
+      url.searchParams.set("lines", String(lines));
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) return;
+      const data = (await response.json()) as { lines: string[]; note?: string };
+      if (data.note) { this.addMessage("system", data.note); return; }
+      const content = data.lines.length > 0
+        ? "```\n" + data.lines.join("\n") + "\n```"
+        : "（无日志）";
+      this.addMessage("system", "## 后台日志\n\n" + content);
+    } catch { /* ignore */ }
   }
 
   private async resolveModelsFromSettingsOrGateway(): Promise<string[]> {
@@ -1257,10 +1549,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private appendAssistantTextOnState(state: SessionState, chunk: string, updateWebview: boolean): void {
-    const last = state.messages[state.messages.length - 1];
-    if (last && last.role === "assistant") {
-      last.text += chunk;
-      if (updateWebview) this.postMessage({ type: "appendText", id: last.id, chunk });
+    const lastHistory = state.history[state.history.length - 1];
+    const lastMessage = state.messages[state.messages.length - 1];
+    // If the most recent history item is a tool/thinking/permission/choice card,
+    // a new tool result just finished — start a fresh assistant message so it
+    // appears after the tool cards in the DOM instead of updating the pre-tool message.
+    const lastHistoryIsCard = lastHistory && lastHistory.kind !== "message";
+    if (!lastHistoryIsCard && lastMessage && lastMessage.role === "assistant") {
+      lastMessage.text += chunk;
+      if (updateWebview) this.postMessage({ type: "appendText", id: lastMessage.id, chunk });
     } else {
       this.addMessageOnState(state, "assistant", chunk, updateWebview);
     }
@@ -4787,6 +5084,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         vscode.postMessage({ type: 'clearMessages' });
         return true;
       },
+      '/status': function() {
+        vscode.postMessage({ type: 'fetchStatus' });
+        return true;
+      },
       '/plan': function() {
         vscode.postMessage({ type: 'switchMode', mode: 'plan' });
         updateModeButton('plan');
@@ -4795,6 +5096,74 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       '/agent': function() {
         vscode.postMessage({ type: 'switchMode', mode: 'agent' });
         updateModeButton('agent');
+        return true;
+      },
+      '/sessions': function() {
+        vscode.postMessage({ type: 'fetchSessions' });
+        return true;
+      },
+      '/recent': function(args) {
+        const limit = parseInt(args, 10) || 10;
+        vscode.postMessage({ type: 'fetchRecentSessions', limit: limit });
+        return true;
+      },
+      '/search': function(args) {
+        if (!args) { addLocalSystemMessage('用法：/search <关键词>'); return true; }
+        vscode.postMessage({ type: 'searchSessions', query: args });
+        return true;
+      },
+      '/archive': function(args) {
+        if (!args) { addLocalSystemMessage('用法：/archive <session_id>'); return true; }
+        vscode.postMessage({ type: 'archiveSession', sessionId: args });
+        return true;
+      },
+      '/export': function(args) {
+        const fmt = (args === 'json') ? 'json' : 'md';
+        vscode.postMessage({ type: 'exportSession', format: fmt });
+        return true;
+      },
+      '/stats': function() {
+        vscode.postMessage({ type: 'fetchStats' });
+        return true;
+      },
+      '/checkpoint': function(args) {
+        vscode.postMessage({ type: 'createCheckpoint', label: args || '' });
+        return true;
+      },
+      '/checkpoints': function() {
+        vscode.postMessage({ type: 'fetchCheckpoints' });
+        return true;
+      },
+      '/rollback': function(args) {
+        if (!args) { addLocalSystemMessage('用法：/rollback <checkpoint_id>'); return true; }
+        vscode.postMessage({ type: 'rollbackCheckpoint', checkpointId: args });
+        return true;
+      },
+      '/revert': function(args) {
+        if (!args) { addLocalSystemMessage('用法：/revert <checkpoint_id>'); return true; }
+        vscode.postMessage({ type: 'revertCheckpoint', checkpointId: args });
+        return true;
+      },
+      '/undo': function() {
+        vscode.postMessage({ type: 'undoCheckpoint' });
+        return true;
+      },
+      '/resume': function(args) {
+        if (!args) { vscode.postMessage({ type: 'fetchSessions' }); return true; }
+        vscode.postMessage({ type: 'resumeSession', sessionId: args });
+        return true;
+      },
+      '/agents': function() {
+        vscode.postMessage({ type: 'fetchAgents' });
+        return true;
+      },
+      '/plan-status': function() {
+        vscode.postMessage({ type: 'fetchPlanStatus' });
+        return true;
+      },
+      '/logs': function(args) {
+        const lines = parseInt(args, 10) || 100;
+        vscode.postMessage({ type: 'fetchLogs', lines: lines });
         return true;
       },
     };
