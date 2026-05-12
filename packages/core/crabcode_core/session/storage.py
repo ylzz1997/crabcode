@@ -107,6 +107,8 @@ class SessionStorage:
         self._written_uuids: set[str] = set()
         self._meta_written = False
         self._meta: dict[str, Any] = {}
+        self.last_context_used_tokens: int = 0
+        self.last_context_window_tokens: int = 0
 
     def _ensure_dir(self) -> None:
         if not self._initialized:
@@ -329,6 +331,12 @@ class SessionStorage:
                         meta = {k: v for k, v in entry.items() if k != "type"}
                         continue
 
+                    # Capture context_usage lines (written at turn_complete) but don't add as message
+                    if entry.get("type") == "context_usage":
+                        self.last_context_used_tokens = int(entry.get("used_tokens", 0))
+                        self.last_context_window_tokens = int(entry.get("window_tokens", 0))
+                        continue
+
                     msg_uuid = entry.get("uuid", "")
                     if msg_uuid and msg_uuid in seen:
                         continue
@@ -375,6 +383,17 @@ class SessionStorage:
             store.close()
         except Exception:
             logger.debug("Failed to record token usage for session %s", self.session_id, exc_info=True)
+
+    def record_context_usage(self, used_tokens: int, window_tokens: int) -> None:
+        """Persist context window usage to JSONL so it survives session restore."""
+        if not used_tokens and not window_tokens:
+            return
+        self.last_context_used_tokens = used_tokens
+        self.last_context_window_tokens = window_tokens
+        self._ensure_dir()
+        entry = {"type": "context_usage", "used_tokens": used_tokens, "window_tokens": window_tokens}
+        with open(self._transcript_path, "a", encoding="utf-8") as f:
+            f.write(_dump_jsonl_line(entry))
 
     def record_message_count(self, count: int) -> None:
         """Update message count in SQLite."""

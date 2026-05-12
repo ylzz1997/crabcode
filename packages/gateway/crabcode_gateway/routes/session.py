@@ -192,16 +192,18 @@ async def session_status(session_id: str | None = None, request: Request = None)
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Session not found")
 
-    usage = getattr(session, "last_context_usage", None) or {}
+    used = getattr(session, "last_context_used_tokens", 0) or 0
+    window = getattr(session, "last_context_window_tokens", 0) or 0
+    percent = round(used / window * 100, 1) if window else 0.0
     return {
         "session_id": session.session_id,
         "message_count": len(session.messages),
         "model": getattr(session, "model", ""),
         "provider": getattr(session, "provider", ""),
         "mode": getattr(session, "mode", "agent"),
-        "context_used_tokens": usage.get("used_tokens", 0),
-        "context_window_tokens": usage.get("window_tokens", 0),
-        "context_used_percent": usage.get("used_percent", 0.0),
+        "context_used_tokens": used,
+        "context_window_tokens": window,
+        "context_used_percent": percent,
     }
 
 

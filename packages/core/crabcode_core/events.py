@@ -712,6 +712,10 @@ class CoreSession:
                         if total_tokens > 0:
                             self._session_storage.record_tokens(total_tokens)
                         self._session_storage.record_message_count(len(self.messages))
+                        self._session_storage.record_context_usage(
+                            self.last_context_used_tokens,
+                            self.last_context_window_tokens,
+                        )
                         self._maybe_generate_title()
                 yield event
         finally:
@@ -1072,6 +1076,11 @@ class CoreSession:
         if self._agent_manager:
             self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
             self._agent_manager.restore_snapshots(agent_snapshots)
+
+        # Restore context usage so the gateway can report it after session switch
+        if storage.last_context_used_tokens or storage.last_context_window_tokens:
+            self.last_context_used_tokens = storage.last_context_used_tokens
+            self.last_context_window_tokens = storage.last_context_window_tokens
 
         # Sync meta to SQLite if it was read from JSONL but missing in DB
         if storage.meta and self._initialized:

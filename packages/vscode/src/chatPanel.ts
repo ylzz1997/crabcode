@@ -511,6 +511,45 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async fetchAndApplyContextUsage(sessionId: string): Promise<void> {
+    try {
+      const url = this._gatewayUrl(`/session/status`);
+      const urlWithParam = `${url}?session_id=${encodeURIComponent(sessionId)}`;
+      const response = await fetch(urlWithParam, { headers: this._gatewayHeaders() });
+      if (!response.ok) return;
+      const data = await response.json() as {
+        context_used_tokens?: number;
+        context_window_tokens?: number;
+        context_used_percent?: number;
+      };
+      if (!data.context_used_tokens && !data.context_window_tokens) return;
+      if (this.displayedSessionId !== sessionId) return;
+      const state = this.getSessionState(sessionId);
+      const used = Math.max(0, Math.trunc(data.context_used_tokens ?? 0));
+      const window = Math.max(0, Math.trunc(data.context_window_tokens ?? 0));
+      if (!used && !window) return;
+      const usedPercent = Math.min(100, Math.max(0, data.context_used_percent ?? (window ? used / window * 100 : 0)));
+      const remainingPercent = Math.max(0, 100 - usedPercent);
+      const remainingTokens = Math.max(0, window - used);
+      const usage: ContextUsageStatus = {
+        usedTokens: used,
+        windowTokens: window,
+        remainingTokens,
+        usedPercent,
+        remainingPercent,
+        details: [
+          "背景信息窗口：",
+          `已用 ${formatTokenCount(used)} / ${formatTokenCount(window)} 标记`,
+          `剩余 ${remainingPercent.toFixed(1)}%`,
+        ],
+      };
+      state.contextUsage = usage;
+      this.postMessage({ type: "contextUsage", usage });
+    } catch {
+      // ignore
+    }
+  }
+
   private async fetchAndSendCurrentTitle(): Promise<void> {
     const sid = this.connection.sessionId;
     if (!sid) return;
@@ -1240,7 +1279,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private handleSessionHistory(payload: { messages: Array<{ id: string; role: string; text: string }> }): void {
     if (!this.displayedSessionId) return;
-    const state = this.getSessionState(this.displayedSessionId);
+    const sessionId = this.displayedSessionId;
+    const state = this.getSessionState(sessionId);
     state.history = [];
     state.messages = [];
     state.toolCards.clear();
@@ -1262,6 +1302,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       state.history.push({ kind: "message", message: chatMsg });
     }
     this.postMessage({ type: "history", items: state.history });
+    // Fetch context usage via HTTP — the server may not send turn_complete for disk-restored sessions
+    void this.fetchAndApplyContextUsage(sessionId);
   }
 
   private handleThinking(chunk: string): void {
