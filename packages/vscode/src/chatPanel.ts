@@ -3750,11 +3750,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function renderSessionList(sessions) {
       allSessions = sessions || [];
       if (!sessionListItems) return;
-      if (allSessions.length === 0) {
+      const visibleSessions = allSessions.filter(function(s) {
+        return s.message_count > 0 || s.session_id === currentSessionId;
+      });
+      if (visibleSessions.length === 0) {
         sessionListItems.innerHTML = '<div class="session-list-empty">暂无会话</div>';
         return;
       }
-      sessionListItems.innerHTML = allSessions.map(function(s) {
+      sessionListItems.innerHTML = visibleSessions.map(function(s) {
         const dotClass = getSessionDotClass(s);
         const isActive = s.session_id === currentSessionId;
         const title = s.title || s.session_id.slice(0, 12) + '…';

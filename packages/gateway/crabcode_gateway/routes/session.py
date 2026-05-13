@@ -37,6 +37,33 @@ async def new_session(req: NewSessionRequest, request: Request) -> SessionInfo:
     from crabcode_core.types.config import CrabCodeSettings
 
     cwd = req.cwd or os.getcwd()
+
+    # Clean up empty sessions (no messages) before creating a new one
+    try:
+        from crabcode_core.session.storage import SessionStorage
+        from crabcode_core.session.meta_db import SessionMetaStore
+        import shutil
+
+        store = SessionMetaStore()
+        empty_sessions = [
+            r for r in store.list_by_cwd(os.path.abspath(cwd), limit=200)
+            if r.get("message_count", 0) == 0
+        ]
+        for r in empty_sessions:
+            sid = r["id"]
+            store.delete(sid)
+            # Remove JSONL transcript file if it exists
+            try:
+                from crabcode_core.session.storage import get_transcript_path
+                transcript = get_transcript_path(r.get("cwd", cwd), sid)
+                if transcript.exists():
+                    transcript.unlink()
+            except Exception:
+                pass
+        store.close()
+    except Exception:
+        pass
+
     settings = CrabCodeSettings()
     session = CoreSession(cwd=cwd, settings=settings)
     await session.initialize()
