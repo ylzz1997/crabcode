@@ -1543,6 +1543,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cmd = buildPermissionResponseCommand(id, allowed, { alwaysAllow, feedback });
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "permissionResolved", card });
+
+    // When denying, auto-deny all other pending permission requests in the same batch
+    if (!allowed) {
+      for (const [otherId, otherCard] of this.permissionCards) {
+        if (otherId !== id && otherCard.allowed === null) {
+          otherCard.allowed = false;
+          const otherCmd = buildPermissionResponseCommand(otherId, false, {});
+          this.connection.sendRaw(serializeCommand(otherCmd));
+          this.postMessage({ type: "permissionResolved", card: otherCard });
+        }
+      }
+    }
   }
 
   private handleFileChange(payload: FileChangePayload): void {

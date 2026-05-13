@@ -678,6 +678,9 @@ class CoreSession:
             try:
                 async for event in query_loop(params):
                     await merged_events.put(event)
+            except asyncio.CancelledError:
+                await merged_events.put(TurnCompleteEvent(reason="interrupted"))
+                raise
             except Exception:
                 logger.exception("query_loop crashed")
                 await merged_events.put(
@@ -691,8 +694,13 @@ class CoreSession:
                 event = await self._agent_event_queue.get()
                 await merged_events.put(event)
 
+        async def _watch_abort() -> None:
+            await self._abort_controller.wait()
+            producer.cancel()
+
         producer = asyncio.create_task(_produce_main_events())
         agent_forwarder = asyncio.create_task(_forward_agent_events())
+        abort_watcher = asyncio.create_task(_watch_abort())
 
         try:
             while True:
@@ -719,6 +727,7 @@ class CoreSession:
                         self._maybe_generate_title()
                 yield event
         finally:
+            abort_watcher.cancel()
             agent_forwarder.cancel()
             producer.cancel()
 
