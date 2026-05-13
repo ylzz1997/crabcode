@@ -210,6 +210,7 @@ interface SessionState {
   activeThinkingId: string | null;
   isBusy: boolean;
   contextUsage: ContextUsageStatus | null;
+  batchDenied: boolean;
 }
 
 function createEmptySessionState(): SessionState {
@@ -223,6 +224,7 @@ function createEmptySessionState(): SessionState {
     activeThinkingId: null,
     isBusy: false,
     contextUsage: null,
+    batchDenied: false,
   };
 }
 
@@ -1301,6 +1303,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (updateWebview) this.postMessage({ type: "contextUsage", usage });
         }
         state.isBusy = false;
+        state.batchDenied = false;
         if (updateWebview) {
           this.postMessage({ type: "busyState", busy: false });
           setTimeout(() => void this.fetchAndSendCurrentTitle(), 2000);
@@ -1420,7 +1423,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "requesting":
       case "thinking":
       case "responding":
+        state.isBusy = true;
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        break;
       case "tool-input":
+        state.isBusy = true;
+        state.batchDenied = false;
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        break;
       case "tool-running":
         state.isBusy = true;
         if (updateWebview) this.postMessage({ type: "busyState", busy: true });
@@ -1517,6 +1527,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     };
     state.permissionCards.set(payload.tool_use_id, card);
     state.history.push({ kind: "permission", card });
+
+    // If this batch already had a denial, auto-deny immediately
+    if (state.batchDenied) {
+      card.allowed = false;
+      const cmd = buildPermissionResponseCommand(card.id, false, {});
+      this.connection.sendRaw(serializeCommand(cmd));
+      if (updateWebview) this.postMessage({ type: "permissionResolved", card });
+      return;
+    }
+
     if (updateWebview) this.postMessage({ type: "permissionRequest", card });
   }
 
@@ -1544,8 +1564,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "permissionResolved", card });
 
-    // When denying, auto-deny all other pending permission requests in the same batch
+    // When denying, mark the batch and auto-deny all other pending cards in this round
     if (!allowed) {
+      this.currentState.batchDenied = true;
       for (const [otherId, otherCard] of this.permissionCards) {
         if (otherId !== id && otherCard.allowed === null) {
           otherCard.allowed = false;
