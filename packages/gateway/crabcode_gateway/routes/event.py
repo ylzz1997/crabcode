@@ -116,6 +116,7 @@ async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
         allowed=msg.get("allowed", False),
         always_allow=msg.get("always_allow", False),
         agent_id=msg.get("agent_id"),
+        feedback=msg.get("feedback"),
     )
     await session.respond_permission(event)
 

@@ -783,7 +783,7 @@ async def _prompt_permission(
                 None,
                 lambda: input(
                     f"  Allow {event.tool_name}? "
-                    "(y)es / (n)o / (a)lways allow: "
+                    "(y)es / (n)o / (a)lways allow / (f)eedback: "
                 ).strip().lower(),
             )
         except (EOFError, KeyboardInterrupt):
@@ -818,8 +818,25 @@ async def _prompt_permission(
                 )
             )
             return
+        elif choice in ("f", "feedback"):
+            try:
+                feedback = await loop.run_in_executor(
+                    None,
+                    lambda: input("  Feedback (what to do instead): ").strip(),
+                )
+            except (EOFError, KeyboardInterrupt):
+                feedback = ""
+            await session.respond_permission(
+                PermissionResponseEvent(
+                    tool_use_id=event.tool_use_id,
+                    allowed=False,
+                    agent_id=event.agent_id,
+                    feedback=feedback or None,
+                )
+            )
+            return
         else:
-            console.print("  [dim]Please enter y, n, or a[/]")
+            console.print("  [dim]Please enter y, n, a, or f[/]")
 
 
 async def _interactive_select(question: str, options: list[str], multiple: bool = False) -> list[str]:

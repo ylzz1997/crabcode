@@ -31,6 +31,7 @@ export interface PermissionResponseCommand {
   allowed: boolean;
   always_allow: boolean;
   agent_id: string | null;
+  feedback: string | null;
 }
 
 export interface ChoiceResponseCommand {
@@ -98,7 +99,7 @@ export function buildSendMessageCommand(
 export function buildPermissionResponseCommand(
   toolUseId: string,
   allowed: boolean,
-  options: { alwaysAllow?: boolean; agentId?: string } = {},
+  options: { alwaysAllow?: boolean; agentId?: string; feedback?: string } = {},
 ): PermissionResponseCommand {
   return {
     type: "permission_response",
@@ -106,6 +107,7 @@ export function buildPermissionResponseCommand(
     allowed,
     always_allow: options.alwaysAllow ?? false,
     agent_id: options.agentId ?? null,
+    feedback: options.feedback ?? null,
   };
 }
 

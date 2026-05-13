@@ -61,6 +61,7 @@ class PermissionResponseEvent:
     allowed: bool
     always_allow: bool = False
     agent_id: str | None = None
+    feedback: str | None = None
 
 
 @dataclass

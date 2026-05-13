@@ -34,6 +34,7 @@ async def respond_permission(req: PermissionResponseRequest, request: Request):
         allowed=req.allowed,
         always_allow=req.always_allow,
         agent_id=req.agent_id,
+        feedback=req.feedback,
     )
     await session.respond_permission(event)
     return {"status": "ok"}

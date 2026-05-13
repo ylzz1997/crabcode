@@ -44,6 +44,7 @@ export interface PermissionResponseRequest {
   allowed: boolean;
   always_allow?: boolean;
   agent_id?: string | null;
+  feedback?: string | null;
 }
 
 export interface ChoiceResponseRequest {
@@ -106,6 +107,20 @@ export interface RevertRequest {
   checkpoint_id: string;
 }
 
+export interface SearchSessionsRequest {
+  query: string;
+  limit?: number;
+}
+
+export interface ArchiveSessionRequest {
+  session_id: string;
+}
+
+export interface ExportSessionRequest {
+  session_id: string;
+  format?: "md" | "json";
+}
+
 
 // ── Response / info types ────────────────────────────────────────────
 export interface SessionInfo {
@@ -114,6 +129,7 @@ export interface SessionInfo {
   model?: string;
   provider?: string;
   created_at?: string;
+  title?: string;
 }
 
 export interface AgentInfo {
@@ -134,6 +150,11 @@ export interface ToolInfo {
   description?: string;
   is_read_only?: boolean;
   is_enabled?: boolean;
+}
+
+export interface SkillInfo {
+  name: string;
+  description?: string;
 }
 
 export interface ModelInfo {
@@ -193,6 +214,7 @@ export interface PermissionResponsePayload {
   type?: "permission_response";
   always_allow?: boolean;
   agent_id?: string | null;
+  feedback?: string | null;
 }
 
 export interface ChoiceRequestPayload {
@@ -337,11 +359,6 @@ export interface ServerHeartbeatPayload {
   properties?: Record<string, unknown>;
 }
 
-export interface SessionHistoryPayload {
-  type?: "session_history";
-  messages?: Array<{ id: string; role: string; text: string }>;
-}
-
 
 // ── Tagged union ─────────────────────────────────────────────────────
 export type EventPayload =
@@ -368,8 +385,7 @@ export type EventPayload =
   SnapshotPayload |
   RevertPayload |
   ServerConnectedPayload |
-  ServerHeartbeatPayload |
-  SessionHistoryPayload;
+  ServerHeartbeatPayload;
 
 // ── Type discriminator helper ────────────────────────────────────────
 export type EventPayloadType = EventPayload["type"];

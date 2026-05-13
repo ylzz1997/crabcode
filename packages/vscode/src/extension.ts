@@ -50,6 +50,7 @@ class PermissionHandler implements vscode.Disposable {
     const allowItem = "允许";
     const alwaysAllowItem = "始终允许";
     const denyItem = "拒绝";
+    const denyFeedbackItem = "拒绝并反馈";
 
     vscode.window
       .showInformationMessage(
@@ -58,8 +59,21 @@ class PermissionHandler implements vscode.Disposable {
         allowItem,
         alwaysAllowItem,
         denyItem,
+        denyFeedbackItem,
       )
-      .then((choice) => {
+      .then(async (choice) => {
+        if (choice === denyFeedbackItem) {
+          const feedback = await vscode.window.showInputBox({
+            prompt: "告诉 AI 应该怎么做",
+            placeHolder: "例如：不要修改这个文件，改用另一种方式…",
+          });
+          const cmd = buildPermissionResponseCommand(tool_use_id, false, {
+            agentId: agent_id ?? undefined,
+            feedback: feedback || undefined,
+          });
+          this.connection.sendRaw(serializeCommand(cmd));
+          return;
+        }
         const allowed = choice === allowItem || choice === alwaysAllowItem;
         const alwaysAllow = choice === alwaysAllowItem;
         const cmd = buildPermissionResponseCommand(tool_use_id, allowed, {

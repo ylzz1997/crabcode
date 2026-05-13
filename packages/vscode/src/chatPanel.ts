@@ -368,7 +368,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.respondToChoice(msg.id, msg.selected, msg.cancelled);
           break;
         case "respondToPermission":
-          this.respondToPermission(msg.id, msg.allowed, msg.alwaysAllow);
+          this.respondToPermission(msg.id, msg.allowed, msg.alwaysAllow, msg.feedback);
           break;
         case "interrupt": {
           const result = this.connection.sendInterrupt();
@@ -1534,13 +1534,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: "choiceResolved", card });
   }
 
-  private respondToPermission(id: string, allowed: boolean, alwaysAllow = false): void {
+  private respondToPermission(id: string, allowed: boolean, alwaysAllow = false, feedback?: string): void {
     const card = this.permissionCards.get(id);
     if (!card || card.allowed !== null) {
       return;
     }
     card.allowed = allowed;
-    const cmd = buildPermissionResponseCommand(id, allowed, { alwaysAllow });
+    const cmd = buildPermissionResponseCommand(id, allowed, { alwaysAllow, feedback });
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "permissionResolved", card });
   }
@@ -2193,7 +2193,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--surface-soft));
       border: 1px solid var(--border);
     }
-    .request-actions { display: flex; gap: 8px; }
+    .request-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .permission-feedback-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      align-items: center;
+    }
+    .permission-feedback-row.hidden { display: none; }
+    .permission-feedback-input {
+      flex: 1;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg);
+      color: var(--fg);
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+    }
+    .permission-feedback-input:focus {
+      border-color: var(--accent);
+    }
 
     /* ── Thinking cards ───────────────────────────────────────── */
     .thinking-card {
@@ -4520,6 +4541,38 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           vscode.postMessage({ type: 'respondToPermission', id: card.id, allowed: false, alwaysAllow: false });
         });
       }
+      const denyFeedbackBtn = el.querySelector('[data-permission-deny-feedback]');
+      if (denyFeedbackBtn) {
+        denyFeedbackBtn.addEventListener('click', () => {
+          if (card.allowed !== null) return;
+          const feedbackRow = el.querySelector('.permission-feedback-row');
+          if (feedbackRow) {
+            feedbackRow.classList.toggle('hidden');
+            const input = feedbackRow.querySelector('.permission-feedback-input');
+            if (input && !feedbackRow.classList.contains('hidden')) input.focus();
+          }
+        });
+      }
+      const feedbackSendBtn = el.querySelector('[data-permission-feedback-send]');
+      if (feedbackSendBtn) {
+        feedbackSendBtn.addEventListener('click', () => {
+          if (card.allowed !== null) return;
+          const input = el.querySelector('.permission-feedback-input');
+          const feedback = input ? input.value.trim() : '';
+          vscode.postMessage({ type: 'respondToPermission', id: card.id, allowed: false, alwaysAllow: false, feedback: feedback || undefined });
+        });
+      }
+      const feedbackInput = el.querySelector('.permission-feedback-input');
+      if (feedbackInput) {
+        feedbackInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (card.allowed !== null) return;
+            const feedback = feedbackInput.value.trim();
+            vscode.postMessage({ type: 'respondToPermission', id: card.id, allowed: false, alwaysAllow: false, feedback: feedback || undefined });
+          }
+        });
+      }
     }
 
     function buildPermissionCardHtml(card) {
@@ -4527,7 +4580,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         ? '<span class="request-status pending">等待确认</span>'
         : (card.allowed ? '<span class="request-status done">已允许</span>' : '<span class="request-status denied">已拒绝</span>');
       const actions = card.allowed === null
-        ? '<button class="request-action primary" data-permission-allow>允许</button><button class="request-action subtle" data-permission-deny>拒绝</button>'
+        ? '<button class="request-action primary" data-permission-allow>允许</button>' +
+          '<button class="request-action subtle" data-permission-deny>拒绝</button>' +
+          '<button class="request-action subtle" data-permission-deny-feedback>拒绝并反馈</button>'
+        : '';
+      const feedbackRow = card.allowed === null
+        ? '<div class="permission-feedback-row hidden">' +
+          '<input class="permission-feedback-input" type="text" placeholder="告诉 AI 应该怎么做…" />' +
+          '<button class="request-action primary" data-permission-feedback-send>发送</button>' +
+          '</div>'
         : '';
       const reason = card.reason ? '<div class="request-reason">' + escapeHtml(card.reason) + '</div>' : '';
       return '<div class="request-card-header">' +
@@ -4540,6 +4601,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         reason +
         '<pre class="request-pre">' + escapeHtml(formatToolInput(card.toolName, card.input)) + '</pre>' +
         '<div class="request-actions">' + actions + '</div>' +
+        feedbackRow +
         '</div>';
     }
 

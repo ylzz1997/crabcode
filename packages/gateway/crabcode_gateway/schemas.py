@@ -47,6 +47,7 @@ class PermissionResponseRequest(BaseModel):
     allowed: bool
     always_allow: bool = False
     agent_id: str | None = None
+    feedback: str | None = None
 
 
 class ChoiceResponseRequest(BaseModel):
@@ -220,6 +221,7 @@ class PermissionResponsePayload(BaseModel):
     allowed: bool
     always_allow: bool = False
     agent_id: str | None = None
+    feedback: str | None = None
 
 
 class ChoiceRequestPayload(BaseModel):
@@ -454,6 +456,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             allowed=event.allowed,
             always_allow=event.always_allow,
             agent_id=event.agent_id,
+            feedback=event.feedback,
         )
     if isinstance(event, ChoiceRequestEvent):
         return ChoiceRequestPayload(

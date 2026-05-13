@@ -1009,13 +1009,20 @@ async def query_loop(
                         params.permission_manager.add_allow_rule(permission_key)
                     approved_blocks.append(effective_block)
                 else:
-                    msg = create_tool_result_message(
-                        tool_use_id=effective_block.id,
-                        result=(
+                    if response.feedback:
+                        denial_msg = (
+                            f"Permission denied by user with feedback: {response.feedback}\n"
+                            "Adjust your approach based on this feedback."
+                        )
+                    else:
+                        denial_msg = (
                             "Permission denied by user. Do not retry the same "
                             "tool call. Explain what you wanted to do and ask "
                             "for guidance."
-                        ),
+                        )
+                    msg = create_tool_result_message(
+                        tool_use_id=effective_block.id,
+                        result=denial_msg,
                         is_error=True,
                         source_tool_assistant_uuid=assistant_msg.uuid,
                     )
@@ -1023,7 +1030,7 @@ async def query_loop(
                     yield ToolResultEvent(
                         tool_use_id=effective_block.id,
                         tool_name=effective_block.name,
-                        result="Permission denied by user.",
+                        result=denial_msg,
                         is_error=True,
                         tool_input=effective_block.input,
                     )
