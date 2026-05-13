@@ -4567,6 +4567,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           vscode.postMessage({ type: 'respondToPermission', id: card.id, allowed: true, alwaysAllow: false });
         });
       }
+      const alwaysAllowBtn = el.querySelector('[data-permission-always-allow]');
+      if (alwaysAllowBtn) {
+        alwaysAllowBtn.addEventListener('click', () => {
+          if (card.allowed !== null) return;
+          vscode.postMessage({ type: 'respondToPermission', id: card.id, allowed: true, alwaysAllow: true });
+        });
+      }
       const denyBtn = el.querySelector('[data-permission-deny]');
       if (denyBtn) {
         denyBtn.addEventListener('click', () => {
@@ -4614,6 +4621,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         : (card.allowed ? '<span class="request-status done">已允许</span>' : '<span class="request-status denied">已拒绝</span>');
       const actions = card.allowed === null
         ? '<button class="request-action primary" data-permission-allow>允许</button>' +
+          '<button class="request-action subtle" data-permission-always-allow>始终允许</button>' +
           '<button class="request-action subtle" data-permission-deny>拒绝</button>' +
           '<button class="request-action subtle" data-permission-deny-feedback>拒绝并反馈</button>'
         : '';

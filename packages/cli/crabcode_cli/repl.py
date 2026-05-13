@@ -762,8 +762,21 @@ def _render_session_history(messages: list[Message], max_messages: int = 50) -> 
 async def _prompt_permission(
     event: PermissionRequestEvent,
     session: CoreSession,
+    batch_state: dict | None = None,
 ) -> None:
     """Prompt the user for tool permission and push response to session."""
+    # If a previous request in this batch was denied, auto-deny silently
+    if batch_state and batch_state.get("denied"):
+        await session.respond_permission(
+            PermissionResponseEvent(
+                tool_use_id=event.tool_use_id, allowed=False, agent_id=event.agent_id
+            )
+        )
+        console.print(
+            f"  [dim red]✗ {event.tool_name} auto-denied (batch)[/]"
+        )
+        return
+
     summary = _tool_summary(event.tool_name, event.tool_input)
     if event.reason:
         summary = f"{summary}\n\nReason: {event.reason}"
@@ -776,17 +789,19 @@ async def _prompt_permission(
         )
     )
 
-    loop = asyncio.get_event_loop()
+    perm_prompt_session: PromptSession[str] = PromptSession()
     while True:
         try:
-            choice = await loop.run_in_executor(
-                None,
-                lambda: input(
-                    f"  Allow {event.tool_name}? "
+            choice = await perm_prompt_session.prompt_async(
+                HTML(
+                    f"  Allow <b>{event.tool_name}</b>? "
                     "(y)es / (n)o / (a)lways allow / (f)eedback: "
-                ).strip().lower(),
+                )
             )
+            choice = choice.strip().lower()
         except (EOFError, KeyboardInterrupt):
+            if batch_state is not None:
+                batch_state["denied"] = True
             await session.respond_permission(
                 PermissionResponseEvent(
                     tool_use_id=event.tool_use_id, allowed=False, agent_id=event.agent_id
@@ -802,6 +817,8 @@ async def _prompt_permission(
             )
             return
         elif choice in ("n", "no"):
+            if batch_state is not None:
+                batch_state["denied"] = True
             await session.respond_permission(
                 PermissionResponseEvent(
                     tool_use_id=event.tool_use_id, allowed=False, agent_id=event.agent_id
@@ -820,12 +837,15 @@ async def _prompt_permission(
             return
         elif choice in ("f", "feedback"):
             try:
-                feedback = await loop.run_in_executor(
-                    None,
-                    lambda: input("  Feedback (what to do instead): ").strip(),
+                feedback_session: PromptSession[str] = PromptSession()
+                feedback = await feedback_session.prompt_async(
+                    HTML("  Feedback (what to do instead): ")
                 )
+                feedback = feedback.strip()
             except (EOFError, KeyboardInterrupt):
                 feedback = ""
+            if batch_state is not None:
+                batch_state["denied"] = True
             await session.respond_permission(
                 PermissionResponseEvent(
                     tool_use_id=event.tool_use_id,
@@ -1138,6 +1158,7 @@ async def _run_plan_executor_with_runtime_events(
     producer = asyncio.create_task(_produce_plan_events())
     forwarder = asyncio.create_task(_forward_agent_events())
     active_stream_agent: str | None = None
+    batch_state: dict = {"denied": False}
 
     try:
         while True:
@@ -1175,6 +1196,11 @@ async def _run_plan_executor_with_runtime_events(
                 console.print(
                     f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
                 )
+            elif isinstance(event, StreamModeEvent):
+                if event.mode == "tool-input":
+                    batch_state["denied"] = False
+            elif isinstance(event, TurnCompleteEvent):
+                batch_state["denied"] = False
             elif isinstance(event, ToolUseEvent):
                 _render_tool_use(event)
             elif isinstance(event, ToolResultEvent):
@@ -1186,7 +1212,7 @@ async def _run_plan_executor_with_runtime_events(
                 else:
                     _render_tool_result(event)
             elif isinstance(event, PermissionRequestEvent):
-                await _prompt_permission(event, session)
+                await _prompt_permission(event, session, batch_state)
             elif isinstance(event, ChoiceRequestEvent):
                 await _prompt_choice(event, session)
             elif isinstance(event, ErrorEvent):
@@ -1392,6 +1418,7 @@ async def run_repl(
             try:
                 send_images = pending_images.copy() if pending_images else None
                 pending_images.clear()
+                batch_state: dict = {"denied": False}
                 async for event in session.send_message(user_input, images=send_images):
                     if isinstance(event, StreamModeEvent):
                         if event.mode == "requesting":
@@ -1405,6 +1432,7 @@ async def run_repl(
                         elif event.mode == "responding":
                             await _stop_spinner_with_thinking()
                         elif event.mode == "tool-input":
+                            batch_state["denied"] = False
                             await _stop_spinner_with_thinking()
                             if streamed_text:
                                 sys.stdout.write("\n")
@@ -1465,7 +1493,7 @@ async def run_repl(
                             sys.stdout.write("\n")
                             sys.stdout.flush()
                             streamed_text = ""
-                        await _prompt_permission(event, session)
+                        await _prompt_permission(event, session, batch_state)
 
                     elif isinstance(event, ChoiceRequestEvent):
                         await _stop_spinner_with_thinking()
