@@ -7,6 +7,7 @@ import os
 from typing import Any, AsyncGenerator
 
 import anthropic
+import httpx
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
 from crabcode_core.logging_utils import get_logger
@@ -24,6 +25,9 @@ from crabcode_core.types.message import (
 )
 
 logger = get_logger(__name__)
+
+
+ANTHROPIC_VERSION = "2023-06-01"
 
 
 def _messages_to_api(messages: list[Message]) -> list[dict[str, Any]]:
@@ -106,6 +110,186 @@ class AnthropicAdapter(APIAdapter):
             kwargs["default_headers"] = config.http_headers
 
         self.client = anthropic.AsyncAnthropic(**kwargs)
+        self._api_key = api_key
+
+    def _messages_url(self) -> str | None:
+        """Return a Messages API URL for Anthropic-compatible custom endpoints."""
+        if not self.config.base_url:
+            return "https://api.anthropic.com/v1/messages"
+        base = self.config.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            return f"{base}/messages"
+        return f"{base}/v1/messages"
+
+    def _manual_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {
+            "accept": "text/event-stream",
+            "content-type": "application/json",
+            "anthropic-version": ANTHROPIC_VERSION,
+        }
+        headers.update(self.config.http_headers or {})
+        lower_header_names = {k.lower() for k in headers}
+        if self._api_key and "x-api-key" not in lower_header_names:
+            headers["x-api-key"] = self._api_key
+        return headers
+
+    async def _stream_message_httpx(
+        self,
+        params: dict[str, Any],
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Stream from Anthropic-compatible routers without SDK helper headers.
+
+        Some Anthropic-compatible proxies reject the Python SDK's stream helper
+        headers and return a JSON error body with HTTP 200. Reading SSE directly
+        keeps the wire format Anthropic-compatible while avoiding those headers.
+        """
+        url = self._messages_url()
+        if not url:
+            return
+
+        payload = dict(params)
+        payload["stream"] = True
+
+        timeout = httpx.Timeout(
+            float(self.config.timeout),
+            connect=min(float(self.config.timeout), 30.0),
+            read=float(self.config.timeout),
+            write=float(self.config.timeout),
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=self._manual_headers(),
+                json=payload,
+            ) as response:
+                content_type = response.headers.get("content-type", "")
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    yield StreamChunk(
+                        type="error",
+                        error=(
+                            body.decode("utf-8", errors="replace")
+                            or response.reason_phrase
+                        ),
+                    )
+                    return
+
+                if "text/event-stream" not in content_type.lower():
+                    body = await response.aread()
+                    text = body.decode("utf-8", errors="replace")
+                    error_text = text
+                    try:
+                        data = json.loads(text)
+                        error_text = (
+                            data.get("error", {}).get("message")
+                            if isinstance(data.get("error"), dict)
+                            else data.get("code_msg") or data.get("message") or text
+                        )
+                    except Exception:
+                        pass
+                    yield StreamChunk(type="error", error=str(error_text))
+                    return
+
+                current_tool_id = ""
+                current_tool_name = ""
+                tool_input_buffer = ""
+
+                async for raw_line in response.aiter_lines():
+                    if not raw_line.startswith("data:"):
+                        continue
+                    raw_data = raw_line[5:].strip()
+                    if not raw_data or raw_data == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(raw_data)
+                    except json.JSONDecodeError:
+                        continue
+
+                    event_type = event.get("type", "")
+                    if event_type == "content_block_start":
+                        block = event.get("content_block") or {}
+                        block_type = block.get("type")
+                        if block_type == "tool_use":
+                            current_tool_id = str(block.get("id") or "")
+                            current_tool_name = str(block.get("name") or "")
+                            tool_input_buffer = ""
+                            yield StreamChunk(
+                                type="tool_use_start",
+                                tool_use_id=current_tool_id,
+                                tool_name=current_tool_name,
+                            )
+
+                    elif event_type == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        delta_type = delta.get("type")
+                        if delta_type == "text_delta":
+                            yield StreamChunk(
+                                type="text",
+                                text=safe_utf8_str(str(delta.get("text") or "")),
+                            )
+                        elif delta_type == "thinking_delta":
+                            yield StreamChunk(
+                                type="thinking",
+                                text=safe_utf8_str(str(delta.get("thinking") or "")),
+                            )
+                        elif delta_type == "input_json_delta":
+                            partial = str(delta.get("partial_json") or "")
+                            tool_input_buffer += partial
+                            yield StreamChunk(
+                                type="tool_use_delta",
+                                tool_use_id=current_tool_id,
+                                tool_input_json=partial,
+                            )
+
+                    elif event_type == "content_block_stop":
+                        if current_tool_id:
+                            yield StreamChunk(
+                                type="tool_use_end",
+                                tool_use_id=current_tool_id,
+                                tool_name=current_tool_name,
+                                tool_input_json=tool_input_buffer,
+                            )
+                            current_tool_id = ""
+                            current_tool_name = ""
+                            tool_input_buffer = ""
+
+                    elif event_type == "message_delta":
+                        usage = {}
+                        raw_usage = event.get("usage")
+                        if isinstance(raw_usage, dict):
+                            usage = {
+                                "input_tokens": raw_usage.get("input_tokens", 0),
+                                "output_tokens": raw_usage.get("output_tokens", 0),
+                            }
+                        delta = event.get("delta") or {}
+                        yield StreamChunk(
+                            type="message_delta",
+                            stop_reason=str(delta.get("stop_reason") or ""),
+                            usage=usage,
+                        )
+
+                    elif event_type == "message_start":
+                        usage = {}
+                        message = event.get("message") or {}
+                        raw_usage = message.get("usage")
+                        if isinstance(raw_usage, dict):
+                            usage = {
+                                "input_tokens": raw_usage.get("input_tokens", 0),
+                                "output_tokens": raw_usage.get("output_tokens", 0),
+                            }
+                        yield StreamChunk(type="message_start", usage=usage)
+
+                    elif event_type == "message_stop":
+                        yield StreamChunk(type="message_stop")
+
+                    elif event_type == "error":
+                        error = event.get("error") or {}
+                        if isinstance(error, dict):
+                            message = error.get("message") or json.dumps(error, ensure_ascii=False)
+                        else:
+                            message = str(error or event)
+                        yield StreamChunk(type="error", error=message)
 
     async def resolve_context_window(self) -> int:
         """Query the Anthropic Models API for context window, with caching."""
@@ -172,6 +356,15 @@ class AnthropicAdapter(APIAdapter):
 
         if config.temperature is not None:
             params["temperature"] = config.temperature
+
+        transport = self.config.anthropic_stream_transport
+        use_httpx_stream = transport == "httpx" or (
+            transport == "auto" and bool(self.config.base_url)
+        )
+        if use_httpx_stream:
+            async for chunk in self._stream_message_httpx(params):
+                yield chunk
+            return
 
         current_tool_id = ""
         current_tool_name = ""

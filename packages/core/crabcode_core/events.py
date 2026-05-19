@@ -113,6 +113,11 @@ class CoreSession:
             merged.api.http_headers = dict(file_settings.api.http_headers)
         if file_settings.api.format and not self.settings.api.format:
             merged.api.format = file_settings.api.format
+        if (
+            file_settings.api.anthropic_stream_transport != "auto"
+            and self.settings.api.anthropic_stream_transport == "auto"
+        ):
+            merged.api.anthropic_stream_transport = file_settings.api.anthropic_stream_transport
         if file_settings.api.thinking_enabled is False and self.settings.api.thinking_enabled:
             merged.api.thinking_enabled = file_settings.api.thinking_enabled
         if file_settings.api.max_tokens != 16384 and self.settings.api.max_tokens == 16384:

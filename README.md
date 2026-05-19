@@ -267,6 +267,7 @@ Or configure in `~/.crabcode/settings.json`:
 | `base_url` | Custom API endpoint (for routers or local deployments) | — |
 | `api_key_env` | **Name** of the env var that holds the API key (not the key itself) | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
 | `http_headers` | Extra HTTP headers to attach to every API request for this config | `{}` |
+| `anthropic_stream_transport` | Anthropic streaming implementation: `auto` \| `sdk` \| `httpx`. In `auto`, first-party Anthropic uses the SDK and custom `base_url` endpoints use direct SSE for proxies that reject SDK stream helper headers. | `auto` |
 | `format` | Wire format for router mode: `anthropic` \| `openai` \| `codex` | — |
 | `thinking_enabled` | Enable extended thinking (set `false` for models that don't support it) | `true` |
 | `thinking_budget` | Thinking token budget | `10000` |
