@@ -103,7 +103,8 @@ class SwitchModeTool(Tool):
             "  - description: detailed prompt for the sub-agent executing this step\n"
             "  - files: file paths this step will modify\n"
             "  - depends_on: ids of steps that must complete first (for DAG scheduling)\n"
-            "  - subagent_type: 'generalPurpose' (default) or 'explore'\n\n"
+            "  - subagent_type: 'generalPurpose' (default) or 'explore'\n"
+            "  Do not set 'status' on steps — they are pending until execution.\n\n"
             "Steps with no dependencies run in parallel. Design steps for maximum parallelism."
             + mode_note
         )
@@ -145,6 +146,8 @@ class SwitchModeTool(Tool):
                     result_for_model=f"Plan validation failed:\n" + "\n".join(f"- {e}" for e in errors),
                     is_error=True,
                 )
+
+            plan.prepare_for_execution()
 
             if context.tool_event_queue:
                 await context.tool_event_queue.put(

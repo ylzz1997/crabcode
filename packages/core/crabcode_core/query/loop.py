@@ -39,6 +39,7 @@ from crabcode_core.types.message import (
     create_tool_result_message,
     create_user_message,
 )
+from crabcode_core.permissions.ai_reviewer import AiPermissionReviewer, AiReviewRequest
 from crabcode_core.permissions.manager import PermissionMode
 from crabcode_core.types.tool import PermissionBehavior, PermissionResult, Tool, ToolContext, ToolResult
 
@@ -101,6 +102,7 @@ class QueryParams:
     agent_mode: str = "agent"  # "agent" | "plan"
     api_config: ApiConfig | None = None  # passed from session for ModelConfig
     context_window: int = 0  # resolved context window size
+    ai_reviewer: AiPermissionReviewer | None = None
 
 
 def _append_system_context(
@@ -978,6 +980,27 @@ async def query_loop(
             if explicit_allow:
                 approved_blocks.append(effective_block)
                 continue
+
+            ai_review_active = (
+                hasattr(params.permission_manager, "mode")
+                and params.permission_manager.mode == PermissionMode.AI_REVIEW
+            )
+            if (
+                ai_review_active
+                and params.ai_reviewer is not None
+                and merged_perm.behavior == PermissionBehavior.ASK
+                and rule_perm.reason is None
+                and tool_perm.behavior != PermissionBehavior.ASK
+            ):
+                merged_perm = await params.ai_reviewer.review(
+                    AiReviewRequest(
+                        tool=tool,
+                        tool_input=effective_block.input,
+                        context=params.tool_context,
+                        permission_key=permission_key,
+                        reason=merged_perm.reason,
+                    )
+                )
 
             if merged_perm.behavior == PermissionBehavior.DENY:
                 reason = merged_perm.reason or "denied by policy"

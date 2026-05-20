@@ -814,6 +814,34 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 
 每条规则通过 `tool` 名称匹配（`*` 通配任意工具），可附加 `command` 或 `path` 过滤条件。
 
+### AI 审查模式
+
+AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该直接允许、询问用户，还是拒绝。显式 `allow`、`deny`、`ask` 规则仍然优先。如果 reviewer 失败、超时、返回非法 JSON，或返回了配置不允许的决策，CrabCode 默认回退到 `ask`。
+
+```json
+{
+  "permissions": {
+    "default_mode": "aiReview",
+    "ai_review": {
+      "model": "reviewer",
+      "decisions": ["allow", "ask"],
+      "fallback": "ask",
+      "timeout": 30
+    }
+  },
+  "models": {
+    "reviewer": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6"
+    }
+  }
+}
+```
+
+- 省略 `ai_review.model` 时，会使用当前 agent 正在使用的模型。
+- 默认 `decisions` 为 `["allow", "ask"]`，因此 reviewer 不会直接拒绝工具调用，除非你显式开启。
+- 可将 `decisions` 设为 `["allow", "ask", "deny"]` 启用更严格审查，或设为 `["allow", "deny"]` 用于非交互式 allow/deny 行为。
+
 ### run_everything 模式
 
 将 `"run_everything"` 设为 `true` 可跳过所有权限询问，所有工具调用自动执行。启用后 CLI 启动时会显示醒目警告。

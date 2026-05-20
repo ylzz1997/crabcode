@@ -452,6 +452,7 @@ You are in plan mode. Follow these rules strictly:
      - "files": array of string — file paths this step will modify
      - "depends_on": array of string — ids of steps that must complete before this one
      - "subagent_type": string — "generalPurpose" (default) or "explore" for read-only steps
+     Do NOT include a "status" field on steps — all steps start as pending until the user runs the plan.
 7. Design steps to be parallelizable where possible. Steps with no dependencies can run concurrently.
 8. Keep each step focused — one logical unit of work. Include enough context in each step's description so a sub-agent can execute it independently.
 9. After the plan is submitted, the interface will ask the user whether to execute, revise, or cancel it."""

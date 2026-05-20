@@ -36,6 +36,7 @@ from crabcode_core.types.event import (
 from crabcode_core.types.config import (
     AgentSettings,
     AgentTypeConfig,
+    AiReviewSettings,
     ApiConfig,
     CrabCodeSettings,
     LoggingSettings,
@@ -75,6 +76,7 @@ __all__ = [
     "ApiConfig",
     "AgentSettings",
     "AgentTypeConfig",
+    "AiReviewSettings",
     "CrabCodeSettings",
     "LoggingSettings",
     "McpServerConfig",

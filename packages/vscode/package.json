@@ -148,10 +148,11 @@
           "type": "string",
           "enum": [
             "default",
+            "ai_review",
             "run_everything"
           ],
           "default": "default",
-          "description": "CrabCode 工具权限：default 按规则询问；run_everything 本会话自动批准工具"
+          "description": "CrabCode 工具权限：default 按规则询问；ai_review 使用 AI 审查工具调用；run_everything 本会话自动批准工具"
         },
         "crabcode.pythonPath": {
           "type": "string",

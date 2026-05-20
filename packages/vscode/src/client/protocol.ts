@@ -58,9 +58,11 @@ export interface SwitchModelCommand {
   name: string;
 }
 
+export type PermissionMode = "default" | "run_everything" | "ai_review";
+
 export interface SetPermissionModeCommand {
   type: "set_permission_mode";
-  mode: "default" | "run_everything";
+  mode: PermissionMode;
 }
 
 /** Union of all commands the client can send over the WebSocket. */
@@ -158,7 +160,7 @@ export function buildSwitchModelCommand(name: string): SwitchModelCommand {
 }
 
 export function buildSetPermissionModeCommand(
-  mode: "default" | "run_everything",
+  mode: PermissionMode,
 ): SetPermissionModeCommand {
   return { type: "set_permission_mode", mode };
 }

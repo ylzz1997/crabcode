@@ -65,8 +65,18 @@ class PlanExecutor:
             return
 
         self._plan.status = "running"
+        total_steps, stale_reset = self._plan.prepare_for_execution()
+
+        stale_note = (
+            f", {stale_reset} stale status(es) reset to pending"
+            if stale_reset
+            else ""
+        )
         yield StreamTextEvent(
-            text=f"\n**Executing plan: {self._plan.title}** ({len(self._plan.steps)} steps)\n\n"
+            text=(
+                f"\n**Executing plan: {self._plan.title}** "
+                f"({total_steps} steps{stale_note})\n\n"
+            )
         )
 
         pending_tasks: dict[str, asyncio.Task[None]] = {}

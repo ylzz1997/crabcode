@@ -127,6 +127,21 @@ class ExecutionPlan:
             and all(dep in completed for dep in s.depends_on)
         ]
 
+    def prepare_for_execution(self) -> tuple[int, int]:
+        """Reset stale step statuses before DAG run.
+
+        Returns ``(total_steps, reset_count)``. Steps already tied to a sub-agent
+        (``agent_id`` set) are left unchanged for resume scenarios.
+        """
+        reset = 0
+        for step in self.steps:
+            if not step.agent_id and step.status != "pending":
+                step.status = "pending"
+                step.error = ""
+                step.result = ""
+                reset += 1
+        return len(self.steps), reset
+
     def render(self) -> str:
         """Render a human-readable view of the plan."""
         status_icons = {
@@ -150,5 +165,5 @@ class ExecutionPlan:
                 lines.append(f"      files: {', '.join(step.files)}")
         done = sum(1 for s in self.steps if s.status == "completed")
         total = len(self.steps)
-        lines.append(f"\n  Progress: {done}/{total} steps completed")
+        lines.append(f"\n  Progress: {done}/{total} steps executed")
         return "\n".join(lines)

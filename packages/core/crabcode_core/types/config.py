@@ -14,6 +14,17 @@ class PermissionRule(BaseModel):
     command: str | None = None
 
 
+class AiReviewSettings(BaseModel):
+    """Settings for AI-assisted tool permission review."""
+
+    model: str | None = None
+    decisions: list[Literal["allow", "ask", "deny"]] = Field(
+        default_factory=lambda: ["allow", "ask"]
+    )
+    fallback: Literal["allow", "ask", "deny"] = "ask"
+    timeout: int = 30
+
+
 class PermissionsSettings(BaseModel):
     allow: list[PermissionRule] = Field(default_factory=list)
     deny: list[PermissionRule] = Field(default_factory=list)
@@ -21,6 +32,7 @@ class PermissionsSettings(BaseModel):
     default_mode: str | None = None
     additional_directories: list[str] = Field(default_factory=list)
     run_everything: bool = False
+    ai_review: AiReviewSettings = Field(default_factory=AiReviewSettings)
 
 
 class McpServerConfig(BaseModel):

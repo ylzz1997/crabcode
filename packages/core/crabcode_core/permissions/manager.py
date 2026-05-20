@@ -16,6 +16,7 @@ class PermissionMode(str, Enum):
     BYPASS = "bypassPermissions"
     PLAN = "plan"
     DONT_ASK = "dontAsk"
+    AI_REVIEW = "aiReview"
 
 
 class PermissionManager:
@@ -30,6 +31,8 @@ class PermissionManager:
         self._runtime_allow_keys: set[str] = set()
         if self.settings.run_everything:
             self.mode = PermissionMode.BYPASS
+        elif self.settings.default_mode in {"aiReview", "ai_review"}:
+            self.mode = PermissionMode.AI_REVIEW
         else:
             self.mode = mode
 

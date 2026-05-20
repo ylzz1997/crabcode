@@ -1661,9 +1661,27 @@ async def _prompt_plan_action(session: CoreSession, console: Console) -> None:
         answer = "n"
 
     if answer in ("y", "yes", "execute", "run"):
+        total_steps, stale_reset = plan.prepare_for_execution()
+        first_wave = len(plan.get_ready_steps())
         session.set_plan(None)
         session.switch_mode("agent")
-        console.print("\n  [bold cyan]Executing plan via DAG scheduler...[/]\n")
+        stale_note = (
+            f", {stale_reset} stale status(es) reset to pending"
+            if stale_reset
+            else ""
+        )
+        console.print(
+            "\n  [bold cyan]Executing plan via DAG scheduler...[/]\n"
+            f"  [dim]Plan confirmed (y): scheduling {total_steps} step(s)"
+            f", {first_wave} runnable now{stale_note}[/]\n"
+        )
+        logger.info(
+            "Plan confirmed (y): title=%r steps=%d first_wave=%d stale_reset=%d",
+            plan.title,
+            total_steps,
+            first_wave,
+            stale_reset,
+        )
         try:
             await _run_plan_executor_with_runtime_events(session, plan)
         except _REPL_INTERRUPT_EXCS:

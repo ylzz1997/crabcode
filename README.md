@@ -819,6 +819,34 @@ Fine-grained rules can be set in `settings.json` under `permissions`:
 
 Each rule matches on `tool` name (glob `*` matches any), plus optional `command` or `path` filters.
 
+### AI review mode
+
+AI review mode lets a reviewer model decide whether pending tool calls should be allowed, shown to the user, or denied. Explicit `allow`, `deny`, and `ask` rules still take priority. If the reviewer fails, times out, returns invalid JSON, or returns a decision outside the configured set, CrabCode falls back to `ask` by default.
+
+```json
+{
+  "permissions": {
+    "default_mode": "aiReview",
+    "ai_review": {
+      "model": "reviewer",
+      "decisions": ["allow", "ask"],
+      "fallback": "ask",
+      "timeout": 30
+    }
+  },
+  "models": {
+    "reviewer": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6"
+    }
+  }
+}
+```
+
+- Omit `ai_review.model` to use the current agent model.
+- Default `decisions` is `["allow", "ask"]`, so the reviewer cannot directly deny tool calls unless you opt in.
+- You can set `decisions` to `["allow", "ask", "deny"]` for stricter review, or `["allow", "deny"]` for non-interactive allow/deny behavior.
+
 ### run_everything mode
 
 Set `"run_everything": true` to skip all permission prompts and execute every tool call automatically. The CLI displays a warning at startup when this mode is active.

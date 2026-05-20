@@ -489,6 +489,7 @@ class AgentManager:
                     agent_mode="agent",
                     api_config=agent_api_config,
                     context_window=resolved_cw,
+                    ai_reviewer=getattr(self, "_ai_reviewer", None),
                 )
                 final_usage: dict[str, Any] = {}
                 async for event in query_loop(params):

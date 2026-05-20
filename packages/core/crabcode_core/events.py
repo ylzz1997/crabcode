@@ -72,7 +72,7 @@ class CoreSession:
         self._current_plan: Any = None  # ExecutionPlan | None
         self._title_generation_task: asyncio.Task[None] | None = None
         self._team_manager: Any = None  # TeamManager
-        # Extension UI override: "default" | "run_everything" | None (follow file init only)
+        # Extension UI override: "default" | "run_everything" | "ai_review" | None (follow file init only)
         self._client_permission_mode_override: str | None = None
 
     async def initialize(self) -> None:
@@ -86,6 +86,7 @@ class CoreSession:
         from crabcode_core.config.manager import ConfigManager
         from crabcode_core.mcp.client import McpManager
         from crabcode_core.mcp.config import load_mcp_configs
+        from crabcode_core.permissions.ai_reviewer import AiPermissionReviewer
         from crabcode_core.permissions.manager import PermissionManager
         from crabcode_core.session.storage import (
             get_agent_transcript_path,
@@ -137,6 +138,21 @@ class CoreSession:
         if file_settings.default_model and not merged.default_model:
             merged.default_model = file_settings.default_model
 
+        if file_settings.permissions.allow and not self.settings.permissions.allow:
+            merged.permissions.allow = file_settings.permissions.allow
+        if file_settings.permissions.deny and not self.settings.permissions.deny:
+            merged.permissions.deny = file_settings.permissions.deny
+        if file_settings.permissions.ask and not self.settings.permissions.ask:
+            merged.permissions.ask = file_settings.permissions.ask
+        if file_settings.permissions.default_mode and not self.settings.permissions.default_mode:
+            merged.permissions.default_mode = file_settings.permissions.default_mode
+        if file_settings.permissions.additional_directories and not self.settings.permissions.additional_directories:
+            merged.permissions.additional_directories = file_settings.permissions.additional_directories
+        if file_settings.permissions.run_everything and not self.settings.permissions.run_everything:
+            merged.permissions.run_everything = file_settings.permissions.run_everything
+        if file_settings.permissions.ai_review != self.settings.permissions.ai_review:
+            merged.permissions.ai_review = file_settings.permissions.ai_review
+
         if file_settings.extra_tools and not self.settings.extra_tools:
             merged.extra_tools = file_settings.extra_tools
         if file_settings.tool_settings and not self.settings.tool_settings:
@@ -175,6 +191,10 @@ class CoreSession:
 
         self._permission_manager = PermissionManager(
             settings=merged.permissions,
+        )
+        self._ai_reviewer = AiPermissionReviewer(
+            settings=merged,
+            default_api_config=active_api_config,
         )
         self._sync_client_permission_mode()
         from crabcode_core.hooks.manager import HookManager
@@ -269,6 +289,7 @@ class CoreSession:
             hook_manager=self._hook_manager,
             lsp_manager=self._lsp_manager,
         )
+        self._agent_manager._ai_reviewer = self._ai_reviewer
 
         # Initialize TeamManager
         from crabcode_core.team.manager import TeamManager
@@ -674,6 +695,7 @@ class CoreSession:
             agent_mode=self._agent_mode,
             api_config=active_api_cfg,
             context_window=resolved_context_window,
+            ai_reviewer=self._ai_reviewer,
         )
 
         pre_loop_count = len(self.messages)
@@ -935,12 +957,14 @@ class CoreSession:
         """Apply VS Code / client footer permission override when not in plan mode."""
         if self._permission_manager is None or self._agent_mode == "plan":
             return
-        if self._client_permission_mode_override not in ("default", "run_everything"):
+        if self._client_permission_mode_override not in ("default", "run_everything", "ai_review", "aiReview"):
             return
         from crabcode_core.permissions.manager import PermissionMode
 
         if self._client_permission_mode_override == "run_everything":
             self._permission_manager.mode = PermissionMode.BYPASS
+        elif self._client_permission_mode_override in ("ai_review", "aiReview"):
+            self._permission_manager.mode = PermissionMode.AI_REVIEW
         else:
             self._permission_manager.mode = PermissionMode.DEFAULT
 
@@ -948,8 +972,9 @@ class CoreSession:
         """Set tool permission behavior from the extension chat footer.
 
         ``default`` uses normal allow/ask/deny rules. ``run_everything`` auto-approves tools.
+        ``ai_review`` lets an AI reviewer decide whether to allow, ask, or deny.
         """
-        if mode not in ("default", "run_everything"):
+        if mode not in ("default", "run_everything", "ai_review", "aiReview"):
             return False
         self._client_permission_mode_override = mode
         self._sync_client_permission_mode()
