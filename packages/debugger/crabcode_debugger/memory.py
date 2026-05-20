@@ -170,7 +170,13 @@ class WindowsMemoryBackend(MemoryBackend):
     def _open(self, pid: int, access: int) -> Any:
         handle = self.kernel32.OpenProcess(access, False, pid)
         if not handle:
-            raise OSError(ctypes.get_last_error(), f"OpenProcess failed for pid {pid}")
+            error_code = ctypes.get_last_error()
+            raise OSError(
+                error_code,
+                f"OpenProcess failed for pid {pid}; try running CrabCode as Administrator, "
+                "ensure the target process is not running with higher privileges, and note that "
+                "protected/system processes may still deny memory access",
+            )
         return handle
 
     def regions(self, pid: int) -> list["MemoryRegion"]:
