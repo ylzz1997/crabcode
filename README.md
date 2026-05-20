@@ -1198,6 +1198,8 @@ This is the extension point used by `crabcode-search` to kick off background ind
 `crabcode-debugger` is an optional package that lets agents use Debug Adapter
 Protocol adapters and process-level diagnostics. It is disabled by default.
 
+### Install
+
 ```json
 {
   "extra_tools": [
@@ -1216,26 +1218,100 @@ Protocol adapters and process-level diagnostics. It is disabled by default.
 }
 ```
 
-`Debugger` supports launch/attach, breakpoints, stepping, stack/scopes,
-variables, evaluation, and session cleanup for C/C++, Rust, Python, Go, Java,
-TypeScript, and JavaScript when the corresponding official or official-maintained
-adapter is installed. Built-in discovery prefers `debugpy`, `dlv dap`,
-`lldb-dap`, GDB DAP, `vscode-java-debug`, and `vscode-js-debug`; custom adapter
-commands can be provided with `tool_settings.Debugger.adapters`.
+```bash
+pip install -e packages/debugger
+```
 
-`ProcessDebugger` provides best-effort process diagnostics on macOS, Linux, and
-Windows: process listing, inspection, stack sampling, core/minidump capture,
-memory maps, syscall tracing where available, debugger attach, detach, terminate,
-and kill. It also includes CE-style memory actions: `memory_regions`,
-`memory_read`, `memory_search`, `memory_refine`, `memory_write`,
-`memory_freeze`, `memory_unfreeze`, and `memory_freezes`. Direct memory
-search/write/freeze is currently implemented for Linux through
-`/proc/<pid>/mem`; other platforms report the capability as unavailable until a
-native backend is added.
+The debugger package intentionally relies on official or official-maintained
+debug adapters already installed on the machine. Use `Debugger` action
+`adapters` and `ProcessDebugger` action `capabilities` to see what is available
+in the current environment.
 
-Process and debuggee actions default to permission confirmation. When
-`permissions.run_everything` is enabled, these `ASK` permissions are bypassed by
-the normal CrabCode permission mode.
+### `Debugger` tool
+
+`Debugger` uses Debug Adapter Protocol (DAP) for source-level debugging. It
+supports C/C++, Rust, Python, Go, Java, TypeScript, and JavaScript when the
+corresponding adapter is installed.
+
+| Capability | Actions |
+| --- | --- |
+| Adapter discovery | `adapters` |
+| Session lifecycle | `start`, `attach`, `stop`, `sessions`, `events` |
+| Breakpoints and run control | `set_breakpoints`, `configuration_done`, `continue`, `pause`, `step_over`, `step_in`, `step_out` |
+| Runtime inspection | `threads`, `stack`, `scopes`, `variables`, `evaluate` |
+
+Built-in adapter discovery prefers:
+
+| Language | Preferred adapter |
+| --- | --- |
+| Python | `debugpy` |
+| Go | `dlv dap` |
+| C/C++ | `lldb-dap`, then GDB DAP |
+| Rust | `lldb-dap` |
+| Java | `vscode-java-debug` |
+| TypeScript/JavaScript | `vscode-js-debug` |
+
+Custom adapter commands can be provided with
+`tool_settings.Debugger.adapters`. `launch_config` and `attach_config` are passed
+through to the selected adapter for language-specific options.
+
+### `ProcessDebugger` tool
+
+`ProcessDebugger` provides best-effort process diagnostics and process-memory
+operations for local authorized processes.
+
+| Capability | Actions |
+| --- | --- |
+| Capability and process inventory | `capabilities`, `list_processes`, `inspect_process` |
+| Process debugging and control | `attach_debugger`, `detach`, `terminate`, `kill` |
+| Process diagnostics | `sample_stack`, `dump_core`, `memory_maps`, `trace_syscalls` |
+| Memory regions and values | `memory_regions`, `memory_read`, `memory_search`, `memory_refine`, `memory_write` |
+| Repeated value enforcement | `memory_freeze`, `memory_unfreeze`, `memory_freezes` |
+| Pattern and pointer location | `aob_scan`, `pointer_scan`, `pointer_resolve` |
+| Byte-level code patching | `code_read`, `code_patch`, `code_restore`, `code_patches` |
+
+Current platform support:
+
+| Platform | Process diagnostics | Direct memory operations |
+| --- | --- | --- |
+| Linux | `/proc`, `gdb`/`gcore`, `strace` when installed | Implemented through `/proc/<pid>/maps` and `/proc/<pid>/mem` |
+| macOS | `sample`, `vmmap`, `lldb` when available | Implemented through Mach `task_for_pid`, `mach_vm_region_recurse`, `mach_vm_read_overwrite`, `mach_vm_write`, and `mach_vm_protect` |
+| Windows | PowerShell process APIs, `cdb`/ProcDump when available | Implemented through `VirtualQueryEx`, `ReadProcessMemory`, `WriteProcessMemory`, and `VirtualProtectEx` |
+
+Memory and patch details:
+
+- `memory_search` supports numeric, string, and raw byte values.
+- `memory_refine` can narrow a previous search by `equals`, `changed`,
+  `unchanged`, `increased`, or `decreased`.
+- `aob_scan` supports byte patterns with wildcards such as `48 8B ?? 89`.
+- `pointer_scan` searches for process pointer chains with bounded depth, offset,
+  result count, and scan size.
+- `pointer_resolve` resolves an absolute base address or `module_path` +
+  `module_offset` plus offsets.
+- Module-relative pointer resolution depends on whether the active backend can
+  report module paths for memory regions.
+- `code_patch` writes explicit bytes only, stores the original bytes, can verify
+  `expected_hex` before writing, and uses backend protection/cache primitives
+  where available.
+- `code_restore` restores saved patches by `patch_id` or `all=true`.
+- Direct memory access is subject to operating-system process rights. Windows
+  requires sufficient `OpenProcess` rights and can fail for elevated or protected
+  processes. macOS requires debug permission or sufficient privileges through
+  `task_for_pid`, and SIP or protected processes can still deny access.
+
+### Permissions and Boundaries
+
+Process and debuggee actions default to permission confirmation. The tools return
+`ASK` for process inspection, memory reads/writes/freezes, attach, dump, trace,
+and code patching. When `permissions.run_everything` is enabled, those `ASK`
+permissions are bypassed by the normal CrabCode permission mode.
+
+The intended use is local, authorized process debugging, diagnostics, testing,
+and research. `crabcode-debugger` does not provide stealth injection,
+anti-debugging bypass, DRM bypass, persistence, credential extraction, or remote
+process attack features. Code patching is byte-level only; the agent must supply
+the exact bytes to write and should use `expected_hex` before changing process
+code.
 
 ## crabcode-search (Semantic Codebase Search)
 

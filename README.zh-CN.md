@@ -1194,6 +1194,8 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 `crabcode-debugger` 是一个可选包，让 agent 可以调用 Debug Adapter Protocol
 调试器和进程级诊断能力。默认不启用。
 
+### 安装与启用
+
 ```json
 {
   "extra_tools": [
@@ -1212,22 +1214,85 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 }
 ```
 
-`Debugger` 支持启动/附加、断点、单步、调用栈/作用域、变量、表达式求值和会话清理。
-当前优先支持 C/C++、Rust、Python、Go、Java、TypeScript、JavaScript，并优先发现
-`debugpy`、`dlv dap`、`lldb-dap`、GDB DAP、`vscode-java-debug`、`vscode-js-debug`
-等官方或官方维护的 adapter。自定义 adapter 命令可以放在
-`tool_settings.Debugger.adapters`。
+```bash
+pip install -e packages/debugger
+```
 
-`ProcessDebugger` 在 macOS、Linux、Windows 上提供 best-effort 的进程诊断：
-进程列表、进程检查、栈采样、core/minidump、内存映射、可用时的 syscall trace、
-调试器附加/分离、terminate 和 kill。它也包含类似 CE 的内存动作：
-`memory_regions`、`memory_read`、`memory_search`、`memory_refine`、`memory_write`、
-`memory_freeze`、`memory_unfreeze`、`memory_freezes`。直接内存搜索/写入/冻结当前通过
-Linux 的 `/proc/<pid>/mem` 实现；其他平台会在 capabilities 中报告暂不可用，后续可接
-原生后端。
+该包默认依赖本机已安装的官方或官方维护 debug adapter。可以先调用 `Debugger`
+的 `adapters` 动作和 `ProcessDebugger` 的 `capabilities` 动作查看当前环境可用能力。
 
-进程和 debuggee 相关动作默认触发权限确认。启用 `permissions.run_everything`
-时，这些 `ASK` 权限会通过 CrabCode 现有权限模式自动放行。
+### `Debugger` 工具
+
+`Debugger` 通过 Debug Adapter Protocol（DAP）做源码级调试。安装对应 adapter 后，
+支持 C/C++、Rust、Python、Go、Java、TypeScript、JavaScript。
+
+| 能力 | Actions |
+| --- | --- |
+| Adapter 发现 | `adapters` |
+| 会话生命周期 | `start`, `attach`, `stop`, `sessions`, `events` |
+| 断点与运行控制 | `set_breakpoints`, `configuration_done`, `continue`, `pause`, `step_over`, `step_in`, `step_out` |
+| 运行态检查 | `threads`, `stack`, `scopes`, `variables`, `evaluate` |
+
+内置 adapter 发现优先级：
+
+| 语言 | 优先 adapter |
+| --- | --- |
+| Python | `debugpy` |
+| Go | `dlv dap` |
+| C/C++ | `lldb-dap`，其次 GDB DAP |
+| Rust | `lldb-dap` |
+| Java | `vscode-java-debug` |
+| TypeScript/JavaScript | `vscode-js-debug` |
+
+自定义 adapter 命令可以放在 `tool_settings.Debugger.adapters`。
+`launch_config` 和 `attach_config` 会透传给选中的 adapter，用于语言特定选项。
+
+### `ProcessDebugger` 工具
+
+`ProcessDebugger` 面向本机授权进程，提供 best-effort 的进程诊断和进程内存操作。
+
+| 能力 | Actions |
+| --- | --- |
+| 能力与进程清单 | `capabilities`, `list_processes`, `inspect_process` |
+| 进程调试与控制 | `attach_debugger`, `detach`, `terminate`, `kill` |
+| 进程诊断 | `sample_stack`, `dump_core`, `memory_maps`, `trace_syscalls` |
+| 内存区域与值 | `memory_regions`, `memory_read`, `memory_search`, `memory_refine`, `memory_write` |
+| 持续值保持 | `memory_freeze`, `memory_unfreeze`, `memory_freezes` |
+| 特征与指针定位 | `aob_scan`, `pointer_scan`, `pointer_resolve` |
+| 字节级代码 patch | `code_read`, `code_patch`, `code_restore`, `code_patches` |
+
+当前平台支持：
+
+| 平台 | 进程诊断 | 直接内存操作 |
+| --- | --- | --- |
+| Linux | `/proc`，安装后可用 `gdb`/`gcore`、`strace` | 通过 `/proc/<pid>/maps` 和 `/proc/<pid>/mem` 实现 |
+| macOS | 可用时使用 `sample`、`vmmap`、`lldb` | 通过 Mach `task_for_pid`、`mach_vm_region_recurse`、`mach_vm_read_overwrite`、`mach_vm_write`、`mach_vm_protect` 实现 |
+| Windows | PowerShell 进程 API，可用时使用 `cdb`/ProcDump | 通过 `VirtualQueryEx`、`ReadProcessMemory`、`WriteProcessMemory`、`VirtualProtectEx` 实现 |
+
+内存与 patch 细节：
+
+- `memory_search` 支持数值、字符串和原始 bytes。
+- `memory_refine` 可用 `equals`、`changed`、`unchanged`、`increased`、`decreased` 缩小上次搜索。
+- `aob_scan` 支持带 wildcard 的字节特征，例如 `48 8B ?? 89`。
+- `pointer_scan` 会在受限 depth、offset、结果数和扫描大小内查找进程指针链。
+- `pointer_resolve` 可解析绝对 base address，或 `module_path` + `module_offset` + offsets。
+- 基于模块路径的指针解析取决于当前 backend 是否能为内存区域提供模块路径。
+- `code_patch` 只写入明确 bytes，会保存原始 bytes，可在写入前校验 `expected_hex`，
+  并在 backend 支持时使用页面保护和指令缓存刷新原语。
+- `code_restore` 可按 `patch_id` 恢复，也可用 `all=true` 恢复全部。
+- 直接内存访问受操作系统进程权限限制。Windows 需要足够的 `OpenProcess` 权限，
+  遇到提权或受保护进程可能失败。macOS 需要通过 `task_for_pid` 获得调试权限或足够
+  权限，且 SIP 或受保护进程仍可能拒绝访问。
+
+### 权限与能力边界
+
+进程和 debuggee 相关动作默认触发权限确认。工具对进程检查、内存读写/冻结、attach、
+dump、trace、代码 patch 等动作返回 `ASK`。启用 `permissions.run_everything` 时，
+这些 `ASK` 权限会通过 CrabCode 现有权限模式自动放行。
+
+该功能面向本机授权进程调试、诊断、测试和研究。不提供隐蔽注入、反调试绕过、
+DRM 绕过、持久化、凭据提取或远程进程攻击能力。代码 patch 是字节级原语；agent
+必须提供明确要写入的 bytes，修改进程代码前应使用 `expected_hex` 做写前校验。
 
 ## crabcode-search（语义代码搜索）
 

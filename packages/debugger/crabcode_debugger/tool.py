@@ -49,6 +49,13 @@ _PROCESS_ACTIONS = {
     "memory_freeze",
     "memory_unfreeze",
     "memory_freezes",
+    "aob_scan",
+    "pointer_scan",
+    "pointer_resolve",
+    "code_read",
+    "code_patch",
+    "code_restore",
+    "code_patches",
     "trace_syscalls",
     "detach",
     "terminate",
@@ -295,8 +302,32 @@ class ProcessDebuggerTool(Tool):
             "interval_seconds": {"type": "number"},
             "output_path": {"type": "string"},
             "attach_config": {"type": "object", "additionalProperties": True},
+            "pattern": {"type": "string"},
+            "module_filter": {"type": "string"},
+            "target_address": {
+                "description": "Target address for pointer_scan.",
+            },
+            "max_depth": {"type": "integer"},
+            "max_offset": {"type": "integer"},
+            "pointer_size": {"type": "integer", "enum": [4, 8]},
+            "align": {"type": "integer"},
+            "offsets": {
+                "type": "array",
+                "items": {},
+                "description": "Pointer offsets as integers or hex strings.",
+            },
+            "module_path": {"type": "string"},
+            "module_offset": {
+                "description": "Module-relative base offset as an integer or hex string.",
+            },
+            "patch_hex": {"type": "string"},
+            "expected_hex": {"type": "string"},
+            "patch_id": {"type": "string"},
             "address": {
                 "description": "Memory address as an integer or hex string.",
+            },
+            "base_address": {
+                "description": "Pointer-chain base address as an integer or hex string.",
             },
             "size": {"type": "integer"},
             "value_type": {
@@ -322,6 +353,7 @@ class ProcessDebuggerTool(Tool):
             "value_hex": {"type": "string"},
             "endian": {"type": "string", "enum": ["little", "big"]},
             "writable_only": {"type": "boolean"},
+            "executable_only": {"type": "boolean"},
             "readable": {"type": "boolean"},
             "writable": {"type": "boolean"},
             "executable": {"type": "boolean"},
@@ -371,7 +403,8 @@ class ProcessDebuggerTool(Tool):
             "Use ProcessDebugger for process-level diagnostics: list_processes, inspect_process, "
             "sample_stack, dump_core, memory_maps, memory_regions, memory_read, memory_search, "
             "memory_refine, memory_write, memory_freeze, memory_unfreeze, memory_freezes, "
-            "trace_syscalls, attach_debugger, detach, terminate, and kill. "
+            "aob_scan, pointer_scan, pointer_resolve, code_read, code_patch, code_restore, "
+            "code_patches, trace_syscalls, attach_debugger, detach, terminate, and kill. "
             "Use capabilities first to see what the current OS supports. Most actions ask for permission by default; "
             "run_everything bypasses those confirmations through the normal CrabCode permission mode."
         )
@@ -392,6 +425,12 @@ class ProcessDebuggerTool(Tool):
             return None
         if action == "memory_freezes":
             return None
+        if action == "code_restore":
+            if not str(tool_input.get("patch_id", "")).strip() and not bool(tool_input.get("all", False)):
+                return "patch_id is required unless all=true"
+            return None
+        if action == "code_patches":
+            return None
         if action in _PROCESS_ACTIONS - {"capabilities", "list_processes"}:
             if action == "detach":
                 if not str(tool_input.get("session_id", "")).strip():
@@ -403,6 +442,21 @@ class ProcessDebuggerTool(Tool):
         if action == "memory_read":
             if tool_input.get("address") is None or tool_input.get("size") is None:
                 return "address and size are required for memory_read"
+        if action == "aob_scan" and not str(tool_input.get("pattern", "")).strip():
+            return "pattern is required for aob_scan"
+        if action == "pointer_scan" and tool_input.get("target_address") is None:
+            return "target_address is required for pointer_scan"
+        if action == "pointer_resolve":
+            has_base = tool_input.get("base_address") is not None or tool_input.get("address") is not None
+            has_module = tool_input.get("module_path") and tool_input.get("module_offset") is not None
+            if not has_base and not has_module:
+                return "base_address/address or module_path+module_offset is required for pointer_resolve"
+        if action == "code_read":
+            if tool_input.get("address") is None or tool_input.get("size") is None:
+                return "address and size are required for code_read"
+        if action == "code_patch":
+            if tool_input.get("address") is None or not str(tool_input.get("patch_hex", "")).strip():
+                return "address and patch_hex are required for code_patch"
         if action in {"memory_search", "memory_write", "memory_freeze"}:
             if not tool_input.get("value_type"):
                 return "value_type is required"
@@ -424,10 +478,10 @@ class ProcessDebuggerTool(Tool):
 
     def get_permission_key(self, tool_input: dict[str, Any]) -> str:
         action = str(tool_input.get("action", ""))
-        if action.startswith("memory_"):
+        if action.startswith("memory_") or action in {"aob_scan", "pointer_scan", "pointer_resolve", "code_read", "code_patch", "code_restore", "code_patches"}:
             target = (
                 f"{tool_input.get('pid', 'state')}:"
-                f"{tool_input.get('address') or tool_input.get('search_id') or tool_input.get('freeze_id') or action}"
+                f"{tool_input.get('address') or tool_input.get('target_address') or tool_input.get('search_id') or tool_input.get('freeze_id') or tool_input.get('patch_id') or action}"
             )
             return f"ProcessDebugger:{action}:{target}"
         target = tool_input.get("pid") or tool_input.get("session_id") or tool_input.get("search_id") or "all"
@@ -534,6 +588,59 @@ class ProcessDebuggerTool(Tool):
             )
         if action == "memory_freezes":
             return await self._inspector.memory_freezes()
+        if action == "aob_scan":
+            return await self._inspector.aob_scan(
+                int(tool_input["pid"]),
+                pattern=str(tool_input["pattern"]),
+                executable_only=bool(tool_input.get("executable_only", True)),
+                writable_only=bool(tool_input.get("writable_only", False)),
+                module_filter=tool_input.get("module_filter"),
+                max_results=_as_int(tool_input.get("max_results")),
+                max_scan_bytes=_as_int(tool_input.get("max_scan_bytes")),
+            )
+        if action == "pointer_scan":
+            return await self._inspector.pointer_scan(
+                int(tool_input["pid"]),
+                target_address=tool_input["target_address"],
+                max_depth=int(tool_input.get("max_depth", 3)),
+                max_offset=int(tool_input.get("max_offset", 4096)),
+                pointer_size=_as_int(tool_input.get("pointer_size")),
+                align=_as_int(tool_input.get("align")),
+                writable_only=bool(tool_input.get("writable_only", True)),
+                max_results=_as_int(tool_input.get("max_results")),
+                max_scan_bytes=_as_int(tool_input.get("max_scan_bytes")),
+            )
+        if action == "pointer_resolve":
+            return await self._inspector.pointer_resolve(
+                int(tool_input["pid"]),
+                base_address=tool_input.get("base_address", tool_input.get("address")),
+                offsets=tool_input.get("offsets") if isinstance(tool_input.get("offsets"), list) else None,
+                module_path=tool_input.get("module_path"),
+                module_offset=tool_input.get("module_offset"),
+                pointer_size=_as_int(tool_input.get("pointer_size")),
+                endian=str(tool_input.get("endian", "little")),
+            )
+        if action == "code_read":
+            return await self._inspector.code_read(
+                int(tool_input["pid"]),
+                address=tool_input["address"],
+                size=int(tool_input["size"]),
+            )
+        if action == "code_patch":
+            return await self._inspector.code_patch(
+                int(tool_input["pid"]),
+                address=tool_input["address"],
+                patch_hex=str(tool_input["patch_hex"]),
+                expected_hex=tool_input.get("expected_hex"),
+                patch_id=tool_input.get("patch_id"),
+            )
+        if action == "code_restore":
+            return await self._inspector.code_restore(
+                patch_id=tool_input.get("patch_id"),
+                all_patches=bool(tool_input.get("all", False)),
+            )
+        if action == "code_patches":
+            return await self._inspector.code_patches()
         if action == "trace_syscalls":
             return await self._inspector.trace_syscalls(
                 int(tool_input["pid"]),

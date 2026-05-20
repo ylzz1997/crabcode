@@ -4,6 +4,7 @@ import asyncio
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "core"))
@@ -12,7 +13,14 @@ sys.path.insert(0, str(ROOT / "debugger"))
 from crabcode_core.types.tool import PermissionBehavior, ToolContext
 
 from crabcode_debugger.adapters import AdapterRegistry
-from crabcode_debugger.memory import MemoryInspector, decode_value, encode_value
+from crabcode_debugger.memory import (
+    MemoryRegion,
+    MemoryInspector,
+    decode_value,
+    encode_value,
+    find_aob_matches,
+    parse_aob_pattern,
+)
 from crabcode_debugger.process import ProcessInspector
 from crabcode_debugger.sessions import DebugSessionManager
 from crabcode_debugger.tool import ProcessDebuggerTool
@@ -172,6 +180,31 @@ class MemoryEncodingTests(unittest.TestCase):
 
         self.assertEqual(encoded, b"needle")
 
+    def test_aob_pattern_supports_wildcards(self) -> None:
+        pattern = parse_aob_pattern("48 8B ?? 89")
+
+        self.assertEqual(pattern, [0x48, 0x8B, None, 0x89])
+        self.assertEqual(find_aob_matches(bytes.fromhex("90488bff8990"), pattern), [1])
+
+
+class MemoryBackendTests(unittest.TestCase):
+    def test_capabilities_follow_selected_backend(self) -> None:
+        memory = MemoryInspector()
+
+        class FakeBackend:
+            available = True
+            name = "fake-native"
+            note = "fake backend"
+
+        memory.backend = FakeBackend()  # type: ignore[assignment]
+
+        capabilities = memory.capabilities()
+
+        self.assertTrue(capabilities["memory_read"])
+        self.assertTrue(capabilities["code_patch"])
+        self.assertEqual(capabilities["backend"], "fake-native")
+        self.assertEqual(capabilities["backend_note"], "fake backend")
+
 
 class MemoryFreezeTests(unittest.IsolatedAsyncioTestCase):
     async def test_freeze_rewrites_until_unfreeze(self) -> None:
@@ -198,6 +231,107 @@ class MemoryFreezeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(freezes["freezes"][0]["freeze_id"], frozen["freeze_id"])
         self.assertGreaterEqual(len(writes), 2)
         self.assertEqual(stopped["stopped"][0]["freeze_id"], frozen["freeze_id"])
+
+    async def test_code_patch_and_restore(self) -> None:
+        memory = MemoryInspector()
+        storage = {0x10: bytearray(bytes.fromhex("9090"))}
+
+        def read_memory(pid: int, address: int, size: int) -> bytes:
+            return bytes(storage[address][:size])
+
+        def write_memory(pid: int, address: int, data: bytes) -> None:
+            storage[address][: len(data)] = data
+
+        memory._read_memory = read_memory  # type: ignore[method-assign]
+        memory._write_memory = write_memory  # type: ignore[method-assign]
+
+        patched = memory.code_patch(123, address="0x10", expected_hex="9090", patch_hex="9091")
+        restored = memory.code_restore(patch_id=patched["patch_id"])
+
+        self.assertTrue(patched["verified"])
+        self.assertEqual(storage[0x10], bytearray(bytes.fromhex("9090")))
+        self.assertTrue(restored["restored"][0]["restored"])
+
+    async def test_code_patch_uses_memory_protection_when_available(self) -> None:
+        memory = MemoryInspector()
+        storage = {0x10: bytearray(bytes.fromhex("9090"))}
+        protect_calls: list[tuple[int, int, int, bool, bool]] = []
+        restore_calls: list[tuple[int, int, int, str]] = []
+        flush_calls: list[tuple[int, int, int]] = []
+
+        def read_memory(pid: int, address: int, size: int) -> bytes:
+            return bytes(storage[address][:size])
+
+        def write_memory(pid: int, address: int, data: bytes) -> None:
+            storage[address][: len(data)] = data
+
+        def protect_memory(pid: int, address: int, size: int, *, writable: bool, executable: bool) -> str:
+            protect_calls.append((pid, address, size, writable, executable))
+            return "old-protection"
+
+        def restore_protection(pid: int, address: int, size: int, token: str) -> None:
+            restore_calls.append((pid, address, size, token))
+
+        def flush_instruction_cache(pid: int, address: int, size: int) -> None:
+            flush_calls.append((pid, address, size))
+
+        memory._read_memory = read_memory  # type: ignore[method-assign]
+        memory._write_memory = write_memory  # type: ignore[method-assign]
+        memory._protect_memory = protect_memory  # type: ignore[method-assign]
+        memory._restore_protection = restore_protection  # type: ignore[method-assign]
+        memory._flush_instruction_cache = flush_instruction_cache  # type: ignore[method-assign]
+
+        patched = memory.code_patch(123, address="0x10", expected_hex="9090", patch_hex="9091")
+
+        self.assertTrue(patched["verified"])
+        self.assertEqual(protect_calls, [(123, 0x10, 2, True, True)])
+        self.assertEqual(restore_calls, [(123, 0x10, 2, "old-protection")])
+        self.assertEqual(flush_calls, [(123, 0x10, 2)])
+
+    async def test_pointer_resolve_reads_chain(self) -> None:
+        memory = MemoryInspector()
+        values = {
+            0x1000: (0x2000).to_bytes(8, "little"),
+            0x2010: (0x3000).to_bytes(8, "little"),
+        }
+        memory._read_memory = lambda pid, address, size: values[address][:size]  # type: ignore[method-assign]
+
+        with patch("crabcode_debugger.memory.platform.system", return_value="Linux"):
+            resolved = memory.pointer_resolve(
+                123,
+                base_address="0x1000",
+                offsets=["0x10", "0x20"],
+                pointer_size=8,
+            )
+
+        self.assertEqual(resolved["address"], "0x3020")
+
+    async def test_pointer_scan_finds_single_level_chain(self) -> None:
+        memory = MemoryInspector(config={"max_pointer_scan_results": 10})
+        region = MemoryRegion(
+            start=0x1000,
+            end=0x1010,
+            permissions="rw-p",
+            offset=0,
+            device="00:00",
+            inode="0",
+            path="[heap]",
+        )
+        memory._linux_regions = lambda pid: [region]  # type: ignore[method-assign]
+        memory._read_memory = lambda pid, address, size: (0x2000).to_bytes(8, "little") + b"\x00" * 8  # type: ignore[method-assign]
+
+        with patch("crabcode_debugger.memory.platform.system", return_value="Linux"):
+            result = memory.pointer_scan(
+                123,
+                target_address="0x2010",
+                max_depth=1,
+                max_offset=0x20,
+                pointer_size=8,
+                max_scan_bytes=16,
+            )
+
+        self.assertEqual(result["result_count"], 1)
+        self.assertEqual(result["chains"][0]["offsets"], ["0x10"])
 
 
 class PermissionTests(unittest.IsolatedAsyncioTestCase):

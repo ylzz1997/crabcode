@@ -168,6 +168,13 @@ class ProcessInspector:
             "memory_freeze": bool(memory_capabilities.get("memory_freeze")),
             "memory_unfreeze": bool(memory_capabilities.get("memory_unfreeze")),
             "memory_freezes": bool(memory_capabilities.get("memory_freezes")),
+            "aob_scan": bool(memory_capabilities.get("aob_scan")),
+            "pointer_scan": bool(memory_capabilities.get("pointer_scan")),
+            "pointer_resolve": bool(memory_capabilities.get("pointer_resolve")),
+            "code_read": bool(memory_capabilities.get("code_read")),
+            "code_patch": bool(memory_capabilities.get("code_patch")),
+            "code_restore": bool(memory_capabilities.get("code_restore")),
+            "code_patches": bool(memory_capabilities.get("code_patches")),
             "terminate": True,
             "kill": True,
         }
@@ -392,6 +399,104 @@ class ProcessInspector:
 
     async def memory_freezes(self) -> dict[str, Any]:
         return self.memory.freezes()
+
+    async def aob_scan(
+        self,
+        pid: int,
+        *,
+        pattern: str,
+        executable_only: bool = True,
+        writable_only: bool = False,
+        module_filter: str | None = None,
+        max_results: int | None = None,
+        max_scan_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        return self.memory.aob_scan(
+            pid,
+            pattern=pattern,
+            executable_only=executable_only,
+            writable_only=writable_only,
+            module_filter=module_filter,
+            max_results=max_results,
+            max_scan_bytes=max_scan_bytes,
+        )
+
+    async def pointer_scan(
+        self,
+        pid: int,
+        *,
+        target_address: int | str,
+        max_depth: int = 3,
+        max_offset: int = 4096,
+        pointer_size: int | None = None,
+        align: int | None = None,
+        writable_only: bool = True,
+        max_results: int | None = None,
+        max_scan_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        return self.memory.pointer_scan(
+            pid,
+            target_address=target_address,
+            max_depth=max_depth,
+            max_offset=max_offset,
+            pointer_size=pointer_size,
+            align=align,
+            writable_only=writable_only,
+            max_results=max_results,
+            max_scan_bytes=max_scan_bytes,
+        )
+
+    async def pointer_resolve(
+        self,
+        pid: int,
+        *,
+        base_address: int | str | None = None,
+        offsets: list[Any] | None = None,
+        module_path: str | None = None,
+        module_offset: int | str | None = None,
+        pointer_size: int | None = None,
+        endian: str = "little",
+    ) -> dict[str, Any]:
+        return self.memory.pointer_resolve(
+            pid,
+            base_address=base_address,
+            offsets=offsets,
+            module_path=module_path,
+            module_offset=module_offset,
+            pointer_size=pointer_size,
+            endian=endian,
+        )
+
+    async def code_read(self, pid: int, *, address: int | str, size: int) -> dict[str, Any]:
+        return self.memory.code_read(pid, address=address, size=size)
+
+    async def code_patch(
+        self,
+        pid: int,
+        *,
+        address: int | str,
+        patch_hex: str,
+        expected_hex: str | None = None,
+        patch_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.memory.code_patch(
+            pid,
+            address=address,
+            patch_hex=patch_hex,
+            expected_hex=expected_hex,
+            patch_id=patch_id,
+        )
+
+    async def code_restore(
+        self,
+        *,
+        patch_id: str | None = None,
+        all_patches: bool = False,
+    ) -> dict[str, Any]:
+        return self.memory.code_restore(patch_id=patch_id, all_patches=all_patches)
+
+    async def code_patches(self) -> dict[str, Any]:
+        return self.memory.code_patches()
 
     async def trace_syscalls(self, pid: int, *, duration_seconds: int = 5, output_path: str | None = None) -> dict[str, Any]:
         system = platform.system().lower()
