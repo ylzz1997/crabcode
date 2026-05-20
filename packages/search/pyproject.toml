@@ -8,7 +8,7 @@ version = "0.1.3"
 description = "Semantic codebase search for CrabCode"
 requires-python = ">=3.10"
 dependencies = [
-    "crabcode-core>=0.1.2",
+    "crabcode-core>=0.1.3",
     "usearch>=2.12.0",
     "httpx>=0.27.0",
     "tree-sitter-language-pack>=1.0.0",
