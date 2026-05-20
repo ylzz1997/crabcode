@@ -148,6 +148,8 @@ class SwitchModeTool(Tool):
                 )
 
             plan.prepare_for_execution()
+            if context.session and hasattr(context.session, "set_plan"):
+                context.session.set_plan(plan.to_dict())
 
             if context.tool_event_queue:
                 await context.tool_event_queue.put(

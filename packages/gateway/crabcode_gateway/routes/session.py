@@ -100,7 +100,11 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
             provider="",
         )
 
-    session = CoreSession(cwd=os.getcwd(), settings=CrabCodeSettings())
+    from crabcode_core.session.storage import SessionStorage
+
+    resolved = SessionStorage.from_session_id(req.session_id)
+    cwd = resolved.cwd if resolved is not None else os.getcwd()
+    session = CoreSession(cwd=cwd, settings=CrabCodeSettings())
     await session.initialize()
     ok = await session.resume(req.session_id)
     if not ok:

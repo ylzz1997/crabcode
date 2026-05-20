@@ -80,6 +80,8 @@ async def websocket_endpoint(ws: WebSocket):
                 await _handle_switch_model(ws, msg)
             elif msg_type == "set_permission_mode":
                 await _handle_set_permission_mode(ws, msg)
+            elif msg_type == "plan_action":
+                await _handle_plan_action(ws, msg)
             else:
                 await ws.send_text(json.dumps({
                     "type": "error",
@@ -263,6 +265,66 @@ async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
         )
         return
     logger.info("ws set_permission_mode session=%s mode=%s", session.session_id, mode)
+
+
+async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
+    """Execute, revise, or cancel a plan submitted by plan mode."""
+    event_bus: EventBus = ws.app.state.event_bus
+    session = _resolve_session(ws, msg)
+    if not session:
+        logger.warning("ws plan_action rejected: no active session")
+        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        return
+
+    action = msg.get("action")
+    if action == "revise":
+        from crabcode_core.types.event import ModeChangeEvent
+
+        session.switch_mode("plan")
+        await event_bus.publish(session.session_id, ModeChangeEvent(mode="plan"))
+        return
+
+    if action == "cancel":
+        session.set_plan(None)
+        return
+
+    if action != "execute":
+        await ws.send_text(json.dumps({"type": "error", "message": f"invalid plan action: {action}"}))
+        return
+
+    plan_data = getattr(session, "current_plan", None)
+    if not plan_data:
+        await ws.send_text(json.dumps({"type": "error", "message": "no pending plan"}))
+        return
+
+    from crabcode_core.plan.executor import PlanExecutor
+    from crabcode_core.plan.types import ExecutionPlan
+    from crabcode_core.types.event import ErrorEvent, ModeChangeEvent, TurnCompleteEvent
+
+    plan = ExecutionPlan.from_dict(plan_data) if isinstance(plan_data, dict) else plan_data
+    plan.prepare_for_execution()
+    session.set_plan(None)
+    session.switch_mode("agent")
+    await event_bus.publish(session.session_id, ModeChangeEvent(mode="agent"))
+
+    async def _run() -> None:
+        try:
+            executor = PlanExecutor(
+                plan,
+                spawn_fn=session.spawn_agent,
+                wait_fn=session.wait_agent,
+            )
+            async for event in executor.execute():
+                await event_bus.publish(session.session_id, event)
+            await event_bus.publish(session.session_id, TurnCompleteEvent(reason="plan_complete"))
+        except Exception as exc:
+            logger.exception("ws plan execution failed session=%s", session.session_id)
+            await event_bus.publish(
+                session.session_id,
+                ErrorEvent(message=str(exc), recoverable=False, error_type="internal"),
+            )
+
+    asyncio.create_task(_run())
 
 
 async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:

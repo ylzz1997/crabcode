@@ -1107,6 +1107,7 @@ class CoreSession:
             cross = SessionStorage.from_session_id(session_id)
             if cross is not None:
                 storage = cross
+                self.cwd = storage.cwd
                 raw_messages = storage.load_messages()
                 agent_snapshots = storage.load_agent_snapshots()
 

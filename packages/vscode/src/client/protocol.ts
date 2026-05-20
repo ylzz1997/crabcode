@@ -65,6 +65,11 @@ export interface SetPermissionModeCommand {
   mode: PermissionMode;
 }
 
+export interface PlanActionCommand {
+  type: "plan_action";
+  action: "execute" | "revise" | "cancel";
+}
+
 /** Union of all commands the client can send over the WebSocket. */
 export type WsCommand =
   | SendMessageCommand
@@ -72,7 +77,8 @@ export type WsCommand =
   | ChoiceResponseCommand
   | PushContextCommand
   | SwitchModelCommand
-  | SetPermissionModeCommand;
+  | SetPermissionModeCommand
+  | PlanActionCommand;
 
 // ── Builder helpers ───────────────────────────────────────────────
 
@@ -163,4 +169,10 @@ export function buildSetPermissionModeCommand(
   mode: PermissionMode,
 ): SetPermissionModeCommand {
   return { type: "set_permission_mode", mode };
+}
+
+export function buildPlanActionCommand(
+  action: PlanActionCommand["action"],
+): PlanActionCommand {
+  return { type: "plan_action", action };
 }

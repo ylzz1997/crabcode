@@ -14,6 +14,7 @@ import {
   buildPushContextCommand,
   buildSwitchModelCommand,
   buildSetPermissionModeCommand,
+  buildPlanActionCommand,
   serializeCommand,
   type PermissionMode,
   type WsCommand,
@@ -203,6 +204,11 @@ export class CrabCodeConnection implements vscode.Disposable {
 
   sendSetPermissionMode(mode: PermissionMode): void {
     const cmd = buildSetPermissionModeCommand(mode);
+    this.sendCommand(cmd);
+  }
+
+  sendPlanAction(action: "execute" | "revise" | "cancel"): void {
+    const cmd = buildPlanActionCommand(action);
     this.sendCommand(cmd);
   }
 

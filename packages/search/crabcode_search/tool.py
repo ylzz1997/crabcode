@@ -147,6 +147,22 @@ class CodebaseSearchTool(Tool):
             return None
         return data if isinstance(data, dict) else None
 
+    def _normalize_target_directory(self, value: Any, cwd: str) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+
+        raw = Path(value.strip()).expanduser()
+        try:
+            if raw.is_absolute():
+                rel = raw.resolve().relative_to(Path(cwd).resolve())
+            else:
+                rel = raw
+        except (OSError, ValueError):
+            return value.strip().replace("\\\\", "/").strip("/") or None
+
+        normalized = rel.as_posix().strip("/")
+        return normalized or None
+
     async def _build_index(self) -> None:
         assert self._indexer is not None
         async for progress in self._indexer.build_or_update():
@@ -202,7 +218,7 @@ class CodebaseSearchTool(Tool):
             )
 
         num_results = tool_input.get("num_results", 10)
-        target_dir = tool_input.get("target_directory")
+        target_dir = self._normalize_target_directory(tool_input.get("target_directory"), context.cwd)
 
         building = self._background_task and not self._background_task.done()
 

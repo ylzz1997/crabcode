@@ -24,6 +24,7 @@ import type {
   FileChangePayload,
   ImageAttachment,
   PermissionRequestPayload,
+  PlanReadyPayload,
   StreamModePayload,
   ToolResultPayload,
   ToolUsePayload,
@@ -162,6 +163,12 @@ export interface PermissionCard {
   allowed: boolean | null;
 }
 
+export interface PlanCard {
+  id: string;
+  plan: Record<string, unknown>;
+  status: "pending" | "executing" | "revising" | "cancelled";
+}
+
 export interface PendingEditFileSummary {
   id: string;
   path: string;
@@ -198,6 +205,7 @@ type HistoryItem =
   | { kind: "thinking"; card: ThinkingCard }
   | { kind: "choice"; card: ChoiceCard }
   | { kind: "permission"; card: PermissionCard }
+  | { kind: "plan"; card: PlanCard }
   | { kind: "fileChange"; payload: FileChangePayload };
 
 interface SessionState {
@@ -207,6 +215,7 @@ interface SessionState {
   thinkingCards: Map<string, ThinkingCard>;
   choiceCards: Map<string, ChoiceCard>;
   permissionCards: Map<string, PermissionCard>;
+  planCards: Map<string, PlanCard>;
   activeThinkingId: string | null;
   isBusy: boolean;
   contextUsage: ContextUsageStatus | null;
@@ -221,6 +230,7 @@ function createEmptySessionState(): SessionState {
     thinkingCards: new Map(),
     choiceCards: new Map(),
     permissionCards: new Map(),
+    planCards: new Map(),
     activeThinkingId: null,
     isBusy: false,
     contextUsage: null,
@@ -276,6 +286,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private get thinkingCards(): Map<string, ThinkingCard> { return this.currentState.thinkingCards; }
   private get choiceCards(): Map<string, ChoiceCard> { return this.currentState.choiceCards; }
   private get permissionCards(): Map<string, PermissionCard> { return this.currentState.permissionCards; }
+  private get planCards(): Map<string, PlanCard> { return this.currentState.planCards; }
   private get activeThinkingId(): string | null { return this.currentState.activeThinkingId; }
   private set activeThinkingId(v: string | null) { if (this.displayedSessionId) this.getSessionState(this.displayedSessionId).activeThinkingId = v; }
   private get isBusy(): boolean { return this.currentState.isBusy; }
@@ -372,6 +383,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "respondToPermission":
           this.respondToPermission(msg.id, msg.allowed, msg.alwaysAllow, msg.feedback);
+          break;
+        case "respondToPlan":
+          this.respondToPlan(msg.id, msg.action);
           break;
         case "interrupt": {
           const result = this.connection.sendInterrupt();
@@ -1262,8 +1276,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "mode_change":
         this.postMessage({ type: "modeChange", mode: (payload as { mode: string }).mode });
         break;
+      case "plan_ready":
+        this.handlePlanReadyOnState(this.currentState, (payload as PlanReadyPayload).plan, true);
+        break;
       case "session_history":
-        this.handleSessionHistory(payload as { messages: Array<{ id: string; role: string; text: string }> });
+        this.handleSessionHistory(payload as unknown as { messages: Array<{ id: string; role: string; text: string }> });
         break;
     }
   }
@@ -1295,6 +1312,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       case "choice_request":
         this.handleChoiceRequestOnState(state, payload as ChoiceRequestPayload, updateWebview);
+        break;
+      case "plan_ready":
+        this.handlePlanReadyOnState(state, (payload as PlanReadyPayload).plan, updateWebview);
         break;
       case "file_change":
         this.handleFileChangeOnState(state, payload as FileChangePayload, updateWebview);
@@ -1332,6 +1352,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     state.thinkingCards.clear();
     state.choiceCards.clear();
     state.permissionCards.clear();
+    state.planCards.clear();
     state.activeThinkingId = null;
     for (const msg of payload.messages ?? []) {
       const role = (msg.role === "user" || msg.role === "assistant" || msg.role === "system")
@@ -1561,6 +1582,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cmd = buildChoiceResponseCommand(id, selected, { cancelled });
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "choiceResolved", card });
+  }
+
+  private handlePlanReadyOnState(state: SessionState, plan: Record<string, unknown>, updateWebview: boolean): void {
+    this.finalizeThinkingOnState(state, updateWebview);
+    const card: PlanCard = {
+      id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      plan,
+      status: "pending",
+    };
+    state.planCards.set(card.id, card);
+    state.history.push({ kind: "plan", card });
+    if (updateWebview) this.postMessage({ type: "planReady", card });
+  }
+
+  private respondToPlan(id: string, action: "execute" | "revise" | "cancel"): void {
+    const card = this.planCards.get(id);
+    if (!card || card.status !== "pending") {
+      return;
+    }
+    card.status = action === "execute" ? "executing" : action === "revise" ? "revising" : "cancelled";
+    this.connection.sendPlanAction(action);
+    this.postMessage({ type: "planResolved", card });
+    if (action === "revise") this.postMessage({ type: "modeChange", mode: "plan" });
+    if (action === "execute") this.postMessage({ type: "modeChange", mode: "agent" });
   }
 
   private respondToPermission(id: string, allowed: boolean, alwaysAllow = false, feedback?: string): void {
@@ -1998,6 +2043,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .request-card.permission {
       border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
     }
+    .request-card.plan {
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      background: color-mix(in srgb, var(--accent) 5%, var(--surface-soft));
+    }
     .request-card-header {
       display: flex;
       align-items: center;
@@ -2256,6 +2305,61 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .permission-feedback-input:focus {
       border-color: var(--accent);
+    }
+    .plan-summary {
+      white-space: pre-wrap;
+      line-height: 1.45;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .plan-step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .plan-step {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--vscode-editor-background) 55%, transparent);
+    }
+    .plan-step-index {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-align: right;
+    }
+    .plan-step-title {
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.35;
+    }
+    .plan-step-desc {
+      margin-top: 3px;
+      white-space: pre-wrap;
+      color: var(--text-muted);
+      font-size: 11.5px;
+      line-height: 1.4;
+    }
+    .plan-step-meta {
+      margin-top: 5px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .plan-chip {
+      border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+      border-radius: 999px;
+      padding: 1px 6px;
+      font-size: 10.5px;
+      color: var(--text-muted);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
     }
 
     /* ── Thinking cards ───────────────────────────────────────── */
@@ -3729,6 +3833,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const thinkingCards = new Map();
     const choiceCards = new Map();
     const permissionCards = new Map();
+    const planCards = new Map();
     const toolCardTurns = new Map();
     const thinkingCardTurns = new Map();
     const busyIndicator = document.getElementById('busy-indicator');
@@ -4451,6 +4556,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         renderChoiceCard(item.card);
       } else if (item.kind === 'permission') {
         renderPermissionCard(item.card);
+      } else if (item.kind === 'plan') {
+        renderPlanCard(item.card);
       } else if (item.kind === 'fileChange') {
         addFileChangePill(item.payload);
       }
@@ -4549,6 +4656,88 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         summary +
         '<div class="request-actions">' + actions + '</div>' +
         '</div>';
+    }
+
+    function renderPlanCard(card) {
+      const existing = document.getElementById('plan-' + card.id);
+      if (existing) { updatePlanCard(existing, card); return existing; }
+
+      const shouldStick = captureScrollAnchor();
+      const el = document.createElement('div');
+      el.className = 'request-card plan';
+      el.id = 'plan-' + card.id;
+      el.innerHTML = buildPlanCardHtml(card);
+      appendToTurnContent(getCurrentTurn(), el);
+      restoreScrollAnchor(shouldStick);
+      bindPlanCardEvents(el, card);
+      planCards.set(card.id, card);
+      return el;
+    }
+
+    function updatePlanCard(el, card) {
+      el.innerHTML = buildPlanCardHtml(card);
+      bindPlanCardEvents(el, card);
+      planCards.set(card.id, card);
+    }
+
+    function bindPlanCardEvents(el, card) {
+      el.querySelectorAll('[data-plan-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (card.status !== 'pending') return;
+          const action = btn.getAttribute('data-plan-action');
+          if (action) vscode.postMessage({ type: 'respondToPlan', id: card.id, action: action });
+        });
+      });
+    }
+
+    function buildPlanCardHtml(card) {
+      const plan = card.plan || {};
+      const title = plan.title || 'Execution Plan';
+      const summary = plan.summary || '';
+      const steps = Array.isArray(plan.steps) ? plan.steps : [];
+      const statusHtml = card.status === 'pending'
+        ? '<span class="request-status pending">等待确认</span>'
+        : card.status === 'executing'
+          ? '<span class="request-status done">执行中</span>'
+          : card.status === 'revising'
+            ? '<span class="request-status done">继续规划</span>'
+            : '<span class="request-status cancelled">已取消</span>';
+      const stepHtml = steps.length > 0
+        ? '<ol class="plan-step-list">' + steps.map((step, index) => buildPlanStepHtml(step, index)).join('') + '</ol>'
+        : '<pre class="request-pre">' + escapeHtml(JSON.stringify(plan, null, 2)) + '</pre>';
+      const actions = card.status === 'pending'
+        ? '<button class="request-action primary" data-plan-action="execute">执行计划</button>' +
+          '<button class="request-action subtle" data-plan-action="revise">修改计划</button>' +
+          '<button class="request-action subtle" data-plan-action="cancel">取消</button>'
+        : '';
+      return '<div class="request-card-header">' +
+        '<span class="icon">✓</span>' +
+        '<span class="request-title">计划 · ' + escapeHtml(title) + '</span>' +
+        statusHtml +
+        '</div>' +
+        '<div class="request-card-body">' +
+        '<div class="timeline-meta">execution plan</div>' +
+        (summary ? '<div class="plan-summary">' + escapeHtml(summary) + '</div>' : '') +
+        stepHtml +
+        '<div class="request-actions">' + actions + '</div>' +
+        '</div>';
+    }
+
+    function buildPlanStepHtml(step, index) {
+      const files = Array.isArray(step.files) ? step.files : [];
+      const deps = Array.isArray(step.depends_on) ? step.depends_on : [];
+      const chips = [];
+      if (files.length > 0) chips.push('<span class="plan-chip">files: ' + escapeHtml(files.join(', ')) + '</span>');
+      if (deps.length > 0) chips.push('<span class="plan-chip">after: ' + escapeHtml(deps.join(', ')) + '</span>');
+      if (step.subagent_type) chips.push('<span class="plan-chip">' + escapeHtml(String(step.subagent_type)) + '</span>');
+      return '<li class="plan-step">' +
+        '<span class="plan-step-index">' + (index + 1) + '.</span>' +
+        '<div>' +
+        '<div class="plan-step-title">' + escapeHtml(step.title || step.id || ('Step ' + (index + 1))) + '</div>' +
+        (step.description ? '<div class="plan-step-desc">' + escapeHtml(String(step.description)) + '</div>' : '') +
+        (chips.length > 0 ? '<div class="plan-step-meta">' + chips.join('') + '</div>' : '') +
+        '</div>' +
+        '</li>';
     }
 
     function renderPermissionCard(card) {
@@ -5415,6 +5604,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function updateModeButton(mode) {
       currentMode = mode;
       if (modeLabel) modeLabel.textContent = mode === 'plan' ? 'Plan' : 'Agent';
+      if (input) input.placeholder = mode === 'plan' ? '描述目标，CrabCode 会先只读分析并生成计划…' : '输入问题或命令（如 /help）…';
       if (modeMenu) modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
         el.classList.toggle('active', el.getAttribute('data-mode') === mode);
       });
@@ -5729,6 +5919,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           thinkingCardTurns.clear();
           choiceCards.clear();
           permissionCards.clear();
+          planCards.clear();
           turns.length = 0;
           activeTurn = null;
           turnCounter = 0;
@@ -5781,6 +5972,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const el = document.getElementById('permission-' + card.id);
           if (el) updatePermissionCard(el, card);
           else renderPermissionCard(card);
+          updateBusyLabel();
+          updateAllTurnSummaries();
+          break;
+        }
+        case 'planReady':
+          renderPlanCard(msg.card);
+          updateBusyLabel();
+          updateAllTurnSummaries();
+          break;
+        case 'planResolved': {
+          const card = msg.card;
+          planCards.set(card.id, card);
+          const el = document.getElementById('plan-' + card.id);
+          if (el) updatePlanCard(el, card);
+          else renderPlanCard(card);
           updateBusyLabel();
           updateAllTurnSummaries();
           break;
