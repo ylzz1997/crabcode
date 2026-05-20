@@ -72,7 +72,7 @@ class CoreSession:
         self._current_plan: Any = None  # ExecutionPlan | None
         self._title_generation_task: asyncio.Task[None] | None = None
         self._team_manager: Any = None  # TeamManager
-        # Extension UI override: "default" | "run_everything" | "ai_review" | None (follow file init only)
+        # Extension UI override: "ask" | "run_everything" | "ai_review" | None (follow file init only)
         self._client_permission_mode_override: str | None = None
 
     async def initialize(self) -> None:
@@ -957,24 +957,28 @@ class CoreSession:
         """Apply VS Code / client footer permission override when not in plan mode."""
         if self._permission_manager is None or self._agent_mode == "plan":
             return
-        if self._client_permission_mode_override not in ("default", "run_everything", "ai_review", "aiReview"):
+        if self._client_permission_mode_override not in (
+            "ask",
+            "default",
+            "run_everything",
+            "bypassPermissions",
+            "ai_review",
+            "aiReview",
+        ):
             return
-        from crabcode_core.permissions.manager import PermissionMode
+        from crabcode_core.permissions.manager import mode_from_default_mode
 
-        if self._client_permission_mode_override == "run_everything":
-            self._permission_manager.mode = PermissionMode.BYPASS
-        elif self._client_permission_mode_override in ("ai_review", "aiReview"):
-            self._permission_manager.mode = PermissionMode.AI_REVIEW
-        else:
-            self._permission_manager.mode = PermissionMode.DEFAULT
+        self._permission_manager.mode = mode_from_default_mode(
+            self._client_permission_mode_override,
+        )
 
     def set_client_permission_mode(self, mode: str) -> bool:
         """Set tool permission behavior from the extension chat footer.
 
-        ``default`` uses normal allow/ask/deny rules. ``run_everything`` auto-approves tools.
+        ``ask`` uses normal allow/ask/deny rules. ``run_everything`` auto-approves tools.
         ``ai_review`` lets an AI reviewer decide whether to allow, ask, or deny.
         """
-        if mode not in ("default", "run_everything", "ai_review", "aiReview"):
+        if mode not in ("ask", "default", "run_everything", "bypassPermissions", "ai_review", "aiReview"):
             return False
         self._client_permission_mode_override = mode
         self._sync_client_permission_mode()

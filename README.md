@@ -819,6 +819,16 @@ Fine-grained rules can be set in `settings.json` under `permissions`:
 
 Each rule matches on `tool` name (glob `*` matches any), plus optional `command` or `path` filters.
 
+### Default permission mode
+
+`permissions.default_mode` controls the fallback behavior after explicit `allow`, `deny`, and `ask` rules. Supported values are:
+
+- `"ask"` — default; ask before tools that need permission.
+- `"run_everything"` — skip permission prompts and allow tool calls automatically.
+- `"aiReview"` / `"ai_review"` — ask a reviewer model to decide.
+
+The legacy boolean `permissions.run_everything: true` is still supported as an alias for `"default_mode": "run_everything"`.
+
 ### AI review mode
 
 AI review mode lets a reviewer model decide whether pending tool calls should be allowed, shown to the user, or denied. Explicit `allow`, `deny`, and `ask` rules still take priority. If the reviewer fails, times out, returns invalid JSON, or returns a decision outside the configured set, CrabCode falls back to `ask` by default.
@@ -828,36 +838,43 @@ AI review mode lets a reviewer model decide whether pending tool calls should be
   "permissions": {
     "default_mode": "aiReview",
     "ai_review": {
-      "model": "reviewer",
+      "model": "review-model",
       "decisions": ["allow", "ask"],
       "fallback": "ask",
       "timeout": 30
     }
   },
   "models": {
-    "reviewer": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-6"
+    "review-model": {
+      "provider": "openai",
+      "model": "your-model-name",
+      "base_url": "https://your-api-endpoint/v1",
+      "api_key_env": "YOUR_API_KEY_ENV",
+      "thinking_enabled": false,
+      "max_tokens": 8000
     }
   }
 }
 ```
 
+- `ai_review.model` is the name of an entry in `models`, such as `"review-model"` above.
 - Omit `ai_review.model` to use the current agent model.
 - Default `decisions` is `["allow", "ask"]`, so the reviewer cannot directly deny tool calls unless you opt in.
 - You can set `decisions` to `["allow", "ask", "deny"]` for stricter review, or `["allow", "deny"]` for non-interactive allow/deny behavior.
 
 ### run_everything mode
 
-Set `"run_everything": true` to skip all permission prompts and execute every tool call automatically. The CLI displays a warning at startup when this mode is active.
+Set `"default_mode": "run_everything"` to skip all permission prompts and execute every tool call automatically. The CLI displays a warning at startup when this mode is active.
 
 ```json
 {
   "permissions": {
-    "run_everything": true
+    "default_mode": "run_everything"
   }
 }
 ```
+
+`"run_everything": true` is still accepted for backward compatibility.
 
 > **Use with caution.** In this mode CrabCode will run shell commands and write files without asking.
 
@@ -1331,7 +1348,7 @@ Memory and patch details:
 
 Process and debuggee actions default to permission confirmation. The tools return
 `ASK` for process inspection, memory reads/writes/freezes, attach, dump, trace,
-and code patching. When `permissions.run_everything` is enabled, those `ASK`
+and code patching. When `permissions.default_mode` is `"run_everything"` or legacy `permissions.run_everything` is enabled, those `ASK`
 permissions are bypassed by the normal CrabCode permission mode.
 
 The intended use is local, authorized process debugging, diagnostics, testing,

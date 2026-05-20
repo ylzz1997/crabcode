@@ -19,6 +19,17 @@ class PermissionMode(str, Enum):
     AI_REVIEW = "aiReview"
 
 
+def mode_from_default_mode(default_mode: str | None) -> PermissionMode:
+    mode = (default_mode or "ask").strip()
+    if mode in {"ask", "default"}:
+        return PermissionMode.DEFAULT
+    if mode in {"run_everything", "bypassPermissions"}:
+        return PermissionMode.BYPASS
+    if mode in {"aiReview", "ai_review"}:
+        return PermissionMode.AI_REVIEW
+    return PermissionMode.DEFAULT
+
+
 class PermissionManager:
     """Manages tool permissions based on settings and mode."""
 
@@ -31,8 +42,8 @@ class PermissionManager:
         self._runtime_allow_keys: set[str] = set()
         if self.settings.run_everything:
             self.mode = PermissionMode.BYPASS
-        elif self.settings.default_mode in {"aiReview", "ai_review"}:
-            self.mode = PermissionMode.AI_REVIEW
+        elif self.settings.default_mode is not None:
+            self.mode = mode_from_default_mode(self.settings.default_mode)
         else:
             self.mode = mode
 

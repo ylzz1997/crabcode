@@ -405,8 +405,9 @@ class ProcessDebuggerTool(Tool):
             "memory_refine, memory_write, memory_freeze, memory_unfreeze, memory_freezes, "
             "aob_scan, pointer_scan, pointer_resolve, code_read, code_patch, code_restore, "
             "code_patches, trace_syscalls, attach_debugger, detach, terminate, and kill. "
-            "Use capabilities first to see what the current OS supports. Most actions ask for permission by default; "
-            "run_everything bypasses those confirmations through the normal CrabCode permission mode."
+            "Use capabilities first to see what the current OS supports. "
+            "Most actions ask for permission by default; default_mode=run_everything bypasses "
+            "those confirmations through the normal CrabCode permission mode."
         )
 
     async def validate_input(self, tool_input: dict[str, Any]) -> str | None:

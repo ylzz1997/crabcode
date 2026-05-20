@@ -58,7 +58,7 @@ export interface SwitchModelCommand {
   name: string;
 }
 
-export type PermissionMode = "default" | "run_everything" | "ai_review";
+export type PermissionMode = "ask" | "run_everything" | "ai_review";
 
 export interface SetPermissionModeCommand {
   type: "set_permission_mode";

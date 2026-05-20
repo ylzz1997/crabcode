@@ -814,6 +814,16 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 
 每条规则通过 `tool` 名称匹配（`*` 通配任意工具），可附加 `command` 或 `path` 过滤条件。
 
+### 默认权限模式
+
+`permissions.default_mode` 控制显式 `allow`、`deny`、`ask` 规则之后的默认行为。支持的值：
+
+- `"ask"` — 默认值；需要权限的工具调用会询问用户。
+- `"run_everything"` — 跳过权限询问，自动允许工具调用。
+- `"aiReview"` / `"ai_review"` — 交给 reviewer 模型判断。
+
+旧的布尔开关 `permissions.run_everything: true` 仍然兼容，等价于 `"default_mode": "run_everything"`。
+
 ### AI 审查模式
 
 AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该直接允许、询问用户，还是拒绝。显式 `allow`、`deny`、`ask` 规则仍然优先。如果 reviewer 失败、超时、返回非法 JSON，或返回了配置不允许的决策，CrabCode 默认回退到 `ask`。
@@ -823,36 +833,42 @@ AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该�
   "permissions": {
     "default_mode": "aiReview",
     "ai_review": {
-      "model": "reviewer",
+      "model": "review-model",
       "decisions": ["allow", "ask"],
       "fallback": "ask",
       "timeout": 30
     }
   },
   "models": {
-    "reviewer": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-6"
+    "review-model": {
+      "provider": "openai",
+      "model": "your-model-name",
+      "base_url": "https://your-api-endpoint/v1",
+      "api_key_env": "YOUR_API_KEY_ENV",
+      "thinking_enabled": false,
+      "max_tokens": 8000
     }
   }
 }
 ```
 
-- 省略 `ai_review.model` 时，会使用当前 agent 正在使用的模型。
+`ai_review.model` 填的是 `models` 里的配置名，例如上面的 `"review-model"`；省略时会使用当前 agent 正在使用的模型。
 - 默认 `decisions` 为 `["allow", "ask"]`，因此 reviewer 不会直接拒绝工具调用，除非你显式开启。
 - 可将 `decisions` 设为 `["allow", "ask", "deny"]` 启用更严格审查，或设为 `["allow", "deny"]` 用于非交互式 allow/deny 行为。
 
 ### run_everything 模式
 
-将 `"run_everything"` 设为 `true` 可跳过所有权限询问，所有工具调用自动执行。启用后 CLI 启动时会显示醒目警告。
+将 `"default_mode"` 设为 `"run_everything"` 可跳过所有权限询问，所有工具调用自动执行。启用后 CLI 启动时会显示醒目警告。
 
 ```json
 {
   "permissions": {
-    "run_everything": true
+    "default_mode": "run_everything"
   }
 }
 ```
+
+旧写法 `"run_everything": true` 仍然兼容。
 
 > **请谨慎使用。** 此模式下 CrabCode 将不经确认直接执行 shell 命令和写入文件。
 
@@ -1315,7 +1331,7 @@ pip install -e packages/debugger
 ### 权限与能力边界
 
 进程和 debuggee 相关动作默认触发权限确认。工具对进程检查、内存读写/冻结、attach、
-dump、trace、代码 patch 等动作返回 `ASK`。启用 `permissions.run_everything` 时，
+dump、trace、代码 patch 等动作返回 `ASK`。当 `permissions.default_mode` 为 `"run_everything"` 或启用旧配置 `permissions.run_everything` 时，
 这些 `ASK` 权限会通过 CrabCode 现有权限模式自动放行。
 
 该功能面向本机授权进程调试、诊断、测试和研究。不提供隐蔽注入、反调试绕过、

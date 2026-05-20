@@ -342,11 +342,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
           break;
         case "setPermissionMode":
-          if (msg.mode === "default" || msg.mode === "run_everything" || msg.mode === "ai_review") {
+          if (msg.mode === "ask" || msg.mode === "default" || msg.mode === "run_everything" || msg.mode === "ai_review") {
+            const mode = msg.mode === "default" ? "ask" : msg.mode;
             void vscode.workspace
               .getConfiguration("crabcode")
-              .update("permissionMode", msg.mode, vscode.ConfigurationTarget.Global);
-            this.connection.sendSetPermissionMode(msg.mode);
+              .update("permissionMode", mode, vscode.ConfigurationTarget.Global);
+            this.connection.sendSetPermissionMode(mode);
           }
           break;
         case "pickFiles":
@@ -988,13 +989,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cfg = vscode.workspace.getConfiguration("crabcode");
     const models = await this.resolveModelsFromSettingsOrGateway();
     const defaultModel = cfg.get<string>("chatModelDefault", "") ?? "";
-    const permissionMode = cfg.get<string>("permissionMode", "default");
-    const mode: "default" | "run_everything" | "ai_review" =
+    const permissionMode = cfg.get<string>("permissionMode", "ask");
+    const mode: "ask" | "run_everything" | "ai_review" =
       permissionMode === "run_everything"
         ? "run_everything"
         : permissionMode === "ai_review"
           ? "ai_review"
-          : "default";
+          : "ask";
 
     if (models.length > 0) {
       const pick =
@@ -1046,13 +1047,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const models = fetchedModels.length > 0
       ? fetchedModels
       : (this.lastNonEmptyModels.length > 0 ? this.lastNonEmptyModels : fallbackModels);
-    const permissionMode = cfg.get<string>("permissionMode", "default");
-    const mode: "default" | "run_everything" | "ai_review" =
+    const permissionMode = cfg.get<string>("permissionMode", "ask");
+    const mode: "ask" | "run_everything" | "ai_review" =
       permissionMode === "run_everything"
         ? "run_everything"
         : permissionMode === "ai_review"
           ? "ai_review"
-          : "default";
+          : "ask";
     const pendingEditsVisibleFiles = normalizePendingEditsVisibleFiles(
       cfg.get<number>("pendingEditsVisibleFiles", 5),
     );
@@ -3655,9 +3656,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
   <div id="perm-menu" class="perm-menu hidden" role="menu">
-    <div class="perm-item active" data-perm="default" role="menuitem">
+    <div class="perm-item active" data-perm="ask" role="menuitem">
       <span class="perm-item-icon">🛡</span>
-      <span class="perm-item-text">默认权限</span>
+      <span class="perm-item-text">询问确认</span>
       <span class="perm-check">✓</span>
     </div>
     <div class="perm-item" data-perm="ai_review" role="menuitem">
@@ -4987,9 +4988,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (modelSelectWrap) modelSelectWrap.classList.remove('is-empty');
         renderModelMenuItems(models, preferred, '');
       }
-      const newPerm = msg.permissionMode === 'run_everything' ? 'run_everything' : (msg.permissionMode === 'ai_review' ? 'ai_review' : 'default');
+      const newPerm = msg.permissionMode === 'run_everything' ? 'run_everything' : (msg.permissionMode === 'ai_review' ? 'ai_review' : 'ask');
       if (permBtn && permLabel && permIcon && permMenu) {
-        permLabel.textContent = newPerm === 'run_everything' ? '全部允许 ⚠️' : (newPerm === 'ai_review' ? 'AI 审查' : '默认权限');
+        permLabel.textContent = newPerm === 'run_everything' ? '全部允许 ⚠️' : (newPerm === 'ai_review' ? 'AI 审查' : '询问确认');
         permIcon.textContent = newPerm === 'run_everything' ? '⚡' : (newPerm === 'ai_review' ? '🤖' : '🛡');
         permBtn.classList.toggle('perm-danger', newPerm === 'run_everything');
         permMenu.querySelectorAll('.perm-item').forEach(function(el) {
@@ -5503,13 +5504,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     permMenu && permMenu.querySelectorAll('.perm-item').forEach(function(el) {
       el.addEventListener('click', function() {
         const perm = el.getAttribute('data-perm');
-        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '全部允许 ⚠️' : (perm === 'ai_review' ? 'AI 审查' : '默认权限');
+        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '全部允许 ⚠️' : (perm === 'ai_review' ? 'AI 审查' : '询问确认');
         if (permIcon) permIcon.textContent = perm === 'run_everything' ? '⚡' : (perm === 'ai_review' ? '🤖' : '🛡');
         if (permBtn) permBtn.classList.toggle('perm-danger', perm === 'run_everything');
         permMenu.querySelectorAll('.perm-item').forEach(function(item) {
           item.classList.toggle('active', item.getAttribute('data-perm') === perm);
         });
-        vscode.postMessage({ type: 'setPermissionMode', mode: perm === 'run_everything' ? 'run_everything' : (perm === 'ai_review' ? 'ai_review' : 'default') });
+        vscode.postMessage({ type: 'setPermissionMode', mode: perm === 'run_everything' ? 'run_everything' : (perm === 'ai_review' ? 'ai_review' : 'ask') });
         closePermMenu();
       });
     });

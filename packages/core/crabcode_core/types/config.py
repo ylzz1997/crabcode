@@ -29,8 +29,9 @@ class PermissionsSettings(BaseModel):
     allow: list[PermissionRule] = Field(default_factory=list)
     deny: list[PermissionRule] = Field(default_factory=list)
     ask: list[PermissionRule] = Field(default_factory=list)
-    default_mode: str | None = None
+    default_mode: str | None = "ask"
     additional_directories: list[str] = Field(default_factory=list)
+    # Deprecated compatibility alias for default_mode="run_everything".
     run_everything: bool = False
     ai_review: AiReviewSettings = Field(default_factory=AiReviewSettings)
 

@@ -72,6 +72,8 @@ def main(
     if file_settings.default_model and not settings.default_model:
         settings.default_model = file_settings.default_model
 
+    if file_settings.permissions.default_mode and not settings.permissions.default_mode:
+        settings.permissions.default_mode = file_settings.permissions.default_mode
     if file_settings.permissions.run_everything:
         settings.permissions.run_everything = True
     settings.logging = file_settings.logging.model_copy(deep=True)

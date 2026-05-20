@@ -1259,10 +1259,13 @@ async def run_repl(
         style="dim",
     )
 
-    if settings and settings.permissions.run_everything:
+    if settings and (
+        settings.permissions.run_everything
+        or settings.permissions.default_mode in {"run_everything", "bypassPermissions"}
+    ):
         console.print()
         console.print(
-            "  [bold yellow]⚠ WARNING: run_everything is enabled.[/] "
+            "  [bold yellow]⚠ WARNING: run_everything mode is enabled.[/] "
             "All tool calls will execute automatically without asking for permission.",
             style="yellow",
         )
