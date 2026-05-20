@@ -41,6 +41,7 @@ class DAPClient:
         self._reader_task: asyncio.Task[None] | None = None
         self._seq = 0
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._pending_commands: dict[int, str] = {}
         self._write_lock = asyncio.Lock()
         self.events: asyncio.Queue[DAPEvent] = asyncio.Queue()
 
@@ -63,6 +64,7 @@ class DAPClient:
             if not future.done():
                 future.set_exception(DAPError("DAP client closed"))
         self._pending.clear()
+        self._pending_commands.clear()
 
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
@@ -116,6 +118,7 @@ class DAPClient:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[seq] = future
+        self._pending_commands[seq] = command
         await self._send(payload)
         return seq
 
@@ -128,12 +131,15 @@ class DAPClient:
         future = self._pending.get(seq)
         if future is None:
             raise DAPError(f"unknown pending DAP request: {seq}")
+        command = self._pending_commands.get(seq, f"seq {seq}")
         try:
             response = await asyncio.wait_for(future, timeout=timeout or self.timeout)
         finally:
             self._pending.pop(seq, None)
+            self._pending_commands.pop(seq, None)
         if not response.get("success", False):
-            message = response.get("message") or response.get("body", {}).get("error", {}).get("format")
+            error = response.get("body", {}).get("error", {})
+            message = response.get("message") or error.get("format")
             raise DAPError(str(message or f"DAP request failed: {command}"))
         body = response.get("body", {})
         return body if isinstance(body, dict) else {"value": body}
@@ -213,7 +219,8 @@ class DAPClient:
         if msg_type == "event":
             event = str(message.get("event", ""))
             body = message.get("body", {})
-            await self.events.put(DAPEvent(event=event, body=body if isinstance(body, dict) else {}))
+            event_body = body if isinstance(body, dict) else {}
+            await self.events.put(DAPEvent(event=event, body=event_body))
 
     async def _drain_stderr(self) -> None:
         if not self._process or not self._process.stderr:

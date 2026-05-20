@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "debugger"))
 from crabcode_core.types.tool import PermissionBehavior, ToolContext
 
 from crabcode_debugger.adapters import AdapterRegistry
+from crabcode_debugger.dap import DAPClient, DAPError
 from crabcode_debugger.memory import (
     MemoryRegion,
     MemoryInspector,
@@ -152,6 +153,30 @@ class DebugSessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["events"][0]["event"], "stopped")
         self.assertEqual(threads["threads"][0]["id"], 7)
         self.assertEqual(stack["totalFrames"], 1)
+
+
+class DAPClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_response_reports_command_name(self) -> None:
+        client = DAPClient([sys.executable, "-c", "pass"], cwd=str(Path.cwd()))
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        seq = 1
+        client._pending[seq] = future
+        client._pending_commands[seq] = "badCommand"
+        future.set_result(
+            {
+                "type": "response",
+                "request_seq": seq,
+                "success": False,
+                "command": "badCommand",
+            }
+        )
+
+        with self.assertRaisesRegex(DAPError, "DAP request failed: badCommand"):
+            await client.wait_response(seq)
+
+        self.assertNotIn(seq, client._pending)
+        self.assertNotIn(seq, client._pending_commands)
 
 
 class ProcessInspectorTests(unittest.TestCase):
