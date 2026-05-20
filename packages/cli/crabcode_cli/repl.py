@@ -1962,10 +1962,8 @@ async def _handle_command(
         return True
 
     if cmd == "/status":
-        from crabcode_core.compact.compact import (
-            DEFAULT_COMPACT_THRESHOLD,
-            estimate_token_count,
-        )
+        from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW, lookup_context_window
+        from crabcode_core.compact.compact import estimate_token_count
 
         initialized = getattr(session, "_initialized", False)
 
@@ -1976,9 +1974,15 @@ async def _handle_command(
         model_display = f"{current_name} → " if current_name else ""
         model_display += f"{provider}/{model}"
 
-        ctx_threshold = session.settings.max_context_length or DEFAULT_COMPACT_THRESHOLD
-        ctx_used = estimate_token_count(session.messages)
-        ctx_pct = int(ctx_used / ctx_threshold * 100) if ctx_threshold else 0
+        ctx_used = getattr(session, "last_context_used_tokens", 0) or estimate_token_count(session.messages)
+        ctx_window = (
+            getattr(session, "last_context_window_tokens", 0)
+            or session.settings.max_context_length
+            or active_cfg.context_window
+            or lookup_context_window(active_cfg.model)
+            or DEFAULT_CONTEXT_WINDOW
+        )
+        ctx_pct = int(ctx_used / ctx_window * 100) if ctx_window else 0
 
         def _fmt_k(n: int) -> str:
             return f"{n // 1000}k" if n >= 1000 else str(n)
@@ -2038,7 +2042,7 @@ async def _handle_command(
         lines = [
             f"[bold cyan]🦀 CrabCode[/] v{__import__('crabcode_cli').__version__}",
             f"[bold]🧠 Model:[/] {model_display} · [bold]Mode:[/] {mode_display}",
-            f"[bold]📚 Context:[/] {_fmt_k(ctx_used)} / {_fmt_k(ctx_threshold)} ({ctx_pct}%) · [bold]💬 Messages:[/] {msg_count}",
+            f"[bold]📚 Context:[/] {_fmt_k(ctx_used)} / {_fmt_k(ctx_window)} ({ctx_pct}%) · [bold]💬 Messages:[/] {msg_count}",
             f"[bold]🧹 Compactions:[/] {compact_count} · [bold]Auto-compact:[/] {auto_compact}",
             f"[bold]🧵 Session:[/] {sid_short}",
             f"[bold]⚙️  Config:[/] think={thinking} · max_tokens={max_tok} · tools={tool_display}",
