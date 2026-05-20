@@ -1193,6 +1193,50 @@ When the session starts, each extra tool's `setup()` method is called with a `To
 
 This is the extension point used by `crabcode-search` to kick off background indexing on startup.
 
+## crabcode-debugger (DAP and Process Debugging)
+
+`crabcode-debugger` is an optional package that lets agents use Debug Adapter
+Protocol adapters and process-level diagnostics. It is disabled by default.
+
+```json
+{
+  "extra_tools": [
+    "crabcode_debugger.DebuggerTool",
+    "crabcode_debugger.ProcessDebuggerTool"
+  ],
+  "tool_settings": {
+    "Debugger": {
+      "allow_evaluate": false,
+      "default_timeout_seconds": 30
+    },
+    "ProcessDebugger": {
+      "default_timeout_seconds": 15
+    }
+  }
+}
+```
+
+`Debugger` supports launch/attach, breakpoints, stepping, stack/scopes,
+variables, evaluation, and session cleanup for C/C++, Rust, Python, Go, Java,
+TypeScript, and JavaScript when the corresponding official or official-maintained
+adapter is installed. Built-in discovery prefers `debugpy`, `dlv dap`,
+`lldb-dap`, GDB DAP, `vscode-java-debug`, and `vscode-js-debug`; custom adapter
+commands can be provided with `tool_settings.Debugger.adapters`.
+
+`ProcessDebugger` provides best-effort process diagnostics on macOS, Linux, and
+Windows: process listing, inspection, stack sampling, core/minidump capture,
+memory maps, syscall tracing where available, debugger attach, detach, terminate,
+and kill. It also includes CE-style memory actions: `memory_regions`,
+`memory_read`, `memory_search`, `memory_refine`, `memory_write`,
+`memory_freeze`, `memory_unfreeze`, and `memory_freezes`. Direct memory
+search/write/freeze is currently implemented for Linux through
+`/proc/<pid>/mem`; other platforms report the capability as unavailable until a
+native backend is added.
+
+Process and debuggee actions default to permission confirmation. When
+`permissions.run_everything` is enabled, these `ASK` permissions are bypassed by
+the normal CrabCode permission mode.
+
 ## crabcode-search (Semantic Codebase Search)
 
 `crabcode-search` is an optional package that adds semantic code search to the agent.

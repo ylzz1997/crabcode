@@ -1189,6 +1189,46 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 
 `crabcode-search` 就是通过这个扩展点在启动时触发后台索引建立的。
 
+## crabcode-debugger（DAP 与进程级调试）
+
+`crabcode-debugger` 是一个可选包，让 agent 可以调用 Debug Adapter Protocol
+调试器和进程级诊断能力。默认不启用。
+
+```json
+{
+  "extra_tools": [
+    "crabcode_debugger.DebuggerTool",
+    "crabcode_debugger.ProcessDebuggerTool"
+  ],
+  "tool_settings": {
+    "Debugger": {
+      "allow_evaluate": false,
+      "default_timeout_seconds": 30
+    },
+    "ProcessDebugger": {
+      "default_timeout_seconds": 15
+    }
+  }
+}
+```
+
+`Debugger` 支持启动/附加、断点、单步、调用栈/作用域、变量、表达式求值和会话清理。
+当前优先支持 C/C++、Rust、Python、Go、Java、TypeScript、JavaScript，并优先发现
+`debugpy`、`dlv dap`、`lldb-dap`、GDB DAP、`vscode-java-debug`、`vscode-js-debug`
+等官方或官方维护的 adapter。自定义 adapter 命令可以放在
+`tool_settings.Debugger.adapters`。
+
+`ProcessDebugger` 在 macOS、Linux、Windows 上提供 best-effort 的进程诊断：
+进程列表、进程检查、栈采样、core/minidump、内存映射、可用时的 syscall trace、
+调试器附加/分离、terminate 和 kill。它也包含类似 CE 的内存动作：
+`memory_regions`、`memory_read`、`memory_search`、`memory_refine`、`memory_write`、
+`memory_freeze`、`memory_unfreeze`、`memory_freezes`。直接内存搜索/写入/冻结当前通过
+Linux 的 `/proc/<pid>/mem` 实现；其他平台会在 capabilities 中报告暂不可用，后续可接
+原生后端。
+
+进程和 debuggee 相关动作默认触发权限确认。启用 `permissions.run_everything`
+时，这些 `ASK` 权限会通过 CrabCode 现有权限模式自动放行。
+
 ## crabcode-search（语义代码搜索）
 
 `crabcode-search` 是一个可选包，为 agent 添加语义代码搜索能力。

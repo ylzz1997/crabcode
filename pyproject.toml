@@ -23,6 +23,7 @@ search = [
     "modelscope>=1.10.0",
 ]
 browser = ["playwright>=1.48.0"]
+debugger = []
 bedrock = ["anthropic[bedrock]>=0.40.0"]
 vertex = ["anthropic[vertex]>=0.40.0"]
 gateway = [
@@ -35,7 +36,7 @@ gateway = [
     "httpx>=0.27.0",
 ]
 all = [
-    "crabcode[search,browser,bedrock,vertex,gateway]",
+    "crabcode[search,browser,debugger,bedrock,vertex,gateway]",
 ]
 
 [project.scripts]
@@ -51,6 +52,7 @@ packages = [
     "packages/cli/crabcode_cli",
     "packages/search/crabcode_search",
     "packages/gateway/crabcode_gateway",
+    "packages/debugger/crabcode_debugger",
 ]
 
 [tool.uv.workspace]
