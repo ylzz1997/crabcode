@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from sse_starlette.sse import EventSourceResponse
@@ -292,7 +293,7 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
         await ws.send_text(json.dumps({"type": "error", "message": f"invalid plan action: {action}"}))
         return
 
-    plan_data = getattr(session, "current_plan", None)
+    plan_data = getattr(session, "current_plan", None) or msg.get("plan")
     if not plan_data:
         await ws.send_text(json.dumps({"type": "error", "message": "no pending plan"}))
         return
@@ -308,23 +309,83 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
     await event_bus.publish(session.session_id, ModeChangeEvent(mode="agent"))
 
     async def _run() -> None:
+        session_id = session.session_id
+        event_count = 0
+        forwarder: asyncio.Task[None] | None = None
         try:
-            executor = PlanExecutor(
-                plan,
-                spawn_fn=session.spawn_agent,
-                wait_fn=session.wait_agent,
-            )
-            async for event in executor.execute():
-                await event_bus.publish(session.session_id, event)
-            await event_bus.publish(session.session_id, TurnCompleteEvent(reason="plan_complete"))
+            merged_events: asyncio.Queue[object] = asyncio.Queue()
+            done_sentinel = object()
+
+            async def _produce_plan_events() -> None:
+                executor = PlanExecutor(
+                    plan,
+                    spawn_fn=session.spawn_agent,
+                    wait_fn=session.wait_agent,
+                )
+                try:
+                    async for plan_event in executor.execute():
+                        await merged_events.put(plan_event)
+                finally:
+                    await merged_events.put(done_sentinel)
+
+            async def _forward_agent_events() -> None:
+                from crabcode_core.types.event import ModeChangeEvent, PlanReadyEvent
+
+                while True:
+                    event = await session._agent_event_queue.get()  # type: ignore[attr-defined]
+                    if isinstance(event, (ModeChangeEvent, PlanReadyEvent)):
+                        logger.info(
+                            "ws plan execution suppressed sub-agent event session=%s type=%s",
+                            session_id,
+                            type(event).__name__,
+                        )
+                        continue
+                    await merged_events.put(event)
+
+            producer = asyncio.create_task(_produce_plan_events())
+            forwarder = asyncio.create_task(_forward_agent_events())
+
+            try:
+                while True:
+                    event = await merged_events.get()
+                    if event is done_sentinel:
+                        break
+                    await event_bus.publish(session_id, event)
+                    event_count += 1
+                await producer
+            finally:
+                forwarder.cancel()
+                try:
+                    await forwarder
+                except asyncio.CancelledError:
+                    pass
+
+            await event_bus.publish(session_id, TurnCompleteEvent(reason="plan_complete"))
+            logger.info("ws plan execution completed session=%s events=%d", session_id, event_count)
+        except asyncio.CancelledError:
+            logger.info("ws plan execution cancelled session=%s", session_id)
+            raise
         except Exception as exc:
-            logger.exception("ws plan execution failed session=%s", session.session_id)
+            logger.exception("ws plan execution failed session=%s", session_id)
             await event_bus.publish(
-                session.session_id,
+                session_id,
                 ErrorEvent(message=str(exc), recoverable=False, error_type="internal"),
             )
+            await event_bus.publish(session_id, TurnCompleteEvent(reason="plan_error"))
+        finally:
+            if forwarder and not forwarder.done():
+                forwarder.cancel()
+            # Clean up task reference when done
+            if hasattr(ws.app.state, "plan_tasks"):
+                ws.app.state.plan_tasks.pop(session_id, None)
 
-    asyncio.create_task(_run())
+    # Create background task for plan execution
+    task = asyncio.create_task(_run())
+    # Store task reference for potential cancellation tracking
+    if not hasattr(ws.app.state, "plan_tasks"):
+        ws.app.state.plan_tasks = {}
+    ws.app.state.plan_tasks[session.session_id] = task
+    logger.info("ws plan_action started execution session=%s", session.session_id)
 
 
 async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
@@ -340,6 +401,14 @@ async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
         return
 
     sessions: dict = ws.app.state.sessions
+    
+    # Clean up any plan execution tasks from the previous session
+    previous_id = ws.app.state.default_session_id
+    if previous_id and hasattr(ws.app.state, "plan_tasks"):
+        old_task = ws.app.state.plan_tasks.pop(previous_id, None)
+        if old_task and not old_task.done():
+            logger.info("ws resume_session cancelling previous plan session=%s", previous_id)
+            old_task.cancel()
 
     # Reuse already-loaded session if available
     if session_id in sessions:

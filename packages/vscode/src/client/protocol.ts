@@ -68,6 +68,7 @@ export interface SetPermissionModeCommand {
 export interface PlanActionCommand {
   type: "plan_action";
   action: "execute" | "revise" | "cancel";
+  plan?: Record<string, unknown>;
 }
 
 /** Union of all commands the client can send over the WebSocket. */
@@ -173,6 +174,9 @@ export function buildSetPermissionModeCommand(
 
 export function buildPlanActionCommand(
   action: PlanActionCommand["action"],
+  plan?: Record<string, unknown>,
 ): PlanActionCommand {
-  return { type: "plan_action", action };
+  const cmd: PlanActionCommand = { type: "plan_action", action };
+  if (plan) cmd.plan = plan;
+  return cmd;
 }

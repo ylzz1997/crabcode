@@ -19,6 +19,7 @@ import {
 } from "./client/protocol";
 import type {
   AgentOutputPayload,
+  AgentStatePayload,
   ChoiceRequestPayload,
   EventPayload,
   FileChangePayload,
@@ -153,6 +154,7 @@ export interface ChoiceCard {
   pendingSelected?: string[];
   completed: boolean;
   cancelled: boolean;
+  agentId?: string | null;
 }
 
 export interface PermissionCard {
@@ -161,6 +163,7 @@ export interface PermissionCard {
   input: Record<string, unknown>;
   reason: string | null;
   allowed: boolean | null;
+  agentId?: string | null;
 }
 
 export interface PlanCard {
@@ -187,14 +190,14 @@ export interface PendingEditReviewSummary {
 
 export interface PendingEditActionMessage {
   action:
-    | "undoAll"
-    | "keepAll"
-    | "reviewAll"
-    | "undoFile"
-    | "keepFile"
-    | "reviewFile"
-    | "undoHunk"
-    | "keepHunk";
+  | "undoAll"
+  | "keepAll"
+  | "reviewAll"
+  | "undoFile"
+  | "keepFile"
+  | "reviewFile"
+  | "undoHunk"
+  | "keepHunk";
   changeId?: string;
   hunkId?: string;
 }
@@ -697,7 +700,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async resumeSession(sessionId: string): Promise<void> {
-    // Switch to the target session
+    // Immediately update displayed session before processing
+    const previousSessionId = this.displayedSessionId;
     this.displayedSessionId = sessionId;
 
     // If we already have cached state for this session, render it immediately
@@ -1242,7 +1246,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       // Ensure we have a state object for this session
       const targetState = this.getSessionState(eventSessionId!);
-      const isDisplayed = !this.displayedSessionId || eventSessionId === this.displayedSessionId;
+      // Only update webview if this is the displayed session
+      // Once displayedSessionId is set, reject events from other sessions
+      const isDisplayed = this.displayedSessionId ? (eventSessionId === this.displayedSessionId) : false;
 
       // Route event to the target session state (even if not displayed)
       this.routeEventToState(payload, targetState, isDisplayed);
@@ -1256,7 +1262,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (connSid) {
           this.displayedSessionId = connSid;
           // Ensure state exists for this session
-          this.getSessionState(connSid);
+          const state = this.getSessionState(connSid);
+          // Preserve busy state if this session was previously busy
+          if (!state.isBusy && this.busySessions.has(connSid)) {
+            state.isBusy = true;
+          }
         }
         this.sendCurrentSessionInfo();
         this.notifyConfigurationChanged();
@@ -1296,6 +1306,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       case "stream_mode":
         this.handleStreamModeOnState(state, payload as StreamModePayload, updateWebview);
+        break;
+      case "agent_state":
+        this.handleAgentStateOnState(state, payload as AgentStatePayload, updateWebview);
         break;
       case "agent_output":
         this.handleAgentOutputOnState(state, payload as AgentOutputPayload, updateWebview);
@@ -1470,6 +1483,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private handleAgentStateOnState(state: SessionState, payload: AgentStatePayload, updateWebview: boolean): void {
+    const shortId = payload.agent_id.slice(0, 8);
+    const text = `  agent ${shortId} · ${payload.status} · ${payload.title}\n`;
+    this.finalizeThinkingOnState(state, updateWebview);
+    this.appendAssistantTextOnState(state, text, updateWebview);
+    state.isBusy = payload.status !== "completed" && payload.status !== "failed" && payload.status !== "cancelled";
+    if (updateWebview) this.postMessage({ type: "busyState", busy: state.isBusy });
+  }
+
   private handleAgentOutput(payload: AgentOutputPayload): void {
     this.handleAgentOutputOnState(this.currentState, payload, true);
   }
@@ -1537,6 +1559,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pendingSelected: [],
       completed: false,
       cancelled: false,
+      agentId: payload.agent_id ?? null,
     };
     state.choiceCards.set(payload.tool_use_id, card);
     state.history.push({ kind: "choice", card });
@@ -1554,6 +1577,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       input: payload.tool_input,
       reason: payload.reason ?? null,
       allowed: null,
+      agentId: payload.agent_id ?? null,
     };
     state.permissionCards.set(payload.tool_use_id, card);
     state.history.push({ kind: "permission", card });
@@ -1561,7 +1585,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // If this batch already had a denial, auto-deny immediately
     if (state.batchDenied) {
       card.allowed = false;
-      const cmd = buildPermissionResponseCommand(card.id, false, {});
+      const cmd = buildPermissionResponseCommand(card.id, false, {
+        agentId: card.agentId ?? undefined,
+      });
       this.connection.sendRaw(serializeCommand(cmd));
       if (updateWebview) this.postMessage({ type: "permissionResolved", card });
       return;
@@ -1579,7 +1605,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     card.pendingSelected = selected;
     card.cancelled = cancelled;
     card.completed = true;
-    const cmd = buildChoiceResponseCommand(id, selected, { cancelled });
+    const cmd = buildChoiceResponseCommand(id, selected, {
+      cancelled,
+      agentId: card.agentId ?? undefined,
+    });
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "choiceResolved", card });
   }
@@ -1602,7 +1631,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     card.status = action === "execute" ? "executing" : action === "revise" ? "revising" : "cancelled";
-    this.connection.sendPlanAction(action);
+    this.connection.sendPlanAction(action, card.plan);
     this.postMessage({ type: "planResolved", card });
     if (action === "revise") this.postMessage({ type: "modeChange", mode: "plan" });
     if (action === "execute") this.postMessage({ type: "modeChange", mode: "agent" });
@@ -1614,7 +1643,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     card.allowed = allowed;
-    const cmd = buildPermissionResponseCommand(id, allowed, { alwaysAllow, feedback });
+    const cmd = buildPermissionResponseCommand(id, allowed, {
+      alwaysAllow,
+      feedback,
+      agentId: card.agentId ?? undefined,
+    });
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "permissionResolved", card });
 
@@ -1624,7 +1657,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       for (const [otherId, otherCard] of this.permissionCards) {
         if (otherId !== id && otherCard.allowed === null) {
           otherCard.allowed = false;
-          const otherCmd = buildPermissionResponseCommand(otherId, false, {});
+          const otherCmd = buildPermissionResponseCommand(otherId, false, {
+            agentId: otherCard.agentId ?? undefined,
+          });
           this.connection.sendRaw(serializeCommand(otherCmd));
           this.postMessage({ type: "permissionResolved", card: otherCard });
         }

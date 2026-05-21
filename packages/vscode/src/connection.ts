@@ -207,8 +207,8 @@ export class CrabCodeConnection implements vscode.Disposable {
     this.sendCommand(cmd);
   }
 
-  sendPlanAction(action: "execute" | "revise" | "cancel"): void {
-    const cmd = buildPlanActionCommand(action);
+  sendPlanAction(action: "execute" | "revise" | "cancel", plan?: Record<string, unknown>): void {
+    const cmd = buildPlanActionCommand(action, plan);
     this.sendCommand(cmd);
   }
 
@@ -339,6 +339,7 @@ export class CrabCodeConnection implements vscode.Disposable {
       case "push_context":
       case "switch_model":
       case "set_permission_mode":
+      case "plan_action":
         return true;
       default:
         return false;

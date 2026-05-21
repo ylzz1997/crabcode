@@ -190,6 +190,9 @@ class PlanExecutor:
                         set(active.values()),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    for sid, task in list(pending_tasks.items()):
+                        if task.done():
+                            pending_tasks.pop(sid, None)
                     for t in done:
                         if t.exception():
                             logger.warning("Step task raised: %s", t.exception())
