@@ -23,6 +23,7 @@ from crabcode_core.types.message import (
 def _messages_to_openai(
     messages: list[Message],
     system: list[str],
+    pass_reasoning_content: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert internal messages + system to OpenAI chat format."""
     result: list[dict[str, Any]] = []
@@ -40,6 +41,7 @@ def _messages_to_openai(
             continue
 
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         tool_results: list[dict[str, Any]] = []
 
@@ -62,7 +64,7 @@ def _messages_to_openai(
                     "content": block.content,
                 })
             elif isinstance(block, ThinkingBlock):
-                pass
+                reasoning_parts.append(block.thinking)
 
         if msg.role == MessageRole.ASSISTANT:
             entry: dict[str, Any] = {"role": "assistant"}
@@ -73,6 +75,8 @@ def _messages_to_openai(
                 entry["content"] = None
             if tool_calls:
                 entry["tool_calls"] = tool_calls
+            if pass_reasoning_content and reasoning_parts:
+                entry["reasoning_content"] = "".join(reasoning_parts)
             result.append(entry)
         elif msg.role == MessageRole.USER:
             if tool_results:
@@ -173,7 +177,11 @@ class OpenAIAdapter(APIAdapter):
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": config.max_tokens,
-            "messages": _messages_to_openai(messages, system),
+            "messages": _messages_to_openai(
+                messages,
+                system,
+                pass_reasoning_content=self.config.pass_reasoning_content,
+            ),
             "stream": True,
         }
 
@@ -184,6 +192,10 @@ class OpenAIAdapter(APIAdapter):
         if config.temperature is not None:
             params["temperature"] = config.temperature
 
+        extra_body = safe_utf8_json_tree(dict(self.config.extra_body or {}))
+        if extra_body:
+            params["extra_body"] = extra_body
+
         tool_call_buffers: dict[int, dict[str, str]] = {}
 
         stream = await self.client.chat.completions.create(**params)
@@ -193,6 +205,13 @@ class OpenAIAdapter(APIAdapter):
 
             delta = chunk.choices[0].delta
             finish_reason = chunk.choices[0].finish_reason
+
+            reasoning_content = getattr(delta, "reasoning_content", None)
+            if reasoning_content:
+                yield StreamChunk(
+                    type="thinking",
+                    text=safe_utf8_str(reasoning_content),
+                )
 
             if delta.content:
                 yield StreamChunk(type="text", text=safe_utf8_str(delta.content))

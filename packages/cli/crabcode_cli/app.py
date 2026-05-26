@@ -58,8 +58,12 @@ def main(
         settings.api.format = file_settings.api.format
     if not file_settings.api.thinking_enabled:
         settings.api.thinking_enabled = file_settings.api.thinking_enabled
+    if file_settings.api.pass_reasoning_content:
+        settings.api.pass_reasoning_content = file_settings.api.pass_reasoning_content
     if file_settings.api.max_tokens != 16384:
         settings.api.max_tokens = file_settings.api.max_tokens
+    if file_settings.api.extra_body:
+        settings.api.extra_body = dict(file_settings.api.extra_body)
     if file_settings.api.azure_endpoint:
         settings.api.azure_endpoint = file_settings.api.azure_endpoint
     if file_settings.api.azure_api_version:

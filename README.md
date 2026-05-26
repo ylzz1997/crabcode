@@ -250,6 +250,7 @@ Or configure in `~/.crabcode/settings.json`:
       "X-Workspace": "crabcode"
     },
     "thinking_enabled": false,
+    "pass_reasoning_content": false,
     "max_tokens": 16384
   },
   "env": {
@@ -271,6 +272,7 @@ Or configure in `~/.crabcode/settings.json`:
 | `format` | Wire format for router mode: `anthropic` \| `openai` \| `codex` | — |
 | `thinking_enabled` | Enable extended thinking (set `false` for models that don't support it) | `true` |
 | `thinking_budget` | Thinking token budget | `10000` |
+| `pass_reasoning_content` | Pass stored assistant `reasoning_content` back in OpenAI-compatible chat requests. DeepSeek V4 thinking mode with tool calls requires this. | `false` |
 | `reasoning_effort` | OpenAI Responses/Codex reasoning effort; when set, this takes precedence over the `thinking_budget` mapping. Options: `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | — |
 | `max_tokens` | Maximum output tokens | `16384` |
 | `timeout` | API call timeout in seconds (prevents hanging on slow/unresponsive APIs) | `300` |
@@ -280,6 +282,27 @@ Or configure in `~/.crabcode/settings.json`:
 | `extra_body` | Provider-specific fields appended to the request JSON body | `{}` |
 
 The `env` map lets you define environment variables directly in the config file — they are injected at startup so you don't need to `export` them in your shell.
+
+For DeepSeek V4 thinking mode with tool calls, enable reasoning pass-through:
+
+```json
+{
+  "models": {
+    "deepseek": {
+      "provider": "openai",
+      "model": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "pass_reasoning_content": true,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
+    }
+  }
+}
+```
 
 ### Context Window
 

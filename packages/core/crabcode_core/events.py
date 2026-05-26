@@ -121,8 +121,12 @@ class CoreSession:
             merged.api.anthropic_stream_transport = file_settings.api.anthropic_stream_transport
         if file_settings.api.thinking_enabled is False and self.settings.api.thinking_enabled:
             merged.api.thinking_enabled = file_settings.api.thinking_enabled
+        if file_settings.api.pass_reasoning_content and not self.settings.api.pass_reasoning_content:
+            merged.api.pass_reasoning_content = file_settings.api.pass_reasoning_content
         if file_settings.api.max_tokens != 16384 and self.settings.api.max_tokens == 16384:
             merged.api.max_tokens = file_settings.api.max_tokens
+        if file_settings.api.extra_body and not self.settings.api.extra_body:
+            merged.api.extra_body = dict(file_settings.api.extra_body)
         if file_settings.api.context_window and not self.settings.api.context_window:
             merged.api.context_window = file_settings.api.context_window
         if file_settings.api.azure_endpoint and not self.settings.api.azure_endpoint:

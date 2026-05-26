@@ -250,6 +250,7 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
       "X-Workspace": "crabcode"
     },
     "thinking_enabled": false,
+    "pass_reasoning_content": false,
     "max_tokens": 16384
   },
   "env": {
@@ -271,6 +272,7 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `format` | Router 模式下的协议格式：`anthropic` \| `openai` \| `codex` \| `ollama` \| `gemini` \| `azure` | — |
 | `thinking_enabled` | 是否启用思考模式（不支持该功能的模型需设为 `false`） | `true` |
 | `thinking_budget` | 思考 token 预算 | `10000` |
+| `pass_reasoning_content` | 在 OpenAI 兼容 Chat 请求中回传已保存的 assistant `reasoning_content`。DeepSeek V4 思考模式配合工具调用时需要开启。 | `false` |
 | `reasoning_effort` | OpenAI Responses/Codex 推理强度；显式配置时优先于 `thinking_budget` 映射。可选：`none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | — |
 | `max_tokens` | 最大输出 token 数 | `16384` |
 | `timeout` | API 调用超时时间（秒），防止网络卡住时无限等待 | `300` |
@@ -280,6 +282,27 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `extra_body` | 追加到请求 JSON body 的 provider 专用字段 | `{}` |
 
 `env` 字段用于直接在配置文件中定义环境变量，启动时会自动注入，无需在 shell 中 `export`。
+
+DeepSeek V4 思考模式配合工具调用时，需要开启 reasoning 回传：
+
+```json
+{
+  "models": {
+    "deepseek": {
+      "provider": "openai",
+      "model": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "pass_reasoning_content": true,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
+    }
+  }
+}
+```
 
 ### 上下文窗口管理
 
