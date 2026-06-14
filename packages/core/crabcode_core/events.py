@@ -159,6 +159,8 @@ class CoreSession:
 
         if file_settings.extra_tools and not self.settings.extra_tools:
             merged.extra_tools = file_settings.extra_tools
+        if file_settings.tool_call_timeout is not None and self.settings.tool_call_timeout is None:
+            merged.tool_call_timeout = file_settings.tool_call_timeout
         if file_settings.tool_settings and not self.settings.tool_settings:
             merged.tool_settings = file_settings.tool_settings
         elif file_settings.tool_settings:
@@ -700,6 +702,7 @@ class CoreSession:
             api_config=active_api_cfg,
             context_window=resolved_context_window,
             ai_reviewer=self._ai_reviewer,
+            tool_call_timeout=self.settings.tool_call_timeout,
         )
 
         pre_loop_count = len(self.messages)

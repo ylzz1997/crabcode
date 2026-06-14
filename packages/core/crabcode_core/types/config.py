@@ -170,6 +170,7 @@ class CrabCodeSettings(BaseModel):
     output_style: str | None = None
     prompt_profile: dict[str, Any] | None = None
     extra_tools: list[str] = Field(default_factory=list)
+    tool_call_timeout: float | None = None
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     team: TeamSettings = Field(default_factory=TeamSettings)

@@ -104,6 +104,7 @@ class AgentTool(Tool):
                 is_error=True,
             )
 
+        agent_id: str | None = None
         try:
             agent_id = await manager.spawn_agent(
                 prompt=prompt,
@@ -118,6 +119,10 @@ class AgentTool(Tool):
                 result_for_model=f"status: timed_out\nresult:\nSub-agent timed out after {self._timeout}s",
                 is_error=True,
             )
+        except asyncio.CancelledError:
+            if agent_id:
+                await manager.cancel_agent(agent_id)
+            raise
         except ValueError as exc:
             return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
 

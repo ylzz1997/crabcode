@@ -103,6 +103,7 @@ class QueryParams:
     api_config: ApiConfig | None = None  # passed from session for ModelConfig
     context_window: int = 0  # resolved context window size
     ai_reviewer: AiPermissionReviewer | None = None
+    tool_call_timeout: float | None = None  # seconds; None means no timeout
 
 
 def _append_system_context(
@@ -158,6 +159,7 @@ async def _run_tools(
     tools: list[Tool],
     context: ToolContext,
     hook_manager: Any = None,
+    tool_call_timeout: float | None = None,
 ) -> AsyncGenerator[tuple[list[Message], CoreEvent] | CoreEvent, None]:
     """Execute tool calls, yielding result events and mid-execution events.
 
@@ -266,8 +268,27 @@ async def _run_tools(
                 )
                 return [*extra_messages, msg], event
 
+        timeout_enabled = tool_call_timeout is not None and tool_call_timeout > 0
         try:
-            result = await tool.call(block.input, context)
+            if timeout_enabled:
+                result = await asyncio.wait_for(
+                    tool.call(block.input, context),
+                    timeout=tool_call_timeout,
+                )
+            else:
+                result = await tool.call(block.input, context)
+        except asyncio.TimeoutError as e:
+            if timeout_enabled:
+                result = ToolResult(
+                    result_for_model=f"Tool call timed out after {tool_call_timeout:g}s",
+                    is_error=True,
+                )
+            else:
+                logger.exception("Tool execution timed out: %s", block.name)
+                result = ToolResult(
+                    result_for_model=f"Error executing tool: {e}",
+                    is_error=True,
+                )
         except Exception as e:
             logger.exception("Tool execution failed: %s", block.name)
             result = ToolResult(
@@ -1069,6 +1090,7 @@ async def query_loop(
                 params.tools,
                 params.tool_context,
                 params.hook_manager,
+                params.tool_call_timeout,
             ):
                 if isinstance(item, tuple):
                     msgs, event = item

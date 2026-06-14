@@ -94,12 +94,18 @@ class BashTool(Tool):
                     proc.communicate(), timeout=timeout
                 )
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
                 return ToolResult(
                     result_for_model=f"Command timed out after {timeout}s",
                     is_error=True,
                 )
+            except asyncio.CancelledError:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+                raise
 
             stdout = stdout_bytes.decode("utf-8", errors="replace")
             stderr = stderr_bytes.decode("utf-8", errors="replace")

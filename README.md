@@ -911,6 +911,18 @@ Settings are loaded from multiple layers (later overrides earlier):
 4. Flag settings
 5. `~/.crabcode/managed-settings.json` (policy)
 
+### Tool Call Timeout
+
+By default, CrabCode does not apply a global timeout to tool calls. Set the top-level `tool_call_timeout` field to cap each individual tool execution:
+
+```json
+{
+  "tool_call_timeout": 300
+}
+```
+
+Omit `tool_call_timeout` or set it to `null` to let tool calls run indefinitely. Tool-specific timeouts, such as `Bash.timeout` or `agent.timeout`, still apply independently and may be shorter.
+
 ## CLAUDE.md (project instructions)
 
 `CLAUDE.md` is a Markdown file whose contents are **automatically injected** as context at the start of every conversation — no command needed. Use it to encode project conventions, coding style rules, common commands, and anything else the model should always know about.

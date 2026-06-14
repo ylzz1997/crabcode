@@ -103,6 +103,7 @@ class GrepTool(Tool):
             args.append(pattern)
             args.append(search_path)
 
+        proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
@@ -114,10 +115,18 @@ class GrepTool(Tool):
                 proc.communicate(), timeout=30
             )
         except asyncio.TimeoutError:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
             return ToolResult(
                 result_for_model="Search timed out after 30s",
                 is_error=True,
             )
+        except asyncio.CancelledError:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            raise
         except FileNotFoundError:
             return ToolResult(
                 result_for_model="Error: neither ripgrep (rg) nor grep found on PATH.",

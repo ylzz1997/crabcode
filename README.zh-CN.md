@@ -905,6 +905,18 @@ AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该�
 4. 命令行参数
 5. `~/.crabcode/managed-settings.json`（策略级）
 
+### 工具调用超时
+
+默认情况下，CrabCode 不会对工具调用施加全局超时。可以通过顶层 `tool_call_timeout` 字段限制每次工具执行的最长时间：
+
+```json
+{
+  "tool_call_timeout": 300
+}
+```
+
+省略 `tool_call_timeout` 或设为 `null` 时，工具调用不会因为全局配置而超时。工具自身的超时配置（例如 `Bash.timeout` 或 `agent.timeout`）仍会独立生效，并且可能更短。
+
 ## CLAUDE.md（项目指令文件）
 
 `CLAUDE.md` 是一个 Markdown 文本文件，内容会在每次对话开始时**自动注入**为上下文，无需任何命令。适合用来写项目约定、代码风格要求、常用命令等，让模型在整个项目中始终遵守这些规则。

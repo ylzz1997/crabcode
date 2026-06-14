@@ -194,6 +194,7 @@ async def _run_linter(
             full_cmd.extend(targets)
         full_cmd.extend(suffix_args)
 
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *full_cmd,
@@ -211,9 +212,15 @@ async def _run_linter(
             return stderr, stdout, proc.returncode or 0
         return stdout, stderr, proc.returncode or 0
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
         return "", f"Linter timed out after {timeout}s", -1
+    except asyncio.CancelledError:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        raise
     except FileNotFoundError:
         return "", f"Linter command not found: {cmd[0]}", -1
 
