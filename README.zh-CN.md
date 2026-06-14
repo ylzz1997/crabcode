@@ -267,6 +267,7 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `model` | 模型 ID | — |
 | `base_url` | 自定义 API 地址（适用于第三方转发或本地部署） | — |
 | `api_key_env` | 存放 API Key 的**环境变量名**（不是 Key 本身） | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `codex_auth_path` | Codex CLI OAuth 登录文件路径。仅在 `codex` provider 且未配置 API Key 与 `base_url` 时使用。 | `$CODEX_HOME/auth.json` 或 `~/.codex/auth.json` |
 | `http_headers` | 为该配置的每次 API 请求附加额外 HTTP Header | `{}` |
 | `anthropic_stream_transport` | Anthropic 流式传输实现：`auto` \| `sdk` \| `httpx`。`auto` 下官方 Anthropic 使用 SDK，自定义 `base_url` 使用直接 SSE，适合会拒绝 SDK stream helper 头的转发服务。 | `auto` |
 | `format` | Router 模式下的协议格式：`anthropic` \| `openai` \| `codex` \| `ollama` \| `gemini` \| `azure` | — |
@@ -282,6 +283,18 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `extra_body` | 追加到请求 JSON body 的 provider 专用字段 | `{}` |
 
 `env` 字段用于直接在配置文件中定义环境变量，启动时会自动注入，无需在 shell 中 `export`。
+
+Codex OAuth 用法：将 `provider` 设为 `codex`，并省略 `base_url` 和 API Key 配置。CrabCode 会默认读取 `$CODEX_HOME/auth.json` 或 `~/.codex/auth.json`；需要指定其它位置时配置 `codex_auth_path`：
+
+```json
+{
+  "api": {
+    "provider": "codex",
+    "model": "gpt-5.5",
+    "codex_auth_path": "/Users/you/.codex/auth.json"
+  }
+}
+```
 
 DeepSeek V4 思考模式配合工具调用时，需要开启 reasoning 回传：
 
@@ -426,7 +439,7 @@ CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报
 }
 ```
 
-`models` 下的每个条目都是完整的 `ApiConfig`，可以有各自独立的 `provider`、`base_url`、`api_key_env` 等配置。
+`models` 下的每个条目都是完整的 `ApiConfig`，可以有各自独立的 `provider`、`base_url`、`api_key_env`、`codex_auth_path` 等配置。
 
 **启动时选择模型：**
 

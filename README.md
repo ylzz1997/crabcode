@@ -267,6 +267,7 @@ Or configure in `~/.crabcode/settings.json`:
 | `model` | Model ID | — |
 | `base_url` | Custom API endpoint (for routers or local deployments) | — |
 | `api_key_env` | **Name** of the env var that holds the API key (not the key itself) | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `codex_auth_path` | Codex CLI OAuth auth file path. Used only by the `codex` provider when no API key and no `base_url` are configured. | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` |
 | `http_headers` | Extra HTTP headers to attach to every API request for this config | `{}` |
 | `anthropic_stream_transport` | Anthropic streaming implementation: `auto` \| `sdk` \| `httpx`. In `auto`, first-party Anthropic uses the SDK and custom `base_url` endpoints use direct SSE for proxies that reject SDK stream helper headers. | `auto` |
 | `format` | Wire format for router mode: `anthropic` \| `openai` \| `codex` | — |
@@ -282,6 +283,18 @@ Or configure in `~/.crabcode/settings.json`:
 | `extra_body` | Provider-specific fields appended to the request JSON body | `{}` |
 
 The `env` map lets you define environment variables directly in the config file — they are injected at startup so you don't need to `export` them in your shell.
+
+For Codex OAuth, set `provider` to `codex` and omit `base_url` and API key settings. CrabCode will read the Codex CLI auth file from `$CODEX_HOME/auth.json` or `~/.codex/auth.json`; override it with `codex_auth_path` when needed:
+
+```json
+{
+  "api": {
+    "provider": "codex",
+    "model": "gpt-5.5",
+    "codex_auth_path": "/Users/you/.codex/auth.json"
+  }
+}
+```
 
 For DeepSeek V4 thinking mode with tool calls, enable reasoning pass-through:
 
@@ -430,7 +443,7 @@ Define multiple model profiles in `settings.json` and switch between them at run
 }
 ```
 
-Each entry under `models` is a full `ApiConfig` and can have its own `provider`, `base_url`, `api_key_env`, etc.
+Each entry under `models` is a full `ApiConfig` and can have its own `provider`, `base_url`, `api_key_env`, `codex_auth_path`, etc.
 
 **Select a profile at startup:**
 

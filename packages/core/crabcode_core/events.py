@@ -110,6 +110,8 @@ class CoreSession:
             merged.api.base_url = file_settings.api.base_url
         if file_settings.api.api_key_env and not self.settings.api.api_key_env:
             merged.api.api_key_env = file_settings.api.api_key_env
+        if file_settings.api.codex_auth_path and not self.settings.api.codex_auth_path:
+            merged.api.codex_auth_path = file_settings.api.codex_auth_path
         if file_settings.api.http_headers and not self.settings.api.http_headers:
             merged.api.http_headers = dict(file_settings.api.http_headers)
         if file_settings.api.format and not self.settings.api.format:

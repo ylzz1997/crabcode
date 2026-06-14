@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -24,6 +25,51 @@ from crabcode_core.types.message import (
     ThinkingBlock,
     ImageBlock,
 )
+
+
+OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1"
+CODEX_OAUTH_BASE_URL = "https://chatgpt.com/backend-api/codex"
+CODEX_AUTH_FILENAME = "auth.json"
+
+
+def _default_codex_auth_path() -> Path:
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        return Path(codex_home).expanduser() / CODEX_AUTH_FILENAME
+    return Path.home() / ".codex" / CODEX_AUTH_FILENAME
+
+
+def _resolve_codex_auth_path(config: ApiConfig) -> Path:
+    if config.codex_auth_path:
+        return Path(config.codex_auth_path).expanduser()
+    return _default_codex_auth_path()
+
+
+def _load_codex_oauth(config: ApiConfig) -> tuple[str | None, str | None]:
+    auth_path = _resolve_codex_auth_path(config)
+    try:
+        payload = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+
+    tokens = payload.get("tokens")
+    if not isinstance(tokens, dict):
+        return None, None
+
+    access_token = tokens.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        return None, None
+
+    account_id = tokens.get("account_id")
+    if not isinstance(account_id, str) or not account_id:
+        account_id = None
+
+    return access_token, account_id
+
+
+def _has_header(headers: dict[str, str], name: str) -> bool:
+    needle = name.lower()
+    return any(key.lower() == needle for key in headers)
 
 
 def _messages_to_responses_input(
@@ -266,11 +312,29 @@ class CodexAdapter(APIAdapter):
 
         self.config = config
         api_key = None
+        oauth_account_id = None
+        using_codex_oauth = False
         if config.api_key_env:
             api_key = os.environ.get(config.api_key_env)
         if not api_key:
             api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key and not config.base_url:
+            api_key, oauth_account_id = _load_codex_oauth(config)
+            using_codex_oauth = bool(api_key)
+            if not api_key:
+                auth_path = _resolve_codex_auth_path(config)
+                raise RuntimeError(
+                    "Codex provider requires an API key, a base_url, or a "
+                    f"Codex OAuth auth file at {auth_path}"
+                )
         self._api_key = api_key
+        self._codex_oauth_account_id = oauth_account_id
+        self._using_codex_oauth = using_codex_oauth
+        self._base_url = (
+            CODEX_OAUTH_BASE_URL
+            if using_codex_oauth
+            else config.base_url or OPENAI_RESPONSES_BASE_URL
+        )
 
         kwargs: dict[str, Any] = {}
         if api_key:
@@ -285,7 +349,12 @@ class CodexAdapter(APIAdapter):
     def _raw_responses_headers(self) -> dict[str, str]:
         headers = dict(self.config.http_headers or {})
         if self._api_key:
-            headers.setdefault("Authorization", f"Bearer {self._api_key}")
+            if not _has_header(headers, "Authorization"):
+                headers["Authorization"] = f"Bearer {self._api_key}"
+        if self._codex_oauth_account_id and not _has_header(
+            headers, "ChatGPT-Account-Id"
+        ):
+            headers["ChatGPT-Account-Id"] = self._codex_oauth_account_id
         headers.setdefault("Content-Type", "application/json")
         headers.setdefault("Accept", "text/event-stream")
         return headers
@@ -304,7 +373,7 @@ class CodexAdapter(APIAdapter):
         self,
         params: dict[str, Any],
     ) -> AsyncGenerator[StreamChunk, None]:
-        url = f"{(self.config.base_url or 'https://api.openai.com/v1').rstrip('/')}/responses"
+        url = f"{self._base_url.rstrip('/')}/responses"
         active_calls: dict[str, dict[str, str]] = {}
 
         async with httpx.AsyncClient(timeout=self.config.timeout) as client:
@@ -318,6 +387,12 @@ class CodexAdapter(APIAdapter):
                     response.raise_for_status()
                 except httpx.HTTPStatusError:
                     body = (await response.aread()).decode("utf-8", "replace").strip()
+                    if response.status_code == 401 and self._using_codex_oauth:
+                        body = (
+                            "Codex OAuth token was rejected. Run `codex login` "
+                            "to refresh your Codex auth file, or configure "
+                            "api_key_env/base_url instead."
+                        )
                     yield StreamChunk(
                         type="error",
                         error=safe_utf8_str(body or f"HTTP {response.status_code}"),
@@ -511,6 +586,11 @@ class CodexAdapter(APIAdapter):
         raw_params = dict(params)
         if extra_body:
             raw_params.update(extra_body)
+
+        if self._using_codex_oauth:
+            async for chunk in self._stream_via_httpx(raw_params):
+                yield chunk
+            return
 
         # Track active function calls by item_id
         active_calls: dict[str, dict[str, str]] = {}

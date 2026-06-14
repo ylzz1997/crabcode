@@ -63,6 +63,7 @@ class ApiConfig(BaseModel):
     model: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
+    codex_auth_path: str | None = None
     http_headers: dict[str, str] = Field(default_factory=dict)
     format: str | None = None  # anthropic | openai | codex | ollama | gemini | azure (for routers)
     max_tokens: int = 16384
