@@ -274,7 +274,7 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `thinking_enabled` | 是否启用思考模式（不支持该功能的模型需设为 `false`） | `true` |
 | `thinking_budget` | 思考 token 预算 | `10000` |
 | `pass_reasoning_content` | 在 OpenAI 兼容 Chat 请求中回传已保存的 assistant `reasoning_content`。DeepSeek V4 思考模式配合工具调用时需要开启。 | `false` |
-| `reasoning_effort` | OpenAI Responses/Codex 推理强度；显式配置时优先于 `thinking_budget` 映射。可选：`none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | — |
+| `reasoning_effort` | 模型推理强度。OpenAI Responses/Codex 通过 `reasoning.effort` 发送；Anthropic 将其支持的值通过 `output_config.effort` 发送。显式配置时优先于 Codex 的 `thinking_budget` 映射。可选：`none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`（具体可用值取决于模型和 provider）。 | — |
 | `max_tokens` | 最大输出 token 数 | `16384` |
 | `timeout` | API 调用超时时间（秒），防止网络卡住时无限等待 | `300` |
 | `context_window` | 覆盖模型的上下文窗口大小（token 数）。当自动检测失败或不准确时使用——详见下方[上下文窗口管理](#上下文窗口管理)。 | 自动检测 |
@@ -917,6 +917,18 @@ AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该�
 3. `<项目>/.crabcode/settings.local.json`（本地级，已加入 .gitignore）
 4. 命令行参数
 5. `~/.crabcode/managed-settings.json`（策略级）
+
+### Ultra 模式
+
+将顶层 `ultra_mode` 字段设为 `true` 后，主模型会主动把非简单任务拆分给大量子 agent，并行执行彼此独立的工作：
+
+```json
+{
+  "ultra_mode": true
+}
+```
+
+`ultra_mode` 默认为 `false`。该配置会改变模型的任务委派指引；实际并发量仍受 `agent.max_concurrency` 和 `agent.max_active_agents_per_run` 限制。
 
 ### 工具调用超时
 

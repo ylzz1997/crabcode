@@ -161,6 +161,8 @@ class CoreSession:
 
         if file_settings.extra_tools and not self.settings.extra_tools:
             merged.extra_tools = file_settings.extra_tools
+        if file_settings.ultra_mode and not self.settings.ultra_mode:
+            merged.ultra_mode = file_settings.ultra_mode
         if file_settings.tool_call_timeout is not None and self.settings.tool_call_timeout is None:
             merged.tool_call_timeout = file_settings.tool_call_timeout
         if file_settings.tool_settings and not self.settings.tool_settings:
@@ -661,6 +663,7 @@ class CoreSession:
             language=self.settings.language,
             profile=profile,
             agent_mode=self._agent_mode,
+            ultra_mode=self.settings.ultra_mode,
         )
         system_context = get_system_context(self.cwd)
         user_context = get_user_context(self.cwd)

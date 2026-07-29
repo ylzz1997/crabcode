@@ -588,6 +588,13 @@ class CodexAdapter(APIAdapter):
             raw_params.update(extra_body)
 
         if self._using_codex_oauth:
+            # The Codex OAuth endpoint does not support server-side response
+            # storage and rejects requests unless this is explicitly false.
+            # Force the required value even if extra_body contains store=true.
+            raw_params["store"] = False
+            # Output limits are managed by the Codex backend; unlike the public
+            # Responses API, its OAuth endpoint rejects max_output_tokens.
+            raw_params.pop("max_output_tokens", None)
             async for chunk in self._stream_via_httpx(raw_params):
                 yield chunk
             return

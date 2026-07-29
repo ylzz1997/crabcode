@@ -71,7 +71,9 @@ class ApiConfig(BaseModel):
     thinking_budget: int = 10000
     pass_reasoning_content: bool = False
     anthropic_stream_transport: Literal["auto", "sdk", "httpx"] = "auto"
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max"
+    ] | None = None
     timeout: int = 300  # seconds, for API calls
     context_window: int | None = None  # override auto-detected context window
     prompt_cache_key: str | None = None  # OpenAI Responses API prompt cache routing key
@@ -171,6 +173,7 @@ class CrabCodeSettings(BaseModel):
     output_style: str | None = None
     prompt_profile: dict[str, Any] | None = None
     extra_tools: list[str] = Field(default_factory=list)
+    ultra_mode: bool = False
     tool_call_timeout: float | None = None
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)

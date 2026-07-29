@@ -72,6 +72,8 @@ def main(
         settings.api.azure_api_version = file_settings.api.azure_api_version
     if file_settings.api.azure_deployment:
         settings.api.azure_deployment = file_settings.api.azure_deployment
+    if file_settings.ultra_mode:
+        settings.ultra_mode = True
     if file_settings.tool_call_timeout is not None:
         settings.tool_call_timeout = file_settings.tool_call_timeout
 

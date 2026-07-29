@@ -354,6 +354,9 @@ class AnthropicAdapter(APIAdapter):
                 "budget_tokens": config.thinking_budget,
             }
 
+        if config.reasoning_effort in {"low", "medium", "high", "xhigh", "max"}:
+            params["output_config"] = {"effort": config.reasoning_effort}
+
         if config.temperature is not None:
             params["temperature"] = config.temperature
 

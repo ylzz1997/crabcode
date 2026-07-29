@@ -274,7 +274,7 @@ Or configure in `~/.crabcode/settings.json`:
 | `thinking_enabled` | Enable extended thinking (set `false` for models that don't support it) | `true` |
 | `thinking_budget` | Thinking token budget | `10000` |
 | `pass_reasoning_content` | Pass stored assistant `reasoning_content` back in OpenAI-compatible chat requests. DeepSeek V4 thinking mode with tool calls requires this. | `false` |
-| `reasoning_effort` | OpenAI Responses/Codex reasoning effort; when set, this takes precedence over the `thinking_budget` mapping. Options: `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | — |
+| `reasoning_effort` | Model reasoning effort. OpenAI Responses/Codex sends it as `reasoning.effort`; Anthropic sends supported values as `output_config.effort`. When set, it takes precedence over the Codex `thinking_budget` mapping. Options: `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` (availability depends on the model/provider). | — |
 | `max_tokens` | Maximum output tokens | `16384` |
 | `timeout` | API call timeout in seconds (prevents hanging on slow/unresponsive APIs) | `300` |
 | `context_window` | Override the model's context window size (tokens). Used when auto-detection fails or is inaccurate — see [Context Window](#context-window) below. | auto-detected |
@@ -923,6 +923,18 @@ Settings are loaded from multiple layers (later overrides earlier):
 3. `<project>/.crabcode/settings.local.json` (local, gitignored)
 4. Flag settings
 5. `~/.crabcode/managed-settings.json` (policy)
+
+### Ultra Mode
+
+Set the top-level `ultra_mode` field to make the main model proactively split non-trivial work across many sub-agents and run independent tasks in parallel:
+
+```json
+{
+  "ultra_mode": true
+}
+```
+
+`ultra_mode` defaults to `false`. It changes the model's delegation guidance; actual parallelism remains bounded by `agent.max_concurrency` and `agent.max_active_agents_per_run`.
 
 ### Tool Call Timeout
 
