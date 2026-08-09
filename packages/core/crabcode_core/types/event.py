@@ -7,7 +7,10 @@ consume them to render output, handle permission prompts, etc.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
+
+if TYPE_CHECKING:
+    from crabcode_core.types.message import Message
 
 
 @dataclass
@@ -70,6 +73,12 @@ class CompactEvent:
     summary: str
     messages_before: int = 0
     messages_after: int = 0
+    trigger: str = "auto"
+    agent_id: str | None = None
+    # Internal frozen snapshots used by CoreSession for ordered persistence.
+    # Frontend payload converters intentionally expose only the fields above.
+    source_messages: list[Message] | None = field(default=None, repr=False)
+    checkpoint_messages: list[Message] | None = field(default=None, repr=False)
 
 
 @dataclass

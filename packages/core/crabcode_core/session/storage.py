@@ -40,6 +40,29 @@ def _dump_jsonl_line(obj: Any) -> str:
     return json.dumps(safe_utf8_json_tree(obj), ensure_ascii=False) + "\n"
 
 
+def _message_to_entry(message: Message) -> dict[str, Any]:
+    """Serialize all message state needed to reconstruct active context."""
+    entry: dict[str, Any] = {
+        "type": message.role.value,
+        "uuid": message.uuid,
+        "parent_uuid": message.parent_uuid,
+        "timestamp": message.timestamp,
+        "is_compact_summary": message.is_compact_summary,
+        "content": message.content if isinstance(message.content, str) else [
+            block.model_dump() for block in message.content
+        ],
+    }
+    for field in ("tool_use_result", "source_tool_assistant_uuid", "api_error", "usage", "request_id"):
+        value = getattr(message, field, None)
+        if value is not None:
+            entry[field] = value
+    return entry
+
+
+def _is_message_entry(entry: dict[str, Any]) -> bool:
+    return entry.get("type") in {"user", "assistant", "system"}
+
+
 def get_project_dir(cwd: str) -> Path:
     """Get the project-specific session directory."""
     return get_projects_dir() / _sanitize_path(os.path.abspath(cwd))
@@ -109,6 +132,7 @@ class SessionStorage:
         self._meta: dict[str, Any] = {}
         self.last_context_used_tokens: int = 0
         self.last_context_window_tokens: int = 0
+        self.compact_count: int = 0
 
     def _ensure_dir(self) -> None:
         if not self._initialized:
@@ -289,31 +313,66 @@ class SessionStorage:
         """Append a message to the session transcript (skips duplicates by uuid)."""
         if message.uuid in self._written_uuids:
             return
-        self._written_uuids.add(message.uuid)
 
         self._ensure_dir()
-        entry = {
-            "type": message.role.value,
-            "uuid": message.uuid,
-            "parent_uuid": message.parent_uuid,
-            "timestamp": message.timestamp,
-            "content": message.content if isinstance(message.content, str) else [
-                block.model_dump() for block in message.content
-            ],
-        }
+        entry = _message_to_entry(message)
         with open(self._transcript_path, "a", encoding="utf-8") as f:
             f.write(_dump_jsonl_line(entry))
+        self._written_uuids.add(message.uuid)
 
-    def load_messages(self) -> list[dict[str, Any]]:
-        """Load all messages from the session transcript (deduped by uuid).
+    def append_compaction(
+        self,
+        messages: list[Message],
+        *,
+        trigger: str,
+        messages_before: int,
+        estimated_tokens_before: int = 0,
+        estimated_tokens_after: int = 0,
+    ) -> str | None:
+        """Durably commit an active-context checkpoint in one JSONL record."""
+        if not messages or not messages[0].is_compact_summary:
+            return None
+        checkpoint_id = str(uuid.uuid4())
+        snapshot = [_message_to_entry(message) for message in messages]
+        entry = {
+            "type": "compact_boundary",
+            "checkpoint_id": checkpoint_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "trigger": trigger,
+            "messages_before": messages_before,
+            "messages_after": len(messages),
+            "estimated_tokens_before": max(0, estimated_tokens_before),
+            "estimated_tokens_after": max(0, estimated_tokens_after),
+            "tail_start_uuid": messages[1].uuid if len(messages) > 1 else None,
+            "summary_uuid": messages[0].uuid,
+            "messages": snapshot,
+        }
+        self._ensure_dir()
+        with open(self._transcript_path, "a", encoding="utf-8") as f:
+            f.write(_dump_jsonl_line(entry))
+            f.flush()
+            os.fsync(f.fileno())
+        for message in messages:
+            self._written_uuids.add(message.uuid)
+        self.compact_count += 1
+        return checkpoint_id
 
-        Skips session_meta lines (they are metadata, not conversation messages).
+    def load_messages(self, *, full_history: bool = False) -> list[dict[str, Any]]:
+        """Load the active context, or the durable audit history when requested.
+
+        A completed ``compact_boundary`` atomically replaces the active projection
+        with its embedded checkpoint snapshot. Earlier ordinary messages remain in
+        the transcript for export and audit, but are not replayed to the model.
         """
         if not self._transcript_path.exists():
             return []
 
-        messages: list[dict[str, Any]] = []
+        self.compact_count = 0
+        all_messages: list[dict[str, Any]] = []
+        active_messages: list[dict[str, Any]] = []
         seen: set[str] = set()
+        active_seen: set[str] = set()
+        boundary_seen = False
         meta: dict[str, Any] = {}
         try:
             with open(self._transcript_path, encoding="utf-8") as f:
@@ -326,7 +385,10 @@ class SessionStorage:
                     except json.JSONDecodeError:
                         continue
 
-                    # Capture the session_meta line but don't add it as a message
+                    if not isinstance(entry, dict):
+                        continue
+
+                    # Capture the session_meta line but don't add it as a message.
                     if entry.get("type") == "session_meta":
                         meta = {k: v for k, v in entry.items() if k != "type"}
                         continue
@@ -337,12 +399,58 @@ class SessionStorage:
                         self.last_context_window_tokens = int(entry.get("window_tokens", 0))
                         continue
 
+                    if entry.get("type") == "compact_boundary":
+                        snapshot = entry.get("messages")
+                        if not isinstance(snapshot, list):
+                            continue
+                        restored = [
+                            item for item in snapshot
+                            if isinstance(item, dict) and _is_message_entry(item)
+                        ]
+                        if not restored or not restored[0].get("is_compact_summary"):
+                            continue
+                        active_messages = []
+                        active_seen = set()
+                        for item in restored:
+                            item_uuid = str(item.get("uuid") or "")
+                            was_seen = bool(item_uuid and item_uuid in seen)
+                            if item_uuid and item_uuid in active_seen:
+                                continue
+                            if item_uuid:
+                                active_seen.add(item_uuid)
+                                seen.add(item_uuid)
+                            active_messages.append(item)
+                            # A boundary can contain messages produced earlier in
+                            # the current agentic turn. They may not have ordinary
+                            # JSONL records yet, so retain their first appearance in
+                            # the audit/export view as well as in active context.
+                            if full_history and (not item_uuid or not was_seen):
+                                all_messages.append(item)
+                        boundary_seen = True
+                        self.compact_count += 1
+                        continue
+
+                    # Checkpoint, rollback, and future metadata records must never be
+                    # reconstructed as empty user messages.
+                    if not _is_message_entry(entry):
+                        continue
+
                     msg_uuid = entry.get("uuid", "")
                     if msg_uuid and msg_uuid in seen:
+                        # A normal record written after a boundary can duplicate a
+                        # message embedded in that boundary; keep only one active copy.
+                        if boundary_seen and msg_uuid not in active_seen:
+                            active_seen.add(msg_uuid)
+                            active_messages.append(entry)
                         continue
                     if msg_uuid:
                         seen.add(msg_uuid)
-                    messages.append(entry)
+                    all_messages.append(entry)
+                    if boundary_seen:
+                        if not msg_uuid or msg_uuid not in active_seen:
+                            if msg_uuid:
+                                active_seen.add(msg_uuid)
+                            active_messages.append(entry)
         except Exception:
             logger.warning("Failed to load transcript: %s", self._transcript_path, exc_info=True)
 
@@ -350,7 +458,9 @@ class SessionStorage:
         if meta:
             self._meta = meta
             self._meta_written = True
-        return messages
+        if full_history:
+            return all_messages
+        return active_messages if boundary_seen else all_messages
 
     def update_title(self, title: str) -> None:
         """Update the session title in SQLite and in-memory meta."""

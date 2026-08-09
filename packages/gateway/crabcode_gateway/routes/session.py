@@ -199,8 +199,8 @@ async def compact_session(req: CompactRequest, request: Request):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Session not found")
 
-    await session.compact()
-    return {"status": "ok"}
+    accepted = await session.compact(req.custom_instructions)
+    return {"status": "ok" if accepted else "not_compacted"}
 
 
 @router.post("/interrupt")

@@ -17,6 +17,7 @@ from crabcode_core.types.event import (
     AgentStateEvent,
     ChoiceRequestEvent,
     ChoiceResponseEvent,
+    CompactEvent,
     CoreEvent,
     ErrorEvent,
     PermissionRequestEvent,
@@ -491,6 +492,8 @@ class AgentManager:
                     context_window=resolved_cw,
                     ai_reviewer=getattr(self, "_ai_reviewer", None),
                     tool_call_timeout=self._settings.tool_call_timeout,
+                    auto_compact_enabled=self._settings.auto_compact_enabled,
+                    compact_threshold=self._settings.max_context_length,
                 )
                 final_usage: dict[str, Any] = {}
                 async for event in query_loop(params):
@@ -593,7 +596,19 @@ class AgentManager:
             run.snapshot.error = event.message
             await self._event_sink(event)
             return
+        if isinstance(event, CompactEvent):
+            await self._event_sink(
+                CompactEvent(
+                    summary=event.summary,
+                    messages_before=event.messages_before,
+                    messages_after=event.messages_after,
+                    trigger=event.trigger,
+                    agent_id=agent_id,
+                )
+            )
+            return
         if isinstance(event, TurnCompleteEvent):
-            await self._event_sink(event)
+            # AgentStateEvent carries sub-agent completion. Forwarding this raw
+            # event would be indistinguishable from the parent turn completing.
             return
         await self._event_sink(event)

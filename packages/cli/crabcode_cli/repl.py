@@ -2314,8 +2314,11 @@ async def _handle_command(
         return True
 
     if cmd == "/compact":
-        await session.compact()
-        console.print("[dim]Conversation compacted.[/]")
+        accepted = await session.compact(arg or None)
+        if accepted:
+            console.print("[dim]Conversation compacted (or queued at the active turn boundary).[/]")
+        else:
+            console.print("[dim]Not enough history to compact, or checkpoint generation failed.[/]")
         return True
 
     if cmd == "/clear":

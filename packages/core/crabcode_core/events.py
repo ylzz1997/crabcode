@@ -72,6 +72,9 @@ class CoreSession:
         self._current_plan: Any = None  # ExecutionPlan | None
         self._title_generation_task: asyncio.Task[None] | None = None
         self._team_manager: Any = None  # TeamManager
+        self._turn_lock = asyncio.Lock()
+        self._pending_manual_compact: str | None = None
+        self._persisted_compact_summaries: set[str] = set()
         # Extension UI override: "ask" | "run_everything" | "ai_review" | None (follow file init only)
         self._client_permission_mode_override: str | None = None
 
@@ -161,6 +164,16 @@ class CoreSession:
 
         if file_settings.extra_tools and not self.settings.extra_tools:
             merged.extra_tools = file_settings.extra_tools
+        if (
+            "auto_compact_enabled" in file_settings.model_fields_set
+            and "auto_compact_enabled" not in self.settings.model_fields_set
+        ):
+            merged.auto_compact_enabled = file_settings.auto_compact_enabled
+        if (
+            file_settings.max_context_length is not None
+            and "max_context_length" not in self.settings.model_fields_set
+        ):
+            merged.max_context_length = file_settings.max_context_length
         if file_settings.ultra_mode and not self.settings.ultra_mode:
             merged.ultra_mode = file_settings.ultra_mode
         if file_settings.tool_call_timeout is not None and self.settings.tool_call_timeout is None:
@@ -488,6 +501,31 @@ class CoreSession:
         max_turns: int = 0,
         images: list[dict[str, Any]] | None = None,
     ) -> AsyncGenerator[CoreEvent, None]:
+        """Serialize turns and settle a queued manual compact at a safe boundary."""
+        await self.initialize()
+        async with self._turn_lock:
+            try:
+                async for event in self._send_message_impl(
+                    text,
+                    max_turns=max_turns,
+                    images=images,
+                ):
+                    yield event
+            finally:
+                if self._pending_manual_compact is not None:
+                    instructions = self._pending_manual_compact
+                    self._pending_manual_compact = None
+                    await self._compact_now(
+                        trigger="manual",
+                        custom_instructions=instructions or None,
+                    )
+
+    async def _send_message_impl(
+        self,
+        text: str,
+        max_turns: int = 0,
+        images: list[dict[str, Any]] | None = None,
+    ) -> AsyncGenerator[CoreEvent, None]:
         """Send a user message and stream back events.
 
         Args:
@@ -500,7 +538,6 @@ class CoreSession:
         self._ensure_session_storage()
         self._abort_controller.clear()
 
-        from crabcode_core.compact.compact import should_auto_compact, compact_conversation
         from crabcode_core.prompts.context import get_system_context, get_user_context
         from crabcode_core.prompts.profile import PromptProfile
         from crabcode_core.prompts.system import get_system_prompt
@@ -617,38 +654,6 @@ class CoreSession:
                 or DEFAULT_CONTEXT_WINDOW
             )
 
-        compact_threshold: int
-        if self.settings.max_context_length is not None:
-            compact_threshold = self.settings.max_context_length
-        elif resolved_context_window > 0:
-            from crabcode_core.compact.compact import AUTOCOMPACT_BUFFER_TOKENS
-            compact_threshold = resolved_context_window - active_api_cfg.max_tokens - AUTOCOMPACT_BUFFER_TOKENS
-        else:
-            from crabcode_core.compact.compact import DEFAULT_COMPACT_THRESHOLD
-            compact_threshold = DEFAULT_COMPACT_THRESHOLD
-
-        if self.settings.auto_compact_enabled and should_auto_compact(self.messages, threshold=compact_threshold):
-            compact_result = await compact_conversation(
-                self.messages,
-                api_adapter=self._api_adapter,
-            )
-            if compact_result:
-                old_count = len(self.messages)
-                self.messages = compact_result
-                self.compact_count += 1
-                # Persist compact summary to session metadata
-                if self._session_storage and compact_result:
-                    summary_text = compact_result[0].text_content if compact_result[0].text_content else ""
-                    if summary_text.startswith("[Conversation summary: "):
-                        summary_text = summary_text[len("[Conversation summary: "):-1]
-                    if summary_text:
-                        self._session_storage.update_summary(summary_text)
-                yield CompactEvent(
-                    summary="Conversation auto-compacted",
-                    messages_before=old_count,
-                    messages_after=len(self.messages),
-                )
-
         tool_names = [t.name for t in self.tools if t.is_enabled]
         model = active_api_cfg.model or "claude-sonnet-4-20250514"
 
@@ -708,9 +713,10 @@ class CoreSession:
             context_window=resolved_context_window,
             ai_reviewer=self._ai_reviewer,
             tool_call_timeout=self.settings.tool_call_timeout,
+            auto_compact_enabled=self.settings.auto_compact_enabled,
+            compact_threshold=self.settings.max_context_length,
         )
 
-        pre_loop_count = len(self.messages)
         merged_events: asyncio.Queue[CoreEvent | None] = asyncio.Queue()
 
         async def _produce_main_events() -> None:
@@ -746,6 +752,25 @@ class CoreSession:
                 event = await merged_events.get()
                 if event is None:
                     break
+                if isinstance(event, CompactEvent) and event.agent_id is None:
+                    # Commit any full in-flight messages before the compact boundary,
+                    # then use the event's frozen projection. Reading params here is
+                    # racy because the producer may already be processing the retry.
+                    source_messages = event.source_messages or []
+                    checkpoint_messages = event.checkpoint_messages or list(params.messages)
+                    if self._session_storage:
+                        for msg in source_messages:
+                            self._session_storage.append_message(msg)
+                    self.messages = checkpoint_messages
+                    from crabcode_core.compact.compact import estimate_token_count
+                    self._persist_compaction(
+                        self.messages,
+                        trigger=event.trigger,
+                        messages_before=event.messages_before,
+                        estimated_tokens_before=estimate_token_count(source_messages),
+                    )
+                    event.source_messages = None
+                    event.checkpoint_messages = None
                 if isinstance(event, TurnCompleteEvent):
                     self.messages = params.messages
                     if event.context_used_tokens or event.context_window_tokens:
@@ -753,7 +778,9 @@ class CoreSession:
                         self.last_context_window_tokens = event.context_window_tokens
 
                     if self._session_storage:
-                        for msg in self.messages[pre_loop_count:]:
+                        # UUID de-duplication makes this safe across compaction, where
+                        # list indices no longer correspond to the pre-loop history.
+                        for msg in self.messages:
                             self._session_storage.append_message(msg)
                         total_tokens = event.usage.get("input_tokens", 0) + event.usage.get("output_tokens", 0)
                         if total_tokens > 0:
@@ -801,6 +828,9 @@ class CoreSession:
         from crabcode_core.session.storage import SessionStorage, generate_session_id
 
         self.messages.clear()
+        self.compact_count = 0
+        self._persisted_compact_summaries.clear()
+        self._pending_manual_compact = None
         self.session_id = generate_session_id()
         self._session_storage = SessionStorage(self.cwd, self.session_id)
         # Write meta for the new session
@@ -815,22 +845,112 @@ class CoreSession:
             self._agent_manager.restore_snapshots([])
         return self.session_id
 
-    async def compact(self) -> None:
-        """Manually trigger conversation compaction."""
-        from crabcode_core.compact.compact import compact_conversation
+    def _persist_compaction(
+        self,
+        messages: list[Message],
+        *,
+        trigger: str,
+        messages_before: int,
+        estimated_tokens_before: int = 0,
+    ) -> bool:
+        """Persist a compact snapshot once and update session metadata."""
+        if not messages or not messages[0].is_compact_summary:
+            return False
+        summary_message = messages[0]
+        if summary_message.uuid in self._persisted_compact_summaries:
+            return False
+
+        from crabcode_core.compact.compact import compact_summary_text, estimate_token_count
+
+        self._ensure_session_storage()
+        if self._session_storage:
+            self._session_storage.append_compaction(
+                messages,
+                trigger=trigger,
+                messages_before=max(0, messages_before),
+                estimated_tokens_before=estimated_tokens_before,
+                estimated_tokens_after=estimate_token_count(messages),
+            )
+            summary = compact_summary_text(summary_message)
+            if summary:
+                self._session_storage.update_summary(summary)
+        self._persisted_compact_summaries.add(summary_message.uuid)
+        self.compact_count += 1
+        return True
+
+    async def _compact_now(
+        self,
+        *,
+        trigger: str,
+        custom_instructions: str | None = None,
+    ) -> bool:
+        from crabcode_core.compact.compact import compact_conversation, compact_summary_text
+
+        old_count = len(self.messages)
+        if old_count < 4:
+            return False
+
+        from crabcode_core.compact.compact import estimate_token_count
+        estimated_tokens_before = estimate_token_count(self.messages)
+
+        if self._hook_manager:
+            pre = await self._hook_manager.run(
+                "pre_compact",
+                {
+                    "session_id": self.session_id,
+                    "trigger": trigger,
+                    "custom_instructions": custom_instructions or "",
+                },
+                cwd=self.cwd,
+                env=self.settings.env,
+            )
+            if pre.blocked:
+                return False
+
+        context_window = 0
+        if hasattr(self._api_adapter, "resolve_context_window"):
+            context_window = await self._api_adapter.resolve_context_window()
         result = await compact_conversation(
             self.messages,
             api_adapter=self._api_adapter,
+            custom_instructions=custom_instructions,
+            context_window=context_window,
         )
-        if result:
-            self.messages = result
-            self.compact_count += 1
-            if self._session_storage and result:
-                summary_text = result[0].text_content if result[0].text_content else ""
-                if summary_text.startswith("[Conversation summary: "):
-                    summary_text = summary_text[len("[Conversation summary: "):-1]
-                if summary_text:
-                    self._session_storage.update_summary(summary_text)
+        if not result:
+            return False
+
+        self.messages = result
+        self._persist_compaction(
+            result,
+            trigger=trigger,
+            messages_before=old_count,
+            estimated_tokens_before=estimated_tokens_before,
+        )
+        if self._hook_manager:
+            await self._hook_manager.run(
+                "post_compact",
+                {
+                    "session_id": self.session_id,
+                    "trigger": trigger,
+                    "compact_summary": compact_summary_text(result[0]),
+                },
+                cwd=self.cwd,
+                env=self.settings.env,
+            )
+        return True
+
+    async def compact(self, custom_instructions: str | None = None) -> bool:
+        """Run manual compaction now, or coalesce it at the active turn boundary."""
+        await self.initialize()
+        instructions = (custom_instructions or "").strip()
+        if self._turn_lock.locked():
+            self._pending_manual_compact = instructions
+            return True
+        async with self._turn_lock:
+            return await self._compact_now(
+                trigger="manual",
+                custom_instructions=instructions or None,
+            )
 
     def checkpoint(self, label: str = "") -> str | None:
         """Create a checkpoint at the current conversation position.
@@ -1129,6 +1249,8 @@ class CoreSession:
         self.session_id = session_id
         self._session_storage = storage
         self.messages.clear()
+        self.compact_count = storage.compact_count
+        self._persisted_compact_summaries.clear()
         if self._agent_manager:
             self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
             self._agent_manager.restore_snapshots(agent_snapshots)
@@ -1189,10 +1311,17 @@ class CoreSession:
                 kwargs["uuid"] = msg_uuid
             if parent_uuid:
                 kwargs["parent_uuid"] = parent_uuid
+            if raw.get("timestamp"):
+                kwargs["timestamp"] = raw["timestamp"]
+            if raw.get("is_compact_summary"):
+                kwargs["is_compact_summary"] = True
 
             if role == "user":
                 self.messages.append(create_user_message(content=content, **kwargs))
             elif role == "assistant":
                 self.messages.append(create_assistant_message(content=content, **kwargs))
+
+        if self.messages and self.messages[0].is_compact_summary:
+            self._persisted_compact_summaries.add(self.messages[0].uuid)
 
         return True

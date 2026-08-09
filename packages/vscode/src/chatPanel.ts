@@ -414,7 +414,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           void this.fetchAndSendSkills();
           break;
         case "compact":
-          void this.triggerCompact();
+          void this.triggerCompact(msg.customInstructions);
           break;
         case "newSession": {
           const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
@@ -622,7 +622,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async triggerCompact(): Promise<void> {
+  private async triggerCompact(customInstructions?: string): Promise<void> {
     const cfg = vscode.workspace.getConfiguration("crabcode");
     const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
     const password = cfg.get<string>("password", "");
@@ -638,7 +638,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       await fetch(url.toString(), {
         method: "POST",
         headers,
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          custom_instructions: customInstructions?.trim() || null,
+        }),
       });
     } catch {
       // ignore
@@ -5491,8 +5494,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (args) vscode.postMessage({ type: 'setModel', name: args });
         return !!args;
       },
-      '/compact': function() {
-        vscode.postMessage({ type: 'compact' });
+      '/compact': function(args) {
+        vscode.postMessage({ type: 'compact', customInstructions: args || '' });
         return true;
       },
       '/new': function() {

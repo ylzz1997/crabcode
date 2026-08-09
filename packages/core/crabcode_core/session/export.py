@@ -23,14 +23,14 @@ def _format_ts(ts: Any) -> str:
 def export_markdown(session_id: str, cwd: str) -> str:
     """Export a session transcript as Markdown."""
     storage = SessionStorage(cwd, session_id)
-    raw_messages = storage.load_messages()
+    raw_messages = storage.load_messages(full_history=True)
     meta = storage.meta
 
     if not raw_messages and not meta:
         cross = SessionStorage.from_session_id(session_id)
         if cross:
             storage = cross
-            raw_messages = storage.load_messages()
+            raw_messages = storage.load_messages(full_history=True)
             meta = storage.meta
 
     lines: list[str] = []
@@ -95,14 +95,14 @@ def export_markdown(session_id: str, cwd: str) -> str:
 def export_json(session_id: str, cwd: str) -> str:
     """Export a session transcript as formatted JSON."""
     storage = SessionStorage(cwd, session_id)
-    raw_messages = storage.load_messages()
+    raw_messages = storage.load_messages(full_history=True)
     meta = storage.meta
 
     if not raw_messages and not meta:
         cross = SessionStorage.from_session_id(session_id)
         if cross:
             storage = cross
-            raw_messages = storage.load_messages()
+            raw_messages = storage.load_messages(full_history=True)
             meta = storage.meta
 
     data = {

@@ -12,7 +12,15 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Coroutine
 
 from crabcode_core.api.base import APIAdapter, ModelConfig
-from crabcode_core.compact.compact import compact_conversation, estimate_token_count
+from crabcode_core.compact.compact import (
+    DEFAULT_COMPACT_BUFFER_TOKENS,
+    compact_conversation,
+    compact_summary_text,
+    compaction_input_limit,
+    conversation_turn_starts,
+    estimate_token_count,
+    should_auto_compact,
+)
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.types.event import (
@@ -104,6 +112,8 @@ class QueryParams:
     context_window: int = 0  # resolved context window size
     ai_reviewer: AiPermissionReviewer | None = None
     tool_call_timeout: float | None = None  # seconds; None means no timeout
+    auto_compact_enabled: bool = True
+    compact_threshold: int | None = None
 
 
 def _append_system_context(
@@ -160,7 +170,7 @@ async def _run_tools(
     context: ToolContext,
     hook_manager: Any = None,
     tool_call_timeout: float | None = None,
-) -> AsyncGenerator[tuple[list[Message], CoreEvent] | CoreEvent, None]:
+) -> AsyncGenerator[tuple[list[Message], ToolResultEvent] | CoreEvent, None]:
     """Execute tool calls, yielding result events and mid-execution events.
 
     Runs concurrency-safe tools in parallel, others sequentially.
@@ -197,7 +207,7 @@ async def _run_tools(
             )
         return msgs
 
-    async def execute_one(block: ToolUseBlock) -> tuple[list[Message], CoreEvent]:
+    async def execute_one(block: ToolUseBlock) -> tuple[list[Message], ToolResultEvent]:
         tool = _find_tool(tools, block.name)
         if not tool:
             msg = create_tool_result_message(
@@ -341,15 +351,15 @@ async def _run_tools(
         return [*extra_messages, msg], event
 
     async def _run_with_event_drain(
-        coro: Coroutine[Any, Any, tuple[list[Message], CoreEvent]],
-    ) -> AsyncGenerator[tuple[list[Message], CoreEvent] | CoreEvent, None]:
+        coro: Coroutine[Any, Any, tuple[list[Message], ToolResultEvent]],
+    ) -> AsyncGenerator[tuple[list[Message], ToolResultEvent] | CoreEvent, None]:
         """Run a tool coroutine while draining mid-execution events from the queue.
 
         This solves the deadlock: a tool like AskUserTool puts a ChoiceRequestEvent
         into tool_event_queue, then blocks on choice_queue. Without draining, the
         event would never reach the frontend and the tool would wait forever.
         """
-        task = asyncio.ensure_future(coro)
+        task: asyncio.Task[tuple[list[Message], ToolResultEvent]] = asyncio.create_task(coro)
         queue = context.tool_event_queue
 
         if not queue:
@@ -399,8 +409,8 @@ async def _run_tools(
 
     # Unsafe tools run sequentially with event draining
     for block in unsafe:
-            async for item in _run_with_event_drain(execute_one(block)):
-                yield item
+        async for drained_item in _run_with_event_drain(execute_one(block)):
+            yield drained_item
 
 
 def _parse_context_limit_from_error(error_msg: str) -> int | None:
@@ -417,55 +427,73 @@ def _parse_context_limit_from_error(error_msg: str) -> int | None:
     return None
 
 
+def _is_context_overflow_error(error_msg: str) -> bool:
+    """Recognize provider size-limit errors without matching arbitrary HTTP 400s."""
+    text = error_msg.lower()
+    phrases = (
+        "maximum context length",
+        "context length exceeded",
+        "context length limit exceeded",
+        "context window exceeded",
+        "exceeds the context window",
+        "context_length_exceeded",
+        "contextwindowexceeded",
+        "prompt is too long",
+        "input is too long",
+        "too many input tokens",
+        "input token count exceeds",
+        "exceeds the maximum number of tokens",
+        "request too large for model",
+    )
+    return any(phrase in text for phrase in phrases)
+
+
 def _truncate_to_fit_tokens(
     messages: list[Message],
     target_tokens: int,
     system: list[str] | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> list[Message]:
-    """Aggressively truncate messages to fit within target_tokens.
-
-    Strategy: drop middle messages first (fast), then truncate large
-    ToolResultBlocks. Modifies messages in-place.
-    """
-    estimated = estimate_token_count(messages, system=system)
-    if estimated <= target_tokens:
+    """Prune tool output, then drop only structurally complete old turns."""
+    if target_tokens <= 0:
         return messages
 
-    # Fast path: drop older messages from index 1 first (keep first & last)
-    while estimated > target_tokens and len(messages) > 2:
-        messages.pop(1)
-        estimated = estimate_token_count(messages, system=system)
+    def estimated() -> int:
+        return estimate_token_count(messages, system=system, tools=tools)
 
-    if estimated <= target_tokens:
+    def trim_tool_results(max_chars: int) -> None:
+        for msg in messages:
+            if isinstance(msg.content, str):
+                continue
+            for block in msg.content:
+                if not isinstance(block, ToolResultBlock) or len(block.content) <= max_chars:
+                    continue
+                marker = "\n... [old tool output pruned to fit context] ...\n"
+                keep = max(0, max_chars - len(marker))
+                left = keep // 2
+                block.content = (
+                    block.content[:left]
+                    + marker
+                    + block.content[-(keep - left) :]
+                )
+                if estimated() <= target_tokens:
+                    return
+
+    if estimated() <= target_tokens:
+        return messages
+    trim_tool_results(2_000)
+    if estimated() <= target_tokens:
+        return messages
+    trim_tool_results(500)
+    if estimated() <= target_tokens:
         return messages
 
-    # Still over: truncate large ToolResultBlocks in remaining messages
-    candidates: list[tuple[ToolResultBlock, int]] = []
-    for msg in messages:
-        if isinstance(msg.content, str):
-            continue
-        for block in msg.content:
-            if isinstance(block, ToolResultBlock) and len(block.content) > 500:
-                candidates.append((block, len(block.content)))
-    candidates.sort(key=lambda x: x[1], reverse=True)
-
-    for block, original_size in candidates:
-        estimated = estimate_token_count(messages, system=system)
-        if estimated <= target_tokens:
-            break
-        overshoot = estimated / target_tokens
-        if overshoot > 2:
-            keep = min(500, original_size // 10)
-        elif overshoot > 1.5:
-            keep = min(1000, original_size // 5)
-        else:
-            keep = max(500, int(original_size / overshoot * 0.7))
-        half = keep // 2
-        block.content = (
-            block.content[:half]
-            + "\n\n... (truncated to fit context window) ...\n\n"
-            + block.content[-half:]
-        )
+    # Preserve the compact summary (if any) and the newest real user turn.
+    starts = conversation_turn_starts(messages)
+    while estimated() > target_tokens and len(starts) > 1:
+        start, end = starts[0], starts[1]
+        del messages[start:end]
+        starts = conversation_turn_starts(messages)
 
     return messages
 
@@ -512,10 +540,13 @@ async def query_loop(
     Sends messages to the API, processes streaming response, executes
     tool calls, and loops until no more tool calls are made.
     """
-    messages = list(params.messages)
+    # Work on a private deep copy so emergency pruning cannot mutate the durable
+    # pre-turn state before a successful checkpoint/turn is committed.
+    messages = [message.model_copy(deep=True) for message in params.messages]
+    params.tool_context.messages = messages
     turn_count = 0
     _context_retries = 0
-    _MAX_CONTEXT_RETRIES = 2
+    _MAX_CONTEXT_RETRIES = 1
     _compact_resume_retries = 0
     _MAX_COMPACT_RESUME_RETRIES = 1
     _awaiting_compact_resume = False
@@ -542,8 +573,79 @@ async def query_loop(
     )
     context_window = params.context_window
 
+    async def _perform_compaction(
+        *,
+        trigger: str,
+    ) -> CompactEvent | None:
+        nonlocal messages, _awaiting_compact_resume, _compact_resume_retries
+
+        old_count = len(messages)
+        source_messages = messages
+        if params.hook_manager:
+            pre = await params.hook_manager.run(
+                "pre_compact",
+                {
+                    "session_id": params.tool_context.session_id,
+                    "trigger": trigger,
+                    "custom_instructions": "",
+                },
+                cwd=params.tool_context.cwd,
+                env=params.tool_context.env,
+            )
+            if pre.blocked:
+                return None
+
+        result = await compact_conversation(
+            messages,
+            api_adapter=params.api_adapter,
+            context_window=context_window,
+        )
+        if not result:
+            return None
+
+        _append_compact_resume_prompt(result)
+        if estimate_token_count(result) >= estimate_token_count(source_messages):
+            logger.warning(
+                "Compaction plus recovery prompt produced no token savings; "
+                "original context was preserved"
+            )
+            return None
+
+        messages = result
+        _awaiting_compact_resume = True
+        _compact_resume_retries = 0
+        params.messages[:] = messages
+        params.tool_context.messages = messages
+
+        if params.hook_manager:
+            await params.hook_manager.run(
+                "post_compact",
+                {
+                    "session_id": params.tool_context.session_id,
+                    "trigger": trigger,
+                    "compact_summary": compact_summary_text(messages[0]),
+                },
+                cwd=params.tool_context.cwd,
+                env=params.tool_context.env,
+            )
+        return CompactEvent(
+            summary=(
+                "Conversation auto-compacted: context approaching limit"
+                if trigger == "auto"
+                else "Emergency compact after provider context overflow"
+            ),
+            messages_before=old_count,
+            messages_after=len(messages),
+            trigger=trigger,
+            source_messages=source_messages,
+            checkpoint_messages=[message.model_copy(deep=True) for message in messages],
+        )
+
     while True:
         turn_count += 1
+        # Compaction may replace the list object. Tools and permission reviewers
+        # must always observe the active projection, including this turn's results.
+        params.tool_context.messages = messages
 
         full_system = _append_system_context(
             params.system_prompt, params.system_context
@@ -558,55 +660,65 @@ async def query_loop(
 
         max_tokens = effective_max_tokens
 
-        # --- Pre-flight context window check ---
+        # --- Final-request preflight (system + messages + tool schemas) ---
         if context_window > 0:
-            estimated = estimate_token_count(messages_for_api, system=full_system)
-            headroom = context_window - max_tokens
-            if estimated > headroom:
+            estimated = estimate_token_count(
+                messages_for_api,
+                system=full_system,
+                tools=tool_schemas,
+            )
+            compact_limit = compaction_input_limit(
+                context_window,
+                max_tokens,
+                buffer_tokens=DEFAULT_COMPACT_BUFFER_TOKENS,
+                override=params.compact_threshold,
+            )
+            if params.auto_compact_enabled and should_auto_compact(
+                messages_for_api,
+                threshold=compact_limit,
+                system=full_system,
+                tools=tool_schemas,
+            ):
                 logger.warning(
-                    "Estimated tokens (%d) exceed headroom (%d = %d - %d). "
-                    "Attempting emergency compact.",
-                    estimated, headroom, context_window, max_tokens,
+                    "Estimated final input (%d) exceeds compact threshold %d. "
+                    "Attempting auto compact.",
+                    estimated,
+                    compact_limit,
                 )
-                compact_result = await compact_conversation(
-                    messages, api_adapter=params.api_adapter
+                compact_event = await _perform_compaction(
+                    trigger="auto",
                 )
-                if compact_result:
-                    messages = compact_result
-                    _append_compact_resume_prompt(messages)
-                    _awaiting_compact_resume = True
+                if compact_event:
                     messages_for_api = _prepend_user_context(messages, params.user_context)
-                    yield CompactEvent(
-                        summary="Emergency compact: context approaching limit",
-                        messages_before=-1,
-                        messages_after=len(messages),
+                    estimated = estimate_token_count(
+                        messages_for_api,
+                        system=full_system,
+                        tools=tool_schemas,
                     )
-                    estimated = estimate_token_count(messages_for_api, system=full_system)
+                    yield compact_event
 
-                if estimated > headroom:
-                    logger.warning(
-                        "Post-compact estimated %d still > headroom %d, truncating",
-                        estimated, headroom,
-                    )
-                    try:
-                        _truncate_to_fit_tokens(messages, headroom, system=full_system)
-                    except Exception:
-                        logger.exception("Truncation failed, falling back to keep only first+last")
-                        if len(messages) > 2:
-                            first, last = messages[0], messages[-1]
-                            messages.clear()
-                            messages.extend([first, last])
-                    messages_for_api = _prepend_user_context(messages, params.user_context)
-                    estimated = estimate_token_count(messages_for_api, system=full_system)
-                    logger.warning(
-                        "Post-truncate: estimated=%d, msgs=%d", estimated, len(messages)
-                    )
-
-                if estimated > context_window - 1024:
-                    max_tokens = max(1024, context_window - estimated - 512)
-                    logger.warning(
-                        "Reducing max_tokens to %d to fit context window", max_tokens
-                    )
+            # Always validate input + output. If compaction was disabled or failed,
+            # reduce output rather than knowingly sending an impossible request.
+            available_output = context_window - estimated - 512
+            if available_output < 256:
+                params.messages[:] = messages
+                yield ErrorEvent(
+                    message=(
+                        "The final request does not fit the model context window, and "
+                        "conversation compaction could not free enough space."
+                    ),
+                    recoverable=True,
+                    error_type="context_overflow",
+                )
+                yield TurnCompleteEvent(
+                    reason="context_overflow",
+                    turn_count=turn_count,
+                    usage=total_usage,
+                )
+                return
+            if max_tokens > available_output:
+                max_tokens = max(256, available_output)
+                logger.warning("Reducing max_tokens to %d to fit final request", max_tokens)
 
         request_thinking = effective_thinking
         request_thinking_budget = effective_thinking_budget
@@ -673,6 +785,7 @@ async def query_loop(
             estimated_context_used = estimate_token_count(
                 _prepend_user_context(snapshot, params.user_context),
                 system=full_system,
+                tools=tool_schemas,
             )
             exact_context_used = last_request_usage["input_tokens"] + last_request_usage["output_tokens"]
             context_used = exact_context_used if exact_context_used > 0 else estimated_context_used
@@ -808,43 +921,37 @@ async def query_loop(
                         _set_request_usage(chunk.usage)
 
                 elif chunk.type == "error":
-                    is_ctx_err = (
-                        "maximum context length" in chunk.error.lower()
-                        or ("input_tokens" in chunk.error and "400" in chunk.error)
-                        or "context window" in chunk.error.lower()
-                        or "prompt is too long" in chunk.error.lower()
+                    has_response_evidence = bool(
+                        current_text
+                        or current_thinking
+                        or assistant_content
+                        or tool_use_blocks
+                        or current_tool
                     )
-                    if is_ctx_err and _context_retries < _MAX_CONTEXT_RETRIES:
+                    is_ctx_err = _is_context_overflow_error(chunk.error)
+                    if (
+                        is_ctx_err
+                        and not has_response_evidence
+                        and _context_retries < _MAX_CONTEXT_RETRIES
+                    ):
                         _context_retries += 1
                         parsed_limit = _parse_context_limit_from_error(chunk.error)
                         if parsed_limit and parsed_limit > 0:
                             context_window = parsed_limit
                             logger.info("Parsed context window from error: %d", context_window)
                         logger.warning(
-                            "Context length error in stream (retry %d/%d), compact + truncate",
+                            "Context overflow before output (retry %d/%d), preparing recovery",
                             _context_retries, _MAX_CONTEXT_RETRIES,
                         )
-                        cr = await compact_conversation(
-                            messages, api_adapter=params.api_adapter
-                        )
-                        if cr:
-                            messages = cr
-                            _append_compact_resume_prompt(messages)
-                            _awaiting_compact_resume = True
-                            yield CompactEvent(
-                                summary="Emergency compact after context length error",
-                                messages_before=-1,
-                                messages_after=len(messages),
+                        compact_event = await _perform_compaction(trigger="overflow")
+                        if not compact_event:
+                            yield ErrorEvent(
+                                message=chunk.error,
+                                recoverable=True,
+                                error_type="context_overflow",
                             )
-                        retry_headroom = context_window - max_tokens
-                        try:
-                            _truncate_to_fit_tokens(messages, retry_headroom, system=full_system)
-                        except Exception:
-                            logger.exception("Truncation failed in stream error handler")
-                            if len(messages) > 2:
-                                first, last = messages[0], messages[-1]
-                                messages.clear()
-                                messages.extend([first, last])
+                            return
+                        yield compact_event
                         messages_for_api = _prepend_user_context(messages, params.user_context)
                         turn_count -= 1
                         _retry_after_compact = True
@@ -857,43 +964,37 @@ async def query_loop(
 
         except Exception as e:
             error_str = str(e)
-            is_context_error = (
-                "maximum context length" in error_str.lower()
-                or ("input_tokens" in error_str and "400" in error_str)
-                or "context window" in error_str.lower()
-                or "prompt is too long" in error_str.lower()
+            has_response_evidence = bool(
+                current_text
+                or current_thinking
+                or assistant_content
+                or tool_use_blocks
+                or current_tool
             )
-            if is_context_error and _context_retries < _MAX_CONTEXT_RETRIES:
+            is_context_error = _is_context_overflow_error(error_str)
+            if (
+                is_context_error
+                and not has_response_evidence
+                and _context_retries < _MAX_CONTEXT_RETRIES
+            ):
                 _context_retries += 1
                 parsed_limit = _parse_context_limit_from_error(error_str)
                 if parsed_limit and parsed_limit > 0:
                     context_window = parsed_limit
                     logger.info("Parsed context window from error: %d", context_window)
                 logger.warning(
-                    "Context length error (retry %d/%d), compact + truncate and retry",
+                    "Context overflow before output (retry %d/%d), preparing recovery",
                     _context_retries, _MAX_CONTEXT_RETRIES,
                 )
-                compact_result = await compact_conversation(
-                    messages, api_adapter=params.api_adapter
-                )
-                if compact_result:
-                    messages = compact_result
-                    _append_compact_resume_prompt(messages)
-                    _awaiting_compact_resume = True
-                    yield CompactEvent(
-                        summary="Emergency compact after context length error",
-                        messages_before=-1,
-                        messages_after=len(messages),
+                compact_event = await _perform_compaction(trigger="overflow")
+                if not compact_event:
+                    yield ErrorEvent(
+                        message=error_str,
+                        recoverable=True,
+                        error_type="context_overflow",
                     )
-                retry_headroom = context_window - max_tokens
-                try:
-                    _truncate_to_fit_tokens(messages, retry_headroom, system=full_system)
-                except Exception:
-                    logger.exception("Truncation failed in exception handler")
-                    if len(messages) > 2:
-                        first, last = messages[0], messages[-1]
-                        messages.clear()
-                        messages.extend([first, last])
+                    return
+                yield compact_event
                 messages_for_api = _prepend_user_context(messages, params.user_context)
                 turn_count -= 1
                 continue

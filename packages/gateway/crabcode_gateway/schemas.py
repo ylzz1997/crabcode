@@ -36,6 +36,7 @@ class ResumeSessionRequest(BaseModel):
 
 class CompactRequest(BaseModel):
     session_id: str
+    custom_instructions: str | None = None
 
 
 class InterruptRequest(BaseModel):
@@ -246,6 +247,8 @@ class CompactPayload(BaseModel):
     summary: str
     messages_before: int = 0
     messages_after: int = 0
+    trigger: str = "auto"
+    agent_id: str | None = None
 
 
 class ErrorPayload(BaseModel):
@@ -478,6 +481,8 @@ def core_event_to_payload(event: Any) -> EventPayload:
             summary=event.summary,
             messages_before=event.messages_before,
             messages_after=event.messages_after,
+            trigger=event.trigger,
+            agent_id=event.agent_id,
         )
     if isinstance(event, ErrorEvent):
         return ErrorPayload(

@@ -33,6 +33,7 @@ export interface ResumeSessionRequest {
 
 export interface CompactRequest {
   session_id: string;
+  custom_instructions?: string | null;
 }
 
 export interface InterruptRequest {
@@ -239,6 +240,8 @@ export interface CompactPayload {
   type?: "compact";
   messages_before?: number;
   messages_after?: number;
+  trigger?: string;
+  agent_id?: string | null;
 }
 
 export interface ErrorPayload {
@@ -395,4 +398,3 @@ export type EventPayload =
 
 // ── Type discriminator helper ────────────────────────────────────────
 export type EventPayloadType = EventPayload["type"];
-

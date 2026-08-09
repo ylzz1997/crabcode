@@ -327,7 +327,7 @@ CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报
 2. 内置已知模型查找表（例如 `glm-5.1-fp8` → 202752、`gpt-4o` → 128000）
 3. 默认兜底值：`200000`
 
-如果你的模型不在内置表中，且未显式配置，则使用 128k 兜底。对于上下文窗口更大的模型（如智谱 GLM），建议手动指定：
+如果模型不在内置表中且未显式配置，则使用 200k 兜底；当服务商暴露的限制不同时，请手动指定 `context_window`：
 
 ```json
 {
@@ -342,15 +342,16 @@ CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报
 
 **自动压缩（Auto Compact）**
 
-当估算 token 数接近上下文限制时，CrabCode 会自动：
+CrabCode 会估算完整请求（system prompt、消息、工具调用/结果、工具 schema 和图片载荷）。默认会在输入超过 `context_window - max(max_tokens, 20000)` 前触发压缩：
 
-1. 调用 API 将历史消息总结为一条 `[Conversation summary: ...]` 消息
-2. 保留最近的若干条消息不变
-3. **在同一个 session 内继续执行当前任务**，无需用户干预
+1. 分块处理全部较旧历史，生成结构化、可恢复的 checkpoint
+2. 最多保留最近两个完整用户轮次，保证工具调用与对应结果不会被拆开
+3. 将压缩后的有效上下文原子追加到 JSONL；重启后从该边界恢复，导出时仍保留完整审计历史
+4. **在同一个 session 内继续执行当前任务**，无需用户干预
 
-也可以使用 `/compact` 命令手动触发压缩，或通过 `settings.json` 中的 `max_context_length` 字段自定义触发阈值。
+可使用 `/compact [可选指令]` 手动触发。`auto_compact_enabled` 控制自动压缩；`max_context_length` 可设置更早的输入触发阈值，但不能突破服务商安全上限。
 
-> **注意**：自动压缩使用的是 `api` 中配置的同一个模型。如果你的模型通过自定义接口访问，请确保 `api.model` 字段填写正确——否则摘要生成请求可能静默失败。
+> **注意**：压缩使用当前配置的 API 模型。若 checkpoint 生成失败，CrabCode 会原样保留旧对话，不会用有损兜底摘要替换历史。只有在响应尚未产生任何输出时才会针对服务商超限做恢复重试，避免部分响应后重复执行工具。
 
 ### Logging（运行日志）
 
@@ -379,6 +380,8 @@ CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报
 - `user_prompt_submit`：用户消息提交时触发
 - `pre_tool_call`：工具调用前触发（可阻断本次工具调用）
 - `post_tool_call`：工具调用后触发
+- `pre_compact`：手动、自动或超限压缩前触发（可阻断本次压缩）
+- `post_compact`：checkpoint 成功生成后触发
 
 示例：
 
@@ -401,6 +404,12 @@ CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报
       {
         "command": "echo '[submit] ok'"
       }
+    ],
+    "pre_compact": [
+      {
+        "matcher": "manual",
+        "command": "echo '[compact] trigger 位于 $CRABCODE_HOOK_PAYLOAD'"
+      }
     ]
   }
 }
@@ -410,7 +419,8 @@ CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报
 
 - hook 命令退出码非 0 视为失败，`pre_tool_call` 失败会阻断该次工具执行。
 - 可通过 `continue_on_error: true`（或 `continueOnError: true`）让失败不阻断流程。
-- 支持 Claude 风格的 `PreToolUse` / `PostToolUse` 及嵌套 `hooks: [{\"type\":\"command\", ...}]` 写法。
+- 支持 Claude 风格的 `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` 及嵌套 `hooks: [{\"type\":\"command\", ...}]` 写法。
+- 压缩 hook 的 matcher 会收到 `auto`、`manual` 或 `overflow`。
 - 运行时会注入环境变量：`CRABCODE_HOOK_EVENT`、`CRABCODE_HOOK_PAYLOAD`、`CRABCODE_HOOK_TOOL_NAME`、`CRABCODE_HOOK_TOOL_USE_ID`、`CRABCODE_HOOK_AGENT_ID`。
 
 ### 多模型配置与切换

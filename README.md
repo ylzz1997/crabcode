@@ -327,7 +327,7 @@ CrabCode automatically manages the context window to prevent `400 token limit ex
 2. Built-in lookup table for known models (e.g. `glm-5.1-fp8` → 202752, `gpt-4o` → 128000)
 3. `DEFAULT_CONTEXT_WINDOW` fallback: `200000`
 
-If your model is not in the built-in table and you don't set an override, the fallback of 128k is used. For models with a larger window (e.g. Zhipu GLM), set `context_window` explicitly:
+If your model is not in the built-in table and you don't set an override, the 200k fallback is used. Set `context_window` explicitly when the provider exposes a different limit:
 
 ```json
 {
@@ -342,15 +342,16 @@ If your model is not in the built-in table and you don't set an override, the fa
 
 **Automatic compaction**
 
-When the estimated token count approaches the context limit, CrabCode automatically:
+CrabCode estimates the complete request (system prompts, messages, tool calls/results, tool schemas, and image payloads). It normally compacts before input exceeds `context_window - max(max_tokens, 20000)`:
 
-1. Summarizes old conversation messages into a single compact `[Conversation summary: ...]` message via an API call
-2. Keeps the most recent messages intact
-3. Continues the current task in the same session without interruption
+1. Incrementally summarizes the full older history into a structured, resumable checkpoint
+2. Keeps up to two complete recent user turns, so tool calls are never separated from their results
+3. Atomically appends the compacted active context to the JSONL transcript; restarts resume from that boundary while exports retain the audit history
+4. Continues the current task in the same session without interruption
 
-You can also trigger compaction manually with `/compact`, or configure the threshold via `max_context_length` in `settings.json`.
+Use `/compact [optional instructions]` to trigger it manually. `auto_compact_enabled` controls automatic compaction. `max_context_length` can set an earlier input threshold, but it cannot raise the threshold past the provider-safe limit.
 
-> **Note**: Auto-compaction uses the same model configured in `api`. If your model is served through a custom endpoint, make sure the `model` field in `api` is set correctly — otherwise the summarization call may fail silently.
+> **Note**: Compaction uses the configured API model. If checkpoint generation fails, CrabCode keeps the original conversation unchanged; it never replaces history with a lossy fallback. Provider overflow recovery is attempted only before response output has started, avoiding duplicate tool calls after a partial response.
 
 ### Logging
 
@@ -379,6 +380,8 @@ Notes:
 - `user_prompt_submit`: fires when a user message is submitted
 - `pre_tool_call`: fires before a tool call (can block that tool call)
 - `post_tool_call`: fires after a tool call
+- `pre_compact`: fires before manual, automatic, or overflow compaction (can block it)
+- `post_compact`: fires after a checkpoint is successfully generated
 
 Example:
 
@@ -401,6 +404,12 @@ Example:
       {
         "command": "echo '[submit] ok'"
       }
+    ],
+    "pre_compact": [
+      {
+        "matcher": "manual",
+        "command": "echo '[compact] trigger is in $CRABCODE_HOOK_PAYLOAD'"
+      }
     ]
   }
 }
@@ -410,7 +419,8 @@ Notes:
 
 - A non-zero exit code means hook failure; a failing `pre_tool_call` blocks that tool execution.
 - Use `continue_on_error: true` (or `continueOnError: true`) to keep going on hook failures.
-- Claude-style `PreToolUse` / `PostToolUse` keys and nested `hooks: [{\"type\":\"command\", ...}]` are also supported.
+- Claude-style `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` keys and nested `hooks: [{\"type\":\"command\", ...}]` are also supported.
+- Compaction hook matchers receive `auto`, `manual`, or `overflow` as their match value.
 - Runtime env vars include `CRABCODE_HOOK_EVENT`, `CRABCODE_HOOK_PAYLOAD`, `CRABCODE_HOOK_TOOL_NAME`, `CRABCODE_HOOK_TOOL_USE_ID`, and `CRABCODE_HOOK_AGENT_ID`.
 
 ### Multiple Named Models

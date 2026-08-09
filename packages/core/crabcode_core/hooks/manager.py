@@ -48,6 +48,18 @@ class HookManager:
             "PostToolUse",
             "post-tool-use",
         ),
+        "pre_compact": (
+            "pre_compact",
+            "preCompact",
+            "PreCompact",
+            "pre-compact",
+        ),
+        "post_compact": (
+            "post_compact",
+            "postCompact",
+            "PostCompact",
+            "post-compact",
+        ),
     }
 
     def __init__(self, hooks: dict[str, list[dict[str, Any]]] | None = None):
@@ -171,7 +183,7 @@ class HookManager:
         if not matcher:
             return True
 
-        tool_name = str(payload.get("tool_name") or "")
+        tool_name = str(payload.get("tool_name") or payload.get("trigger") or "")
         if isinstance(matcher, str):
             if not tool_name:
                 return False
@@ -184,7 +196,7 @@ class HookManager:
                 for item in matcher
             )
         if isinstance(matcher, dict):
-            for key in ("tool_name", "tool", "name"):
+            for key in ("tool_name", "tool", "name", "trigger"):
                 pattern = matcher.get(key)
                 if pattern is None:
                     continue
