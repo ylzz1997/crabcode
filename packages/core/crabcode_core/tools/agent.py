@@ -164,7 +164,10 @@ class AgentSpawnTool(Tool):
             "name": {"type": "string", "description": "Optional title for the sub-agent."},
             "model_profile": {
                 "type": "string",
-                "description": "Optional model profile override.",
+                "description": (
+                    "Optional named model profile configured under settings.models. "
+                    "Do not pass a provider model ID."
+                ),
             },
         },
         "required": ["prompt"],

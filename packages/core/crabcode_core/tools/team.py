@@ -79,7 +79,10 @@ class TeamSpawnTool(Tool):
             },
             "model_profile": {
                 "type": "string",
-                "description": "Optional model profile override (enables multi-model teams).",
+                "description": (
+                    "Optional named model profile configured under settings.models "
+                    "(enables multi-model teams). Do not pass a provider model ID."
+                ),
             },
         },
         "required": ["team_id", "prompt"],

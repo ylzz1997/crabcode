@@ -198,10 +198,28 @@ class AgentManager:
                 f"({self._agent_settings.max_active_agents_per_run})"
             )
 
-        agent_id = str(uuid.uuid4())
         profile_cfg = self._resolve_type_config(subagent_type)
-        model_name = model_profile or profile_cfg.model_profile or self._current_model_name
+        requested_model_profile = (
+            model_profile if model_profile is not None else profile_cfg.model_profile
+        )
+        if (
+            requested_model_profile is not None
+            and requested_model_profile not in self._settings.models
+        ):
+            available = ", ".join(sorted(self._settings.models)) or "(none configured)"
+            raise ValueError(
+                f"Unknown model profile '{requested_model_profile}'. "
+                "Model profiles must be names configured under settings.models. "
+                f"Available profiles: {available}"
+            )
+
+        model_name = (
+            requested_model_profile
+            if requested_model_profile is not None
+            else self._current_model_name
+        )
         api_cfg = self._settings.get_api_config(model_name)
+        agent_id = str(uuid.uuid4())
         snapshot = AgentSnapshot(
             agent_id=agent_id,
             parent_agent_id=parent_agent_id,
