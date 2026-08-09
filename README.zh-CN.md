@@ -918,6 +918,10 @@ AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该�
 
 > **请谨慎使用。** 此模式下 CrabCode 将不经确认直接执行 shell 命令和写入文件。
 
+VS Code 扩展默认使用“跟随配置”（`crabcode.permissionMode: "default"`），因此会遵循
+`settings.json` 中的 `permissions.default_mode`。如果在扩展底部菜单明确选择了其他模式，
+该选择会覆盖当前网关会话的文件配置。
+
 ## 配置
 
 配置按以下层级加载（后者覆盖前者）：

@@ -1089,9 +1089,11 @@ class CoreSession:
         """Apply VS Code / client footer permission override when not in plan mode."""
         if self._permission_manager is None or self._agent_mode == "plan":
             return
+        if self._client_permission_mode_override is None:
+            self._permission_manager.reset_mode()
+            return
         if self._client_permission_mode_override not in (
             "ask",
-            "default",
             "run_everything",
             "bypassPermissions",
             "ai_review",
@@ -1107,12 +1109,21 @@ class CoreSession:
     def set_client_permission_mode(self, mode: str) -> bool:
         """Set tool permission behavior from the extension chat footer.
 
-        ``ask`` uses normal allow/ask/deny rules. ``run_everything`` auto-approves tools.
-        ``ai_review`` lets an AI reviewer decide whether to allow, ask, or deny.
+        ``default`` clears the client override and follows the loaded settings.
+        ``ask`` uses normal allow/ask/deny rules. ``run_everything`` auto-approves
+        tools. ``ai_review`` lets an AI reviewer decide whether to allow, ask,
+        or deny.
         """
-        if mode not in ("ask", "default", "run_everything", "bypassPermissions", "ai_review", "aiReview"):
+        if mode not in (
+            "ask",
+            "default",
+            "run_everything",
+            "bypassPermissions",
+            "ai_review",
+            "aiReview",
+        ):
             return False
-        self._client_permission_mode_override = mode
+        self._client_permission_mode_override = None if mode == "default" else mode
         self._sync_client_permission_mode()
         return True
 

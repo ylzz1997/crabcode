@@ -29,7 +29,10 @@ class PermissionsSettings(BaseModel):
     allow: list[PermissionRule] = Field(default_factory=list)
     deny: list[PermissionRule] = Field(default_factory=list)
     ask: list[PermissionRule] = Field(default_factory=list)
-    default_mode: str | None = "ask"
+    # None means "not explicitly configured". PermissionManager still falls
+    # back to ask mode, while config layering can distinguish an omitted value
+    # from an explicit override.
+    default_mode: str | None = None
     additional_directories: list[str] = Field(default_factory=list)
     # Deprecated compatibility alias for default_mode="run_everything".
     run_everything: bool = False

@@ -624,6 +624,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("crabcode")) {
         activeChatProvider.notifyConfigurationChanged();
+        if (activeConnection.connected && activeConnection.sessionId) {
+          void activeChatProvider.syncSessionPreferencesFromSettings();
+        }
       }
     }),
   );

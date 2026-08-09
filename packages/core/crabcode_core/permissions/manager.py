@@ -41,11 +41,16 @@ class PermissionManager:
         self.settings = settings or PermissionsSettings()
         self._runtime_allow_keys: set[str] = set()
         if self.settings.run_everything:
-            self.mode = PermissionMode.BYPASS
+            self._configured_mode = PermissionMode.BYPASS
         elif self.settings.default_mode is not None:
-            self.mode = mode_from_default_mode(self.settings.default_mode)
+            self._configured_mode = mode_from_default_mode(self.settings.default_mode)
         else:
-            self.mode = mode
+            self._configured_mode = mode
+        self.mode = self._configured_mode
+
+    def reset_mode(self) -> None:
+        """Restore the mode selected by the loaded settings."""
+        self.mode = self._configured_mode
 
     def check(
         self,

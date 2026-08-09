@@ -924,6 +924,10 @@ Set `"default_mode": "run_everything"` to skip all permission prompts and execut
 
 > **Use with caution.** In this mode CrabCode will run shell commands and write files without asking.
 
+The VS Code extension defaults to **Follow settings** (`crabcode.permissionMode: "default"`),
+so it honors `permissions.default_mode` from `settings.json`. Choosing another mode
+explicitly from the extension footer overrides the file setting for the active gateway session.
+
 ## Configuration
 
 Settings are loaded from multiple layers (later overrides earlier):
