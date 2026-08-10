@@ -46,6 +46,33 @@ def _event_to_proto(event: Any) -> dict:
     }
 
 
+def _snapshot_to_proto(snapshot: Any) -> dict[str, Any]:
+    """Map the complete observable agent lifecycle to the gRPC shape."""
+    payload: dict[str, Any] = {
+        "agent_id": snapshot.agent_id,
+        "session_id": snapshot.session_id,
+        "parent_agent_id": snapshot.parent_agent_id or "",
+        "title": snapshot.title,
+        "subagent_type": snapshot.subagent_type,
+        "status": snapshot.status,
+        "model": snapshot.model,
+        "created_at": snapshot.created_at,
+        "usage": snapshot.usage,
+        "final_result": snapshot.final_result,
+        "error": snapshot.error,
+        "callback_enabled": snapshot.callback_enabled,
+        "callback_state": snapshot.callback_state,
+        "callback_epoch": snapshot.callback_epoch,
+    }
+    if snapshot.finished_at:
+        payload["finished_at"] = snapshot.finished_at
+    if snapshot.transcript_path:
+        payload["transcript_path"] = snapshot.transcript_path
+    if snapshot.callback_message_id:
+        payload["callback_message_id"] = snapshot.callback_message_id
+    return payload
+
+
 class _CrabCodeServicer:
     """Hand-written servicer that delegates to CoreSession.
 
@@ -79,37 +106,13 @@ class _CrabCodeServicer:
         snapshot = session.get_agent(request.get("agent_id", ""))
         if not snapshot:
             await context.abort(code=404, details="Agent not found")
-        return {
-            "agent_id": snapshot.agent_id,
-            "parent_agent_id": snapshot.parent_agent_id or "",
-            "title": snapshot.title,
-            "subagent_type": snapshot.subagent_type,
-            "status": snapshot.status,
-            "model": snapshot.model,
-            "created_at": snapshot.created_at,
-            "usage": snapshot.usage,
-            "final_result": snapshot.final_result,
-            "error": snapshot.error,
-        }
+        return _snapshot_to_proto(snapshot)
 
     async def ListAgents(self, request: dict, context: Any) -> dict:
         session = _session_from_app(self._app_state)
         if not session:
             await context.abort(code=404, details="No active session")
-        agents = []
-        for s in session.list_agents():
-            agents.append({
-                "agent_id": s.agent_id,
-                "parent_agent_id": s.parent_agent_id or "",
-                "title": s.title,
-                "subagent_type": s.subagent_type,
-                "status": s.status,
-                "model": s.model,
-                "created_at": s.created_at,
-                "usage": s.usage,
-                "final_result": s.final_result,
-                "error": s.error,
-            })
+        agents = [_snapshot_to_proto(snapshot) for snapshot in session.list_agents()]
         return {"agents": agents}
 
     async def CancelAgent(self, request: dict, context: Any) -> dict:
@@ -131,18 +134,7 @@ class _CrabCodeServicer:
             snapshot = await session.wait_agent(agent_ids, timeout_ms=timeout_ms)
         if not snapshot:
             await context.abort(code=408, details="Wait timed out")
-        return {
-            "agent_id": snapshot.agent_id,
-            "parent_agent_id": snapshot.parent_agent_id or "",
-            "title": snapshot.title,
-            "subagent_type": snapshot.subagent_type,
-            "status": snapshot.status,
-            "model": snapshot.model,
-            "created_at": snapshot.created_at,
-            "usage": snapshot.usage,
-            "final_result": snapshot.final_result,
-            "error": snapshot.error,
-        }
+        return _snapshot_to_proto(snapshot)
 
     async def RespondPermission(self, request: dict, context: Any) -> dict:
         from crabcode_core.types.event import PermissionResponseEvent

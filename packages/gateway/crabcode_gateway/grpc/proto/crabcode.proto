@@ -103,6 +103,13 @@ message AgentSnapshotProto {
   map<string, int64> usage = 8;
   string final_result = 9;
   string error = 10;
+  string session_id = 11;
+  optional string finished_at = 12;
+  optional string transcript_path = 13;
+  bool callback_enabled = 14;
+  string callback_state = 15;
+  optional string callback_message_id = 16;
+  int32 callback_epoch = 17;
 }
 
 message ListAgentsResponse {

@@ -277,6 +277,7 @@ Or configure in `~/.crabcode/settings.json`:
 | `reasoning_effort` | Model reasoning effort. OpenAI Responses/Codex sends it as `reasoning.effort`; Anthropic sends supported values as `output_config.effort`. When set, it takes precedence over the Codex `thinking_budget` mapping. Options: `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` (availability depends on the model/provider). | — |
 | `max_tokens` | Maximum output tokens | `16384` |
 | `timeout` | API call timeout in seconds (prevents hanging on slow/unresponsive APIs) | `300` |
+| `max_retries` | Automatic reconnect attempts for transient API, rate-limit, timeout, and server failures. Requests are replayed only when no response content or tool call has arrived. | `5` |
 | `context_window` | Override the model's context window size (tokens). Used when auto-detection fails or is inaccurate — see [Context Window](#context-window) below. | auto-detected |
 | `prompt_cache_key` | Prompt cache routing key for OpenAI Responses/Codex requests; defaults to `http_headers.session_id` when omitted | — |
 | `prompt_cache_retention` | OpenAI Responses/Codex prompt cache retention policy: `in_memory` \| `24h` | — |
@@ -1227,6 +1228,18 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
 | `timeout` | Total wall-clock timeout in seconds for a sub-agent | `300` |
 | `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
 | `stream_send_input_output` | Stream live output after `/agent-send` in REPL; set `false` to send input silently | `false` |
+
+`Agent` waits for its sub-agent and returns the result in the same tool call. `AgentSpawn`
+returns immediately and enables a durable callback: when the sub-agent completes, fails,
+or is cancelled, CrabCode injects a `<task-notification>` and automatically resumes its
+direct parent (then the main agent for top-level work). Nested callbacks are routed up the
+parent chain. Callback delivery is persisted across session resume and compaction, with
+the observable states `pending`, `injected`, and `delivered`.
+
+The REPL renders automatic continuations while idle. Gateway clients receive the same
+background events through `/event` or `/ws`; pass `"callback": true` to
+`POST /agent/spawn`. Agent status responses include callback state, epoch, correlated
+message ID, finish time, and transcript path for monitoring and recovery.
 
 Example browser-focused sub-agent profile:
 

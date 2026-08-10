@@ -66,8 +66,69 @@ def _format_exception_message(exc: Exception) -> str:
 
 
 def _is_recoverable_api_exception(exc: Exception) -> bool:
-    """Identify transport failures that are safe for the caller to retry."""
-    return isinstance(exc, httpx.TransportError)
+    """Identify transport/server failures that are safe for the caller to retry."""
+    pending: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+
+        if isinstance(current, (httpx.TransportError, asyncio.TimeoutError)):
+            return True
+
+        status_code = getattr(current, "status_code", None)
+        if isinstance(status_code, int) and (
+            status_code in {408, 409, 429} or status_code >= 500
+        ):
+            return True
+
+        for nested in (current.__cause__, current.__context__):
+            if nested is not None:
+                pending.append(nested)
+
+    return False
+
+
+def _is_recoverable_api_error_message(message: str) -> bool:
+    """Recognize transient failures delivered as successful stream events."""
+    text = message.lower().strip()
+    if not text:
+        return False
+
+    transient_phrases = (
+        "an error occurred while processing your request",
+        "you can retry your request",
+        "response failed",
+        "request timeout",
+        "too many requests",
+        "rate limit",
+        "internal server error",
+        "server error",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+        "temporarily unavailable",
+        "server is overloaded",
+        "server overloaded",
+    )
+    if any(phrase in text for phrase in transient_phrases):
+        return True
+
+    # Direct SSE adapters surface non-2xx responses as "HTTP <status>" text.
+    import re
+
+    match = re.search(r"\bhttp\s+(\d{3})\b", text)
+    if not match:
+        return False
+    status_code = int(match.group(1))
+    return status_code in {408, 409, 429} or status_code >= 500
+
+
+def _api_retry_delay_seconds(attempt: int) -> float:
+    """Return capped exponential backoff for a one-based retry attempt."""
+    return float(min(2 ** max(attempt - 1, 0), 8))
 
 
 def _merge_permission_results(
@@ -585,6 +646,7 @@ async def query_loop(
     _MAX_CONTEXT_RETRIES = 1
     _compact_resume_retries = 0
     _MAX_COMPACT_RESUME_RETRIES = 1
+    _api_retry_attempts = 0
     _awaiting_compact_resume = False
     total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
@@ -607,7 +669,29 @@ async def query_loop(
         cfg.timeout if cfg
         else getattr(adapter_config, "timeout", 300)
     )
+    effective_max_retries = max(
+        0,
+        cfg.max_retries if cfg
+        else getattr(adapter_config, "max_retries", 5),
+    )
     context_window = params.context_window
+
+    async def _schedule_api_retry(error_message: str) -> bool:
+        nonlocal _api_retry_attempts
+        if _api_retry_attempts >= effective_max_retries:
+            return False
+
+        _api_retry_attempts += 1
+        delay = _api_retry_delay_seconds(_api_retry_attempts)
+        logger.warning(
+            "Transient API failure; reconnecting in %.1fs (retry %d/%d): %s",
+            delay,
+            _api_retry_attempts,
+            effective_max_retries,
+            error_message,
+        )
+        await asyncio.sleep(delay)
+        return True
 
     async def _perform_compaction(
         *,
@@ -896,6 +980,7 @@ async def query_loop(
         current_tool: dict[str, str] = {}
         emitted_mode: str = ""
         _retry_after_compact = False
+        _retry_after_api_error = False
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking
@@ -903,6 +988,15 @@ async def query_loop(
                 return
             assistant_content.append(ThinkingBlock(thinking=current_thinking))
             current_thinking = ""
+
+        def _has_response_evidence() -> bool:
+            return bool(
+                current_text
+                or current_thinking
+                or assistant_content
+                or tool_use_blocks
+                or current_tool
+            )
 
         yield StreamModeEvent(mode="requesting")
 
@@ -928,9 +1022,20 @@ async def query_loop(
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
+                    error_message = (
+                        f"API request timed out after {model_config.timeout}s"
+                    )
+                    if (
+                        not _has_response_evidence()
+                        and await _schedule_api_retry(error_message)
+                    ):
+                        turn_count -= 1
+                        _retry_after_api_error = True
+                        break
                     yield ErrorEvent(
-                        message=f"API request timed out after {model_config.timeout}s",
+                        message=error_message,
                         recoverable=True,
+                        error_type="network",
                     )
                     return
                 if chunk.type == "text":
@@ -1000,13 +1105,7 @@ async def query_loop(
                         _set_request_usage(chunk.usage)
 
                 elif chunk.type == "error":
-                    has_response_evidence = bool(
-                        current_text
-                        or current_thinking
-                        or assistant_content
-                        or tool_use_blocks
-                        or current_tool
-                    )
+                    has_response_evidence = _has_response_evidence()
                     is_ctx_err = _is_context_overflow_error(chunk.error)
                     if (
                         is_ctx_err
@@ -1036,21 +1135,25 @@ async def query_loop(
                         turn_count -= 1
                         _retry_after_compact = True
                         break
+                    is_recoverable = _is_recoverable_api_error_message(chunk.error)
+                    if (
+                        is_recoverable
+                        and not has_response_evidence
+                        and await _schedule_api_retry(chunk.error)
+                    ):
+                        turn_count -= 1
+                        _retry_after_api_error = True
+                        break
                     yield ErrorEvent(
                         message=chunk.error,
-                        recoverable=False,
+                        recoverable=is_recoverable,
+                        error_type="network" if is_recoverable else "",
                     )
                     return
 
         except Exception as e:
             error_str = _format_exception_message(e)
-            has_response_evidence = bool(
-                current_text
-                or current_thinking
-                or assistant_content
-                or tool_use_blocks
-                or current_tool
-            )
+            has_response_evidence = _has_response_evidence()
             is_context_error = _is_context_overflow_error(error_str)
             if (
                 is_context_error
@@ -1079,14 +1182,27 @@ async def query_loop(
                 messages_for_api = _prepend_user_context(messages, params.user_context)
                 turn_count -= 1
                 continue
-            logger.exception("Query loop failed")
             is_network_error = _is_recoverable_api_exception(e)
+            if (
+                is_network_error
+                and not has_response_evidence
+                and await _schedule_api_retry(error_str)
+            ):
+                turn_count -= 1
+                continue
+            logger.exception("Query loop failed")
             yield ErrorEvent(
                 message=error_str,
                 recoverable=is_network_error,
                 error_type="network" if is_network_error else "",
             )
             return
+
+        if _retry_after_api_error:
+            continue
+
+        # A completed stream gives the next agent turn a fresh reconnect budget.
+        _api_retry_attempts = 0
 
         if _retry_after_compact:
             continue

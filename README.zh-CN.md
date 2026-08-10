@@ -277,6 +277,7 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 | `reasoning_effort` | 模型推理强度。OpenAI Responses/Codex 通过 `reasoning.effort` 发送；Anthropic 将其支持的值通过 `output_config.effort` 发送。显式配置时优先于 Codex 的 `thinking_budget` 映射。可选：`none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`（具体可用值取决于模型和 provider）。 | — |
 | `max_tokens` | 最大输出 token 数 | `16384` |
 | `timeout` | API 调用超时时间（秒），防止网络卡住时无限等待 | `300` |
+| `max_retries` | 瞬时 API、限流、超时及服务端故障时的自动重连次数。仅在尚未收到正文或工具调用时重放请求。 | `5` |
 | `context_window` | 覆盖模型的上下文窗口大小（token 数）。当自动检测失败或不准确时使用——详见下方[上下文窗口管理](#上下文窗口管理)。 | 自动检测 |
 | `prompt_cache_key` | OpenAI Responses/Codex 请求的 Prompt Cache 路由 key；未配置时默认使用 `http_headers.session_id` | — |
 | `prompt_cache_retention` | OpenAI Responses/Codex Prompt Cache 保留策略：`in_memory` \| `24h` | — |
@@ -1222,6 +1223,16 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 | `timeout` | 子 agent 的总超时时间（秒） | `300` |
 | `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
 | `stream_send_input_output` | REPL 执行 `/agent-send` 后是否实时流式回显；设为 `false` 时仅发送输入，不自动回显 | `false` |
+
+`Agent` 会等待子 agent，并在同一次工具调用中返回结果；`AgentSpawn` 则立即返回并启用
+持久化 callback。子 agent 完成、失败或被取消后，CrabCode 会注入
+`<task-notification>`，自动恢复其直接父 agent；顶层任务则恢复主 agent。嵌套 callback
+会沿父链逐级路由。callback 的投递记录可跨会话恢复和对话压缩保存，并暴露
+`pending`、`injected`、`delivered` 三种状态。
+
+REPL 会在空闲时显示自动续跑过程。Gateway 客户端可通过 `/event` 或 `/ws` 接收相同的
+后台事件；调用 `POST /agent/spawn` 时传入 `"callback": true` 即可开启。Agent 状态响应
+会返回 callback 状态、epoch、关联消息 ID、完成时间和 transcript 路径，便于监控与恢复。
 
 浏览器型子 agent 配置示例：
 

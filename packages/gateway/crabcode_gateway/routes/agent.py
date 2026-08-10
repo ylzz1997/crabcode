@@ -22,6 +22,29 @@ def _get_session(request: Request, session_id: str | None = None):
     return sessions[sid]
 
 
+def _agent_info(snapshot) -> AgentInfo:
+    """Expose lifecycle and callback delivery state for monitoring clients."""
+    return AgentInfo(
+        agent_id=snapshot.agent_id,
+        session_id=snapshot.session_id,
+        parent_agent_id=snapshot.parent_agent_id,
+        title=snapshot.title,
+        subagent_type=snapshot.subagent_type,
+        status=snapshot.status,
+        model=snapshot.model,
+        created_at=snapshot.created_at,
+        finished_at=snapshot.finished_at,
+        usage=snapshot.usage,
+        final_result=snapshot.final_result,
+        error=snapshot.error,
+        transcript_path=snapshot.transcript_path,
+        callback_enabled=snapshot.callback_enabled,
+        callback_state=snapshot.callback_state,
+        callback_message_id=snapshot.callback_message_id,
+        callback_epoch=snapshot.callback_epoch,
+    )
+
+
 @router.post("/spawn", response_model=AgentInfo)
 async def spawn_agent(req: SpawnAgentRequest, request: Request) -> AgentInfo:
     """Spawn a managed sub-agent."""
@@ -40,18 +63,7 @@ async def spawn_agent(req: SpawnAgentRequest, request: Request) -> AgentInfo:
     if not snapshot:
         raise HTTPException(status_code=500, detail="Agent spawn failed")
 
-    return AgentInfo(
-        agent_id=snapshot.agent_id,
-        parent_agent_id=snapshot.parent_agent_id,
-        title=snapshot.title,
-        subagent_type=snapshot.subagent_type,
-        status=snapshot.status,
-        model=snapshot.model,
-        created_at=snapshot.created_at,
-        usage=snapshot.usage,
-        final_result=snapshot.final_result,
-        error=snapshot.error,
-    )
+    return _agent_info(snapshot)
 
 
 @router.get("/list", response_model=list[AgentInfo])
@@ -61,21 +73,7 @@ async def list_agents(request: Request) -> list[AgentInfo]:
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return [
-        AgentInfo(
-            agent_id=s.agent_id,
-            parent_agent_id=s.parent_agent_id,
-            title=s.title,
-            subagent_type=s.subagent_type,
-            status=s.status,
-            model=s.model,
-            created_at=s.created_at,
-            usage=s.usage,
-            final_result=s.final_result,
-            error=s.error,
-        )
-        for s in session.list_agents()
-    ]
+    return [_agent_info(snapshot) for snapshot in session.list_agents()]
 
 
 @router.get("/{agent_id}", response_model=AgentInfo)
@@ -89,18 +87,7 @@ async def get_agent(agent_id: str, request: Request) -> AgentInfo:
     if not snapshot:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
-    return AgentInfo(
-        agent_id=snapshot.agent_id,
-        parent_agent_id=snapshot.parent_agent_id,
-        title=snapshot.title,
-        subagent_type=snapshot.subagent_type,
-        status=snapshot.status,
-        model=snapshot.model,
-        created_at=snapshot.created_at,
-        usage=snapshot.usage,
-        final_result=snapshot.final_result,
-        error=snapshot.error,
-    )
+    return _agent_info(snapshot)
 
 
 @router.post("/{agent_id}/cancel")
@@ -140,15 +127,4 @@ async def wait_agent(req: WaitAgentRequest, request: Request) -> AgentInfo:
     if not snapshot:
         raise HTTPException(status_code=408, detail="Agent wait timed out")
 
-    return AgentInfo(
-        agent_id=snapshot.agent_id,
-        parent_agent_id=snapshot.parent_agent_id,
-        title=snapshot.title,
-        subagent_type=snapshot.subagent_type,
-        status=snapshot.status,
-        model=snapshot.model,
-        created_at=snapshot.created_at,
-        usage=snapshot.usage,
-        final_result=snapshot.final_result,
-        error=snapshot.error,
-    )
+    return _agent_info(snapshot)

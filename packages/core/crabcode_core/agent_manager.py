@@ -186,6 +186,7 @@ class AgentManager:
         transcript_path_getter: Callable[[str], str] | None = None,
         hook_manager: Any = None,
         lsp_manager: Any = None,
+        ai_reviewer: Any = None,
     ) -> None:
         self._settings = settings
         self._agent_settings = agent_settings
@@ -205,6 +206,7 @@ class AgentManager:
         self._transcript_path_getter = transcript_path_getter
         self._hook_manager = hook_manager
         self._lsp_manager = lsp_manager
+        self._ai_reviewer = ai_reviewer
         self._team_manager: Any = None  # Set by CoreSession after construction
         self._runs: dict[str, _AgentRun] = {}
         self._lock = asyncio.Lock()
@@ -238,6 +240,13 @@ class AgentManager:
             summary.append(f"error: {snapshot.error}")
         if snapshot.transcript_path:
             summary.append(f"transcript_path: {snapshot.transcript_path}")
+        if snapshot.callback_enabled:
+            callback = (
+                f"{snapshot.callback_state} (epoch={snapshot.callback_epoch})"
+            )
+            if snapshot.callback_message_id:
+                callback += f", message_id={snapshot.callback_message_id}"
+            summary.append(f"callback: {callback}")
         summary.append("result:")
         summary.append(result)
         return "\n".join(summary)
@@ -340,7 +349,7 @@ class AgentManager:
         self._runs[agent_id] = run
         await self._emit_state(run, "queued", "Agent queued")
         run.task = asyncio.create_task(
-            self._run_agent(
+            self._run_agent_guarded(
                 run=run,
                 model_profile=model_name,
                 profile_cfg=profile_cfg,
@@ -396,6 +405,7 @@ class AgentManager:
             await run.task
         except asyncio.CancelledError:
             pass
+        await self._finalize_cancelled_run(run)
         return True
 
     async def send_input(
@@ -468,7 +478,7 @@ class AgentManager:
         self._persist_transcript(run)
         await self._emit_state(run, "queued", "Agent received new input")
         run.task = asyncio.create_task(
-            self._run_agent(
+            self._run_agent_guarded(
                 run=run,
                 model_profile=model_profile,
                 profile_cfg=profile_cfg,
@@ -517,15 +527,20 @@ class AgentManager:
             self._persist()
 
     async def close(self) -> None:
-        tasks: list[asyncio.Task[None]] = []
+        active_runs: list[_AgentRun] = []
         for run in self._runs.values():
             if run.task and not run.task.done():
                 run.cancelled = True
                 run.detached = True
                 run.task.cancel()
-                tasks.append(run.task)
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+                active_runs.append(run)
+        if active_runs:
+            await asyncio.gather(
+                *(run.task for run in active_runs if run.task is not None),
+                return_exceptions=True,
+            )
+            for run in active_runs:
+                await self._finalize_cancelled_run(run)
             self._persist()
 
     def set_current_model(self, model_name: str | None) -> None:
@@ -674,6 +689,39 @@ class AgentManager:
                 run.snapshot.agent_id,
             )
 
+    async def _run_agent_guarded(
+        self,
+        *,
+        run: _AgentRun,
+        model_profile: str | None,
+        profile_cfg: AgentTypeConfig,
+    ) -> None:
+        """Finalize cancellation even if it happens while waiting for a slot."""
+        try:
+            await self._run_agent(
+                run=run,
+                model_profile=model_profile,
+                profile_cfg=profile_cfg,
+            )
+        except asyncio.CancelledError:
+            # _run_agent handles cancellation after entering the semaphore. A
+            # queued task can be cancelled before that inner try/finally starts.
+            await self._finalize_cancelled_run(run)
+
+    async def _finalize_cancelled_run(self, run: _AgentRun) -> None:
+        """Settle a cancelled run exactly once, including never-started tasks."""
+        if run.done_event.is_set():
+            return
+        if not run.detached:
+            run.snapshot.error = "cancelled"
+        run.snapshot.final_result = run.final_text.strip()
+        self._persist_transcript(run)
+        try:
+            await self._emit_state(run, "cancelled", "Agent cancelled")
+        finally:
+            run.done_event.set()
+            await self._emit_completion(run)
+
     async def _run_agent(
         self,
         *,
@@ -736,7 +784,7 @@ class AgentManager:
                     agent_mode="agent",
                     api_config=agent_api_config,
                     context_window=resolved_cw,
-                    ai_reviewer=getattr(self, "_ai_reviewer", None),
+                    ai_reviewer=self._ai_reviewer,
                     tool_call_timeout=self._settings.tool_call_timeout,
                     auto_compact_enabled=self._settings.auto_compact_enabled,
                     compact_threshold=self._settings.max_context_length,
@@ -755,9 +803,17 @@ class AgentManager:
                 run.snapshot.usage = dict(final_usage)
                 run.snapshot.final_result = run.final_text.strip()
                 self._persist_transcript(run)
-                await self._emit_state(run, "completed", "Agent completed")
+                if run.snapshot.error:
+                    await self._emit_state(
+                        run,
+                        "failed",
+                        f"Agent failed: {run.snapshot.error}",
+                    )
+                else:
+                    await self._emit_state(run, "completed", "Agent completed")
             except asyncio.CancelledError:
-                run.snapshot.error = "cancelled"
+                if not run.detached:
+                    run.snapshot.error = "cancelled"
                 run.snapshot.final_result = run.final_text.strip()
                 self._persist_transcript(run)
                 await self._emit_state(run, "cancelled", "Agent cancelled")

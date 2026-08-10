@@ -2196,8 +2196,16 @@ async def _handle_command(
         if agents:
             active_agents = sum(1 for item in agents if item.status in {"queued", "running"})
             failed_agents = sum(1 for item in agents if item.status == "failed")
+            pending_callbacks = sum(
+                1
+                for item in agents
+                if item.callback_enabled
+                and item.callback_state in {"pending", "injected"}
+            )
             lines.append(
-                f"[bold]🤖 Agents:[/] total={len(agents)} · active={active_agents} · failed={failed_agents} · max_concurrency={session.settings.agent.max_concurrency}"
+                f"[bold]🤖 Agents:[/] total={len(agents)} · active={active_agents} "
+                f"· failed={failed_agents} · callbacks={pending_callbacks} "
+                f"· max_concurrency={session.settings.agent.max_concurrency}"
             )
         if search_status is not None:
             lines.append(f"[bold]🔎 Search:[/] {search_status}")
@@ -2221,6 +2229,7 @@ async def _handle_command(
         table.add_column("Status", style="dim", width=10)
         table.add_column("Type", style="dim", width=14)
         table.add_column("Depth", style="dim", width=5)
+        table.add_column("Callback", style="dim", width=10)
         table.add_column("Title")
         for snapshot in agents[:20]:
             table.add_row(
@@ -2228,6 +2237,7 @@ async def _handle_command(
                 snapshot.status,
                 snapshot.subagent_type,
                 str(snapshot.depth),
+                snapshot.callback_state if snapshot.callback_enabled else "—",
                 snapshot.title[:60],
             )
         console.print(table)

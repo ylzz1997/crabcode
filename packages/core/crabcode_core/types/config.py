@@ -78,6 +78,7 @@ class ApiConfig(BaseModel):
         "none", "minimal", "low", "medium", "high", "xhigh", "max"
     ] | None = None
     timeout: int = 300  # seconds, for API calls
+    max_retries: int = Field(default=5, ge=0)  # transient API reconnects per request
     context_window: int | None = None  # override auto-detected context window
     prompt_cache_key: str | None = None  # OpenAI Responses API prompt cache routing key
     prompt_cache_retention: Literal["in_memory", "24h"] | None = None

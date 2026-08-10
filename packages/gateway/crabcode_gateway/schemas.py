@@ -140,15 +140,22 @@ class SessionInfo(BaseModel):
 
 class AgentInfo(BaseModel):
     agent_id: str
+    session_id: str = ""
     parent_agent_id: str | None = None
     title: str
     subagent_type: str
     status: str
     model: str
     created_at: str
+    finished_at: str | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
     final_result: str = ""
     error: str = ""
+    transcript_path: str | None = None
+    callback_enabled: bool = False
+    callback_state: str = "disabled"
+    callback_message_id: str | None = None
+    callback_epoch: int = 0
 
 
 class ToolInfo(BaseModel):

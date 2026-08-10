@@ -393,9 +393,12 @@ class CodexAdapter(APIAdapter):
                             "to refresh your Codex auth file, or configure "
                             "api_key_env/base_url instead."
                         )
+                    error_message = f"HTTP {response.status_code}"
+                    if body:
+                        error_message = f"{error_message}: {body}"
                     yield StreamChunk(
                         type="error",
-                        error=safe_utf8_str(body or f"HTTP {response.status_code}"),
+                        error=safe_utf8_str(error_message),
                     )
                     return
 

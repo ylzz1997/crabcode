@@ -141,6 +141,11 @@ class CoreSession:
             merged.api.pass_reasoning_content = file_settings.api.pass_reasoning_content
         if file_settings.api.max_tokens != 16384 and self.settings.api.max_tokens == 16384:
             merged.api.max_tokens = file_settings.api.max_tokens
+        if (
+            "max_retries" in file_settings.api.model_fields_set
+            and "max_retries" not in self.settings.api.model_fields_set
+        ):
+            merged.api.max_retries = file_settings.api.max_retries
         if file_settings.api.extra_body and not self.settings.api.extra_body:
             merged.api.extra_body = dict(file_settings.api.extra_body)
         if file_settings.api.context_window and not self.settings.api.context_window:
@@ -336,8 +341,8 @@ class CoreSession:
             transcript_path_getter=_agent_transcript_path,
             hook_manager=self._hook_manager,
             lsp_manager=self._lsp_manager,
+            ai_reviewer=self._ai_reviewer,
         )
-        self._agent_manager._ai_reviewer = self._ai_reviewer
 
         # Initialize TeamManager
         from crabcode_core.team.manager import TeamManager
@@ -459,17 +464,38 @@ class CoreSession:
                         generation,
                     ):
                         continue
-                    if parent_agent_id is None:
-                        await self._continue_main_agent(
-                            completions,
-                            lifecycle_generation=generation,
-                        )
-                    else:
-                        async with self._managed_callback_lock:
-                            await self._continue_managed_parent(
-                                parent_agent_id,
+                    try:
+                        if parent_agent_id is None:
+                            await self._continue_main_agent(
                                 completions,
                                 lifecycle_generation=generation,
+                            )
+                        else:
+                            async with self._managed_callback_lock:
+                                await self._continue_managed_parent(
+                                    parent_agent_id,
+                                    completions,
+                                    lifecycle_generation=generation,
+                                )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.exception(
+                            "Managed-agent callback group failed: parent=%s agents=%s",
+                            parent_agent_id,
+                            [completion.agent_id for completion in completions],
+                        )
+                        try:
+                            await self._emit_background_event(
+                                ErrorEvent(
+                                    message=f"Managed-agent callback failed: {exc}",
+                                    recoverable=True,
+                                    error_type="agent_callback",
+                                )
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Failed to publish managed-agent callback error"
                             )
         except asyncio.CancelledError:
             pass
