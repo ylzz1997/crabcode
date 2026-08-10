@@ -97,6 +97,11 @@ def get_agent_transcript_path(cwd: str, session_id: str, agent_id: str) -> Path:
     return get_agent_transcript_dir(cwd, session_id) / f"{agent_id}.jsonl"
 
 
+def get_task_output_path(cwd: str, session_id: str, task_id: str) -> Path:
+    """Get the output path for a session-scoped background task."""
+    return get_project_dir(cwd) / f"{session_id}.tasks" / f"{task_id}.log"
+
+
 def generate_session_id() -> str:
     return str(uuid.uuid4())
 

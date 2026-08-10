@@ -112,6 +112,7 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/agent": [],
     "/plan-status": [],
     "/agents": [],
+    "/tasks": ["stop"],
     "/agent-log": [],
     "/agent-send": [],
     "/wait": [],
@@ -261,6 +262,7 @@ class _CrabCodeCompleter(Completer):
             "/agent": "switch to agent mode / show agent (<id>)",
             "/plan-status": "show current plan status",
             "/agents": "list managed agents",
+            "/tasks": "list/stop background agents and monitors",
             "/agent-log": "show an agent transcript",
             "/agent-send": "send input to an agent",
             "/wait": "wait for an agent",
@@ -1131,6 +1133,7 @@ async def _consume_background_events(
                 "completed": "green",
                 "failed": "red",
                 "cancelled": "yellow",
+                "stopped": "yellow",
             }.get(event.status, "dim")
             await render(
                 lambda: console.print(
@@ -1230,11 +1233,17 @@ async def _stream_agent_until_done(
                 "completed": "green",
                 "failed": "red",
                 "cancelled": "yellow",
+                "stopped": "yellow",
             }.get(event.status, "dim")
             console.print(
                 f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
             )
-            if event.agent_id == target_agent_id and event.status in {"completed", "failed", "cancelled"}:
+            if event.agent_id == target_agent_id and event.status in {
+                "completed",
+                "failed",
+                "stopped",
+                "cancelled",
+            }:
                 break
             continue
 
@@ -1324,6 +1333,7 @@ async def _run_plan_executor_with_runtime_events(
                     "completed": "green",
                     "failed": "red",
                     "cancelled": "yellow",
+                    "stopped": "yellow",
                 }.get(event.status, "dim")
                 console.print(
                     f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
@@ -1619,6 +1629,7 @@ async def run_repl(
                             "completed": "green",
                             "failed": "red",
                             "cancelled": "yellow",
+                            "stopped": "yellow",
                         }.get(event.status, "dim")
                         console.print(
                             f"  [{style}]agent {event.agent_id[:8]} · {event.status} · {event.title}[/]"
@@ -1920,6 +1931,8 @@ async def _handle_command(
             "[bold]/agent[/] — switch to agent mode (full execution; no args)\n"
             "[bold]/plan-status[/] — show current plan status\n"
             "[bold]/agents[/] — list managed agents\n"
+            "[bold]/tasks[/] — list background agents and monitors\n"
+            "[bold]/tasks stop <id>[/] — stop a background task\n"
             "[bold]/agent <id>[/] — show a managed agent\n"
             "[bold]/agent-log <id>[/] — show an agent transcript\n"
             "[bold]/agent-send <id> <prompt>[/] — send more input to an agent\n"
@@ -2207,6 +2220,14 @@ async def _handle_command(
                 f"· failed={failed_agents} · callbacks={pending_callbacks} "
                 f"· max_concurrency={session.settings.agent.max_concurrency}"
             )
+        monitors = session.list_monitor_tasks()
+        if monitors:
+            active_monitors = sum(1 for item in monitors if item.status == "running")
+            failed_monitors = sum(1 for item in monitors if item.status == "failed")
+            lines.append(
+                f"[bold]📡 Monitors:[/] total={len(monitors)} "
+                f"· active={active_monitors} · failed={failed_monitors}"
+            )
         if search_status is not None:
             lines.append(f"[bold]🔎 Search:[/] {search_status}")
         console.print(Panel(
@@ -2215,6 +2236,49 @@ async def _handle_command(
             border_style="cyan",
             expand=False,
         ))
+        return True
+
+    if cmd == "/tasks":
+        await session.initialize()
+        if arg.startswith("stop "):
+            task_id = arg[5:].strip()
+            if not task_id:
+                console.print("[dim]Usage: /tasks stop <task-id>[/]")
+                return True
+            stopped = await session.stop_background_task(task_id)
+            if stopped:
+                console.print(f"[green]Stopped background task {task_id}.[/]")
+            else:
+                console.print(f"[bold red]No running background task: {task_id}[/]")
+            return True
+
+        agents = session.list_agents()
+        monitors = session.list_monitor_tasks()
+        if not agents and not monitors:
+            console.print("[dim]No background tasks.[/]")
+            return True
+        from rich.table import Table
+
+        table = Table(title="Background Tasks", border_style="blue", expand=False)
+        table.add_column("ID", style="cyan", width=10)
+        table.add_column("Status", style="dim", width=10)
+        table.add_column("Type", style="dim", width=12)
+        table.add_column("Description")
+        for snapshot in monitors[:20]:
+            table.add_row(
+                snapshot.task_id[:8],
+                snapshot.status,
+                "monitor",
+                snapshot.description[:60],
+            )
+        for snapshot in agents[:20]:
+            table.add_row(
+                snapshot.agent_id[:8],
+                snapshot.status,
+                "agent",
+                snapshot.title[:60],
+            )
+        console.print(table)
         return True
 
     if cmd == "/agents":

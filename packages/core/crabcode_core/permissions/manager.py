@@ -128,7 +128,14 @@ class PermissionManager:
         tool: Tool,
         tool_input: dict[str, Any],
     ) -> bool:
-        if rule.tool != tool.name and rule.tool != "*":
+        # Command-backed Monitor calls intentionally share Bash permission
+        # rules. WebSocket monitors remain a separate Monitor approval.
+        command_monitor = tool.name == "Monitor" and bool(tool_input.get("command"))
+        if (
+            rule.tool != tool.name
+            and rule.tool != "*"
+            and not (command_monitor and rule.tool == "Bash")
+        ):
             return False
 
         if rule.path:

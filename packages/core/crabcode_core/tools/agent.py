@@ -16,7 +16,10 @@ from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 class AgentTool(Tool):
     name = "Agent"
-    description = "Spawn a sub-agent for parallel or isolated tasks."
+    description = (
+        "Spawn a sub-agent for parallel or isolated tasks. Agents run in the "
+        "background by default and report back through a completion notification."
+    )
     is_read_only = False
     is_concurrency_safe = True
     input_schema = {
@@ -31,6 +34,30 @@ class AgentTool(Tool):
                 "type": "string",
                 "description": "Type of agent to spawn (e.g., 'explore', 'generalPurpose').",
                 "enum": ["explore", "generalPurpose"],
+            },
+            "description": {
+                "type": "string",
+                "description": "A short description used to identify the task.",
+            },
+            "name": {
+                "type": "string",
+                "description": "Optional stable name for the sub-agent.",
+            },
+            "model_profile": {
+                "type": "string",
+                "description": (
+                    "Optional named model profile configured under settings.models. "
+                    "Do not pass a provider model ID."
+                ),
+            },
+            "run_in_background": {
+                "type": "boolean",
+                "description": (
+                    "Run asynchronously and report back through a task notification. "
+                    "Defaults to true; set false only when the result is required "
+                    "before this turn can continue."
+                ),
+                "default": True,
             },
         },
         "required": ["prompt"],
@@ -67,6 +94,12 @@ class AgentTool(Tool):
             "- Broadly exploring the codebase for context on a large task\n"
             "- Parallelizing independent research queries\n"
             "- Tasks that may produce large outputs\n\n"
+            "Execution mode:\n"
+            "- Agents run in the background by default. The tool returns an agent ID "
+            "immediately, and the result arrives later as a task notification.\n"
+            "- Set run_in_background=false only when this turn cannot continue without "
+            "the result. Do not poll a background agent; its completion automatically "
+            "resumes the parent conversation.\n\n"
             "When NOT to use:\n"
             "- Simple, single-step tasks — just call the tools directly\n"
             "- Searching for a specific file or class — use Glob or Grep\n\n"
@@ -105,14 +138,50 @@ class AgentTool(Tool):
             )
 
         agent_id: str | None = None
+        # Claude Code treats an omitted/null value as the background default;
+        # only an explicit false requests synchronous execution.
+        run_in_background = tool_input.get("run_in_background") is not False
+        title = first_non_empty_str(tool_input, ("description", "name"))
         try:
             agent_id = await manager.spawn_agent(
                 prompt=prompt,
                 subagent_type=tool_input.get("subagent_type", "generalPurpose"),
+                name=title,
+                model_profile=tool_input.get("model_profile"),
                 parent_agent_id=context.agent_id,
                 parent_tool_use_id=context.tool_use_id,
                 depth=context.agent_depth + 1,
+                callback=run_in_background,
             )
+            if run_in_background:
+                snapshot = manager.get_agent(agent_id)
+                description = snapshot.title if snapshot is not None else (title or prompt[:80])
+                output_file = snapshot.transcript_path if snapshot is not None else None
+                resolved_model = snapshot.model if snapshot is not None else None
+                data = {
+                    "status": "async_launched",
+                    "isAsync": True,
+                    "agentId": agent_id,
+                    "description": description,
+                    "resolvedModel": resolved_model,
+                    "prompt": prompt,
+                    "outputFile": output_file,
+                    "canReadOutputFile": bool(output_file),
+                }
+                lines = [
+                    "status: async_launched",
+                    f"agentId: {agent_id}",
+                    f"description: {description}",
+                ]
+                if resolved_model:
+                    lines.append(f"resolvedModel: {resolved_model}")
+                if output_file:
+                    lines.append(f"outputFile: {output_file}")
+                lines.append(
+                    "The result will arrive automatically as a task notification; "
+                    "do not poll for completion."
+                )
+                return ToolResult(data=data, result_for_model="\n".join(lines))
             snapshot = await manager.wait_agent(agent_id, timeout_ms=self._timeout * 1000)
         except asyncio.TimeoutError:
             return ToolResult(
@@ -153,8 +222,8 @@ class AgentTool(Tool):
 class AgentSpawnTool(Tool):
     name = "AgentSpawn"
     description = (
-        "Spawn a managed sub-agent and return immediately. When it reaches a terminal "
-        "state, its final response is automatically delivered to and resumes the parent agent."
+        "Compatibility alias for Agent with run_in_background=true. Spawn a managed "
+        "sub-agent and return immediately; completion automatically resumes its parent."
     )
     is_read_only = False
     is_concurrency_safe = True
@@ -197,8 +266,17 @@ class AgentSpawnTool(Tool):
         except ValueError as exc:
             return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
         return ToolResult(
-            data={"agent_id": agent_id},
-            result_for_model=f"Spawned agent: {agent_id}",
+            data={
+                "status": "async_launched",
+                "isAsync": True,
+                "agentId": agent_id,
+                "agent_id": agent_id,
+            },
+            result_for_model=(
+                f"status: async_launched\nagentId: {agent_id}\n"
+                "The result will arrive automatically as a task notification; "
+                "do not poll for completion."
+            ),
         )
 
 
@@ -303,7 +381,8 @@ class AgentWaitTool(Tool):
         return ToolResult(
             data={"agent": snapshot.to_dict()},
             result_for_model=text,
-            is_error=snapshot.status not in {"completed", "cancelled", "failed"},
+            is_error=snapshot.status
+            not in {"completed", "stopped", "cancelled", "failed"},
         )
 
 

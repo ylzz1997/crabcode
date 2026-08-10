@@ -773,6 +773,8 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 | `/model` | 查看当前模型与全部命名模型 |
 | `/model <名称>` | 切换到 `settings.models` 中的命名模型 |
 | `/agents` | 列出当前会话中的托管子 agent |
+| `/tasks` | 列出后台 agent 与命令/WebSocket monitor |
+| `/tasks stop <id>` | 停止运行中的后台任务 |
 | `/agent <id>` | 查看单个 agent 的详情（状态、用量、结果、transcript 路径） |
 | `/agent-log <id>` | 查看单个 agent 的持久化 transcript |
 | `/agent-send <id> <提示词>` | 给已有 agent 继续发送输入 |
@@ -1224,15 +1226,25 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 | `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
 | `stream_send_input_output` | REPL 执行 `/agent-send` 后是否实时流式回显；设为 `false` 时仅发送输入，不自动回显 | `false` |
 
-`Agent` 会等待子 agent，并在同一次工具调用中返回结果；`AgentSpawn` 则立即返回并启用
-持久化 callback。子 agent 完成、失败或被取消后，CrabCode 会注入
-`<task-notification>`，自动恢复其直接父 agent；顶层任务则恢复主 agent。嵌套 callback
-会沿父链逐级路由。callback 的投递记录可跨会话恢复和对话压缩保存，并暴露
-`pending`、`injected`、`delivered` 三种状态。
+与 Claude Code 一样，`Agent` 默认在后台运行并立即返回 `async_launched`；只有当前轮次
+必须同步取得结果时才设置 `run_in_background: false`。`AgentSpawn` 继续作为后台启动的
+兼容别名。子 agent 完成、失败或被停止后，CrabCode 会注入 `<task-notification>`，自动
+恢复其直接父 agent；顶层任务则恢复主 agent。嵌套 callback 会沿父链逐级路由。
+callback 的投递记录可跨会话恢复和对话压缩保存，并暴露 `pending`、`injected`、
+`delivered` 三种状态。进程终止后遗留的 queued/running agent 会在恢复时被标记为
+`stopped`，不会显示成实际已不存在的运行中任务。
 
 REPL 会在空闲时显示自动续跑过程。Gateway 客户端可通过 `/event` 或 `/ws` 接收相同的
 后台事件；调用 `POST /agent/spawn` 时传入 `"callback": true` 即可开启。Agent 状态响应
 会返回 callback 状态、epoch、关联消息 ID、完成时间和 transcript 路径，便于监控与恢复。
+
+独立的 `Monitor` 工具也遵循 Claude Code 的事件驱动 watch 模式。传入 `command` 或
+`ws` 之一以及简短 `description`；合并后的 stdout/stderr 每一行或每条 WebSocket 消息
+都会以 `<monitor-event>` 注入并自动唤醒主会话。默认期限为 300,000 ms（最大
+3,600,000 ms），设置 `persistent: true` 后会一直运行到 `TaskStop` 或会话结束。完整
+输出保存在当前会话的 task 文件中。`TaskList` 同时列出 monitor 和 agent，`TaskStop`
+可按 ID 停止任一类型。命令 monitor 复用 Bash 权限规则；WebSocket monitor 单独审批，
+并拒绝带凭据、私网、本机或保留地址的目标。
 
 浏览器型子 agent 配置示例：
 

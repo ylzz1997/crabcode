@@ -24,6 +24,7 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.glob import GlobTool
     from crabcode_core.tools.lint import LintTool
     from crabcode_core.tools.memory import MemoryTool
+    from crabcode_core.tools.monitor import MonitorManager, MonitorTool, TaskListTool, TaskStopTool
     from crabcode_core.tools.revert import RevertTool
     from crabcode_core.tools.switch_mode import SwitchModeTool
     from crabcode_core.tools.team import (
@@ -39,6 +40,8 @@ def get_default_tools() -> list[Tool]:
     )
     from crabcode_core.tools.web_search import WebSearchTool
 
+    monitor_manager = MonitorManager()
+
     return [
         BashTool(),
         FileReadTool(),
@@ -50,6 +53,9 @@ def get_default_tools() -> list[Tool]:
         BrowserTool(),
         LintTool(),
         MemoryTool(),
+        MonitorTool(monitor_manager),
+        TaskListTool(monitor_manager),
+        TaskStopTool(monitor_manager),
         AgentSpawnTool(),
         AgentStatusTool(),
         AgentWaitTool(),

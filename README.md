@@ -778,6 +778,8 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 | `/model` | Show active model and all configured named models |
 | `/model <name>` | Switch to a named model from `settings.models` |
 | `/agents` | List managed sub-agents in the current session |
+| `/tasks` | List background agents and command/WebSocket monitors |
+| `/tasks stop <id>` | Stop a running background task |
 | `/agent <id>` | Show details for one agent (`status`, `usage`, `result`, transcript path) |
 | `/agent-log <id>` | Show the stored transcript for one agent |
 | `/agent-send <id> <prompt>` | Send additional input to an existing agent |
@@ -1229,17 +1231,29 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
 | `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
 | `stream_send_input_output` | Stream live output after `/agent-send` in REPL; set `false` to send input silently | `false` |
 
-`Agent` waits for its sub-agent and returns the result in the same tool call. `AgentSpawn`
-returns immediately and enables a durable callback: when the sub-agent completes, fails,
-or is cancelled, CrabCode injects a `<task-notification>` and automatically resumes its
-direct parent (then the main agent for top-level work). Nested callbacks are routed up the
-parent chain. Callback delivery is persisted across session resume and compaction, with
-the observable states `pending`, `injected`, and `delivered`.
+Like Claude Code, `Agent` runs in the background by default and immediately returns an
+`async_launched` result. Set `run_in_background: false` only when the current turn needs the
+sub-agent result synchronously. `AgentSpawn` remains as a compatibility alias for a background
+launch. When the sub-agent completes, fails, or is stopped, CrabCode injects a
+`<task-notification>` and automatically resumes its direct parent (then the main agent for
+top-level work). Nested callbacks are routed up the parent chain. Callback delivery is persisted
+across session resume and compaction, with the observable states `pending`, `injected`, and
+`delivered`. A queued or running agent left behind by a terminated process is restored as
+`stopped`, never as a phantom running task.
 
 The REPL renders automatic continuations while idle. Gateway clients receive the same
 background events through `/event` or `/ws`; pass `"callback": true` to
 `POST /agent/spawn`. Agent status responses include callback state, epoch, correlated
 message ID, finish time, and transcript path for monitoring and recovery.
+
+The separate `Monitor` tool follows Claude Code's event-driven watch model. Pass exactly one of
+`command` or `ws`, plus a short `description`; every merged stdout/stderr line or WebSocket
+message is injected as `<monitor-event>` and automatically resumes the main conversation. The
+default deadline is 300,000 ms (maximum 3,600,000 ms), while `persistent: true` runs until
+`TaskStop` or session end. Output is retained in a per-session task file. `TaskList` lists both
+monitors and agents, and `TaskStop` stops either kind by ID. Command monitors share Bash
+permission rules; WebSocket monitors require Monitor approval and reject credential-bearing,
+private, local, and reserved targets.
 
 Example browser-focused sub-agent profile:
 

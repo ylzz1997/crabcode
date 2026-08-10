@@ -432,7 +432,7 @@ class AgentManager:
             None,
         )
         if (
-            run.snapshot.status in {"completed", "failed", "cancelled"}
+            run.snapshot.status in {"completed", "failed", "stopped", "cancelled"}
             and run.snapshot.callback_enabled
             and run.snapshot.callback_state in {"pending", "injected"}
             and existing_index is None
@@ -517,7 +517,7 @@ class AgentManager:
             changed = True
             run.cancelled = True
             run.detached = True
-            run.snapshot.status = "cancelled"
+            run.snapshot.status = "stopped"
             run.snapshot.error = reason
             run.snapshot.updated_at = _now_iso()
             run.snapshot.finished_at = run.snapshot.updated_at
@@ -555,12 +555,24 @@ class AgentManager:
                 run.task.cancel()
         self._runs.clear()
         pending_callbacks: list[AgentCompletion] = []
+        changed = False
         for item in snapshots:
             try:
                 snapshot = AgentSnapshot(**item)
             except Exception:
                 logger.warning("Skipping invalid agent snapshot during restore", exc_info=True)
                 continue
+            if snapshot.status in {"queued", "running"}:
+                # Background agents are owned by the session process. Once that
+                # process is gone there is no coroutine to resume, so never expose
+                # a phantom running task after --resume. Settle it as stopped and,
+                # when callbacks were enabled, deliver that terminal state exactly
+                # like any other completion.
+                snapshot.status = "stopped"
+                snapshot.error = snapshot.error or "stopped because the session ended"
+                snapshot.updated_at = _now_iso()
+                snapshot.finished_at = snapshot.updated_at
+                changed = True
             run = _AgentRun(snapshot=snapshot, active_model_profile=self._current_model_name)
             if self._transcript_loader is not None:
                 raw_messages = self._transcript_loader(snapshot.agent_id)
@@ -575,10 +587,12 @@ class AgentManager:
             # inspect that stale state instead of waiting forever for an impossible
             # transition. send_input() clears this event before starting a new run.
             run.done_event.set()
-            if snapshot.status in {"completed", "failed", "cancelled"}:
+            if snapshot.status in {"completed", "failed", "stopped", "cancelled"}:
                 if snapshot.callback_enabled and snapshot.callback_state in {"pending", "injected"}:
                     pending_callbacks.append(AgentCompletion.from_snapshot(snapshot))
             self._runs[snapshot.agent_id] = run
+        if changed:
+            self._persist()
         return pending_callbacks
 
     def mark_callback_injected(
@@ -656,7 +670,7 @@ class AgentManager:
         run.snapshot.updated_at = _now_iso()
         if status == "running" and run.snapshot.started_at is None:
             run.snapshot.started_at = run.snapshot.updated_at
-        if status in {"completed", "failed", "cancelled"}:
+        if status in {"completed", "failed", "stopped", "cancelled"}:
             run.snapshot.finished_at = run.snapshot.updated_at
         if run.detached:
             return
@@ -713,11 +727,11 @@ class AgentManager:
         if run.done_event.is_set():
             return
         if not run.detached:
-            run.snapshot.error = "cancelled"
+            run.snapshot.error = "stopped"
         run.snapshot.final_result = run.final_text.strip()
         self._persist_transcript(run)
         try:
-            await self._emit_state(run, "cancelled", "Agent cancelled")
+            await self._emit_state(run, "stopped", "Agent stopped")
         finally:
             run.done_event.set()
             await self._emit_completion(run)
@@ -813,10 +827,10 @@ class AgentManager:
                     await self._emit_state(run, "completed", "Agent completed")
             except asyncio.CancelledError:
                 if not run.detached:
-                    run.snapshot.error = "cancelled"
+                    run.snapshot.error = "stopped"
                 run.snapshot.final_result = run.final_text.strip()
                 self._persist_transcript(run)
-                await self._emit_state(run, "cancelled", "Agent cancelled")
+                await self._emit_state(run, "stopped", "Agent stopped")
             except Exception as exc:
                 run.snapshot.error = str(exc)
                 run.snapshot.final_result = run.final_text.strip()

@@ -82,6 +82,11 @@ class CoreSession:
         self._lifecycle_generation = 0
         self._agent_completion_queue: asyncio.Queue[tuple[int, AgentCompletion]] = asyncio.Queue()
         self._agent_completion_task: asyncio.Task[None] | None = None
+        self._monitor_notification_queue: asyncio.Queue[tuple[int, str, str]] = (
+            asyncio.Queue(maxsize=1000)
+        )
+        self._monitor_notification_task: asyncio.Task[None] | None = None
+        self._monitor_manager: Any = None
         self._background_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
         self._background_event_sink: Callable[[CoreEvent], Awaitable[None]] | None = None
         self._pending_manual_compact: str | None = None
@@ -224,6 +229,17 @@ class CoreSession:
 
         if not self.tools:
             self.tools = get_default_tools()
+
+        from crabcode_core.tools.monitor import MonitorTool
+
+        self._monitor_manager = next(
+            (
+                tool.manager
+                for tool in self.tools
+                if isinstance(tool, MonitorTool)
+            ),
+            None,
+        )
 
         # Session storage is created lazily by _ensure_session_storage()
         # to avoid leaving empty session files when resume() is called.
@@ -415,6 +431,83 @@ class CoreSession:
                 self._dispatch_agent_completions()
             )
 
+    async def enqueue_monitor_notification(
+        self,
+        notification: str,
+        *,
+        session_id: str,
+    ) -> None:
+        """Queue one Monitor event for a safe-boundary automatic continuation."""
+        if self._closed or session_id != self.session_id:
+            return
+        await self._monitor_notification_queue.put(
+            (self._lifecycle_generation, session_id, notification)
+        )
+        self._ensure_monitor_notification_dispatcher()
+
+    def _ensure_monitor_notification_dispatcher(self) -> None:
+        if self._closed:
+            return
+        if (
+            self._monitor_notification_task is None
+            or self._monitor_notification_task.done()
+        ):
+            self._monitor_notification_task = asyncio.create_task(
+                self._dispatch_monitor_notifications()
+            )
+
+    async def _dispatch_monitor_notifications(self) -> None:
+        """Batch ready monitor events and let the main model react to them."""
+        try:
+            while True:
+                first = await self._monitor_notification_queue.get()
+                # Coalesce bursts without turning every log line into a separate
+                # model request. Every event remains present and ordered.
+                await asyncio.sleep(0.05)
+                batch = [first]
+                batch_chars = len(first[2])
+                while len(batch) < 100 and batch_chars < 500_000:
+                    try:
+                        item = self._monitor_notification_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    batch.append(item)
+                    batch_chars += len(item[2])
+
+                grouped: dict[tuple[int, str], list[str]] = {}
+                for generation, session_id, notification in batch:
+                    grouped.setdefault((generation, session_id), []).append(notification)
+
+                for (generation, session_id), notifications in grouped.items():
+                    if not self._lifecycle_matches(session_id, generation):
+                        continue
+                    async with self._turn_lock:
+                        if not self._lifecycle_matches(session_id, generation):
+                            continue
+                        try:
+                            async for event in self._send_message_impl(
+                                "\n\n".join(notifications),
+                                synthetic=True,
+                                message_uuid=str(uuid.uuid4()),
+                            ):
+                                await self._emit_background_event(event)
+                        except Exception as exc:
+                            logger.exception("Automatic Monitor continuation failed")
+                            try:
+                                await self._emit_background_event(
+                                    ErrorEvent(
+                                        message=f"Monitor continuation failed: {exc}",
+                                        recoverable=True,
+                                        error_type="monitor_callback",
+                                    )
+                                )
+                            except Exception:
+                                logger.exception("Failed to publish Monitor callback error")
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Monitor notification dispatcher failed")
+
     def _lifecycle_matches(self, session_id: str, generation: int) -> bool:
         return (
             not self._closed
@@ -507,18 +600,26 @@ class CoreSession:
         completion: AgentCompletion,
         *,
         max_result_chars: int | None = None,
+        notification_uuid: str | None = None,
     ) -> str:
         result = AgentManager.truncate_result(
             completion.final_result.strip() or "(no result)",
             max_result_chars or self.settings.agent.max_output_chars,
         )
+        notification_status = (
+            "stopped" if completion.status == "cancelled" else completion.status
+        )
+        summary = completion.error.strip() or completion.title
         fields = [
             ("session-id", completion.session_id),
             ("task-id", completion.agent_id),
+            ("uuid", notification_uuid or ""),
             ("parent-agent-id", completion.parent_agent_id or ""),
             ("tool-use-id", completion.parent_tool_use_id or ""),
             ("callback-epoch", str(completion.callback_epoch)),
-            ("status", completion.status),
+            ("status", notification_status),
+            ("output-file", completion.transcript_path or ""),
+            ("summary", summary),
             ("title", completion.title),
             ("subagent-type", completion.subagent_type),
             ("completed-at", completion.completed_at),
@@ -703,6 +804,7 @@ class CoreSession:
                 self._format_agent_completion(
                     completion,
                     max_result_chars=result_budget,
+                    notification_uuid=message_id,
                 )
                 for completion in injected
             )
@@ -792,7 +894,7 @@ class CoreSession:
         parent = manager.get_agent(parent_agent_id)
         if (
             parent is not None
-            and parent.status in {"completed", "failed", "cancelled"}
+            and parent.status in {"completed", "failed", "stopped", "cancelled"}
             and parent.callback_enabled
             and parent.callback_state in {"pending", "injected"}
         ):
@@ -877,6 +979,7 @@ class CoreSession:
             self._format_agent_completion(
                 completion,
                 max_result_chars=result_budget,
+                notification_uuid=message_id,
             )
             for completion in injected
         )
@@ -902,7 +1005,7 @@ class CoreSession:
         assistant_reply = manager.get_agent_reply(parent_agent_id, message_id)
         if (
             parent is None
-            or parent.status not in {"completed", "failed", "cancelled"}
+            or parent.status not in {"completed", "failed", "stopped", "cancelled"}
             or assistant_reply is None
         ):
             return
@@ -990,6 +1093,14 @@ class CoreSession:
             except asyncio.CancelledError:
                 pass
             self._agent_completion_task = None
+
+        if self._monitor_notification_task is not None:
+            self._monitor_notification_task.cancel()
+            try:
+                await self._monitor_notification_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_notification_task = None
 
         if self._agent_manager is not None:
             await self._agent_manager.close()
@@ -1085,6 +1196,19 @@ class CoreSession:
             self._agent_completion_task = None
             if not self._agent_completion_queue.empty():
                 self._ensure_agent_completion_dispatcher()
+        if (
+            self._monitor_notification_task is not None
+            and self._monitor_notification_task.done()
+        ):
+            try:
+                monitor_error = self._monitor_notification_task.exception()
+            except asyncio.CancelledError:
+                monitor_error = None
+            if monitor_error is not None:
+                logger.error("Monitor notification dispatcher stopped: %s", monitor_error)
+            self._monitor_notification_task = None
+            if not self._monitor_notification_queue.empty():
+                self._ensure_monitor_notification_dispatcher()
         async with self._turn_lock:
             self._foreground_turn_active = True
             try:
@@ -1449,8 +1573,12 @@ class CoreSession:
     def _drain_background_event_queue(self) -> None:
         self._drain_queue(self._background_event_queue)
 
+    def _drain_monitor_notification_queue(self) -> None:
+        self._drain_queue(self._monitor_notification_queue)
+
     def _drain_session_queues(self) -> None:
         self._drain_agent_completion_queue()
+        self._drain_monitor_notification_queue()
         self._drain_background_event_queue()
         self._drain_queue(self._agent_event_queue)
         self._drain_queue(self._permission_queue)
@@ -1463,6 +1591,11 @@ class CoreSession:
         if self._turn_lock.locked():
             raise RuntimeError("Cannot start a new session while a turn is still running")
         self._lifecycle_generation += 1
+        if self._monitor_manager and self.session_id:
+            self._monitor_manager.cancel_session_now(
+                self.session_id,
+                "session replaced",
+            )
         if self._agent_manager:
             self._agent_manager.abandon_active_agents("session replaced")
             self._agent_manager.restore_snapshots([])
@@ -1843,6 +1976,27 @@ class CoreSession:
             return []
         return self._agent_manager.list_agents()
 
+    def list_monitor_tasks(self) -> list[Any]:
+        if not self._monitor_manager:
+            return []
+        return self._monitor_manager.list_tasks(self.session_id or None)
+
+    async def stop_background_task(self, task_id: str) -> bool:
+        await self.initialize()
+        if self._monitor_manager:
+            monitor_id = self._monitor_manager.resolve_task_id(task_id)
+            if monitor_id and await self._monitor_manager.stop_task(monitor_id):
+                return True
+        if self._agent_manager:
+            matches = [
+                snapshot.agent_id
+                for snapshot in self._agent_manager.list_agents()
+                if snapshot.agent_id.startswith(task_id)
+            ]
+            if len(matches) == 1:
+                return await self._agent_manager.cancel_agent(matches[0])
+        return False
+
     async def wait_agent(
         self, agent_id: str | list[str], timeout_ms: int | None = None
     ) -> AgentSnapshot | None:
@@ -1901,6 +2055,11 @@ class CoreSession:
 
         self._lifecycle_generation += 1
         lifecycle_generation = self._lifecycle_generation
+        if self._monitor_manager and self.session_id:
+            self._monitor_manager.cancel_session_now(
+                self.session_id,
+                "session resumed elsewhere",
+            )
         if self._agent_manager:
             self._agent_manager.abandon_active_agents("session resumed elsewhere")
         self.session_id = session_id
