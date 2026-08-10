@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, AsyncGenerator, Coroutine
+
+import httpx
 
 from crabcode_core.api.base import APIAdapter, ModelConfig
 from crabcode_core.compact.compact import (
@@ -52,6 +54,20 @@ from crabcode_core.permissions.manager import PermissionMode
 from crabcode_core.types.tool import PermissionBehavior, PermissionResult, Tool, ToolContext, ToolResult
 
 logger = get_logger(__name__)
+
+
+def _format_exception_message(exc: Exception) -> str:
+    """Return an actionable message even when an exception has an empty str()."""
+    exception_name = type(exc).__name__
+    detail = str(exc).strip()
+    if detail:
+        return f"{exception_name}: {detail}"
+    return f"{exception_name}: no additional details"
+
+
+def _is_recoverable_api_exception(exc: Exception) -> bool:
+    """Identify transport failures that are safe for the caller to retry."""
+    return isinstance(exc, httpx.TransportError)
 
 
 def _merge_permission_results(
@@ -114,6 +130,7 @@ class QueryParams:
     tool_call_timeout: float | None = None  # seconds; None means no timeout
     auto_compact_enabled: bool = True
     compact_threshold: int | None = None
+    reply_to_uuid: str | None = None
 
 
 def _append_system_context(
@@ -209,6 +226,7 @@ async def _run_tools(
 
     async def execute_one(block: ToolUseBlock) -> tuple[list[Message], ToolResultEvent]:
         tool = _find_tool(tools, block.name)
+        call_context = replace(context, tool_use_id=block.id)
         if not tool:
             msg = create_tool_result_message(
                 tool_use_id=block.id,
@@ -282,11 +300,11 @@ async def _run_tools(
         try:
             if timeout_enabled:
                 result = await asyncio.wait_for(
-                    tool.call(block.input, context),
+                    tool.call(block.input, call_context),
                     timeout=tool_call_timeout,
                 )
             else:
-                result = await tool.call(block.input, context)
+                result = await tool.call(block.input, call_context)
         except asyncio.TimeoutError as e:
             if timeout_enabled:
                 result = ToolResult(
@@ -458,10 +476,44 @@ def _truncate_to_fit_tokens(
     if target_tokens <= 0:
         return messages
 
+    if estimate_token_count(messages, system=system, tools=tools) <= target_tokens:
+        return messages
+    _trim_tool_results_to_fit(
+        messages,
+        target_tokens,
+        system=system,
+        tools=tools,
+    )
+    if estimate_token_count(messages, system=system, tools=tools) <= target_tokens:
+        return messages
+
+    # Preserve the compact summary (if any) and the newest real user turn.
+    starts = conversation_turn_starts(messages)
+    while (
+        estimate_token_count(messages, system=system, tools=tools) > target_tokens
+        and len(starts) > 1
+    ):
+        start, end = starts[0], starts[1]
+        del messages[start:end]
+        starts = conversation_turn_starts(messages)
+
+    return messages
+
+
+def _trim_tool_results_to_fit(
+    messages: list[Message],
+    target_tokens: int,
+    *,
+    system: list[str] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Prune oversized tool blocks before paying for a remote summary call."""
+    changed = False
+
     def estimated() -> int:
         return estimate_token_count(messages, system=system, tools=tools)
 
-    def trim_tool_results(max_chars: int) -> None:
+    for max_chars in (2_000, 500):
         for msg in messages:
             if isinstance(msg.content, str):
                 continue
@@ -476,26 +528,10 @@ def _truncate_to_fit_tokens(
                     + marker
                     + block.content[-(keep - left) :]
                 )
+                changed = True
                 if estimated() <= target_tokens:
-                    return
-
-    if estimated() <= target_tokens:
-        return messages
-    trim_tool_results(2_000)
-    if estimated() <= target_tokens:
-        return messages
-    trim_tool_results(500)
-    if estimated() <= target_tokens:
-        return messages
-
-    # Preserve the compact summary (if any) and the newest real user turn.
-    starts = conversation_turn_starts(messages)
-    while estimated() > target_tokens and len(starts) > 1:
-        start, end = starts[0], starts[1]
-        del messages[start:end]
-        starts = conversation_turn_starts(messages)
-
-    return messages
+                    return changed
+    return changed
 
 
 _COMPACT_RESUME_PROMPT = (
@@ -673,18 +709,61 @@ async def query_loop(
                 buffer_tokens=DEFAULT_COMPACT_BUFFER_TOKENS,
                 override=params.compact_threshold,
             )
-            if params.auto_compact_enabled and should_auto_compact(
+            needs_compaction = params.auto_compact_enabled and should_auto_compact(
                 messages_for_api,
                 threshold=compact_limit,
                 system=full_system,
                 tools=tool_schemas,
-            ):
+            )
+            if needs_compaction:
+                source_messages = messages
+                pruned_messages = [message.model_copy(deep=True) for message in messages]
+                if _trim_tool_results_to_fit(
+                    pruned_messages,
+                    compact_limit,
+                    system=full_system,
+                    tools=tool_schemas,
+                ):
+                    pruned_for_api = _prepend_user_context(
+                        pruned_messages,
+                        params.user_context,
+                    )
+                    pruned_estimated = estimate_token_count(
+                        pruned_for_api,
+                        system=full_system,
+                        tools=tool_schemas,
+                    )
+                    if pruned_estimated <= compact_limit:
+                        messages = pruned_messages
+                        params.messages[:] = messages
+                        params.tool_context.messages = messages
+                        messages_for_api = pruned_for_api
+                        estimated = pruned_estimated
+                        needs_compaction = False
+                        logger.warning(
+                            "Pruned oversized tool output; estimated final input is now %d",
+                            estimated,
+                        )
+                        if messages and messages[0].is_compact_summary:
+                            yield CompactEvent(
+                                summary="Oversized historical tool output was pruned",
+                                messages_before=len(source_messages),
+                                messages_after=len(messages),
+                                trigger="auto",
+                                source_messages=source_messages,
+                                checkpoint_messages=[
+                                    message.model_copy(deep=True) for message in messages
+                                ],
+                            )
+
+            if needs_compaction:
                 logger.warning(
                     "Estimated final input (%d) exceeds compact threshold %d. "
                     "Attempting auto compact.",
                     estimated,
                     compact_limit,
                 )
+                yield StreamModeEvent(mode="compacting")
                 compact_event = await _perform_compaction(
                     trigger="auto",
                 )
@@ -943,6 +1022,7 @@ async def query_loop(
                             "Context overflow before output (retry %d/%d), preparing recovery",
                             _context_retries, _MAX_CONTEXT_RETRIES,
                         )
+                        yield StreamModeEvent(mode="compacting")
                         compact_event = await _perform_compaction(trigger="overflow")
                         if not compact_event:
                             yield ErrorEvent(
@@ -963,7 +1043,7 @@ async def query_loop(
                     return
 
         except Exception as e:
-            error_str = str(e)
+            error_str = _format_exception_message(e)
             has_response_evidence = bool(
                 current_text
                 or current_thinking
@@ -986,6 +1066,7 @@ async def query_loop(
                     "Context overflow before output (retry %d/%d), preparing recovery",
                     _context_retries, _MAX_CONTEXT_RETRIES,
                 )
+                yield StreamModeEvent(mode="compacting")
                 compact_event = await _perform_compaction(trigger="overflow")
                 if not compact_event:
                     yield ErrorEvent(
@@ -999,7 +1080,12 @@ async def query_loop(
                 turn_count -= 1
                 continue
             logger.exception("Query loop failed")
-            yield ErrorEvent(message=error_str, recoverable=False)
+            is_network_error = _is_recoverable_api_exception(e)
+            yield ErrorEvent(
+                message=error_str,
+                recoverable=is_network_error,
+                error_type="network" if is_network_error else "",
+            )
             return
 
         if _retry_after_compact:
@@ -1015,7 +1101,11 @@ async def query_loop(
         )
 
         if has_visible_or_actionable_output:
-            assistant_msg = create_assistant_message(content=assistant_content)
+            assistant_msg = create_assistant_message(
+                content=assistant_content,
+                parent_uuid=messages[-1].uuid if messages else None,
+                reply_to_uuid=params.reply_to_uuid,
+            )
             messages.append(assistant_msg)
             _awaiting_compact_resume = False
         else:

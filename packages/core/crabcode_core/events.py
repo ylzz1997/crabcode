@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Awaitable, Callable
+from xml.sax.saxutils import escape
 
-from crabcode_core.agent_manager import AgentManager, AgentSnapshot
+from crabcode_core.agent_manager import AgentCompletion, AgentManager, AgentSnapshot
 from crabcode_core.logging_utils import configure_logging, get_logger
 from crabcode_core.lsp.manager import LSPManager
 from crabcode_core.types.config import CrabCodeSettings
@@ -15,11 +17,13 @@ from crabcode_core.types.event import (
     ChoiceResponseEvent,
     CompactEvent,
     CoreEvent,
+    ErrorEvent,
     ModeChangeEvent,
     PermissionResponseEvent,
     PlanReadyEvent,
+    TurnCompleteEvent,
 )
-from crabcode_core.types.message import Message
+from crabcode_core.types.message import Message, find_assistant_reply, message_from_entry
 from crabcode_core.types.tool import Tool, ToolEventCallback
 
 logger = get_logger(__name__)
@@ -68,11 +72,18 @@ class CoreSession:
         self._lsp_manager: LSPManager | None = None
         self._closed = False
         self._agent_mode: str = "agent"  # "agent" | "plan"
+        self._foreground_turn_active = False
         self._saved_permission_mode: Any = None
         self._current_plan: Any = None  # ExecutionPlan | None
         self._title_generation_task: asyncio.Task[None] | None = None
         self._team_manager: Any = None  # TeamManager
         self._turn_lock = asyncio.Lock()
+        self._managed_callback_lock = asyncio.Lock()
+        self._lifecycle_generation = 0
+        self._agent_completion_queue: asyncio.Queue[tuple[int, AgentCompletion]] = asyncio.Queue()
+        self._agent_completion_task: asyncio.Task[None] | None = None
+        self._background_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
+        self._background_event_sink: Callable[[CoreEvent], Awaitable[None]] | None = None
         self._pending_manual_compact: str | None = None
         self._persisted_compact_summaries: set[str] = set()
         # Extension UI override: "ask" | "run_everything" | "ai_review" | None (follow file init only)
@@ -225,7 +236,20 @@ class CoreSession:
         self._hook_manager = HookManager(merged.hooks)
 
         async def _push_agent_event(event: CoreEvent) -> None:
-            await self._agent_event_queue.put(event)
+            if self._closed:
+                return
+            if self._foreground_turn_active:
+                await self._agent_event_queue.put(event)
+            else:
+                await self._emit_background_event(event)
+
+        async def _push_agent_completion(completion: AgentCompletion) -> None:
+            if self._closed:
+                return
+            await self._agent_completion_queue.put(
+                (self._lifecycle_generation, completion)
+            )
+            self._ensure_agent_completion_dispatcher()
 
         def _tools_provider() -> list[Tool]:
             return [tool for tool in self.tools if tool.name != "Agent"]
@@ -304,6 +328,7 @@ class CoreSession:
             cwd=self.cwd,
             env=merged.env,
             session_id=self.session_id,
+            completion_sink=_push_agent_completion,
             current_model_name=self._current_model_name,
             persistence_callback=_persist_agents,
             transcript_writer=_write_agent_transcript,
@@ -358,6 +383,516 @@ class CoreSession:
 
         self._initialized = True
 
+    def set_background_event_sink(
+        self,
+        sink: Callable[[CoreEvent], Awaitable[None]] | None,
+    ) -> None:
+        """Set the frontend sink used for events emitted outside a user turn."""
+        self._background_event_sink = sink
+
+    async def _emit_background_event(self, event: CoreEvent) -> None:
+        if self._closed:
+            return
+        if self._background_event_sink is not None:
+            await self._background_event_sink(event)
+        else:
+            await self._background_event_queue.put(event)
+
+    async def next_background_event(self) -> CoreEvent:
+        """Wait for an event produced while no foreground turn owns a stream."""
+        return await self._background_event_queue.get()
+
+    def _ensure_agent_completion_dispatcher(self) -> None:
+        if self._closed:
+            return
+        if self._agent_completion_task is None or self._agent_completion_task.done():
+            self._agent_completion_task = asyncio.create_task(
+                self._dispatch_agent_completions()
+            )
+
+    def _lifecycle_matches(self, session_id: str, generation: int) -> bool:
+        return (
+            not self._closed
+            and self.session_id == session_id
+            and self._lifecycle_generation == generation
+        )
+
+    async def _dispatch_agent_completions(self) -> None:
+        try:
+            while not self._closed:
+                first = await self._agent_completion_queue.get()
+                batch = [first]
+                await asyncio.sleep(0)
+                while True:
+                    try:
+                        batch.append(self._agent_completion_queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+
+                grouped: dict[
+                    tuple[int, str | None, str],
+                    list[AgentCompletion],
+                ] = {}
+                for generation, completion in batch:
+                    if not self._lifecycle_matches(
+                        completion.session_id,
+                        generation,
+                    ):
+                        continue
+                    delivery_key = (
+                        f"injected:{completion.callback_message_id}"
+                        if completion.callback_state == "injected"
+                        and completion.callback_message_id
+                        else "pending"
+                    )
+                    grouped.setdefault(
+                        (generation, completion.parent_agent_id, delivery_key), []
+                    ).append(completion)
+
+                for (
+                    generation,
+                    parent_agent_id,
+                    _delivery_key,
+                ), completions in grouped.items():
+                    if not self._lifecycle_matches(
+                        completions[0].session_id,
+                        generation,
+                    ):
+                        continue
+                    if parent_agent_id is None:
+                        await self._continue_main_agent(
+                            completions,
+                            lifecycle_generation=generation,
+                        )
+                    else:
+                        async with self._managed_callback_lock:
+                            await self._continue_managed_parent(
+                                parent_agent_id,
+                                completions,
+                                lifecycle_generation=generation,
+                            )
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Managed-agent completion dispatcher failed")
+
+    def _format_agent_completion(
+        self,
+        completion: AgentCompletion,
+        *,
+        max_result_chars: int | None = None,
+    ) -> str:
+        result = AgentManager.truncate_result(
+            completion.final_result.strip() or "(no result)",
+            max_result_chars or self.settings.agent.max_output_chars,
+        )
+        fields = [
+            ("session-id", completion.session_id),
+            ("task-id", completion.agent_id),
+            ("parent-agent-id", completion.parent_agent_id or ""),
+            ("tool-use-id", completion.parent_tool_use_id or ""),
+            ("callback-epoch", str(completion.callback_epoch)),
+            ("status", completion.status),
+            ("title", completion.title),
+            ("subagent-type", completion.subagent_type),
+            ("completed-at", completion.completed_at),
+            ("transcript-path", completion.transcript_path or ""),
+            ("error", completion.error),
+        ]
+        parts = ["<task-notification>"]
+        parts.extend(
+            f"<{name}>{escape(value)}</{name}>"
+            for name, value in fields
+            if value
+        )
+        if completion.usage:
+            usage = ", ".join(
+                f"{key}={value}" for key, value in completion.usage.items()
+            )
+            parts.append(f"<usage>{escape(usage)}</usage>")
+        parts.extend(
+            [
+                f"<result>{escape(result)}</result>",
+                "</task-notification>",
+            ]
+        )
+        return "\n".join(parts)
+
+    @staticmethod
+    def _assistant_reply(messages: list[Message], message_id: str) -> Message | None:
+        return find_assistant_reply(messages, message_id)
+
+    @classmethod
+    def _has_assistant_reply(cls, messages: list[Message], message_id: str) -> bool:
+        return cls._assistant_reply(messages, message_id) is not None
+
+    def _has_callback_delivery(
+        self,
+        completion: AgentCompletion,
+        message_id: str,
+    ) -> bool:
+        return bool(
+            self._session_storage
+            and self._session_storage.has_callback_delivery(
+                agent_id=completion.agent_id,
+                callback_epoch=completion.callback_epoch,
+                callback_message_id=message_id,
+            )
+        )
+
+    def _record_callback_deliveries(
+        self,
+        completions: list[AgentCompletion],
+        *,
+        message_id: str,
+        assistant_uuid: str,
+    ) -> list[AgentCompletion]:
+        if not self._session_storage:
+            self._ensure_session_storage()
+        if not self._session_storage:
+            logger.error("Cannot acknowledge callback without durable session storage")
+            return []
+        return [
+            completion
+            for completion in completions
+            if self._session_storage.record_callback_delivery(
+                agent_id=completion.agent_id,
+                callback_epoch=completion.callback_epoch,
+                callback_message_id=message_id,
+                assistant_uuid=assistant_uuid,
+            )
+        ]
+
+    async def _continue_main_agent(
+        self,
+        completions: list[AgentCompletion],
+        *,
+        lifecycle_generation: int | None = None,
+    ) -> None:
+        if not completions:
+            return
+        expected_session_id = completions[0].session_id
+        generation = (
+            self._lifecycle_generation
+            if lifecycle_generation is None
+            else lifecycle_generation
+        )
+        async with self._turn_lock:
+            if (
+                not self._lifecycle_matches(expected_session_id, generation)
+                or not self._agent_manager
+            ):
+                return
+            current = [
+                completion
+                for completion in completions
+                if completion.session_id == expected_session_id
+            ]
+            if not current:
+                return
+
+            message_ids: set[str] = set()
+            for completion in current:
+                snapshot = self._agent_manager.get_agent(completion.agent_id)
+                if (
+                    completion.callback_state == "injected"
+                    and completion.callback_message_id
+                ):
+                    message_ids.add(completion.callback_message_id)
+                elif (
+                    snapshot is not None
+                    and snapshot.callback_state == "injected"
+                    and snapshot.callback_message_id
+                    and snapshot.callback_epoch == completion.callback_epoch
+                ):
+                    message_ids.add(snapshot.callback_message_id)
+            if len(message_ids) > 1:
+                logger.error(
+                    "Cannot merge callback completions with different message IDs: %s",
+                    sorted(message_ids),
+                )
+                return
+            message_id = next(iter(message_ids), None) or str(uuid.uuid4())
+            awaiting_delivery: list[AgentCompletion] = []
+            for completion in current:
+                if self._has_callback_delivery(completion, message_id):
+                    self._agent_manager.mark_callback_delivered(
+                        completion.agent_id,
+                        session_id=completion.session_id,
+                        callback_epoch=completion.callback_epoch,
+                    )
+                else:
+                    awaiting_delivery.append(completion)
+            current = awaiting_delivery
+            if not current:
+                return
+
+            existing_message_index = next(
+                (
+                    index
+                    for index, message in enumerate(self.messages)
+                    if message.uuid == message_id
+                ),
+                None,
+            )
+            if existing_message_index is not None:
+                assistant_reply = self._assistant_reply(self.messages, message_id)
+                if assistant_reply is not None:
+                    durable = self._record_callback_deliveries(
+                        current,
+                        message_id=message_id,
+                        assistant_uuid=assistant_reply.uuid,
+                    )
+                    delivery_session_id = current[0].session_id
+                    for completion in durable:
+                        self._agent_manager.mark_callback_delivered(
+                            completion.agent_id,
+                            session_id=delivery_session_id,
+                            callback_epoch=completion.callback_epoch,
+                        )
+                    return
+
+            injected: list[AgentCompletion] = []
+            for completion in current:
+                snapshot = self._agent_manager.get_agent(completion.agent_id)
+                if (
+                    snapshot is not None
+                    and snapshot.callback_state == "injected"
+                    and snapshot.callback_message_id == message_id
+                    and snapshot.callback_epoch == completion.callback_epoch
+                ):
+                    injected.append(completion)
+                elif self._agent_manager.mark_callback_injected(
+                    completion.agent_id,
+                    session_id=expected_session_id,
+                    message_id=message_id,
+                    callback_epoch=completion.callback_epoch,
+                ):
+                    injected.append(completion)
+            if not injected:
+                return
+
+            result_budget = max(1, self.settings.agent.max_output_chars // len(injected))
+            text = "\n\n".join(
+                self._format_agent_completion(
+                    completion,
+                    max_result_chars=result_budget,
+                )
+                for completion in injected
+            )
+            if not self._lifecycle_matches(expected_session_id, generation):
+                return
+            terminal_event: TurnCompleteEvent | None = None
+            try:
+                async for event in self._send_message_impl(
+                    text,
+                    synthetic=True,
+                    message_uuid=message_id,
+                    reuse_existing_message=existing_message_index is not None,
+                ):
+                    if isinstance(event, TurnCompleteEvent):
+                        terminal_event = event
+                    await self._emit_background_event(event)
+            except Exception:
+                logger.exception("Automatic managed-agent continuation failed")
+
+            assistant_reply = self._assistant_reply(self.messages, message_id)
+            if (
+                self._lifecycle_matches(expected_session_id, generation)
+                and terminal_event is not None
+                and assistant_reply is not None
+            ):
+                durable = self._record_callback_deliveries(
+                    injected,
+                    message_id=message_id,
+                    assistant_uuid=assistant_reply.uuid,
+                )
+                delivery_session_id = current[0].session_id
+                for completion in durable:
+                    self._agent_manager.mark_callback_delivered(
+                        completion.agent_id,
+                        session_id=delivery_session_id,
+                        callback_epoch=completion.callback_epoch,
+                    )
+
+    async def _continue_managed_parent(
+        self,
+        parent_agent_id: str,
+        completions: list[AgentCompletion],
+        *,
+        lifecycle_generation: int | None = None,
+    ) -> None:
+        if not completions:
+            return
+        expected_session_id = completions[0].session_id
+        generation = (
+            self._lifecycle_generation
+            if lifecycle_generation is None
+            else lifecycle_generation
+        )
+        manager = self._agent_manager
+        if (
+            not self._lifecycle_matches(expected_session_id, generation)
+            or manager is None
+        ):
+            return
+        current = [
+            completion
+            for completion in completions
+            if completion.session_id == expected_session_id
+        ]
+        if not current:
+            return
+
+        parent = manager.get_agent(parent_agent_id)
+        if parent is None or parent.session_id != expected_session_id:
+            await self._continue_main_agent(
+                current,
+                lifecycle_generation=generation,
+            )
+            return
+        if parent.status in {"queued", "running"}:
+            if manager.is_agent_active(parent_agent_id):
+                await manager.wait_agent(parent_agent_id)
+            else:
+                await self._continue_main_agent(
+                    current,
+                    lifecycle_generation=generation,
+                )
+                return
+        if not self._lifecycle_matches(expected_session_id, generation):
+            return
+
+        parent = manager.get_agent(parent_agent_id)
+        if (
+            parent is not None
+            and parent.status in {"completed", "failed", "cancelled"}
+            and parent.callback_enabled
+            and parent.callback_state in {"pending", "injected"}
+        ):
+            parent_completion = AgentCompletion.from_snapshot(parent)
+            if parent.parent_agent_id is None:
+                await self._continue_main_agent(
+                    [parent_completion],
+                    lifecycle_generation=generation,
+                )
+            else:
+                await self._continue_managed_parent(
+                    parent.parent_agent_id,
+                    [parent_completion],
+                    lifecycle_generation=generation,
+                )
+            parent = manager.get_agent(parent_agent_id)
+            if parent is None or parent.callback_state != "delivered":
+                await self._continue_main_agent(
+                    current,
+                    lifecycle_generation=generation,
+                )
+                return
+
+        message_ids: set[str] = set()
+        for completion in current:
+            snapshot = manager.get_agent(completion.agent_id)
+            if (
+                completion.callback_state == "injected"
+                and completion.callback_message_id
+            ):
+                message_ids.add(completion.callback_message_id)
+            elif (
+                snapshot is not None
+                and snapshot.callback_state == "injected"
+                and snapshot.callback_message_id
+                and snapshot.callback_epoch == completion.callback_epoch
+            ):
+                message_ids.add(snapshot.callback_message_id)
+        if len(message_ids) > 1:
+            logger.error(
+                "Cannot merge managed callbacks with different message IDs: %s",
+                sorted(message_ids),
+            )
+            return
+        message_id = next(iter(message_ids), None) or str(uuid.uuid4())
+        awaiting_delivery: list[AgentCompletion] = []
+        for completion in current:
+            if self._has_callback_delivery(completion, message_id):
+                manager.mark_callback_delivered(
+                    completion.agent_id,
+                    session_id=completion.session_id,
+                    callback_epoch=completion.callback_epoch,
+                )
+            else:
+                awaiting_delivery.append(completion)
+        current = awaiting_delivery
+        if not current:
+            return
+
+        injected: list[AgentCompletion] = []
+        for completion in current:
+            snapshot = manager.get_agent(completion.agent_id)
+            if (
+                snapshot is not None
+                and snapshot.callback_state == "injected"
+                and snapshot.callback_message_id == message_id
+                and snapshot.callback_epoch == completion.callback_epoch
+            ):
+                injected.append(completion)
+            elif manager.mark_callback_injected(
+                completion.agent_id,
+                session_id=expected_session_id,
+                message_id=message_id,
+                callback_epoch=completion.callback_epoch,
+            ):
+                injected.append(completion)
+        if not injected:
+            return
+
+        result_budget = max(1, self.settings.agent.max_output_chars // len(injected))
+        text = "\n\n".join(
+            self._format_agent_completion(
+                completion,
+                max_result_chars=result_budget,
+            )
+            for completion in injected
+        )
+        if not self._lifecycle_matches(expected_session_id, generation):
+            return
+        if not await manager.send_input(
+            parent_agent_id,
+            text,
+            message_id=message_id,
+            message_origin="task-notification",
+        ):
+            await self._continue_main_agent(
+                injected,
+                lifecycle_generation=generation,
+            )
+            return
+
+        if manager.is_agent_active(parent_agent_id):
+            await manager.wait_agent(parent_agent_id)
+        if not self._lifecycle_matches(expected_session_id, generation):
+            return
+        parent = manager.get_agent(parent_agent_id)
+        assistant_reply = manager.get_agent_reply(parent_agent_id, message_id)
+        if (
+            parent is None
+            or parent.status not in {"completed", "failed", "cancelled"}
+            or assistant_reply is None
+        ):
+            return
+        durable = self._record_callback_deliveries(
+            injected,
+            message_id=message_id,
+            assistant_uuid=assistant_reply.uuid,
+        )
+        delivery_session_id = injected[0].session_id
+        for completion in durable:
+            manager.mark_callback_delivered(
+                completion.agent_id,
+                session_id=delivery_session_id,
+                callback_epoch=completion.callback_epoch,
+            )
+
     def _ensure_session_storage(self) -> None:
         """Lazily create session storage on first real use.
 
@@ -368,15 +903,16 @@ class CoreSession:
             return
         from crabcode_core.session.storage import SessionStorage, generate_session_id
 
-        self.session_id = generate_session_id()
+        if not self.session_id:
+            self.session_id = generate_session_id()
         self._session_storage = SessionStorage(self.cwd, self.session_id)
+        if self._agent_manager:
+            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
         active_cfg = self.settings.get_api_config(self._current_model_name)
         self._session_storage.write_meta(
             model=active_cfg.model or "",
             provider=active_cfg.provider or "",
         )
-        if self._agent_manager:
-            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
 
     def _maybe_generate_title(self) -> None:
         """Fire-and-forget task to generate an LLM title after the first turn."""
@@ -418,6 +954,16 @@ class CoreSession:
         if self._closed:
             return
         self._closed = True
+        self._lifecycle_generation += 1
+        self._drain_session_queues()
+
+        if self._agent_completion_task is not None:
+            self._agent_completion_task.cancel()
+            try:
+                await self._agent_completion_task
+            except asyncio.CancelledError:
+                pass
+            self._agent_completion_task = None
 
         if self._agent_manager is not None:
             await self._agent_manager.close()
@@ -503,7 +1049,18 @@ class CoreSession:
     ) -> AsyncGenerator[CoreEvent, None]:
         """Serialize turns and settle a queued manual compact at a safe boundary."""
         await self.initialize()
+        if self._agent_completion_task is not None and self._agent_completion_task.done():
+            try:
+                error = self._agent_completion_task.exception()
+            except asyncio.CancelledError:
+                error = None
+            if error is not None:
+                logger.error("Managed-agent completion dispatcher stopped: %s", error)
+            self._agent_completion_task = None
+            if not self._agent_completion_queue.empty():
+                self._ensure_agent_completion_dispatcher()
         async with self._turn_lock:
+            self._foreground_turn_active = True
             try:
                 async for event in self._send_message_impl(
                     text,
@@ -512,6 +1069,7 @@ class CoreSession:
                 ):
                     yield event
             finally:
+                self._foreground_turn_active = False
                 if self._pending_manual_compact is not None:
                     instructions = self._pending_manual_compact
                     self._pending_manual_compact = None
@@ -525,6 +1083,10 @@ class CoreSession:
         text: str,
         max_turns: int = 0,
         images: list[dict[str, Any]] | None = None,
+        *,
+        synthetic: bool = False,
+        message_uuid: str | None = None,
+        reuse_existing_message: bool = False,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Send a user message and stream back events.
 
@@ -548,7 +1110,7 @@ class CoreSession:
 
         user_msg_content = text
         hook_blocked_reason = ""
-        if self._hook_manager:
+        if self._hook_manager and not synthetic:
             hook_result = await self._hook_manager.run(
                 "user_prompt_submit",
                 {"user_text": text},
@@ -567,7 +1129,24 @@ class CoreSession:
                 hook_blocked_reason = "; ".join(hook_result.details or []) or "blocked by user_prompt_submit hook"
 
         # Build user message content — text + optional image blocks
-        if images:
+        existing_message = next(
+            (
+                message
+                for message in self.messages
+                if message_uuid is not None and message.uuid == message_uuid
+            ),
+            None,
+        )
+        if reuse_existing_message:
+            if existing_message is None:
+                raise RuntimeError(
+                    f"Cannot reuse missing durable message {message_uuid}"
+                )
+            user_msg = existing_message
+            if self.messages[-1] is not user_msg:
+                self.messages.remove(user_msg)
+                self.messages.append(user_msg)
+        elif images:
             from crabcode_core.types.message import ImageBlock as _ImageBlock
             content_blocks: list[Any] = []
             if user_msg_content:
@@ -582,9 +1161,15 @@ class CoreSession:
                     }
                 ))
             user_msg = create_user_message(content=content_blocks)
+            self.messages.append(user_msg)
         else:
-            user_msg = create_user_message(content=user_msg_content)
-        self.messages.append(user_msg)
+            kwargs: dict[str, Any] = {}
+            if message_uuid:
+                kwargs["uuid"] = message_uuid
+            if synthetic:
+                kwargs["origin"] = "task-notification"
+            user_msg = create_user_message(content=user_msg_content, **kwargs)
+            self.messages.append(user_msg)
 
         if hook_blocked_reason:
             if self._session_storage:
@@ -635,7 +1220,7 @@ class CoreSession:
         if self._session_storage:
             self._session_storage.append_message(user_msg)
             # Update first_user_message in meta on the first real user message
-            if not self._session_storage.meta.get("first_user_message"):
+            if not synthetic and not self._session_storage.meta.get("first_user_message"):
                 active_api_cfg = self.settings.get_api_config(self._current_model_name)
                 self._session_storage.write_meta(
                     model=active_api_cfg.model or "",
@@ -715,6 +1300,7 @@ class CoreSession:
             tool_call_timeout=self.settings.tool_call_timeout,
             auto_compact_enabled=self.settings.auto_compact_enabled,
             compact_threshold=self.settings.max_context_length,
+            reply_to_uuid=message_uuid if synthetic else None,
         )
 
         merged_events: asyncio.Queue[CoreEvent | None] = asyncio.Queue()
@@ -823,10 +1409,38 @@ class CoreSession:
         if self._session_storage:
             self._session_storage.append_message(assistant_msg)
 
+    @staticmethod
+    def _drain_queue(queue: asyncio.Queue[Any]) -> None:
+        while not queue.empty():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    def _drain_agent_completion_queue(self) -> None:
+        self._drain_queue(self._agent_completion_queue)
+
+    def _drain_background_event_queue(self) -> None:
+        self._drain_queue(self._background_event_queue)
+
+    def _drain_session_queues(self) -> None:
+        self._drain_agent_completion_queue()
+        self._drain_background_event_queue()
+        self._drain_queue(self._agent_event_queue)
+        self._drain_queue(self._permission_queue)
+        self._drain_queue(self._choice_queue)
+
     def new_session(self) -> str:
         """Start a fresh session, preserving tools and config. Returns the new session ID."""
         from crabcode_core.session.storage import SessionStorage, generate_session_id
 
+        if self._turn_lock.locked():
+            raise RuntimeError("Cannot start a new session while a turn is still running")
+        self._lifecycle_generation += 1
+        if self._agent_manager:
+            self._agent_manager.abandon_active_agents("session replaced")
+            self._agent_manager.restore_snapshots([])
+        self._drain_session_queues()
         self.messages.clear()
         self.compact_count = 0
         self._persisted_compact_summaries.clear()
@@ -842,7 +1456,6 @@ class CoreSession:
             )
         if self._agent_manager:
             self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
-            self._agent_manager.restore_snapshots([])
         return self.session_id
 
     def _persist_compaction(
@@ -1176,10 +1789,13 @@ class CoreSession:
         parent_agent_id: str | None = None,
         parent_tool_use_id: str | None = None,
         depth: int = 1,
+        callback: bool = False,
     ) -> str:
         await self.initialize()
         if not self._agent_manager:
             raise RuntimeError("Agent manager is not initialized")
+        if callback:
+            self._ensure_session_storage()
         return await self._agent_manager.spawn_agent(
             prompt=prompt,
             subagent_type=subagent_type,
@@ -1188,6 +1804,7 @@ class CoreSession:
             parent_agent_id=parent_agent_id,
             parent_tool_use_id=parent_tool_use_id,
             depth=depth,
+            callback=callback,
         )
 
     def get_agent(self, agent_id: str) -> AgentSnapshot | None:
@@ -1233,14 +1850,13 @@ class CoreSession:
         )
 
     async def resume(self, session_id: str) -> bool:
+        """Resume a previous session after any active foreground/background turn."""
+        async with self._turn_lock:
+            return await self._resume_session(session_id)
+
+    async def _resume_session(self, session_id: str) -> bool:
         """Resume a previous session by loading its messages."""
         from crabcode_core.session.storage import SessionStorage
-        from crabcode_core.types.message import (
-            create_assistant_message,
-            create_user_message,
-            deserialize_content,
-        )
-
         storage = SessionStorage(self.cwd, session_id)
         raw_messages = storage.load_messages()
         agent_snapshots = storage.load_agent_snapshots()
@@ -1257,14 +1873,20 @@ class CoreSession:
         if not raw_messages and not storage.meta and not agent_snapshots:
             return False
 
+        self._lifecycle_generation += 1
+        lifecycle_generation = self._lifecycle_generation
+        if self._agent_manager:
+            self._agent_manager.abandon_active_agents("session resumed elsewhere")
         self.session_id = session_id
         self._session_storage = storage
+        self._drain_session_queues()
         self.messages.clear()
         self.compact_count = storage.compact_count
         self._persisted_compact_summaries.clear()
+        pending_completions: list[AgentCompletion] = []
         if self._agent_manager:
             self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
-            self._agent_manager.restore_snapshots(agent_snapshots)
+            pending_completions = self._agent_manager.restore_snapshots(agent_snapshots)
 
         # Restore context usage so the gateway can report it after session switch
         if storage.last_context_used_tokens or storage.last_context_window_tokens:
@@ -1312,27 +1934,18 @@ class CoreSession:
                 logger.warning("Failed to sync resumed session metadata to SQLite", exc_info=True)
 
         for raw in raw_messages:
-            role = raw.get("type", "user")
-            content = deserialize_content(raw.get("content", ""))
-            msg_uuid = raw.get("uuid")
-            parent_uuid = raw.get("parent_uuid")
-
-            kwargs: dict[str, Any] = {}
-            if msg_uuid:
-                kwargs["uuid"] = msg_uuid
-            if parent_uuid:
-                kwargs["parent_uuid"] = parent_uuid
-            if raw.get("timestamp"):
-                kwargs["timestamp"] = raw["timestamp"]
-            if raw.get("is_compact_summary"):
-                kwargs["is_compact_summary"] = True
-
-            if role == "user":
-                self.messages.append(create_user_message(content=content, **kwargs))
-            elif role == "assistant":
-                self.messages.append(create_assistant_message(content=content, **kwargs))
+            message = message_from_entry(raw)
+            if message is not None:
+                self.messages.append(message)
 
         if self.messages and self.messages[0].is_compact_summary:
             self._persisted_compact_summaries.add(self.messages[0].uuid)
+
+        for completion in pending_completions:
+            await self._agent_completion_queue.put(
+                (lifecycle_generation, completion)
+            )
+        if pending_completions:
+            self._ensure_agent_completion_dispatcher()
 
         return True

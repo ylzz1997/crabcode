@@ -63,6 +63,7 @@ class SpawnAgentRequest(BaseModel):
     subagent_type: str = "generalPurpose"
     name: str | None = None
     model_profile: str | None = None
+    callback: bool = False
 
 
 class AgentInputRequest(BaseModel):

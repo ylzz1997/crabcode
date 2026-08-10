@@ -110,7 +110,7 @@ class AgentTool(Tool):
                 prompt=prompt,
                 subagent_type=tool_input.get("subagent_type", "generalPurpose"),
                 parent_agent_id=context.agent_id,
-                parent_tool_use_id=None,
+                parent_tool_use_id=context.tool_use_id,
                 depth=context.agent_depth + 1,
             )
             snapshot = await manager.wait_agent(agent_id, timeout_ms=self._timeout * 1000)
@@ -132,7 +132,10 @@ class AgentTool(Tool):
                 is_error=True,
             )
 
-        result = AgentManager.format_snapshot(snapshot)
+        result = AgentManager.format_snapshot(
+            snapshot,
+            max_result_chars=self._max_output_chars,
+        )
         display = result
         lines = display.split("\n")
         if len(lines) > self._max_display_lines:
@@ -149,7 +152,10 @@ class AgentTool(Tool):
 
 class AgentSpawnTool(Tool):
     name = "AgentSpawn"
-    description = "Spawn a managed sub-agent and return its agent_id."
+    description = (
+        "Spawn a managed sub-agent and return immediately. When it reaches a terminal "
+        "state, its final response is automatically delivered to and resumes the parent agent."
+    )
     is_read_only = False
     is_concurrency_safe = True
     input_schema = {
@@ -184,8 +190,9 @@ class AgentSpawnTool(Tool):
                 name=tool_input.get("name"),
                 model_profile=tool_input.get("model_profile"),
                 parent_agent_id=context.agent_id,
-                parent_tool_use_id=None,
+                parent_tool_use_id=context.tool_use_id,
                 depth=context.agent_depth + 1,
+                callback=True,
             )
         except ValueError as exc:
             return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
@@ -219,12 +226,22 @@ class AgentStatusTool(Tool):
             snapshot = manager.get_agent(agent_id)
             if not snapshot:
                 return ToolResult(result_for_model=f"Error: unknown agent {agent_id}", is_error=True)
-            text = AgentManager.format_snapshot(snapshot)
+            text = AgentManager.format_snapshot(
+                snapshot,
+                max_result_chars=manager.max_output_chars,
+            )
             return ToolResult(data={"agents": [snapshot.to_dict()]}, result_for_model=text)
         snapshots = manager.list_agents()
         if not snapshots:
             return ToolResult(data={"agents": []}, result_for_model="No managed agents.")
-        body = "\n\n".join(AgentManager.format_snapshot(snapshot) for snapshot in snapshots)
+        result_budget = max(1, manager.max_output_chars // len(snapshots))
+        body = "\n\n".join(
+            AgentManager.format_snapshot(
+                snapshot,
+                max_result_chars=result_budget,
+            )
+            for snapshot in snapshots
+        )
         return ToolResult(
             data={"agents": [snapshot.to_dict() for snapshot in snapshots]},
             result_for_model=body,
@@ -279,7 +296,10 @@ class AgentWaitTool(Tool):
                 result_for_model="status: timeout\nresult:\nAgent is still running.",
                 is_error=True,
             )
-        text = AgentManager.format_snapshot(snapshot)
+        text = AgentManager.format_snapshot(
+            snapshot,
+            max_result_chars=manager.max_output_chars,
+        )
         return ToolResult(
             data={"agent": snapshot.to_dict()},
             result_for_model=text,
@@ -312,7 +332,14 @@ class AgentCancelTool(Tool):
                 is_error=True,
             )
         snapshot = manager.get_agent(tool_input["agent_id"])
-        text = AgentManager.format_snapshot(snapshot) if snapshot else f"Cancelled agent: {tool_input['agent_id']}"
+        text = (
+            AgentManager.format_snapshot(
+                snapshot,
+                max_result_chars=manager.max_output_chars,
+            )
+            if snapshot
+            else f"Cancelled agent: {tool_input['agent_id']}"
+        )
         return ToolResult(
             data={"agent": snapshot.to_dict() if snapshot else None, "cancelled": True},
             result_for_model=text,
@@ -354,7 +381,14 @@ class AgentSendInputTool(Tool):
                 is_error=True,
             )
         snapshot = manager.get_agent(tool_input["agent_id"])
-        text = AgentManager.format_snapshot(snapshot) if snapshot else f"Sent input to agent: {tool_input['agent_id']}"
+        text = (
+            AgentManager.format_snapshot(
+                snapshot,
+                max_result_chars=manager.max_output_chars,
+            )
+            if snapshot
+            else f"Sent input to agent: {tool_input['agent_id']}"
+        )
         return ToolResult(
             data={"agent": snapshot.to_dict() if snapshot else None, "sent": True},
             result_for_model=text,

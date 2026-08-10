@@ -126,6 +126,7 @@ class StreamModeEvent:
 
     Modes:
       - "requesting": API request sent, waiting for first chunk
+      - "compacting": conversation checkpoint generation is in progress
       - "thinking": model entered extended thinking
       - "responding": model is streaming text output
     """

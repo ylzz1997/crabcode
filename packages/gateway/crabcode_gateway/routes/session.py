@@ -29,6 +29,13 @@ def _get_session(request: Request, session_id: str | None = None):
     return sessions[sid]
 
 
+def _attach_event_bus(session, event_bus: EventBus) -> None:
+    async def _publish(event) -> None:
+        await event_bus.publish(session.session_id, event)
+
+    session.set_background_event_sink(_publish)
+
+
 @router.post("/new", response_model=SessionInfo)
 async def new_session(req: NewSessionRequest, request: Request) -> SessionInfo:
     """Create a new CrabCode session."""
@@ -66,6 +73,7 @@ async def new_session(req: NewSessionRequest, request: Request) -> SessionInfo:
 
     settings = CrabCodeSettings()
     session = CoreSession(cwd=cwd, settings=settings)
+    _attach_event_bus(session, request.app.state.event_bus)
     await session.initialize()
     session.new_session()
 
@@ -105,6 +113,7 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
     resolved = SessionStorage.from_session_id(req.session_id)
     cwd = resolved.cwd if resolved is not None else os.getcwd()
     session = CoreSession(cwd=cwd, settings=CrabCodeSettings())
+    _attach_event_bus(session, request.app.state.event_bus)
     await session.initialize()
     ok = await session.resume(req.session_id)
     if not ok:

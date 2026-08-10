@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import in_terminal
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
@@ -733,7 +734,10 @@ def _render_session_history(messages: list[Message], max_messages: int = 50) -> 
 
     for msg in displayed:
         if msg.role == MessageRole.USER:
-            if getattr(msg, "source_tool_assistant_uuid", None):
+            if (
+                getattr(msg, "source_tool_assistant_uuid", None)
+                or getattr(msg, "origin", None) == "task-notification"
+            ):
                 continue
             text = msg.text_content.strip()
             if not text or text.startswith("<system-reminder>"):
@@ -1071,6 +1075,134 @@ async def _prompt_choice(
             )
 
 
+async def _consume_background_events(
+    session: CoreSession,
+) -> None:
+    """Render events from automatic continuations while the REPL is idle."""
+    text_parts: list[str] = []
+    announced = False
+    permission_batch: dict[str, bool] = {"denied": False}
+
+    async def render(action: Any) -> None:
+        async with in_terminal():
+            action()
+
+    async def announce() -> None:
+        nonlocal announced
+        if announced:
+            return
+        await render(
+            lambda: console.print(
+                "\n  [dim cyan]↻ Background agent continuation[/]"
+            )
+        )
+        announced = True
+
+    async def flush_text() -> None:
+        if not text_parts:
+            return
+        body = safe_utf8_str("".join(text_parts)).rstrip()
+        text_parts.clear()
+        if body:
+            await render(lambda: console.print(Text(body)))
+
+    while True:
+        event = await session.next_background_event()
+
+        if isinstance(event, StreamTextEvent):
+            await announce()
+            text_parts.append(event.text)
+            continue
+        if isinstance(event, StreamModeEvent):
+            if event.mode == "compacting":
+                await announce()
+                await render(
+                    lambda: console.print("  [dim italic]Compacting conversation…[/]")
+                )
+            continue
+        if isinstance(event, (ThinkingEvent, AgentOutputEvent)):
+            continue
+
+        if isinstance(event, AgentStateEvent):
+            await announce()
+            style = {
+                "queued": "dim",
+                "running": "cyan",
+                "completed": "green",
+                "failed": "red",
+                "cancelled": "yellow",
+            }.get(event.status, "dim")
+            await render(
+                lambda: console.print(
+                    f"  [{style}]agent {event.agent_id[:8]} · "
+                    f"{event.status} · {event.title}[/]"
+                )
+            )
+            continue
+
+        await announce()
+        await flush_text()
+
+        if isinstance(event, ToolUseEvent):
+            await render(lambda: _render_tool_use(event))
+        elif isinstance(event, ToolResultEvent):
+            await render(lambda: _render_tool_result(event))
+        elif isinstance(event, PermissionRequestEvent):
+            async with in_terminal():
+                await _prompt_permission(event, session, permission_batch)
+        elif isinstance(event, ChoiceRequestEvent):
+            async with in_terminal():
+                await _prompt_choice(event, session)
+        elif isinstance(event, CompactEvent):
+            await render(
+                lambda: console.print(
+                    f"[dim italic]Conversation compacted: {event.summary}[/]"
+                )
+            )
+        elif isinstance(event, ErrorEvent):
+            await render(
+                lambda: console.print(
+                    f"[bold red]Error: {safe_utf8_str(event.message)}[/]"
+                )
+            )
+        elif isinstance(event, ModeChangeEvent):
+            session.switch_mode(event.mode)
+            await render(
+                lambda: console.print(
+                    f"  [dim]Background continuation switched to {event.mode} mode[/]"
+                )
+            )
+        elif isinstance(event, PlanReadyEvent):
+            session.set_plan(event.plan)
+            await render(lambda: console.print("  [bold blue]Background plan ready[/]"))
+        elif isinstance(event, TeamMessageEvent):
+            await render(
+                lambda: console.print(
+                    f"  [dim magenta][team:{event.team_id[:8]}] "
+                    f"{event.from_agent[:8]} → {event.to_agent[:8]}: "
+                    f"{event.text[:100]}[/]"
+                )
+            )
+        elif isinstance(event, TeamStateEvent):
+            await render(
+                lambda: console.print(
+                    f"  [dim magenta][team:{event.team_id[:8]}] "
+                    f"{event.agent_id[:8]} {event.old_state} → {event.new_state}[/]"
+                )
+            )
+        elif isinstance(event, TaskUpdateEvent):
+            await render(
+                lambda: console.print(
+                    f"  [dim magenta][team:{event.team_id[:8]}] "
+                    f"task {event.task_id[:8]} {event.status}[/]"
+                )
+            )
+        elif isinstance(event, TurnCompleteEvent):
+            await render(lambda: _render_context_usage(event))
+            permission_batch["denied"] = False
+            announced = False
+
+
 async def _stream_agent_until_done(
     session: CoreSession,
     target_agent_id: str,
@@ -1273,6 +1405,7 @@ async def run_repl(
     console.print()
 
     session = CoreSession(cwd=cwd, settings=settings)
+    background_consumer: asyncio.Task[None] | None = None
 
     # Pending image attachments for the next user message
     pending_images: list[dict[str, str]] = []
@@ -1330,6 +1463,9 @@ async def run_repl(
             history=InMemoryHistory(),
             completer=_CrabCodeCompleter(session),
             complete_while_typing=True,
+        )
+        background_consumer = asyncio.create_task(
+            _consume_background_events(session)
         )
 
         ctrl_c_exit = _CtrlCDoubleExit()
@@ -1428,6 +1564,10 @@ async def run_repl(
                             spinner.start()
                             is_thinking = False
                             thinking_start = 0.0
+                        elif event.mode == "compacting":
+                            spinner.start("Compacting")
+                            is_thinking = False
+                            thinking_start = 0.0
                         elif event.mode == "thinking":
                             thinking_start = time.monotonic()
                             is_thinking = True
@@ -1518,6 +1658,7 @@ async def run_repl(
                             _render_tool_result(event)
 
                     elif isinstance(event, CompactEvent):
+                        await _stop_spinner_with_thinking()
                         console.print(
                             f"\n[dim italic]Conversation compacted: {event.summary}[/]"
                         )
@@ -1633,6 +1774,10 @@ async def run_repl(
 
             console.print()
     finally:
+        if background_consumer is not None:
+            background_consumer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await background_consumer
         await session.close()
 
 
@@ -2103,7 +2248,13 @@ async def _handle_command(
         from crabcode_core.agent_manager import AgentManager
         console.print(
             Panel(
-                Text(AgentManager.format_snapshot(snapshot), style="dim"),
+                Text(
+                    AgentManager.format_snapshot(
+                        snapshot,
+                        max_result_chars=session.settings.agent.max_output_chars,
+                    ),
+                    style="dim",
+                ),
                 title=f"[bold]Agent {snapshot.agent_id[:8]}[/]",
                 border_style="cyan",
                 expand=False,
@@ -2182,7 +2333,13 @@ async def _handle_command(
         from crabcode_core.agent_manager import AgentManager
         console.print(
             Panel(
-                Text(AgentManager.format_snapshot(snapshot), style="dim"),
+                Text(
+                    AgentManager.format_snapshot(
+                        snapshot,
+                        max_result_chars=session.settings.agent.max_output_chars,
+                    ),
+                    style="dim",
+                ),
                 title=f"[bold]Agent {snapshot.agent_id[:8]}[/]",
                 border_style="cyan",
                 expand=False,
@@ -2309,7 +2466,11 @@ async def _handle_command(
         return True
 
     if cmd == "/new":
-        new_id = session.new_session()
+        try:
+            new_id = session.new_session()
+        except RuntimeError as exc:
+            console.print(f"[bold yellow]{safe_utf8_str(str(exc))}[/]")
+            return True
         console.print(f"[dim]New session started: [bold]{new_id[:8]}…[/bold][/]")
         return True
 

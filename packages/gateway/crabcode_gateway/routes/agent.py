@@ -34,6 +34,7 @@ async def spawn_agent(req: SpawnAgentRequest, request: Request) -> AgentInfo:
         subagent_type=req.subagent_type,
         name=req.name,
         model_profile=req.model_profile,
+        callback=req.callback,
     )
     snapshot = session.get_agent(agent_id)
     if not snapshot:

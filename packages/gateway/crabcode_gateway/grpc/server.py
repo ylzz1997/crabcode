@@ -68,6 +68,7 @@ class _CrabCodeServicer:
             subagent_type=request.get("subagent_type", "generalPurpose"),
             name=request.get("name"),
             model_profile=request.get("model_profile"),
+            callback=bool(request.get("callback", False)),
         )
         return {"agent_id": agent_id}
 
@@ -338,7 +339,8 @@ class _GeneratedStubServicer:
     async def SpawnAgent(self, request, context):
         req_dict = {
             "prompt": request.prompt,
-            "subagent_type": request.subagent_type,
+            "subagent_type": request.subagent_type or "generalPurpose",
+            "callback": request.callback,
         }
         if request.HasField("name"):
             req_dict["name"] = request.name

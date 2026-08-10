@@ -30,9 +30,9 @@ from crabcode_core.types.event import (
 )
 from crabcode_core.types.message import (
     Message,
-    create_assistant_message,
+    find_assistant_reply,
+    message_from_entry,
     create_user_message,
-    deserialize_content,
 )
 from crabcode_core.types.tool import Tool, ToolContext
 
@@ -41,6 +41,19 @@ logger = get_logger(__name__)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _truncate_result(text: str, max_chars: int | None) -> str:
+    """Bound model-facing agent output while preserving its conclusion."""
+    if max_chars is None or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    marker = "\n... [agent result truncated; see transcript for full output] ...\n"
+    if max_chars <= len(marker):
+        return text[-max_chars:]
+    keep = max(0, max_chars - len(marker))
+    head = keep // 3
+    tail = keep - head
+    return text[:head] + marker + text[-tail:]
 
 
 @dataclass
@@ -53,6 +66,7 @@ class AgentSnapshot:
     status: str
     model: str
     created_at: str
+    session_id: str = ""
     started_at: str | None = None
     finished_at: str | None = None
     updated_at: str = field(default_factory=_now_iso)
@@ -61,6 +75,10 @@ class AgentSnapshot:
     error: str = ""
     depth: int = 0
     transcript_path: str | None = None
+    callback_enabled: bool = False
+    callback_state: str = "disabled"
+    callback_message_id: str | None = None
+    callback_epoch: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +90,7 @@ class AgentSnapshot:
             "status": self.status,
             "model": self.model,
             "created_at": self.created_at,
+            "session_id": self.session_id,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "updated_at": self.updated_at,
@@ -80,7 +99,52 @@ class AgentSnapshot:
             "error": self.error,
             "depth": self.depth,
             "transcript_path": self.transcript_path,
+            "callback_enabled": self.callback_enabled,
+            "callback_state": self.callback_state,
+            "callback_message_id": self.callback_message_id,
+            "callback_epoch": self.callback_epoch,
         }
+
+
+@dataclass(frozen=True)
+class AgentCompletion:
+    """Immutable terminal result delivered to the owning session or agent."""
+
+    session_id: str
+    agent_id: str
+    parent_agent_id: str | None
+    parent_tool_use_id: str | None
+    title: str
+    subagent_type: str
+    status: str
+    final_result: str
+    error: str
+    usage: dict[str, Any]
+    completed_at: str
+    transcript_path: str | None
+    callback_state: str = "pending"
+    callback_message_id: str | None = None
+    callback_epoch: int = 0
+
+    @classmethod
+    def from_snapshot(cls, snapshot: AgentSnapshot) -> "AgentCompletion":
+        return cls(
+            session_id=snapshot.session_id,
+            agent_id=snapshot.agent_id,
+            parent_agent_id=snapshot.parent_agent_id,
+            parent_tool_use_id=snapshot.parent_tool_use_id,
+            title=snapshot.title,
+            subagent_type=snapshot.subagent_type,
+            status=snapshot.status,
+            final_result=snapshot.final_result,
+            error=snapshot.error,
+            usage=dict(snapshot.usage),
+            completed_at=snapshot.finished_at or snapshot.updated_at,
+            transcript_path=snapshot.transcript_path,
+            callback_state=snapshot.callback_state,
+            callback_message_id=snapshot.callback_message_id,
+            callback_epoch=snapshot.callback_epoch,
+        )
 
 
 @dataclass
@@ -95,6 +159,7 @@ class _AgentRun:
     done_event: asyncio.Event = field(default_factory=asyncio.Event)
     final_text: str = ""
     cancelled: bool = False
+    detached: bool = False
 
 
 class AgentManager:
@@ -113,6 +178,7 @@ class AgentManager:
         cwd: str,
         env: dict[str, str],
         session_id: str,
+        completion_sink: Callable[[AgentCompletion], Awaitable[None]] | None = None,
         current_model_name: str | None = None,
         persistence_callback: Callable[[list[dict[str, Any]]], None] | None = None,
         transcript_writer: Callable[[str, list[Message]], None] | None = None,
@@ -126,6 +192,7 @@ class AgentManager:
         self._tools_provider = tools_provider
         self._adapter_provider = adapter_provider
         self._event_sink = event_sink
+        self._completion_sink = completion_sink
         self._permission_manager = permission_manager
         self._prompt_profile = prompt_profile
         self._cwd = cwd
@@ -144,8 +211,19 @@ class AgentManager:
         self._semaphore = asyncio.Semaphore(max(1, agent_settings.max_concurrency))
 
     @staticmethod
-    def format_snapshot(snapshot: AgentSnapshot) -> str:
-        result = snapshot.final_result.strip() or "(no result)"
+    def truncate_result(text: str, max_chars: int | None) -> str:
+        return _truncate_result(text, max_chars)
+
+    @staticmethod
+    def format_snapshot(
+        snapshot: AgentSnapshot,
+        *,
+        max_result_chars: int | None = None,
+    ) -> str:
+        result = AgentManager.truncate_result(
+            snapshot.final_result.strip() or "(no result)",
+            max_result_chars,
+        )
         usage = snapshot.usage or {}
         usage_line = ", ".join(f"{k}={v}" for k, v in usage.items()) or "none"
         summary = [
@@ -171,6 +249,21 @@ class AgentManager:
         run = self._runs.get(agent_id)
         return run.snapshot if run else None
 
+    def is_agent_active(self, agent_id: str) -> bool:
+        run = self._runs.get(agent_id)
+        return bool(run and run.task and not run.task.done())
+
+    def get_agent_reply(self, agent_id: str, message_id: str) -> Message | None:
+        run = self._runs.get(agent_id)
+        return find_assistant_reply(run.messages, message_id) if run else None
+
+    def has_agent_answered(self, agent_id: str, message_id: str) -> bool:
+        return self.get_agent_reply(agent_id, message_id) is not None
+
+    @property
+    def max_output_chars(self) -> int:
+        return max(1, self._agent_settings.max_output_chars)
+
     async def spawn_agent(
         self,
         *,
@@ -181,7 +274,10 @@ class AgentManager:
         parent_agent_id: str | None = None,
         parent_tool_use_id: str | None = None,
         depth: int = 1,
+        callback: bool = False,
     ) -> str:
+        if callback and not self._session_id:
+            raise RuntimeError("Cannot enable agent callback before a session is active")
         if depth > self._agent_settings.max_depth:
             raise ValueError(
                 f"Maximum agent depth exceeded ({depth} > {self._agent_settings.max_depth})"
@@ -190,7 +286,7 @@ class AgentManager:
         active_runs = sum(
             1
             for existing in self._runs.values()
-            if existing.snapshot.status in {"queued", "running"}
+            if existing.task is not None and not existing.task.done()
         )
         if active_runs >= self._agent_settings.max_active_agents_per_run:
             raise ValueError(
@@ -229,9 +325,12 @@ class AgentManager:
             status="queued",
             model=api_cfg.model or "",
             created_at=_now_iso(),
+            session_id=self._session_id,
             updated_at=_now_iso(),
             depth=depth,
             transcript_path=self._transcript_path_getter(agent_id) if self._transcript_path_getter else None,
+            callback_enabled=callback,
+            callback_state="pending" if callback else "disabled",
         )
         run = _AgentRun(
             snapshot=snapshot,
@@ -293,7 +392,10 @@ class AgentManager:
             return False
         run.cancelled = True
         run.task.cancel()
-        await self._emit_state(run, "cancelled", "Agent cancelled")
+        try:
+            await run.task
+        except asyncio.CancelledError:
+            pass
         return True
 
     async def send_input(
@@ -302,6 +404,8 @@ class AgentManager:
         prompt: str,
         *,
         interrupt: bool = False,
+        message_id: str | None = None,
+        message_origin: str | None = None,
     ) -> bool:
         run = self._runs.get(agent_id)
         if not run:
@@ -309,10 +413,30 @@ class AgentManager:
         if not prompt.strip():
             return False
 
+        existing_index = next(
+            (
+                index
+                for index, message in enumerate(run.messages)
+                if message_id is not None and message.uuid == message_id
+            ),
+            None,
+        )
+        if (
+            run.snapshot.status in {"completed", "failed", "cancelled"}
+            and run.snapshot.callback_enabled
+            and run.snapshot.callback_state in {"pending", "injected"}
+            and existing_index is None
+        ):
+            return False
+        if existing_index is not None and find_assistant_reply(run.messages, message_id or ""):
+            return True
+
         profile_cfg = self._resolve_type_config(run.snapshot.subagent_type)
         model_profile = run.active_model_profile
 
         if run.task and not run.task.done():
+            if existing_index is not None:
+                return True
             if not interrupt:
                 return False
             run.task.cancel()
@@ -321,10 +445,24 @@ class AgentManager:
             except asyncio.CancelledError:
                 pass
 
-        run.messages.append(create_user_message(content=prompt))
+        if existing_index is None:
+            message_kwargs: dict[str, Any] = {}
+            if message_id:
+                message_kwargs["uuid"] = message_id
+            if message_origin:
+                message_kwargs["origin"] = message_origin
+            run.messages.append(create_user_message(content=prompt, **message_kwargs))
         run.done_event.clear()
         run.cancelled = False
+        run.final_text = ""
+        run.output_chunks.clear()
         run.snapshot.error = ""
+        run.snapshot.final_result = ""
+        run.snapshot.finished_at = None
+        if run.snapshot.callback_enabled and existing_index is None:
+            run.snapshot.callback_epoch += 1
+            run.snapshot.callback_state = "pending"
+            run.snapshot.callback_message_id = None
         run.snapshot.status = "queued"
         run.snapshot.updated_at = _now_iso()
         self._persist_transcript(run)
@@ -359,23 +497,49 @@ class AgentManager:
     def update_session(self, *, env: dict[str, str], session_id: str) -> None:
         self._env = env
         self._session_id = session_id
-        self._persist()
+
+    def abandon_active_agents(self, reason: str) -> None:
+        """Cancel active runs and persist their terminal state before a session switch."""
+        changed = False
+        for run in self._runs.values():
+            if not run.task or run.task.done():
+                continue
+            changed = True
+            run.cancelled = True
+            run.detached = True
+            run.snapshot.status = "cancelled"
+            run.snapshot.error = reason
+            run.snapshot.updated_at = _now_iso()
+            run.snapshot.finished_at = run.snapshot.updated_at
+            run.done_event.set()
+            run.task.cancel()
+        if changed:
+            self._persist()
 
     async def close(self) -> None:
         tasks: list[asyncio.Task[None]] = []
         for run in self._runs.values():
             if run.task and not run.task.done():
                 run.cancelled = True
+                run.detached = True
                 run.task.cancel()
                 tasks.append(run.task)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+            self._persist()
 
     def set_current_model(self, model_name: str | None) -> None:
         self._current_model_name = model_name
 
-    def restore_snapshots(self, snapshots: list[dict[str, Any]]) -> None:
+    def restore_snapshots(self, snapshots: list[dict[str, Any]]) -> list[AgentCompletion]:
+        for run in self._runs.values():
+            if run.task and not run.task.done():
+                run.detached = True
+                run.snapshot.callback_enabled = False
+                run.snapshot.callback_state = "disabled"
+                run.task.cancel()
         self._runs.clear()
+        pending_callbacks: list[AgentCompletion] = []
         for item in snapshots:
             try:
                 snapshot = AgentSnapshot(**item)
@@ -386,17 +550,63 @@ class AgentManager:
             if self._transcript_loader is not None:
                 raw_messages = self._transcript_loader(snapshot.agent_id)
                 for raw in raw_messages:
-                    role = raw.get("type", "user")
-                    content = deserialize_content(raw.get("content", ""))
-                    if role == "assistant":
-                        run.messages.append(create_assistant_message(content=content))
-                    else:
-                        run.messages.append(create_user_message(content=content))
+                    message = message_from_entry(raw)
+                    if message is not None:
+                        run.messages.append(message)
             if snapshot.final_result:
                 run.final_text = snapshot.final_result
+            # Restored runs never have a live coroutine. Mark their waiter as settled
+            # even when an older snapshot still says queued/running; callers can then
+            # inspect that stale state instead of waiting forever for an impossible
+            # transition. send_input() clears this event before starting a new run.
+            run.done_event.set()
             if snapshot.status in {"completed", "failed", "cancelled"}:
-                run.done_event.set()
+                if snapshot.callback_enabled and snapshot.callback_state in {"pending", "injected"}:
+                    pending_callbacks.append(AgentCompletion.from_snapshot(snapshot))
             self._runs[snapshot.agent_id] = run
+        return pending_callbacks
+
+    def mark_callback_injected(
+        self,
+        agent_id: str,
+        *,
+        session_id: str,
+        message_id: str,
+        callback_epoch: int,
+    ) -> bool:
+        run = self._runs.get(agent_id)
+        if (
+            not run
+            or run.snapshot.callback_state != "pending"
+            or run.snapshot.session_id != session_id
+            or run.snapshot.callback_epoch != callback_epoch
+        ):
+            return False
+        run.snapshot.callback_state = "injected"
+        run.snapshot.callback_message_id = message_id
+        run.snapshot.updated_at = _now_iso()
+        self._persist()
+        return True
+
+    def mark_callback_delivered(
+        self,
+        agent_id: str,
+        *,
+        session_id: str,
+        callback_epoch: int,
+    ) -> bool:
+        run = self._runs.get(agent_id)
+        if (
+            not run
+            or run.snapshot.callback_state != "injected"
+            or run.snapshot.session_id != session_id
+            or run.snapshot.callback_epoch != callback_epoch
+        ):
+            return False
+        run.snapshot.callback_state = "delivered"
+        run.snapshot.updated_at = _now_iso()
+        self._persist()
+        return True
 
     def _persist(self) -> None:
         if self._persistence_callback is None:
@@ -433,6 +643,8 @@ class AgentManager:
             run.snapshot.started_at = run.snapshot.updated_at
         if status in {"completed", "failed", "cancelled"}:
             run.snapshot.finished_at = run.snapshot.updated_at
+        if run.detached:
+            return
         await self._event_sink(
             AgentStateEvent(
                 agent_id=run.snapshot.agent_id,
@@ -445,6 +657,22 @@ class AgentManager:
             )
         )
         self._persist()
+
+    async def _emit_completion(self, run: _AgentRun) -> None:
+        if (
+            run.detached
+            or self._completion_sink is None
+            or not run.snapshot.callback_enabled
+            or run.snapshot.callback_state != "pending"
+        ):
+            return
+        try:
+            await self._completion_sink(AgentCompletion.from_snapshot(run.snapshot))
+        except Exception:
+            logger.exception(
+                "Failed to enqueue completion for managed agent %s",
+                run.snapshot.agent_id,
+            )
 
     async def _run_agent(
         self,
@@ -512,13 +740,17 @@ class AgentManager:
                     tool_call_timeout=self._settings.tool_call_timeout,
                     auto_compact_enabled=self._settings.auto_compact_enabled,
                     compact_threshold=self._settings.max_context_length,
+                    reply_to_uuid=(
+                        run.messages[-1].uuid
+                        if run.messages and run.messages[-1].origin == "task-notification"
+                        else None
+                    ),
                 )
                 final_usage: dict[str, Any] = {}
                 async for event in query_loop(params):
                     await self._handle_agent_event(run, event)
                     if isinstance(event, TurnCompleteEvent):
                         final_usage = event.usage
-                        break
                 run.messages = params.messages
                 run.snapshot.usage = dict(final_usage)
                 run.snapshot.final_result = run.final_text.strip()
@@ -537,6 +769,7 @@ class AgentManager:
                 await self._event_sink(ErrorEvent(message=str(exc), recoverable=True, error_type="agent"))
             finally:
                 run.done_event.set()
+                await self._emit_completion(run)
 
     async def _handle_agent_event(self, run: _AgentRun, event: CoreEvent) -> None:
         agent_id = run.snapshot.agent_id
@@ -572,9 +805,6 @@ class AgentManager:
             )
             return
         if isinstance(event, ToolResultEvent):
-            body = event.result.strip()
-            if body:
-                run.final_text += f"\n\n[Tool {event.tool_name}]\n{body}"
             await self._event_sink(
                 ToolResultEvent(
                     tool_use_id=event.tool_use_id,

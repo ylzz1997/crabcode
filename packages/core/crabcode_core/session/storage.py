@@ -52,7 +52,16 @@ def _message_to_entry(message: Message) -> dict[str, Any]:
             block.model_dump() for block in message.content
         ],
     }
-    for field in ("tool_use_result", "source_tool_assistant_uuid", "api_error", "usage", "request_id"):
+    if message.origin is not None:
+        entry["origin"] = message.origin
+    for field in (
+        "tool_use_result",
+        "source_tool_assistant_uuid",
+        "reply_to_uuid",
+        "api_error",
+        "usage",
+        "request_id",
+    ):
         value = getattr(message, field, None)
         if value is not None:
             entry[field] = value
@@ -128,6 +137,8 @@ class SessionStorage:
         self._transcript_path = get_transcript_path(self.cwd, self.session_id)
         self._initialized = False
         self._written_uuids: set[str] = set()
+        self._callback_deliveries: dict[tuple[str, int, str], dict[str, Any]] = {}
+        self._callback_deliveries_loaded = False
         self._meta_written = False
         self._meta: dict[str, Any] = {}
         self.last_context_used_tokens: int = 0
@@ -139,14 +150,29 @@ class SessionStorage:
             self._transcript_path.parent.mkdir(parents=True, exist_ok=True)
             self._initialized = True
 
+    @staticmethod
+    def _atomic_write_text(path: Path, content: str) -> None:
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
     def write_agent_snapshots(self, snapshots: list[dict[str, Any]]) -> None:
         """Persist managed-agent metadata for this session."""
         self._ensure_dir()
         path = get_agent_meta_path(self.cwd, self.session_id)
         try:
-            path.write_text(
+            self._atomic_write_text(
+                path,
                 json.dumps(snapshots, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
             )
         except Exception:
             logger.warning("Failed to write agent snapshots: %s", path, exc_info=True)
@@ -162,18 +188,11 @@ class SessionStorage:
         self._ensure_dir()
         path = get_agent_transcript_path(self.cwd, self.session_id, agent_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            for message in messages:
-                entry = {
-                    "type": message.role.value,
-                    "uuid": message.uuid,
-                    "parent_uuid": message.parent_uuid,
-                    "timestamp": message.timestamp,
-                    "content": message.content if isinstance(message.content, str) else [
-                        block.model_dump() for block in message.content
-                    ],
-                }
-                f.write(_dump_jsonl_line(entry))
+        lines = [
+            _dump_jsonl_line(_message_to_entry(message))
+            for message in messages
+        ]
+        self._atomic_write_text(path, "".join(lines))
 
     def load_agent_messages(self, agent_id: str) -> list[dict[str, Any]]:
         """Load a managed agent transcript."""
@@ -311,6 +330,8 @@ class SessionStorage:
 
     def append_message(self, message: Message) -> None:
         """Append a message to the session transcript (skips duplicates by uuid)."""
+        if not self._written_uuids and self._transcript_path.exists():
+            self.load_messages(full_history=True)
         if message.uuid in self._written_uuids:
             return
 
@@ -319,6 +340,93 @@ class SessionStorage:
         with open(self._transcript_path, "a", encoding="utf-8") as f:
             f.write(_dump_jsonl_line(entry))
         self._written_uuids.add(message.uuid)
+
+    def record_callback_delivery(
+        self,
+        *,
+        agent_id: str,
+        callback_epoch: int,
+        callback_message_id: str,
+        assistant_uuid: str,
+    ) -> bool:
+        """Persist an idempotent callback receipt outside the compacted context."""
+        key = (agent_id, callback_epoch, callback_message_id)
+        if not self._callback_deliveries_loaded:
+            self.load_callback_deliveries()
+        if key in self._callback_deliveries:
+            return True
+
+        entry = {
+            "type": "callback_delivery",
+            "session_id": self.session_id,
+            "agent_id": agent_id,
+            "callback_epoch": callback_epoch,
+            "callback_message_id": callback_message_id,
+            "assistant_uuid": assistant_uuid,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            self._ensure_dir()
+            with open(self._transcript_path, "a", encoding="utf-8") as f:
+                f.write(_dump_jsonl_line(entry))
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            logger.warning(
+                "Failed to record callback delivery for agent %s epoch %d",
+                agent_id,
+                callback_epoch,
+                exc_info=True,
+            )
+            return False
+        self._callback_deliveries[key] = entry
+        return True
+
+    def has_callback_delivery(
+        self,
+        *,
+        agent_id: str,
+        callback_epoch: int,
+        callback_message_id: str,
+    ) -> bool:
+        if not self._callback_deliveries_loaded:
+            self.load_callback_deliveries()
+        return (
+            agent_id,
+            callback_epoch,
+            callback_message_id,
+        ) in self._callback_deliveries
+
+    def load_callback_deliveries(self) -> list[dict[str, Any]]:
+        """Load durable callback receipts without affecting active message projection."""
+        deliveries: dict[tuple[str, int, str], dict[str, Any]] = {}
+        if self._transcript_path.exists():
+            try:
+                with open(self._transcript_path, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(entry, dict) or entry.get("type") != "callback_delivery":
+                            continue
+                        agent_id = str(entry.get("agent_id") or "")
+                        message_id = str(entry.get("callback_message_id") or "")
+                        try:
+                            epoch = int(entry.get("callback_epoch", 0))
+                        except (TypeError, ValueError):
+                            continue
+                        if agent_id and message_id:
+                            deliveries.setdefault((agent_id, epoch, message_id), entry)
+            except Exception:
+                logger.warning(
+                    "Failed to load callback deliveries: %s",
+                    self._transcript_path,
+                    exc_info=True,
+                )
+        self._callback_deliveries = deliveries
+        self._callback_deliveries_loaded = True
+        return list(deliveries.values())
 
     def append_compaction(
         self,

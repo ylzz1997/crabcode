@@ -54,6 +54,7 @@ class ToolContext:
     choice_queue: Any | None = None  # asyncio.Queue[ChoiceResponseEvent]
     tool_event_queue: Any | None = None  # asyncio.Queue[CoreEvent] — for tools to emit events mid-execution
     agent_id: str | None = None
+    tool_use_id: str | None = None
     agent_depth: int = 0
     agent_manager: Any | None = None
     lsp_manager: Any | None = None  # LSPManager — session-scoped, set during CoreSession.initialize()

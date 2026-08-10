@@ -21,6 +21,7 @@ message SpawnAgentRequest {
   string subagent_type = 2;
   optional string name = 3;
   optional string model_profile = 4;
+  bool callback = 5;
 }
 
 message SpawnAgentResponse {

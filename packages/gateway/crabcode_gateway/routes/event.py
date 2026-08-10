@@ -192,6 +192,9 @@ async def _handle_new_session(ws: WebSocket, msg: dict) -> None:
     cwd = msg.get("cwd") or os.getcwd()
     settings = CrabCodeSettings()
     session = CoreSession(cwd=cwd, settings=settings)
+    async def _publish_background(event) -> None:
+        await ws.app.state.event_bus.publish(session.session_id, event)
+    session.set_background_event_sink(_publish_background)
     await session.initialize()
     session.new_session()
 
@@ -429,6 +432,9 @@ async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
 
     settings = CrabCodeSettings()
     session = CoreSession(cwd=cwd, settings=settings)
+    async def _publish_background(event) -> None:
+        await ws.app.state.event_bus.publish(session.session_id, event)
+    session.set_background_event_sink(_publish_background)
     await session.initialize()
     ok = await session.resume(session_id)
     if not ok:

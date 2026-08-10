@@ -82,6 +82,7 @@ class Message(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     is_compact_summary: bool = False
+    origin: str | None = None
 
     @property
     def text_content(self) -> str:
@@ -113,6 +114,7 @@ class UserMessage(Message):
 
 class AssistantMessage(Message):
     role: Literal[MessageRole.ASSISTANT] = MessageRole.ASSISTANT
+    reply_to_uuid: str | None = None
     api_error: str | None = None
     usage: dict[str, Any] | None = None
     request_id: str | None = None
@@ -155,6 +157,60 @@ def create_tool_result_message(
         tool_use_result=result,
         source_tool_assistant_uuid=source_tool_assistant_uuid,
     )
+
+
+def message_from_entry(raw: dict[str, Any]) -> Message | None:
+    """Rebuild a durable message entry without dropping subtype metadata."""
+    role = raw.get("type")
+    model: type[Message]
+    if role == MessageRole.USER.value:
+        model = UserMessage
+    elif role == MessageRole.ASSISTANT.value:
+        model = AssistantMessage
+    elif role == MessageRole.SYSTEM.value:
+        model = SystemMessage
+    else:
+        return None
+
+    payload = dict(raw)
+    payload.pop("type", None)
+    payload["role"] = role
+    payload["content"] = deserialize_content(payload.get("content", ""))
+    try:
+        return model.model_validate(payload)
+    except Exception:
+        logger.warning("Failed to restore durable %s message", role, exc_info=True)
+        return None
+
+
+def find_assistant_reply(
+    messages: list[Message],
+    message_id: str,
+) -> AssistantMessage | None:
+    """Find a successful final assistant reply correlated to one input message."""
+    related_uuids = {message_id}
+    message_seen = False
+    for message in messages:
+        if message.uuid == message_id:
+            message_seen = True
+            continue
+
+        directly_related = (
+            isinstance(message, AssistantMessage)
+            and message.reply_to_uuid == message_id
+        )
+        ancestrally_related = message_seen and message.parent_uuid in related_uuids
+        if not directly_related and not ancestrally_related:
+            continue
+
+        related_uuids.add(message.uuid)
+        if (
+            isinstance(message, AssistantMessage)
+            and not message.api_error
+            and not message.has_tool_use
+        ):
+            return message
+    return None
 
 
 def deserialize_content(raw: Any) -> list[ContentBlock] | str:
