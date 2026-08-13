@@ -154,6 +154,15 @@ class MonitorManager:
         run.stop_reason = "stopped by request"
         run.task.cancel()
         await asyncio.gather(run.task, return_exceptions=True)
+        # A task cancelled before its coroutine is first scheduled never enters
+        # _run_source(), so its finally block cannot update the snapshot.
+        if run.snapshot.status == "running":
+            await self._finish(
+                run,
+                status="stopped",
+                error=run.stop_reason,
+                exit_code=None,
+            )
         return True
 
     def cancel_session_now(self, session_id: str, reason: str) -> None:
@@ -166,6 +175,12 @@ class MonitorManager:
                 continue
             run.stop_reason = reason
             run.suppress_notification = True
+            self._mark_finished(
+                run,
+                status="stopped",
+                error=reason,
+                exit_code=None,
+            )
             run.task.cancel()
 
     async def close(self) -> None:
@@ -178,6 +193,12 @@ class MonitorManager:
                 continue
             run.stop_reason = "session ended"
             run.suppress_notification = True
+            self._mark_finished(
+                run,
+                status="stopped",
+                error=run.stop_reason,
+                exit_code=None,
+            )
             run.task.cancel()
             tasks.append(run.task)
         if tasks:
@@ -348,11 +369,12 @@ class MonitorManager:
         error: str,
         exit_code: int | None,
     ) -> None:
-        run.snapshot.status = status
-        run.snapshot.error = error
-        run.snapshot.exit_code = exit_code
-        run.snapshot.updated_at = _now_iso()
-        run.snapshot.finished_at = run.snapshot.updated_at
+        self._mark_finished(
+            run,
+            status=status,
+            error=error,
+            exit_code=exit_code,
+        )
         if run.suppress_notification:
             return
         summary = error or f"{run.snapshot.description} {status}"
@@ -378,6 +400,20 @@ class MonitorManager:
             notification,
             session_id=run.snapshot.session_id,
         )
+
+    @staticmethod
+    def _mark_finished(
+        run: _MonitorRun,
+        *,
+        status: str,
+        error: str,
+        exit_code: int | None,
+    ) -> None:
+        run.snapshot.status = status
+        run.snapshot.error = error
+        run.snapshot.exit_code = exit_code
+        run.snapshot.updated_at = _now_iso()
+        run.snapshot.finished_at = run.snapshot.updated_at
 
     @staticmethod
     async def _terminate_process(run: _MonitorRun) -> None:
@@ -508,13 +544,11 @@ class MonitorTool(Tool):
             return ToolResult(
                 result_for_model=f"Error: {validation_error}", is_error=True
             )
-        if tool_input.get("command") is not None and context.session_id:
-            try:
-                from crabcode_core.snapshot.tracker import pre_bash_snapshot
-
-                pre_bash_snapshot(context.cwd, context.session_id)
-            except Exception:
-                pass  # Best effort, matching BashTool snapshot behavior.
+        # A monitor is a long-lived watcher, not a file-mutating Bash call.  Do
+        # not take the synchronous working-tree snapshot used by BashTool here:
+        # for a non-git cwd (for example a user's home directory) it recursively
+        # copies the tree before the monitor is even registered, blocking the
+        # event loop and hiding the task ID from the frontend.
         try:
             snapshot = await self.manager.start(
                 context=context,
