@@ -10,6 +10,8 @@ from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
+from crabcode_core.types.config import ReasoningEffort
+
 
 # ── Request schemas ──────────────────────────────────────────────
 
@@ -92,6 +94,17 @@ class SwitchModelRequest(BaseModel):
 
 class SwitchModeRequest(BaseModel):
     mode: Literal["agent", "plan"]
+    session_id: str | None = None
+
+
+class SetReasoningEffortRequest(BaseModel):
+    effort: ReasoningEffort
+    session_id: str | None = None
+
+
+class SetUltraModeRequest(BaseModel):
+    # Omitted/null means toggle; an explicit boolean is idempotent.
+    enabled: bool | None = None
     session_id: str | None = None
 
 

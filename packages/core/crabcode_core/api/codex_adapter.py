@@ -564,11 +564,12 @@ class CodexAdapter(APIAdapter):
             if config.reasoning_effort is not None
             else self.config.reasoning_effort
         )
-        if reasoning_effort and reasoning_effort != "none":
-            params["reasoning"] = {
-                "effort": reasoning_effort,
-                "summary": "auto",
-            }
+        if reasoning_effort is not None:
+            if reasoning_effort != "none":
+                params["reasoning"] = {
+                    "effort": reasoning_effort,
+                    "summary": "auto",
+                }
         elif config.thinking_enabled:
             # Backward-compatible mapping from thinking_budget to reasoning effort
             budget = config.thinking_budget

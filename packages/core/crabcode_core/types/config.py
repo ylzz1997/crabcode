@@ -7,6 +7,20 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+ReasoningEffort = Literal[
+    "none", "minimal", "low", "medium", "high", "xhigh", "max"
+]
+REASONING_EFFORT_LEVELS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+)
+
+
 class PermissionRule(BaseModel):
     """A single permission rule for tool access control."""
     tool: str
@@ -74,9 +88,7 @@ class ApiConfig(BaseModel):
     thinking_budget: int = 10000
     pass_reasoning_content: bool = False
     anthropic_stream_transport: Literal["auto", "sdk", "httpx"] = "auto"
-    reasoning_effort: Literal[
-        "none", "minimal", "low", "medium", "high", "xhigh", "max"
-    ] | None = None
+    reasoning_effort: ReasoningEffort | None = None
     timeout: int = 300  # seconds, for API calls
     max_retries: int = Field(default=5, ge=0)  # transient API reconnects per request
     context_window: int | None = None  # override auto-detected context window

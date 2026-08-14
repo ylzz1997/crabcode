@@ -792,13 +792,17 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 | Command | Description |
 | --------- | ------------- |
 | `/help` | Show all available commands and skills |
-| `/status` | Show runtime status (model, context usage, compactions, agent summary) |
+| `/status` | Show runtime status (model, effort, ultra mode, context usage, compactions, agent summary) |
 | `/logs` | List background logs (for example search index logs) |
 | `/logs <name>` | Show tail of a specific log |
 | `/logs -f <name>` | Follow a specific log in real time (`Ctrl+C` to stop) |
 | `/logs --clear <name>` | Clear a specific log file |
 | `/model` | Show active model and all configured named models |
 | `/model <name>` | Switch to a named model from `settings.models` |
+| `/effort` | Show the active reasoning effort |
+| `/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>` | Set reasoning effort for subsequent requests in the current runtime session |
+| `/ultra` | Toggle ultra mode for subsequent requests |
+| `/ultra <true\|false>` | Explicitly enable or disable ultra mode |
 | `/agents` | List managed sub-agents in the current session |
 | `/peers` | List other live sessions available for cross-session messaging |
 | `/tasks` | List background agents and command/WebSocket monitors |

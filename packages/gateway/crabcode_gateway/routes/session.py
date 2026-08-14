@@ -539,9 +539,20 @@ async def session_status(session_id: str | None = None, request: Request = None)
         used = getattr(session, "last_context_used_tokens", 0) or 0
         window = getattr(session, "last_context_window_tokens", 0) or 0
         message_count = len(getattr(session, "messages", ()))
-        model = getattr(session, "model", "")
-        provider = getattr(session, "provider", "")
-        mode = getattr(session, "mode", "agent")
+        current_name = getattr(session, "_current_model_name", None)
+        settings = getattr(session, "settings", None)
+        if settings is not None and hasattr(settings, "get_api_config"):
+            active_config = settings.get_api_config(current_name)
+            model = active_config.model or ""
+            provider = active_config.provider or ""
+        else:
+            # Retain compatibility with lightweight integration doubles and
+            # older session implementations that expose flat attributes.
+            model = getattr(session, "model", "")
+            provider = getattr(session, "provider", "")
+        mode = getattr(session, "agent_mode", getattr(session, "mode", "agent"))
+        reasoning_effort = getattr(session, "reasoning_effort", None)
+        ultra_mode = bool(getattr(session, "ultra_mode", False))
         sid = session.session_id
     percent = round(used / window * 100, 1) if window else 0.0
     return {
@@ -550,6 +561,8 @@ async def session_status(session_id: str | None = None, request: Request = None)
         "model": model,
         "provider": provider,
         "mode": mode,
+        "reasoning_effort": reasoning_effort,
+        "ultra_mode": ultra_mode,
         "context_used_tokens": used,
         "context_window_tokens": window,
         "context_used_percent": percent,

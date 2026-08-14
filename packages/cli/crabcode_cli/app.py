@@ -78,6 +78,8 @@ def main(
         settings.api.thinking_enabled = file_settings.api.thinking_enabled
     if file_settings.api.pass_reasoning_content:
         settings.api.pass_reasoning_content = file_settings.api.pass_reasoning_content
+    if file_settings.api.reasoning_effort is not None:
+        settings.api.reasoning_effort = file_settings.api.reasoning_effort
     if file_settings.api.max_tokens != 16384:
         settings.api.max_tokens = file_settings.api.max_tokens
     if file_settings.api.extra_body:

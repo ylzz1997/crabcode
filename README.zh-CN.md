@@ -786,13 +786,17 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 | 命令 | 说明 |
 | ------ | ------ |
 | `/help` | 显示所有可用命令和技能 |
-| `/status` | 显示运行状态（模型、上下文占用、压缩次数、agent 摘要） |
+| `/status` | 显示运行状态（模型、effort、ultra mode、上下文占用、压缩次数、agent 摘要） |
 | `/logs` | 列出后台日志（例如搜索索引日志） |
 | `/logs <名称>` | 查看指定日志尾部 |
 | `/logs -f <名称>` | 实时跟随指定日志（`Ctrl+C` 停止） |
 | `/logs --clear <名称>` | 清空指定日志文件 |
 | `/model` | 查看当前模型与全部命名模型 |
 | `/model <名称>` | 切换到 `settings.models` 中的命名模型 |
+| `/effort` | 查看当前 reasoning effort |
+| `/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>` | 设置当前运行会话后续请求的 reasoning effort |
+| `/ultra` | 切换后续请求的 ultra mode |
+| `/ultra <true\|false>` | 显式开启或关闭 ultra mode |
 | `/agents` | 列出当前会话中的托管子 agent |
 | `/peers` | 列出可进行跨 session 通信的其他活跃 session |
 | `/tasks` | 列出后台 agent 与命令/WebSocket monitor |

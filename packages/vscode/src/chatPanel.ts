@@ -39,6 +39,19 @@ interface GatewayModelInfo {
   description?: string;
 }
 
+interface SessionRuntimeStatus {
+  session_id: string;
+  message_count?: number;
+  model?: string;
+  provider?: string;
+  mode?: string;
+  reasoning_effort?: string | null;
+  ultra_mode?: boolean;
+  context_used_tokens?: number;
+  context_window_tokens?: number;
+  context_used_percent?: number;
+}
+
 function uniqNonEmpty(values: Array<string | null | undefined>): string[] {
   const result: string[] = [];
   const seen = new Set<string>();
@@ -490,18 +503,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.addMessage(msg.role as ChatMessageRole, msg.text);
           break;
         case "fetchStatus": {
-          const sid = this.displayedSessionId || this.connection.sessionId || "（未知）";
-          const usage = this.latestContextUsage;
-          const lines = [`**会话 ID：** \`${sid}\``];
-          if (usage) {
-            lines.push(`**背景窗口：** ${usage.usedTokens.toLocaleString()} / ${usage.windowTokens.toLocaleString()} tokens（${usage.usedPercent.toFixed(1)}% 已用，剩余 ${usage.remainingPercent.toFixed(1)}%）`);
-            if (usage.cacheDetail) lines.push(`**提示缓存：** ${usage.cacheDetail}`);
-          } else {
-            lines.push("**背景窗口：** 暂无数据");
-          }
-          this.addMessage("system", lines.join("\n"));
+          void this.fetchAndShowStatus();
           break;
         }
+        case "setEffort":
+          void this.showOrSetReasoningEffort(
+            typeof msg.effort === "string" ? msg.effort : null,
+          );
+          break;
+        case "setUltra":
+          void this.setUltraMode(
+            typeof msg.enabled === "boolean" ? msg.enabled : null,
+          );
+          break;
         case "switchMode":
           void this.switchMode(msg.mode as "agent" | "plan");
           break;
@@ -611,6 +625,145 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.postMessage({ type: "contextUsage", usage });
     } catch {
       // ignore
+    }
+  }
+
+  private async fetchSessionRuntimeStatus(sessionId: string): Promise<SessionRuntimeStatus | null> {
+    try {
+      const url = new URL(this._gatewayUrl("/session/status"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) return null;
+      return await response.json() as SessionRuntimeStatus;
+    } catch {
+      return null;
+    }
+  }
+
+  private addSessionSystemMessage(sessionId: string, text: string): void {
+    this.addMessageOnState(
+      this.getSessionState(sessionId),
+      "system",
+      text,
+      this.displayedSessionId === sessionId,
+    );
+  }
+
+  private async fetchAndShowStatus(): Promise<void> {
+    const sessionId = this.displayedSessionId || this.connection.sessionId;
+    if (!sessionId) {
+      this.addMessage("system", "CrabCode：当前没有活动会话。");
+      return;
+    }
+
+    const status = await this.fetchSessionRuntimeStatus(sessionId);
+    if (!status) {
+      this.addSessionSystemMessage(sessionId, "CrabCode：暂时无法读取会话状态。");
+      return;
+    }
+
+    const model = [status.provider, status.model].filter(Boolean).join("/") || "未配置";
+    const effort = status.reasoning_effort || "auto";
+    const ultra = status.ultra_mode ? "开启" : "关闭";
+    const lines = [
+      `**会话 ID：** \`${status.session_id || sessionId}\``,
+      `**模型：** ${model} · **模式：** ${status.mode || "agent"}`,
+      `**Effort：** ${effort} · **Ultra mode：** ${ultra}`,
+    ];
+    const used = Math.max(0, Math.trunc(status.context_used_tokens ?? 0));
+    const window = Math.max(0, Math.trunc(status.context_window_tokens ?? 0));
+    if (used || window) {
+      const usedPercent = Math.min(
+        100,
+        Math.max(0, status.context_used_percent ?? (window ? used / window * 100 : 0)),
+      );
+      lines.push(
+        `**背景窗口：** ${used.toLocaleString()} / ${window.toLocaleString()} tokens（${usedPercent.toFixed(1)}% 已用，剩余 ${Math.max(0, 100 - usedPercent).toFixed(1)}%）`,
+      );
+    } else {
+      lines.push("**背景窗口：** 暂无数据");
+    }
+    const cachedUsage = this.getSessionState(sessionId).contextUsage;
+    if (cachedUsage?.cacheDetail) {
+      lines.push(`**提示缓存：** ${cachedUsage.cacheDetail}`);
+    }
+    lines.push(`**消息数：** ${status.message_count ?? 0}`);
+    this.addSessionSystemMessage(sessionId, lines.join("\n"));
+  }
+
+  private async showOrSetReasoningEffort(effort: string | null): Promise<void> {
+    const sessionId = this.displayedSessionId || this.connection.sessionId;
+    if (!sessionId) {
+      this.addMessage("system", "CrabCode：当前没有活动会话。");
+      return;
+    }
+
+    if (!effort) {
+      const status = await this.fetchSessionRuntimeStatus(sessionId);
+      if (!status) {
+        this.addSessionSystemMessage(sessionId, "CrabCode：暂时无法读取 reasoning effort。");
+        return;
+      }
+      const current = status.reasoning_effort || "auto";
+      this.addSessionSystemMessage(
+        sessionId,
+        `当前 reasoning effort：**${current}**`,
+      );
+      return;
+    }
+
+    try {
+      const response = await fetch(this._gatewayUrl("/config/reasoning-effort"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, effort }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { detail?: string };
+        this.addSessionSystemMessage(
+          sessionId,
+          `CrabCode：设置 effort 失败：${payload.detail || response.statusText}`,
+        );
+        return;
+      }
+      const payload = await response.json() as { reasoning_effort?: string };
+      this.addSessionSystemMessage(
+        sessionId,
+        `Reasoning effort 已设为 **${payload.reasoning_effort || effort}**，下一次请求生效。`,
+      );
+    } catch {
+      this.addSessionSystemMessage(sessionId, "CrabCode：设置 effort 失败，无法连接网关。");
+    }
+  }
+
+  private async setUltraMode(enabled: boolean | null): Promise<void> {
+    const sessionId = this.displayedSessionId || this.connection.sessionId;
+    if (!sessionId) {
+      this.addMessage("system", "CrabCode：当前没有活动会话。");
+      return;
+    }
+
+    try {
+      const response = await fetch(this._gatewayUrl("/config/ultra-mode"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, enabled }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { detail?: string };
+        this.addSessionSystemMessage(
+          sessionId,
+          `CrabCode：设置 ultra mode 失败：${payload.detail || response.statusText}`,
+        );
+        return;
+      }
+      const payload = await response.json() as { ultra_mode?: boolean };
+      this.addSessionSystemMessage(
+        sessionId,
+        `Ultra mode 已**${payload.ultra_mode ? "开启" : "关闭"}**，下一次请求生效。`,
+      );
+    } catch {
+      this.addSessionSystemMessage(sessionId, "CrabCode：设置 ultra mode 失败，无法连接网关。");
     }
   }
 
@@ -5292,6 +5445,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { name: '/plan-status',   desc: '显示当前计划状态',             badge: '' },
       { name: '/agents',        desc: '列出托管的 Agent',             badge: '' },
       { name: '/status',        desc: '显示会话状态',                 badge: '' },
+      { name: '/effort',        desc: '查看/设置推理强度',             badge: '' },
+      { name: '/ultra',         desc: '切换/设置 Ultra mode',         badge: '' },
       { name: '/model',         desc: '显示/切换模型',                badge: '' },
       { name: '/new',           desc: '开始新会话',                   badge: '' },
       { name: '/compact',       desc: '压缩对话上下文',               badge: '' },
@@ -5311,6 +5466,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { name: '/logs',          desc: '显示后台日志',                 badge: '' },
       { name: '/team',          desc: '团队管理',                     badge: '' },
     ];
+
+    const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
     let slashSkills = [];
     let slashActiveIndex = -1;
@@ -5560,6 +5717,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
       '/status': function() {
         vscode.postMessage({ type: 'fetchStatus' });
+        return true;
+      },
+      '/effort': function(args) {
+        const effort = (args || '').toLowerCase();
+        if (effort && EFFORT_LEVELS.indexOf(effort) < 0) {
+          addLocalSystemMessage('用法：/effort <none|minimal|low|medium|high|xhigh|max>');
+          return true;
+        }
+        vscode.postMessage({ type: 'setEffort', effort: effort || null });
+        return true;
+      },
+      '/ultra': function(args) {
+        const value = (args || '').toLowerCase();
+        if (value && value !== 'true' && value !== 'false') {
+          addLocalSystemMessage('用法：/ultra [true|false]；不带参数时切换');
+          return true;
+        }
+        vscode.postMessage({
+          type: 'setUltra',
+          enabled: value ? value === 'true' : null,
+        });
         return true;
       },
       '/plan': function() {

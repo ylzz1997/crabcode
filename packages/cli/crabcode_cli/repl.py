@@ -24,7 +24,11 @@ from rich.text import Text
 from crabcode_cli.banner import print_banner
 from crabcode_core.events import CoreSession
 from crabcode_core.logging_utils import get_logger
-from crabcode_core.types.config import CrabCodeSettings, DisplaySettings
+from crabcode_core.types.config import (
+    REASONING_EFFORT_LEVELS,
+    CrabCodeSettings,
+    DisplaySettings,
+)
 from crabcode_core.types.message import Message, MessageRole
 from crabcode_core.utf8_sanitize import safe_utf8_str
 from crabcode_core.types.event import (
@@ -144,6 +148,8 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/cancel-agent": [],
     "/team": ["list", "status", "messages", "shutdown"],
     "/status": [],
+    "/effort": list(REASONING_EFFORT_LEVELS),
+    "/ultra": ["true", "false"],
     "/logs": ["-f", "--follow", "--clear", "--tail"],
     "/model": [],  # Dynamic: model names
     "/new": [],
@@ -228,6 +234,16 @@ class _CrabCodeCompleter(Completer):
                             )
                 return
 
+            if cmd in {"/effort", "/ultra"}:
+                for value in _SLASH_COMMANDS[cmd]:
+                    if value.startswith(word_before_cursor):
+                        yield Completion(
+                            value,
+                            start_position=-len(word_before_cursor),
+                            display=value,
+                        )
+                return
+
             # /logs <name> — complete log names
             if cmd == "/logs":
                 try:
@@ -296,6 +312,8 @@ class _CrabCodeCompleter(Completer):
             "/cancel-agent": "cancel an agent",
             "/team": "team management (list/status/messages/shutdown)",
             "/status": "show session status",
+            "/effort": "show/set reasoning effort",
+            "/ultra": "toggle/set ultra mode",
             "/logs": "show background logs",
             "/model": "show/switch model",
             "/new": "start new session",
@@ -2011,7 +2029,9 @@ async def _handle_command(
             "[bold]/team status <id>[/] — show team status\n"
             "[bold]/team messages <id>[/] — show team messages\n"
             "[bold]/team shutdown <id>[/] — shut down a team\n"
-            "[bold]/status[/] — show session status (model, context, compactions)\n"
+            "[bold]/status[/] — show session status (model, effort, ultra, context, compactions)\n"
+            "[bold]/effort [none|minimal|low|medium|high|xhigh|max][/] — show/set reasoning effort\n"
+            "[bold]/ultra [true|false][/] — toggle or explicitly set ultra mode\n"
             "[bold]/logs[/] — show background tool logs summary\n"
             "[bold]/logs <name>[/] — show a background log tail\n"
             "[bold]/logs --tail 200 <name>[/] — show more log lines\n"
@@ -2309,6 +2329,51 @@ async def _handle_command(
             console.print(f"[bold red]Failed to switch model to: {arg}[/]")
         return True
 
+    if cmd == "/effort":
+        if not arg:
+            current = session.reasoning_effort or "auto"
+            available = " | ".join(REASONING_EFFORT_LEVELS)
+            console.print(
+                f"Reasoning effort: [bold cyan]{current}[/]  "
+                f"[dim](set with /effort <{available}>)[/]"
+            )
+            return True
+
+        effort = arg.lower()
+        if not session.set_reasoning_effort(effort):
+            available = " | ".join(REASONING_EFFORT_LEVELS)
+            console.print(
+                f"[bold red]Invalid effort: {arg}[/]  "
+                f"[dim]Usage: /effort <{available}>[/]"
+            )
+            return True
+        console.print(
+            f"[green]✓[/] Reasoning effort set to [bold cyan]{effort}[/] "
+            "for subsequent requests."
+        )
+        return True
+
+    if cmd == "/ultra":
+        enabled: bool | None = None
+        if arg:
+            value = arg.lower()
+            if value not in {"true", "false"}:
+                console.print(
+                    f"[bold red]Invalid ultra mode value: {arg}[/]  "
+                    "[dim]Usage: /ultra [true|false][/]"
+                )
+                return True
+            enabled = value == "true"
+
+        ultra_enabled = session.set_ultra_mode(enabled)
+        state = "on" if ultra_enabled else "off"
+        style = "bold green" if ultra_enabled else "bold yellow"
+        console.print(
+            f"[green]✓[/] Ultra mode is now [{style}]{state}[/] "
+            "for subsequent requests."
+        )
+        return True
+
     if cmd == "/status":
         from crabcode_core.api.model_info import DEFAULT_CONTEXT_WINDOW, lookup_context_window
         from crabcode_core.compact.compact import estimate_token_count
@@ -2336,6 +2401,8 @@ async def _handle_command(
             return f"{n // 1000}k" if n >= 1000 else str(n)
 
         thinking = "on" if active_cfg.thinking_enabled else "off"
+        effort = session.reasoning_effort or "auto"
+        ultra = "on" if session.ultra_mode else "off"
         max_tok = active_cfg.max_tokens
 
         sid = session.session_id or "(none)"
@@ -2393,7 +2460,8 @@ async def _handle_command(
             f"[bold]📚 Context:[/] {_fmt_k(ctx_used)} / {_fmt_k(ctx_window)} ({ctx_pct}%) · [bold]💬 Messages:[/] {msg_count}",
             f"[bold]🧹 Compactions:[/] {compact_count} · [bold]Auto-compact:[/] {auto_compact}",
             f"[bold]🧵 Session:[/] {sid_short}",
-            f"[bold]⚙️  Config:[/] think={thinking} · max_tokens={max_tok} · tools={tool_display}",
+            f"[bold]⚙️  Config:[/] effort={effort} · ultra={ultra} · "
+            f"think={thinking} · max_tokens={max_tok} · tools={tool_display}",
         ]
         agents = session.list_agents()
         if agents:

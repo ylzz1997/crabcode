@@ -14,6 +14,8 @@ from crabcode_gateway.schemas import (
     GoalRequest,
     GoalState,
     ModelInfo,
+    SetReasoningEffortRequest,
+    SetUltraModeRequest,
     SkillInfo,
     SwitchModeRequest,
     SwitchModelRequest,
@@ -30,6 +32,16 @@ async def _switch_model(session: Any, name: str) -> bool:
 
 async def _switch_mode(session: Any, mode: str) -> bool:
     return bool(session.switch_mode(mode))
+
+
+async def _set_reasoning_effort(session: Any, effort: str) -> bool:
+    await session.initialize()
+    return bool(session.set_reasoning_effort(effort))
+
+
+async def _set_ultra_mode(session: Any, enabled: bool | None) -> bool:
+    await session.initialize()
+    return bool(session.set_ultra_mode(enabled))
 
 
 async def _manage_goal(session: Any, req: GoalRequest) -> dict[str, Any] | None:
@@ -161,6 +173,44 @@ async def switch_mode(req: SwitchModeRequest, request: Request):
     if not ok:
         raise HTTPException(status_code=400, detail=f"Invalid mode '{req.mode}'")
     return {"status": "ok", "mode": req.mode}
+
+
+@router.post("/config/reasoning-effort")
+async def set_reasoning_effort(req: SetReasoningEffortRequest, request: Request):
+    """Set the active session's reasoning effort for subsequent requests."""
+    session = _get_session(request, req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        ok = await run_session_operation(
+            request.app.state,
+            session,
+            lambda: _set_reasoning_effort(session, req.effort),
+        )
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Invalid reasoning effort '{req.effort}'")
+    return {"status": "ok", "reasoning_effort": session.reasoning_effort}
+
+
+@router.post("/config/ultra-mode")
+async def set_ultra_mode(req: SetUltraModeRequest, request: Request):
+    """Set ultra mode, or toggle it when ``enabled`` is omitted."""
+    session = _get_session(request, req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        enabled = await run_session_operation(
+            request.app.state,
+            session,
+            lambda: _set_ultra_mode(session, req.enabled),
+        )
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"status": "ok", "ultra_mode": enabled}
 
 
 @router.get("/config/goal", response_model=GoalState)

@@ -9,7 +9,7 @@ from copy import deepcopy
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Awaitable, Callable, Literal
+from typing import Any, AsyncGenerator, Awaitable, Callable, Literal, cast
 from xml.sax.saxutils import escape
 
 from pydantic import BaseModel
@@ -18,7 +18,11 @@ from crabcode_core.agent_manager import AgentCompletion, AgentManager, AgentSnap
 from crabcode_core.goal import Goal, GoalStatus
 from crabcode_core.logging_utils import configure_logging, get_logger
 from crabcode_core.lsp.manager import LSPManager
-from crabcode_core.types.config import CrabCodeSettings
+from crabcode_core.types.config import (
+    REASONING_EFFORT_LEVELS,
+    CrabCodeSettings,
+    ReasoningEffort,
+)
 from crabcode_core.types.event import (
     AgentStateEvent,
     ChoiceResponseEvent,
@@ -116,6 +120,7 @@ class CoreSession:
         self._api_adapter: Any = None
         self._session_storage: Any = None
         self._permission_manager: Any = None
+        self._ai_reviewer: Any = None
         self._mcp_manager: Any = None
         self._prompt_profile: Any = None
         self._initialized = False
@@ -129,6 +134,11 @@ class CoreSession:
         self._close_lock = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
         self._current_model_name: str | None = None
+        # Slash/API runtime overrides are session-scoped.  Keep them separate
+        # from project configuration so lazy initialization, model switches,
+        # and cross-project resume cannot silently discard a user's choice.
+        self._reasoning_effort_override: ReasoningEffort | None = None
+        self._ultra_mode_override: bool | None = None
         self.compact_count: int = 0
         self._agent_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
         self._agent_manager: AgentManager | None = None
@@ -405,6 +415,8 @@ class CoreSession:
         # of truthy fields, which both missed valid false/empty overrides and
         # allowed a prior project's settings to survive a cross-project resume.
         merged = self._merge_project_settings(file_settings)
+        if self._ultra_mode_override is not None:
+            merged.ultra_mode = self._ultra_mode_override
         self.settings = merged
 
         for key, val in merged.env.items():
@@ -418,6 +430,8 @@ class CoreSession:
             chosen = merged.default_model
         self._current_model_name = chosen
         active_api_config = merged.get_api_config(self._current_model_name)
+        if self._reasoning_effort_override is not None:
+            active_api_config.reasoning_effort = self._reasoning_effort_override
         self._api_adapter = create_adapter(active_api_config)
 
         if not self.tools:
@@ -1934,10 +1948,14 @@ class CoreSession:
         try:
             file_settings = ConfigManager(cwd=target_cwd).load()
             merged = self._merge_project_settings(file_settings)
+            if self._ultra_mode_override is not None:
+                merged.ultra_mode = self._ultra_mode_override
             chosen = self._current_model_name
             if chosen is None or chosen not in merged.models:
                 chosen = merged.default_model
             api_config = merged.get_api_config(chosen)
+            if self._reasoning_effort_override is not None:
+                api_config.reasoning_effort = self._reasoning_effort_override
 
             prepared.update(
                 settings=merged,
@@ -3470,6 +3488,8 @@ class CoreSession:
         from crabcode_core.api import create_adapter
 
         api_config = self.settings.models[name]
+        if self._reasoning_effort_override is not None:
+            api_config.reasoning_effort = self._reasoning_effort_override
         # Build the replacement before mutating session state.  A malformed
         # provider configuration should leave the currently usable model in
         # place instead of advertising a switch that cannot make API calls.
@@ -3511,6 +3531,44 @@ class CoreSession:
                 )
 
         return True
+
+    @property
+    def reasoning_effort(self) -> ReasoningEffort | None:
+        """Return the configured reasoning effort for the active model."""
+        return self.settings.get_api_config(
+            self._current_model_name,
+        ).reasoning_effort
+
+    def set_reasoning_effort(self, effort: str) -> bool:
+        """Override reasoning effort for subsequent requests in this session."""
+        normalized = effort.strip().lower()
+        if normalized not in REASONING_EFFORT_LEVELS:
+            return False
+
+        selected = cast(ReasoningEffort, normalized)
+        self._reasoning_effort_override = selected
+        active_config = self.settings.get_api_config(self._current_model_name)
+        active_config.reasoning_effort = selected
+
+        # Initialized adapters retain their ApiConfig object.  Most adapters
+        # share ``active_config`` directly; update a defensive copy as well so
+        # wrappers that copied it still observe the runtime override.
+        adapter_config = getattr(self._api_adapter, "config", None)
+        if adapter_config is not None and hasattr(adapter_config, "reasoning_effort"):
+            adapter_config.reasoning_effort = selected
+        return True
+
+    @property
+    def ultra_mode(self) -> bool:
+        """Return whether ultra mode is enabled for this session."""
+        return bool(self.settings.ultra_mode)
+
+    def set_ultra_mode(self, enabled: bool | None = None) -> bool:
+        """Set ultra mode, or toggle it when ``enabled`` is omitted."""
+        next_value = not self.settings.ultra_mode if enabled is None else enabled
+        self._ultra_mode_override = next_value
+        self.settings.ultra_mode = next_value
+        return next_value
 
     def _sync_client_permission_mode(self) -> None:
         """Apply VS Code / client footer permission override when not in plan mode."""
