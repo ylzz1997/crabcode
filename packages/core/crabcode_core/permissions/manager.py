@@ -123,6 +123,10 @@ class PermissionManager:
         permission_key: str | None = None,
     ) -> bool:
         """Return whether an explicit allow rule matches this tool call."""
+        # Plan mode is a hard read-only boundary.  Persistent allow rules and
+        # session-scoped "always allow" decisions must never override it.
+        if self.mode == PermissionMode.PLAN and not tool.is_read_only:
+            return False
         key = permission_key or tool.get_permission_key(tool_input)
         if key in self._runtime_allow_keys:
             return True

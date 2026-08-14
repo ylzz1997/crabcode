@@ -274,6 +274,7 @@ interface SessionState {
   isBusy: boolean;
   contextUsage: ContextUsageStatus | null;
   batchDenied: boolean;
+  mode: "agent" | "plan";
 }
 
 function createEmptySessionState(): SessionState {
@@ -289,6 +290,7 @@ function createEmptySessionState(): SessionState {
     isBusy: false,
     contextUsage: null,
     batchDenied: false,
+    mode: "agent",
   };
 }
 
@@ -793,6 +795,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async switchMode(mode: "agent" | "plan"): Promise<void> {
+    const sessionId = this.displayedSessionId || this.connection.sessionId;
+    if (!sessionId) {
+      return;
+    }
+    const state = this.getSessionState(sessionId);
     const cfg = vscode.workspace.getConfiguration("crabcode");
     const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
     const password = cfg.get<string>("password", "");
@@ -803,14 +810,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       url.search = "";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (password) headers.Authorization = `Bearer ${password}`;
-      await fetch(url.toString(), {
+      const response = await fetch(url.toString(), {
         method: "POST",
         headers,
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, session_id: sessionId }),
       });
+      if (!response.ok) {
+        throw new Error(`switch mode failed: ${response.status}`);
+      }
+      state.mode = mode;
       this.postMessage({ type: "modeChange", mode });
     } catch {
-      // ignore
+      // The webview updates optimistically when the menu is clicked.  Roll it
+      // back to the last confirmed per-session mode if the gateway rejects the
+      // request or is unavailable.
+      this.postMessage({ type: "modeChange", mode: state.mode });
+      this.addSessionSystemMessage(sessionId, "CrabCode：切换模式失败，会话模式未改变。");
     }
   }
 
@@ -896,7 +911,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private async resumeSession(sessionId: string): Promise<void> {
     // Immediately update displayed session before processing
-    const previousSessionId = this.displayedSessionId;
     this.displayedSessionId = sessionId;
 
     // If we already have cached state for this session, render it immediately
@@ -905,11 +919,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.postMessage({ type: "history", items: cached.history });
       this.postMessage({ type: "busyState", busy: cached.isBusy });
       this.postMessage({ type: "contextUsage", usage: cached.contextUsage ?? null });
+      this.postMessage({ type: "modeChange", mode: cached.mode });
     } else {
       // No cached state — clear display and request from server
       this.postMessage({ type: "history", items: [] });
       this.postMessage({ type: "busyState", busy: this.busySessions.has(sessionId) });
       this.postMessage({ type: "contextUsage", usage: null });
+      this.postMessage({ type: "modeChange", mode: "agent" });
+    }
+    // Rendering cached state does not make it the WebSocket's active session.
+    // Always synchronize server ownership when the selected conversation is
+    // different, otherwise permission and plan commands can target the old one.
+    if (this.connection.sessionId !== sessionId) {
       this.connection.sendRaw(JSON.stringify({ type: "resume_session", session_id: sessionId }));
     }
 
@@ -1135,13 +1156,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async fetchPlanStatus(): Promise<void> {
+    const sessionId = this.displayedSessionId || this.connection.sessionId;
+    if (!sessionId) return;
     try {
-      const response = await fetch(this._gatewayUrl("/config/plan-status"), { headers: this._gatewayHeaders() });
+      const url = new URL(this._gatewayUrl("/config/plan-status"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) return;
       const data = (await response.json()) as { mode: string; in_plan_mode: boolean; plan: unknown };
+      const mode = data.mode === "plan" ? "plan" : "agent";
+      this.getSessionState(sessionId).mode = mode;
+      this.postMessage({ type: "modeChange", mode });
       const lines = [`**模式：** ${data.mode}`, `**计划模式：** ${data.in_plan_mode ? "是" : "否"}`];
       if (data.plan) lines.push("", "**当前计划：**", "```json", JSON.stringify(data.plan, null, 2), "```");
-      this.addMessage("system", lines.join("\n"));
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch { /* ignore */ }
   }
 
@@ -1471,7 +1499,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "mode_change":
-        this.postMessage({ type: "modeChange", mode: (payload as { mode: string }).mode });
+        this.currentState.mode = (payload as { mode: string }).mode === "plan" ? "plan" : "agent";
+        this.postMessage({ type: "modeChange", mode: this.currentState.mode });
         break;
       case "plan_ready":
         this.handlePlanReadyOnState(this.currentState, (payload as PlanReadyPayload).plan, true);
@@ -1515,6 +1544,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       case "plan_ready":
         this.handlePlanReadyOnState(state, (payload as PlanReadyPayload).plan, updateWebview);
+        break;
+      case "mode_change":
+        state.mode = (payload as { mode: string }).mode === "plan" ? "plan" : "agent";
+        if (updateWebview) this.postMessage({ type: "modeChange", mode: state.mode });
         break;
       case "peer_message": {
         const peer = payload as PeerMessagePayload;
@@ -1813,6 +1846,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private handlePlanReadyOnState(state: SessionState, plan: Record<string, unknown>, updateWebview: boolean): void {
     this.finalizeThinkingOnState(state, updateWebview);
+    state.mode = "plan";
+    if (updateWebview) this.postMessage({ type: "modeChange", mode: "plan" });
     const card: PlanCard = {
       id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       plan,
@@ -1829,10 +1864,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     card.status = action === "execute" ? "executing" : action === "revise" ? "revising" : "cancelled";
-    this.connection.sendPlanAction(action, card.plan);
+    this.connection.sendPlanAction(
+      action,
+      card.plan,
+      this.displayedSessionId || this.connection.sessionId || undefined,
+    );
     this.postMessage({ type: "planResolved", card });
-    if (action === "revise") this.postMessage({ type: "modeChange", mode: "plan" });
-    if (action === "execute") this.postMessage({ type: "modeChange", mode: "agent" });
   }
 
   private respondToPermission(id: string, allowed: boolean, alwaysAllow = false, feedback?: string): void {

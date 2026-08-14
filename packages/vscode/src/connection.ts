@@ -207,8 +207,16 @@ export class CrabCodeConnection implements vscode.Disposable {
     this.sendCommand(cmd);
   }
 
-  sendPlanAction(action: "execute" | "revise" | "cancel", plan?: Record<string, unknown>): void {
-    const cmd = buildPlanActionCommand(action, plan);
+  sendPlanAction(
+    action: "execute" | "revise" | "cancel",
+    plan?: Record<string, unknown>,
+    sessionId?: string,
+  ): void {
+    const cmd = buildPlanActionCommand(
+      action,
+      plan,
+      sessionId ?? this._sessionId ?? undefined,
+    );
     this.sendCommand(cmd);
   }
 

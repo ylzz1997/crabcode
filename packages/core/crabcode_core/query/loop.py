@@ -196,6 +196,19 @@ class QueryParams:
     drain_peer_messages: Callable[[], list[str]] | None = None
 
 
+def _plan_mode_is_active(params: QueryParams) -> bool:
+    """Return whether this turn must enforce the read-only plan boundary.
+
+    ``agent_mode`` is the immutable mode captured when the turn starts.  The
+    live session check additionally closes the race where a client switches an
+    already-running agent turn into plan mode before its next tool call.
+    """
+    if params.agent_mode == "plan":
+        return True
+    session = params.tool_context.session
+    return getattr(session, "agent_mode", None) == "plan"
+
+
 def _append_system_context(
     system_prompt: list[str],
     context: dict[str, str],
@@ -834,10 +847,11 @@ async def query_loop(
         )
         messages_for_api = _prepend_user_context(messages, params.user_context)
 
+        plan_mode_active = _plan_mode_is_active(params)
         tool_schemas = [
             t.to_api_schema()
             for t in params.tools
-            if t.is_enabled and (params.agent_mode != "plan" or t.is_read_only)
+            if t.is_enabled and (not plan_mode_active or t.is_read_only)
         ]
 
         max_tokens = effective_max_tokens
@@ -1339,6 +1353,33 @@ async def query_loop(
         for block in tool_use_blocks:
             tool = _find_tool(params.tools, block.name)
 
+            # Tool-schema filtering is advisory: some providers can replay or
+            # synthesize calls to tools that were not included in this request.
+            # Enforce plan mode again at the final execution boundary, before
+            # permission plumbing or remembered allow rules can approve it.
+            if (
+                tool is not None
+                and _plan_mode_is_active(params)
+                and not tool.is_read_only
+            ):
+                reason = "Plan mode: write operations are not allowed"
+                msg = create_tool_result_message(
+                    tool_use_id=block.id,
+                    result=f"Permission denied: {reason}",
+                    is_error=True,
+                    source_tool_assistant_uuid=assistant_msg.uuid,
+                )
+                messages.append(msg)
+                params.messages[:] = messages
+                yield ToolResultEvent(
+                    tool_use_id=block.id,
+                    tool_name=block.name,
+                    result=f"Permission denied: {reason}",
+                    is_error=True,
+                    tool_input=block.input,
+                )
+                continue
+
             if not params.permission_manager or not params.permission_queue:
                 approved_blocks.append(block)
                 continue
@@ -1384,7 +1425,10 @@ async def query_loop(
                 effective_block.input,
                 permission_key=permission_key,
             )
-            if explicit_allow:
+            if (
+                explicit_allow
+                and merged_perm.behavior != PermissionBehavior.DENY
+            ):
                 approved_blocks.append(effective_block)
                 continue
 

@@ -458,7 +458,12 @@ class CoreSession:
             settings=merged,
             default_api_config=active_api_config,
         )
-        self._sync_client_permission_mode()
+        if self._agent_mode == "plan":
+            # switch_mode() may have been called before lazy initialization.
+            # Reconcile the newly-created permission manager with that state.
+            self.switch_mode("plan")
+        else:
+            self._sync_client_permission_mode()
         from crabcode_core.hooks.manager import HookManager
 
         self._hook_manager = HookManager(merged.hooks)
@@ -3643,6 +3648,14 @@ class CoreSession:
         if mode not in ("agent", "plan"):
             return False
         if mode == self._agent_mode:
+            # Keep an idempotent plan request useful for repairing state after
+            # lazy initialization or a project-resource rebind.
+            if mode == "plan" and self._permission_manager:
+                from crabcode_core.permissions.manager import PermissionMode
+
+                if self._permission_manager.mode != PermissionMode.PLAN:
+                    self._saved_permission_mode = self._permission_manager.mode
+                    self._permission_manager.mode = PermissionMode.PLAN
             return True
         self._agent_mode = mode
         if self._permission_manager:

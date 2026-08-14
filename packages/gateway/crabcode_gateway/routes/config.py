@@ -343,7 +343,7 @@ async def plan_status(request: Request):
         session = _get_session(request, request.query_params.get("session_id"))
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        mode = getattr(session, "mode", "agent")
+        mode = getattr(session, "agent_mode", getattr(session, "mode", "agent"))
         plan = getattr(session, "current_plan", None)
         if isinstance(plan, dict):
             plan = dict(plan)

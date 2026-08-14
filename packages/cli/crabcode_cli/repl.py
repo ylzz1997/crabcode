@@ -1818,6 +1818,10 @@ async def run_repl(
                             border_style="blue",
                             expand=False,
                         ))
+                        # Prompt only for a plan produced by this turn.  The
+                        # session deliberately remains read-only until the
+                        # user confirms execution below.
+                        plan_pending = True
 
                     elif isinstance(event, TurnCompleteEvent):
                         await _stop_spinner_with_thinking()
@@ -1826,8 +1830,6 @@ async def run_repl(
                             sys.stdout.flush()
                             streamed_text = ""
                         _render_context_usage(event)
-                        if getattr(session, '_current_plan', None) and session.agent_mode == "agent":
-                            plan_pending = True
 
             except _REPL_INTERRUPT_EXCS:
                 await spinner.stop()

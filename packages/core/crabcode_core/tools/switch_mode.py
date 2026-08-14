@@ -118,6 +118,13 @@ class SwitchModeTool(Tool):
                 f"You are already in {target} mode. "
                 f"Switching to the same mode is unnecessary — continue with your current work."
             )
+        if self.current_mode == "plan" and target == "agent":
+            plan_data = tool_input.get("plan")
+            if not isinstance(plan_data, dict) or not plan_data:
+                return (
+                    "A non-empty structured plan is required when submitting "
+                    "a plan-mode result for review"
+                )
         return None
 
     async def call(
@@ -128,6 +135,21 @@ class SwitchModeTool(Tool):
         target_mode = tool_input["target_mode"]
         explanation = tool_input.get("explanation", "")
         plan_data = tool_input.get("plan")
+
+        # This is a security boundary as well as input validation.  A model can
+        # call tools directly even when a provider does not enforce every JSON
+        # schema constraint, so never let a bare plan -> agent request emit a
+        # mode-change event.
+        if self.current_mode == "plan" and target_mode == "agent" and (
+            not isinstance(plan_data, dict) or not plan_data
+        ):
+            return ToolResult(
+                result_for_model=(
+                    "Cannot leave plan mode without submitting a non-empty "
+                    "structured plan for user review."
+                ),
+                is_error=True,
+            )
 
         if target_mode == "agent" and plan_data:
             from crabcode_core.plan.types import ExecutionPlan
@@ -156,7 +178,21 @@ class SwitchModeTool(Tool):
                     PlanReadyEvent(plan=plan.to_dict())
                 )
 
-        if context.tool_event_queue:
+        # A plan submission is not approval to execute it.  Keep the session in
+        # plan mode until the interface receives an explicit user confirmation.
+        # Agent -> plan requests still take effect immediately.
+        submitting_plan = (
+            self.current_mode == "plan"
+            and target_mode == "agent"
+            and isinstance(plan_data, dict)
+        )
+        if (
+            not submitting_plan
+            and context.session
+            and hasattr(context.session, "switch_mode")
+        ):
+            context.session.switch_mode(target_mode)
+        if context.tool_event_queue and not submitting_plan:
             await context.tool_event_queue.put(
                 ModeChangeEvent(mode=target_mode, reason=explanation)
             )
@@ -164,7 +200,8 @@ class SwitchModeTool(Tool):
         if target_mode == "agent" and plan_data:
             return ToolResult(
                 result_for_model=(
-                    f"Mode switch to '{target_mode}' requested with execution plan. "
+                    "Execution plan submitted for user review; the session remains "
+                    "in read-only plan mode. "
                     f"The plan has {len(plan_data.get('steps', []))} steps. "
                     f"Return control to the interface now so the user can choose whether to "
                     f"execute, revise, or cancel it. Do not call more tools in this turn."

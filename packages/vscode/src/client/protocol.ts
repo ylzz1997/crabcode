@@ -68,6 +68,7 @@ export interface SetPermissionModeCommand {
 export interface PlanActionCommand {
   type: "plan_action";
   action: "execute" | "revise" | "cancel";
+  session_id: string | null;
   plan?: Record<string, unknown>;
 }
 
@@ -175,8 +176,13 @@ export function buildSetPermissionModeCommand(
 export function buildPlanActionCommand(
   action: PlanActionCommand["action"],
   plan?: Record<string, unknown>,
+  sessionId?: string,
 ): PlanActionCommand {
-  const cmd: PlanActionCommand = { type: "plan_action", action };
+  const cmd: PlanActionCommand = {
+    type: "plan_action",
+    action,
+    session_id: sessionId ?? null,
+  };
   if (plan) cmd.plan = plan;
   return cmd;
 }
