@@ -84,11 +84,11 @@ class BridgePolicy(str, Enum):
 class TeamConfig(BaseModel):
     """Configuration for a team."""
 
-    name: str
-    max_teammates: int = 8
+    name: str = Field(min_length=1)
+    max_teammates: int = Field(default=8, gt=0)
     inbox_dir: str | None = None  # override default inbox storage path
-    backpressure_queue_size: int = 100
-    max_message_size_bytes: int = 10_000  # 10KB per message
+    backpressure_queue_size: int = Field(default=100, gt=0)
+    max_message_size_bytes: int = Field(default=10_000, gt=0)  # 10KB per message
     bridge_policy: BridgePolicy = BridgePolicy.DENY
 
 

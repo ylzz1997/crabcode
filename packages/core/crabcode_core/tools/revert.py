@@ -68,7 +68,7 @@ class RevertTool(Tool):
                 )
             checkpoint_id = cps[0]["id"]
 
-        result = session.revert(checkpoint_id)
+        result = session.revert(checkpoint_id, messages=context.messages)
 
         if not result.get("success"):
             return ToolResult(

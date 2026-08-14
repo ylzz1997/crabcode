@@ -10,8 +10,12 @@ upgrade requests with 403 by design.
 from __future__ import annotations
 
 import json
+import base64
+import binascii
+import hmac
 import time
 from typing import Any
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +34,62 @@ def _is_websocket(scope: Scope) -> bool:
     return scope.get("type") == "websocket"
 
 
+def _scope_header(scope: Scope, name: str) -> str:
+    """Return the first value for an HTTP/WS header in an ASGI scope."""
+    wanted = name.lower().encode("latin-1")
+    for key, value in scope.get("headers", []):
+        if key.lower() == wanted:
+            try:
+                return value.decode("latin-1")
+            except (AttributeError, UnicodeDecodeError):
+                return ""
+    return ""
+
+
+def _scope_query(scope: Scope, name: str) -> str | None:
+    """Read one query parameter without constructing a Request/WebSocket."""
+    raw = scope.get("query_string", b"")
+    if isinstance(raw, bytes):
+        raw = raw.decode("latin-1")
+    values = parse_qs(raw, keep_blank_values=True).get(name)
+    return values[0] if values else None
+
+
+def is_authorized(scope: Scope, *, username: str, password: str | None) -> bool:
+    """Validate gateway credentials for an HTTP or WebSocket ASGI scope.
+
+    The gateway historically accepted a Basic password, a Bearer token, and
+    the ``auth_token`` query parameter.  Keep all three forms so existing
+    clients continue to work, while applying the same policy to WebSockets.
+    """
+    if not password:
+        return True
+
+    query_token = _scope_query(scope, "auth_token")
+    if query_token is not None and hmac.compare_digest(query_token, password):
+        return True
+
+    auth_header = _scope_header(scope, "authorization")
+    scheme, separator, credentials = auth_header.partition(" ")
+    if not separator:
+        return False
+
+    if scheme.lower() == "bearer":
+        return hmac.compare_digest(credentials, password)
+
+    if scheme.lower() != "basic":
+        return False
+
+    try:
+        decoded = base64.b64decode(credentials, validate=True).decode("utf-8")
+        user, supplied_password = decoded.split(":", 1)
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        return False
+    return hmac.compare_digest(user, username) and hmac.compare_digest(
+        supplied_password, password
+    )
+
+
 # ── Auth middleware ──────────────────────────────────────────────
 
 
@@ -37,8 +97,8 @@ class AuthMiddleware:
     """Basic auth or bearer token authentication.
 
     Skipped if no password is configured.
-    WebSocket requests are always passed through (auth is checked
-    inside the WebSocket handler if needed).
+    The same credentials are required for WebSocket upgrades.  Rejecting
+    before ``websocket.accept`` avoids exposing an unauthenticated stream.
     """
 
     def __init__(self, app: ASGIApp, username: str = "crabcode", password: str | None = None) -> None:
@@ -48,6 +108,17 @@ class AuthMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if _is_websocket(scope):
+            if self.password and not is_authorized(
+                scope,
+                username=self.username,
+                password=self.password,
+            ):
+                await send({
+                    "type": "websocket.close",
+                    "code": 1008,
+                    "reason": "Unauthorized",
+                })
+                return
             await self.app(scope, receive, send)
             return
 
@@ -67,35 +138,9 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Check auth_token query param → translate to Basic header
-        auth_token = request.query_params.get("auth_token")
-        if auth_token:
-            import base64
-            token = base64.b64encode(f"{self.username}:{auth_token}".encode()).decode()
-            scope.setdefault("headers", [])
-            headers = list(scope["headers"])
-            headers.append((b"authorization", f"Basic {token}".encode()))
-            scope["headers"] = headers
-
-        auth_header = request.headers.get("authorization", "")
-
-        # Support Bearer token (treat token value as the password)
-        if auth_header.startswith("Bearer "):
-            token_value = auth_header[7:]
-            if token_value == self.password:
-                await self.app(scope, receive, send)
-                return
-
-        if auth_header.startswith("Basic "):
-            import base64
-            try:
-                decoded = base64.b64decode(auth_header[6:]).decode()
-                user, pw = decoded.split(":", 1)
-                if user == self.username and pw == self.password:
-                    await self.app(scope, receive, send)
-                    return
-            except Exception:
-                pass
+        if is_authorized(scope, username=self.username, password=self.password):
+            await self.app(scope, receive, send)
+            return
 
         # Not authenticated
         response = Response(

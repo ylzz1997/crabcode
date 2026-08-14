@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from crabcode_core.team.manager import TeamManager
 from crabcode_core.team.models import TeammateRole
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
@@ -47,7 +46,7 @@ class TeamCreateTool(Tool):
                 data={"team_id": team_id},
                 result_for_model=f"Team created: {team_id}",
             )
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
             return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
 
 
@@ -104,7 +103,7 @@ class TeamSpawnTool(Tool):
                 data={"agent_id": agent_id},
                 result_for_model=f"Teammate spawned: {agent_id}",
             )
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
             return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
 
 
@@ -288,7 +287,10 @@ class TeamTaskCompleteTool(Tool):
         if not manager:
             return ToolResult(result_for_model="Error: team manager unavailable", is_error=True)
         completed = await manager.complete_task(
-            tool_input["team_id"], tool_input["task_id"], tool_input.get("result", "")
+            tool_input["team_id"],
+            tool_input["task_id"],
+            tool_input.get("result", ""),
+            context.agent_id or "",
         )
         if not completed:
             return ToolResult(

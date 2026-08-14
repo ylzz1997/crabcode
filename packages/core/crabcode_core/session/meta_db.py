@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +12,33 @@ from crabcode_core.session.storage import get_config_home
 
 def _db_path() -> Path:
     return get_config_home() / "sessions.db"
+
+
+def _coerce_epoch(value: Any, fallback: int) -> int:
+    """Normalize JSONL ISO timestamps and legacy SQLite values to epoch seconds."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, str) and value:
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return int(parsed.timestamp())
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return fallback
+
+
+def _persist_archive_marker(session_id: str, cwd: str) -> None:
+    """Write the JSONL tombstone before SQLite archive state can disappear."""
+    if not cwd:
+        return
+    from crabcode_core.session.storage import SessionStorage
+
+    SessionStorage(cwd, session_id).persist_archive_marker()
 
 
 _SCHEMA = """\
@@ -35,6 +61,17 @@ CREATE INDEX IF NOT EXISTS idx_session_meta_updated
     ON session_meta(updated_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_session_meta_cwd
     ON session_meta(cwd, updated_at DESC);
+CREATE TABLE IF NOT EXISTS session_tombstones (
+    id TEXT PRIMARY KEY,
+    cwd TEXT NOT NULL DEFAULT '',
+    archived_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS prevent_tombstoned_session_insert
+    BEFORE INSERT ON session_meta
+    WHEN EXISTS (SELECT 1 FROM session_tombstones WHERE id = NEW.id)
+    BEGIN
+        SELECT RAISE(IGNORE);
+    END;
 """
 
 
@@ -66,6 +103,22 @@ def _get_conn(db_path: Path) -> sqlite3.Connection:
             conn.commit()
         except sqlite3.OperationalError:
             pass  # column/table already exists
+    now = int(datetime.now(timezone.utc).timestamp())
+    legacy_rows = conn.execute(
+        "SELECT id, created_at FROM session_meta WHERE typeof(created_at) != 'integer'"
+    ).fetchall()
+    for session_id, created_at in legacy_rows:
+        conn.execute(
+            "UPDATE session_meta SET created_at = ? WHERE id = ?",
+            (_coerce_epoch(created_at, now), session_id),
+        )
+    if legacy_rows:
+        conn.commit()
+    conn.execute(
+        "INSERT OR IGNORE INTO session_tombstones (id, cwd, archived_at) "
+        "SELECT id, cwd, updated_at FROM session_meta WHERE is_archived = 1"
+    )
+    conn.commit()
     return conn
 
 
@@ -90,15 +143,40 @@ class SessionMetaStore:
         """Insert or update a session metadata row."""
         conn = self._conn_or_create()
         now = int(datetime.now(timezone.utc).timestamp())
-        meta.setdefault("created_at", now)
+        meta["created_at"] = _coerce_epoch(meta.get("created_at"), now)
         meta["updated_at"] = now
 
+        # ``summary`` was added after the original upsert statement.  Keep an
+        # explicit flag so the conflict update can preserve an existing value
+        # atomically when older callers omit the field.
+        summary = meta.get("summary")
+        summary_provided = summary is not None
+
         conn.execute(
-            """INSERT OR REPLACE INTO session_meta
+            """INSERT INTO session_meta
                (id, title, cwd, model, provider, first_user_message,
                 tokens_used, git_branch, git_sha,
-                created_at, updated_at, is_archived, message_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                created_at, updated_at, is_archived, message_count, summary)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   title = excluded.title,
+                   cwd = excluded.cwd,
+                   model = excluded.model,
+                   provider = excluded.provider,
+                   first_user_message = excluded.first_user_message,
+                   tokens_used = excluded.tokens_used,
+                   git_branch = excluded.git_branch,
+                   git_sha = excluded.git_sha,
+                   created_at = session_meta.created_at,
+                   updated_at = excluded.updated_at,
+                   -- Archiving is a terminal metadata transition. A late
+                   -- session write must not make the row visible again.
+                   is_archived = MAX(session_meta.is_archived, excluded.is_archived),
+                   message_count = excluded.message_count,
+                   summary = CASE
+                       WHEN ? THEN excluded.summary
+                       ELSE session_meta.summary
+                   END""",
             (
                 meta["id"],
                 meta.get("title", ""),
@@ -113,6 +191,8 @@ class SessionMetaStore:
                 meta["updated_at"],
                 1 if meta.get("is_archived") else 0,
                 meta.get("message_count", 0),
+                summary or "",
+                1 if summary_provided else 0,
             ),
         )
         conn.commit()
@@ -134,6 +214,21 @@ class SessionMetaStore:
             (title, int(datetime.now(timezone.utc).timestamp()), session_id),
         )
         conn.commit()
+
+    def update_model(self, session_id: str, model: str, provider: str) -> bool:
+        """Update only model fields, preserving accumulated session stats."""
+        conn = self._conn_or_create()
+        cur = conn.execute(
+            "UPDATE session_meta SET model = ?, provider = ?, updated_at = ? WHERE id = ?",
+            (
+                model,
+                provider,
+                int(datetime.now(timezone.utc).timestamp()),
+                session_id,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
     def update_summary(self, session_id: str, summary: str) -> None:
         """Update the summary for a session."""
@@ -175,6 +270,24 @@ class SessionMetaStore:
         cols = [d[0] for d in conn.execute("SELECT * FROM session_meta LIMIT 0").description]
         return [dict(zip(cols, r)) for r in rows]
 
+    def has_any_by_cwd(self, cwd: str) -> bool:
+        """Return whether the index knows this project, including archived rows."""
+        conn = self._conn_or_create()
+        row = conn.execute(
+            "SELECT 1 FROM session_meta WHERE cwd = ? LIMIT 1",
+            (cwd,),
+        ).fetchone()
+        return row is not None
+
+    def list_states_by_cwd(self, cwd: str) -> dict[str, bool]:
+        """Return every indexed session ID mapped to its archived state."""
+        conn = self._conn_or_create()
+        rows = conn.execute(
+            "SELECT id, is_archived FROM session_meta WHERE cwd = ?",
+            (cwd,),
+        ).fetchall()
+        return {str(session_id): bool(is_archived) for session_id, is_archived in rows}
+
     def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         """List all recent sessions across all projects."""
         conn = self._conn_or_create()
@@ -208,9 +321,21 @@ class SessionMetaStore:
     def archive(self, session_id: str) -> None:
         """Mark a session as archived."""
         conn = self._conn_or_create()
+        row = conn.execute(
+            "SELECT cwd FROM session_meta WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return
+        _persist_archive_marker(session_id, str(row[0] or ""))
+        now = int(datetime.now(timezone.utc).timestamp())
         conn.execute(
             "UPDATE session_meta SET is_archived = 1, updated_at = ? WHERE id = ?",
-            (int(datetime.now(timezone.utc).timestamp()), session_id),
+            (now, session_id),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO session_tombstones (id, cwd, archived_at) VALUES (?, ?, ?)",
+            (session_id, str(row[0] or ""), now),
         )
         conn.commit()
 
@@ -218,24 +343,68 @@ class SessionMetaStore:
         """Archive sessions not updated in the last *days* days. Returns count archived."""
         conn = self._conn_or_create()
         cutoff = int(datetime.now(timezone.utc).timestamp()) - days * 86400
-        cur = conn.execute(
-            "UPDATE session_meta SET is_archived = 1 "
+        candidates = conn.execute(
+            "SELECT id, cwd FROM session_meta "
             "WHERE is_archived = 0 AND updated_at < ?",
             (cutoff,),
-        )
+        ).fetchall()
+        archived_ids: list[str] = []
+        for session_id, cwd in candidates:
+            try:
+                _persist_archive_marker(str(session_id), str(cwd or ""))
+            except Exception:
+                # Keep the index row active when the durable tombstone cannot
+                # be committed; a later prune can retry safely.
+                continue
+            archived_ids.append(str(session_id))
+        now = int(datetime.now(timezone.utc).timestamp())
+        if archived_ids:
+            conn.executemany(
+                "UPDATE session_meta SET is_archived = 1, updated_at = ? WHERE id = ?",
+                ((now, session_id) for session_id in archived_ids),
+            )
+            cwd_by_id = {str(session_id): str(cwd or "") for session_id, cwd in candidates}
+            conn.executemany(
+                "INSERT OR IGNORE INTO session_tombstones (id, cwd, archived_at) "
+                "VALUES (?, ?, ?)",
+                (
+                    (session_id, cwd_by_id.get(session_id, ""), now)
+                    for session_id in archived_ids
+                ),
+            )
         conn.commit()
-        return cur.rowcount
+        return len(archived_ids)
 
-    def purge_archived(self) -> list[dict[str, Any]]:
-        """Delete archived rows from SQLite. Returns list of purged sessions (id, cwd)."""
+    def purge_archived(self, *, delete_rows: bool = True) -> list[dict[str, Any]]:
+        """Prepare archived rows for purge and optionally delete their index rows."""
         conn = self._conn_or_create()
         rows = conn.execute(
             "SELECT id, cwd FROM session_meta WHERE is_archived = 1"
         ).fetchall()
-        if rows:
-            conn.execute("DELETE FROM session_meta WHERE is_archived = 1")
+        purgeable: list[tuple[str, str]] = []
+        for session_id, cwd in rows:
+            try:
+                # Upgrade old archived rows before removing their SQLite
+                # tombstone. A failed transcript unlink then remains harmless.
+                _persist_archive_marker(str(session_id), str(cwd or ""))
+            except Exception:
+                continue
+            purgeable.append((str(session_id), str(cwd or "")))
+        if purgeable:
+            now = int(datetime.now(timezone.utc).timestamp())
+            conn.executemany(
+                "INSERT OR IGNORE INTO session_tombstones (id, cwd, archived_at) "
+                "VALUES (?, ?, ?)",
+                ((session_id, cwd, now) for session_id, cwd in purgeable),
+            )
+        if purgeable and delete_rows:
+            conn.executemany(
+                "DELETE FROM session_meta WHERE id = ?",
+                ((session_id,) for session_id, _cwd in purgeable),
+            )
+        if purgeable:
             conn.commit()
-        return [{"id": r[0], "cwd": r[1]} for r in rows]
+        return [{"id": session_id, "cwd": cwd} for session_id, cwd in purgeable]
 
     # --- Checkpoints ---
 

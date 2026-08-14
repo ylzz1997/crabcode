@@ -23,6 +23,7 @@ class SendMessageRequest(BaseModel):
     text: str
     max_turns: int = 0
     session_id: str | None = None
+    operation_id: str | None = Field(default=None, min_length=1)
     images: list[ImageAttachment] = Field(default_factory=list)
 
 
@@ -41,6 +42,7 @@ class CompactRequest(BaseModel):
 
 class InterruptRequest(BaseModel):
     session_id: str
+    operation_id: str | None = Field(default=None, min_length=1)
 
 
 class PermissionResponseRequest(BaseModel):
@@ -49,6 +51,8 @@ class PermissionResponseRequest(BaseModel):
     always_allow: bool = False
     agent_id: str | None = None
     feedback: str | None = None
+    # Optional for multi-session clients; omitted keeps default-session behavior.
+    session_id: str | None = None
 
 
 class ChoiceResponseRequest(BaseModel):
@@ -56,6 +60,8 @@ class ChoiceResponseRequest(BaseModel):
     selected: list[str]
     cancelled: bool = False
     agent_id: str | None = None
+    # Optional for multi-session clients; omitted keeps default-session behavior.
+    session_id: str | None = None
 
 
 class SpawnAgentRequest(BaseModel):
@@ -64,24 +70,29 @@ class SpawnAgentRequest(BaseModel):
     name: str | None = None
     model_profile: str | None = None
     callback: bool = False
+    session_id: str | None = None
 
 
 class AgentInputRequest(BaseModel):
     prompt: str
     interrupt: bool = False
+    session_id: str | None = None
 
 
 class WaitAgentRequest(BaseModel):
     agent_id: str | list[str]
     timeout_ms: int | None = None
+    session_id: str | None = None
 
 
 class SwitchModelRequest(BaseModel):
     name: str
+    session_id: str | None = None
 
 
 class SwitchModeRequest(BaseModel):
     mode: Literal["agent", "plan"]
+    session_id: str | None = None
 
 
 class ContextPushRequest(BaseModel):
@@ -264,6 +275,7 @@ class ErrorPayload(BaseModel):
     message: str
     recoverable: bool = True
     error_type: str = ""
+    agent_id: str | None = None
 
 
 class TurnCompletePayload(BaseModel):
@@ -497,6 +509,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             message=event.message,
             recoverable=event.recoverable,
             error_type=event.error_type,
+            agent_id=event.agent_id,
         )
     if isinstance(event, TurnCompleteEvent):
         return TurnCompletePayload(

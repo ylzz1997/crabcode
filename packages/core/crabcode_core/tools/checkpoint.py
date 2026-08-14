@@ -49,7 +49,7 @@ class CheckpointTool(Tool):
             )
 
         label = tool_input.get("label", "")
-        cp_id = session.checkpoint(label=label)
+        cp_id = session.checkpoint(label=label, messages=context.messages)
 
         if not cp_id:
             return ToolResult(

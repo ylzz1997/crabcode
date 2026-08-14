@@ -30,6 +30,7 @@ from crabcode_core.types.event import (
     CoreEvent,
     ErrorEvent,
     PermissionRequestEvent,
+    PermissionResponseEvent,
     StreamModeEvent,
     StreamTextEvent,
     ThinkingEvent,
@@ -440,45 +441,62 @@ async def _run_tools(
         """
         task: asyncio.Task[tuple[list[Message], ToolResultEvent]] = asyncio.create_task(coro)
         queue = context.tool_event_queue
+        get_event: asyncio.Task[Any] | None = None
 
-        if not queue:
-            result = await task
-            yield result
-            return
+        try:
+            if not queue:
+                result = await task
+                yield result
+                return
 
-        while not task.done():
-            # Wait for either the tool to finish or an event to arrive
-            get_event = asyncio.ensure_future(queue.get())
-            done, _ = await asyncio.wait(
-                {task, get_event},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            while not task.done():
+                # Wait for either the tool to finish or an event to arrive.
+                # Keep a reference so an outer cancellation can clean up the
+                # queue waiter as well as the tool task.
+                get_event = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait(
+                    {task, get_event},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
 
-            if get_event in done:
-                yield get_event.result()
-            else:
-                get_event.cancel()
-                try:
-                    await get_event
-                except asyncio.CancelledError:
-                    pass
+                if get_event in done:
+                    yield get_event.result()
+                else:
+                    get_event.cancel()
+                    await asyncio.gather(get_event, return_exceptions=True)
+                get_event = None
 
-            # Drain any remaining events before checking task
+                # Drain any remaining events before checking task.
+                while True:
+                    try:
+                        yield queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+            result = task.result()
+            # Final drain.
             while True:
                 try:
                     yield queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
 
-        result = task.result()
-        # Final drain
-        while True:
-            try:
-                yield queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-        yield result
+            yield result
+        finally:
+            # Query/session cancellation must not leave a tool running against
+            # resources that are about to be closed, nor a queue waiter holding
+            # a reference to the session.  Await both tasks so their exceptions
+            # are consumed and no "Task exception was never retrieved" warning
+            # is emitted.
+            pending: list[asyncio.Task[Any]] = []
+            if get_event is not None and not get_event.done():
+                get_event.cancel()
+                pending.append(get_event)
+            if not task.done():
+                task.cancel()
+                pending.append(task)
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
     # Safe tools run in parallel (they shouldn't emit mid-execution events)
     if safe:
@@ -638,8 +656,14 @@ async def query_loop(
     tool calls, and loops until no more tool calls are made.
     """
     # Work on a private deep copy so emergency pruning cannot mutate the durable
-    # pre-turn state before a successful checkpoint/turn is committed.
-    messages = [message.model_copy(deep=True) for message in params.messages]
+    # pre-turn state before a successful checkpoint/turn is committed. Keep the
+    # caller-owned projection list itself as the single live container: tools
+    # such as Checkpoint/Revert receive that list through ToolContext and must be
+    # able to update the query loop immediately.
+    params.messages[:] = [
+        message.model_copy(deep=True) for message in params.messages
+    ]
+    messages = params.messages
     params.tool_context.messages = messages
     turn_count = 0
     _context_retries = 0
@@ -649,6 +673,11 @@ async def query_loop(
     _api_retry_attempts = 0
     _awaiting_compact_resume = False
     total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    # Frontends can answer a permission prompt after the turn has already
+    # been interrupted, or can answer several prompts out of order. Keep only
+    # responses for the current model response so a stale approval can never
+    # authorize a later tool call.
+    buffered_permission_responses: dict[str, PermissionResponseEvent] = {}
 
     cfg = params.api_config
     adapter_config = getattr(params.api_adapter, "config", None)
@@ -697,10 +726,10 @@ async def query_loop(
         *,
         trigger: str,
     ) -> CompactEvent | None:
-        nonlocal messages, _awaiting_compact_resume, _compact_resume_retries
+        nonlocal _awaiting_compact_resume, _compact_resume_retries
 
         old_count = len(messages)
-        source_messages = messages
+        source_messages = list(messages)
         if params.hook_manager:
             pre = await params.hook_manager.run(
                 "pre_compact",
@@ -731,10 +760,9 @@ async def query_loop(
             )
             return None
 
-        messages = result
+        messages[:] = result
         _awaiting_compact_resume = True
         _compact_resume_retries = 0
-        params.messages[:] = messages
         params.tool_context.messages = messages
 
         if params.hook_manager:
@@ -763,8 +791,8 @@ async def query_loop(
 
     while True:
         turn_count += 1
-        # Compaction may replace the list object. Tools and permission reviewers
-        # must always observe the active projection, including this turn's results.
+        # Tools and permission reviewers must always observe the active
+        # projection, including this turn's results.
         params.tool_context.messages = messages
 
         full_system = _append_system_context(
@@ -800,7 +828,7 @@ async def query_loop(
                 tools=tool_schemas,
             )
             if needs_compaction:
-                source_messages = messages
+                source_messages = list(messages)
                 pruned_messages = [message.model_copy(deep=True) for message in messages]
                 if _trim_tool_results_to_fit(
                     pruned_messages,
@@ -818,8 +846,7 @@ async def query_loop(
                         tools=tool_schemas,
                     )
                     if pruned_estimated <= compact_limit:
-                        messages = pruned_messages
-                        params.messages[:] = messages
+                        messages[:] = pruned_messages
                         params.tool_context.messages = messages
                         messages_for_api = pruned_for_api
                         estimated = pruned_estimated
@@ -828,17 +855,16 @@ async def query_loop(
                             "Pruned oversized tool output; estimated final input is now %d",
                             estimated,
                         )
-                        if messages and messages[0].is_compact_summary:
-                            yield CompactEvent(
-                                summary="Oversized historical tool output was pruned",
-                                messages_before=len(source_messages),
-                                messages_after=len(messages),
-                                trigger="auto",
-                                source_messages=source_messages,
-                                checkpoint_messages=[
-                                    message.model_copy(deep=True) for message in messages
-                                ],
-                            )
+                        yield CompactEvent(
+                            summary="Oversized historical tool output was pruned",
+                            messages_before=len(source_messages),
+                            messages_after=len(messages),
+                            trigger="auto",
+                            source_messages=source_messages,
+                            checkpoint_messages=[
+                                message.model_copy(deep=True) for message in messages
+                            ],
+                        )
 
             if needs_compaction:
                 logger.warning(
@@ -1223,6 +1249,10 @@ async def query_loop(
                 reply_to_uuid=params.reply_to_uuid,
             )
             messages.append(assistant_msg)
+            # Keep the caller-owned projection current at each completed model
+            # response. A cancellation during a later tool turn can then
+            # preserve this committed prefix without duplicating its text.
+            params.messages[:] = messages
             _awaiting_compact_resume = False
         else:
             if _awaiting_compact_resume and _compact_resume_retries < _MAX_COMPACT_RESUME_RETRIES:
@@ -1234,6 +1264,7 @@ async def query_loop(
                 messages.append(
                     create_user_message(content=_COMPACT_EMPTY_RESPONSE_RETRY_PROMPT)
                 )
+                params.messages[:] = messages
                 turn_count -= 1
                 continue
             logger.warning("Empty response, ending turn (awaiting_resume=%s)", _awaiting_compact_resume)
@@ -1339,6 +1370,7 @@ async def query_loop(
                     source_tool_assistant_uuid=assistant_msg.uuid,
                 )
                 messages.append(msg)
+                params.messages[:] = messages
                 yield ToolResultEvent(
                     tool_use_id=effective_block.id,
                     tool_name=effective_block.name,
@@ -1354,7 +1386,23 @@ async def query_loop(
                     reason=merged_perm.reason,
                     permission_key=permission_key,
                 )
-                response = await params.permission_queue.get()
+                response = buffered_permission_responses.pop(effective_block.id, None)
+                if response is None:
+                    expected_ids = {candidate.id for candidate in tool_use_blocks}
+                    while True:
+                        candidate = await params.permission_queue.get()
+                        if not isinstance(candidate, PermissionResponseEvent):
+                            continue
+                        if candidate.agent_id is not None:
+                            continue
+                        if candidate.tool_use_id == effective_block.id:
+                            response = candidate
+                            break
+                        # Preserve an answer for another tool in this same
+                        # assistant response; discard IDs from an older turn.
+                        if candidate.tool_use_id in expected_ids:
+                            buffered_permission_responses[candidate.tool_use_id] = candidate
+                assert response is not None
                 if response.allowed:
                     if response.always_allow:
                         params.permission_manager.add_allow_rule(permission_key)
@@ -1378,6 +1426,7 @@ async def query_loop(
                         source_tool_assistant_uuid=assistant_msg.uuid,
                     )
                     messages.append(msg)
+                    params.messages[:] = messages
                     yield ToolResultEvent(
                         tool_use_id=effective_block.id,
                         tool_name=effective_block.name,
@@ -1402,6 +1451,7 @@ async def query_loop(
                 if isinstance(item, tuple):
                     msgs, event = item
                     messages.extend(msgs)
+                    params.messages[:] = messages
                     if event.tool_name == "SwitchMode" and not event.is_error:
                         should_end_turn_after_tools = True
                     yield event

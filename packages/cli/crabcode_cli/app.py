@@ -38,7 +38,23 @@ def main(
 
     work_dir = cwd or os.getcwd()
 
+    # Resolve cross-project resumes before loading project settings or creating
+    # any cwd-bound runtime resources.  CoreSession also rebinds an already
+    # initialized session, but startup should take the correct project path
+    # from the outset.
+    if resume:
+        from crabcode_core.session.storage import SessionStorage
+
+        resolved_storage = SessionStorage.from_session_id(resume)
+        if resolved_storage is not None:
+            work_dir = resolved_storage.cwd
+
     settings = CrabCodeSettings()
+    # Keep CLI flags separate from project-file values.  CoreSession needs
+    # this distinction when an interactive REPL later resumes a session from a
+    # different project; otherwise the first project's config is treated as a
+    # caller override and shadows the target project's settings.
+    explicit_settings = CrabCodeSettings()
 
     from crabcode_core.config.manager import ConfigManager
     file_settings = ConfigManager(cwd=work_dir).load()
@@ -92,22 +108,28 @@ def main(
 
     if model:
         settings.api.model = model
+        explicit_settings.api.model = model
     if provider:
         settings.api.provider = provider
+        explicit_settings.api.provider = provider
     if base_url:
         settings.api.base_url = base_url
+        explicit_settings.api.base_url = base_url
     if api_format:
         settings.api.format = api_format
+        explicit_settings.api.format = api_format
     if model_profile:
         if model_profile in file_settings.models:
-            settings.models = file_settings.models
             settings.default_model = model_profile
+            explicit_settings.default_model = model_profile
         else:
             typer.echo(
                 f"Warning: model profile '{model_profile}' not found in settings.models. "
                 f"Available: {list(file_settings.models.keys()) or '(none configured)'}",
                 err=True,
             )
+
+    settings._crabcode_explicit_settings = explicit_settings
 
     # Read image files into base64 attachments
     image_attachments: list[dict[str, str]] | None = None
@@ -203,8 +225,10 @@ def sessions_list(
     if all_projects:
         from crabcode_core.session.meta_db import SessionMetaStore
         store = SessionMetaStore()
-        rows = store.list_recent(limit=limit)
-        store.close()
+        try:
+            rows = store.list_recent(limit=limit)
+        finally:
+            store.close()
     else:
         from crabcode_core.session.storage import SessionStorage
         rows = SessionStorage.list_sessions(work_dir)[:limit]
@@ -283,26 +307,36 @@ def sessions_prune(
     """Archive old sessions and optionally delete their files."""
     from crabcode_core.session.meta_db import SessionMetaStore
     store = SessionMetaStore()
-    archived = store.auto_archive(days=days)
-    typer.echo(f"Archived {archived} session(s) older than {days} days.")
-    if delete_files:
-        purged = store.purge_archived()
-        for entry in purged:
-            sid = entry["id"]
-            cwd = entry.get("cwd", "")
-            if cwd:
-                from crabcode_core.session.storage import get_transcript_path
-                path = get_transcript_path(cwd, sid)
+    try:
+        archived = store.auto_archive(days=days)
+        typer.echo(f"Archived {archived} session(s) older than {days} days.")
+        if delete_files:
+            candidates = store.purge_archived(delete_rows=False)
+            purged = 0
+            failed: list[str] = []
+            for entry in candidates:
+                sid = entry["id"]
+                cwd = entry.get("cwd", "")
                 try:
-                    if path.exists():
-                        path.unlink()
-                except OSError:
-                    pass
-        typer.echo(f"Purged {len(purged)} archived session(s) from database and disk.")
-    else:
-        purged = store.purge_archived()
-        typer.echo(f"Purged {len(purged)} archived session(s) from database.")
-    store.close()
+                    if cwd:
+                        from crabcode_core.session.storage import purge_session_artifacts
+
+                        purge_session_artifacts(cwd, sid)
+                    store.delete(sid)
+                    purged += 1
+                except (OSError, ValueError):
+                    # Retain the archived row so a later prune can retry and so
+                    # the command never claims a failed disk deletion succeeded.
+                    failed.append(sid)
+            typer.echo(f"Purged {purged} archived session(s) from database and disk.")
+            if failed:
+                typer.echo(
+                    f"Failed to delete {len(failed)} session artifact set(s); "
+                    "their archived database rows were retained for retry.",
+                    err=True,
+                )
+    finally:
+        store.close()
 
 
 @app.command("gateway")
@@ -423,21 +457,23 @@ def stats(
             return f"{n / 1_000:.1f}k"
         return str(n)
 
-    if project:
-        p = store.stats_by_project(work_dir)
-        typer.echo(f"Project: {work_dir}")
-        typer.echo(f"  Sessions: {p['total_sessions']}  |  Tokens: {_fmt_tok(p['total_tokens'])}  |  Messages: {p['total_messages']}")
-    else:
-        g = store.stats_global()
-        p = store.stats_by_project(work_dir)
-        models = store.stats_by_model(limit=5)
-        typer.echo(f"Global:        {g['total_sessions']} sessions  |  {_fmt_tok(g['total_tokens'])} tokens  |  {g['active_projects']} projects")
-        typer.echo(f"This week:     {g['week_sessions']} sessions  |  {_fmt_tok(g['week_tokens'])} tokens")
-        typer.echo(f"This project:  {p['total_sessions']} sessions  |  {_fmt_tok(p['total_tokens'])} tokens  |  {p['total_messages']} messages")
-        if models:
-            model_parts = [f"{m['model']} ({_fmt_tok(m['tokens'])})" for m in models]
-            typer.echo(f"Top models:    {', '.join(model_parts)}")
-    store.close()
+    try:
+        if project:
+            p = store.stats_by_project(work_dir)
+            typer.echo(f"Project: {work_dir}")
+            typer.echo(f"  Sessions: {p['total_sessions']}  |  Tokens: {_fmt_tok(p['total_tokens'])}  |  Messages: {p['total_messages']}")
+        else:
+            g = store.stats_global()
+            p = store.stats_by_project(work_dir)
+            models = store.stats_by_model(limit=5)
+            typer.echo(f"Global:        {g['total_sessions']} sessions  |  {_fmt_tok(g['total_tokens'])} tokens  |  {g['active_projects']} projects")
+            typer.echo(f"This week:     {g['week_sessions']} sessions  |  {_fmt_tok(g['week_tokens'])} tokens")
+            typer.echo(f"This project:  {p['total_sessions']} sessions  |  {_fmt_tok(p['total_tokens'])} tokens  |  {p['total_messages']} messages")
+            if models:
+                model_parts = [f"{m['model']} ({_fmt_tok(m['tokens'])})" for m in models]
+                typer.echo(f"Top models:    {', '.join(model_parts)}")
+    finally:
+        store.close()
 
 
 def entry() -> None:

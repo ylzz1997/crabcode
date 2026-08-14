@@ -56,5 +56,14 @@ packages = [
     "packages/debugger/crabcode_debugger",
 ]
 
+[tool.pytest.ini_options]
+pythonpath = [
+    "packages/core",
+    "packages/cli",
+    "packages/search",
+    "packages/gateway",
+    "packages/debugger",
+]
+
 [tool.uv.workspace]
 members = ["packages/*"]

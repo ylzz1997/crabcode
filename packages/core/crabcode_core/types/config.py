@@ -144,9 +144,9 @@ class LoggingSettings(BaseModel):
 class TeamSettings(BaseModel):
     """Settings for Agent Teams feature."""
 
-    max_teammates: int = 8
-    backpressure_queue_size: int = 100
-    max_message_size_bytes: int = 10_000
+    max_teammates: int = Field(default=8, gt=0)
+    backpressure_queue_size: int = Field(default=100, gt=0)
+    max_message_size_bytes: int = Field(default=10_000, gt=0)
     inbox_dir: str | None = None
     bridge_policy: str = "deny"  # deny | allow_tagged | allow_all
 

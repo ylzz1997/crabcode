@@ -4,7 +4,11 @@ package crabcode;
 
 // ── Messages ────────────────────────────────────────────────────
 
-message Empty {}
+message Empty {
+  // Optional selector used by session-scoped configuration RPCs.  Existing
+  // clients can continue sending an empty message and use the default session.
+  string session_id = 1;
+}
 
 message SendMessageRequest {
   string text = 1;
@@ -22,6 +26,7 @@ message SpawnAgentRequest {
   optional string name = 3;
   optional string model_profile = 4;
   bool callback = 5;
+  string session_id = 6;
 }
 
 message SpawnAgentResponse {
@@ -30,12 +35,16 @@ message SpawnAgentResponse {
 
 message GetAgentRequest {
   string agent_id = 1;
+  string session_id = 2;
 }
 
-message ListAgentsRequest {}
+message ListAgentsRequest {
+  string session_id = 1;
+}
 
 message CancelAgentRequest {
   string agent_id = 1;
+  string session_id = 2;
 }
 
 message CancelAgentResponse {
@@ -45,6 +54,7 @@ message CancelAgentResponse {
 message WaitAgentRequest {
   repeated string agent_ids = 1;
   optional int32 timeout_ms = 2;
+  string session_id = 3;
 }
 
 message PermissionResponseMsg {
@@ -52,6 +62,7 @@ message PermissionResponseMsg {
   bool allowed = 2;
   bool always_allow = 3;
   optional string agent_id = 4;
+  string session_id = 5;
 }
 
 message ChoiceResponseMsg {
@@ -59,14 +70,17 @@ message ChoiceResponseMsg {
   repeated string selected = 2;
   bool cancelled = 3;
   optional string agent_id = 4;
+  string session_id = 5;
 }
 
 message SwitchModelRequest {
   string name = 1;
+  string session_id = 2;
 }
 
 message SwitchModeRequest {
   string mode = 1;  // "agent" | "plan"
+  string session_id = 2;
 }
 
 message ListModelsResponse {

@@ -21,6 +21,13 @@ from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.middleware import register_middleware
 from crabcode_gateway.routes import agent, config, event, health, permission, session, snapshot
+from crabcode_gateway.session_registry import get_session_lock
+from crabcode_gateway.task_registry import (
+    ensure_task_state,
+    mark_session_closing,
+    shielded_cleanup_session,
+    unmark_session_closing,
+)
 
 logger = get_logger(__name__)
 
@@ -54,8 +61,14 @@ class GatewayServer:
 
         self._app: FastAPI | None = None
         self._http_server: uvicorn.Server | None = None
+        self._http_task: asyncio.Task[Any] | None = None
         self._grpc_adapter: Any = None
         self._event_bus = EventBus()
+        self._stop_task: asyncio.Task[Any] | None = None
+        # Serialize start transitions with creation of the shared stop task.
+        # The lock is held only during setup/task admission, never while an
+        # HTTP server is serving requests.
+        self._lifecycle_lock = asyncio.Lock()
 
     def build_app(self) -> FastAPI:
         """Build and configure the FastAPI application."""
@@ -70,6 +83,14 @@ class GatewayServer:
         app.state.default_session_id: str | None = None
         app.state.event_bus = self._event_bus
         app.state.client_contexts: dict[str, Any] = {}
+        app.state.session_lock = asyncio.Lock()
+        app.state.session_load_lock = asyncio.Lock()
+        ensure_task_state(app.state)
+        app.state.gateway_closing = False
+        # gRPC is a separate transport and cannot see FastAPI middleware; make
+        # the same gateway credentials available to its adapter explicitly.
+        app.state.gateway_username = "crabcode"
+        app.state.gateway_password = self.password
 
         # Middleware stack
         register_middleware(
@@ -92,32 +113,45 @@ class GatewayServer:
 
     async def start(self) -> None:
         """Start HTTP and optionally gRPC servers."""
-        if self._app is None:
-            self.build_app()
+        async with self._lifecycle_lock:
+            await self._wait_for_previous_stop()
+            self._ensure_not_running()
+            if self._app is None:
+                self.build_app()
 
-        # Start HTTP server
-        config = uvicorn.Config(
-            app=self._app,
-            host=self.host,
-            port=self.port,
-            log_level=self.log_level,
-            loop="asyncio",
-        )
-        self._http_server = uvicorn.Server(config)
+            async with get_session_lock(self._app.state):
+                self._app.state.gateway_closing = False
 
-        # Start gRPC server if configured
-        if self.grpc_port is not None:
-            try:
-                from crabcode_gateway.grpc.server import GrpcAdapter
+            # Start HTTP server
+            config = uvicorn.Config(
+                app=self._app,
+                host=self.host,
+                port=self.port,
+                log_level=self.log_level,
+                loop="asyncio",
+            )
+            self._http_server = uvicorn.Server(config)
 
-                self._grpc_adapter = GrpcAdapter(self._app.state)
-                await self._grpc_adapter.start(self.host, self.grpc_port)
-            except Exception:
-                logger.warning("Failed to start gRPC server", exc_info=True)
-                self._grpc_adapter = None
+            await self._start_grpc()
 
         logger.info("CrabCode Gateway starting on %s:%d", self.host, self.port)
-        await self._http_server.serve()
+        try:
+            await self._http_server.serve()
+        except asyncio.CancelledError:
+            # ``serve`` can be cancelled by an embedding application.  Run
+            # the same fenced cleanup path as an explicit stop before
+            # propagating cancellation.
+            await self.stop()
+            raise
+        except Exception:
+            await self.stop()
+            raise
+        else:
+            # Uvicorn can terminate without an explicit GatewayServer.stop
+            # (for example after an internal startup/runtime failure).  Do
+            # not leave the session registry and gRPC adapter alive in that
+            # case.
+            await self.stop()
 
     async def start_background(self) -> None:
         """Start HTTP server in the background (non-blocking).
@@ -125,39 +159,189 @@ class GatewayServer:
         Unlike ``start()``, this returns immediately so the caller
         can proceed (e.g. to start an ACP agent on stdio).
         """
-        if self._app is None:
-            self.build_app()
+        async with self._lifecycle_lock:
+            await self._wait_for_previous_stop()
+            self._ensure_not_running()
+            if self._app is None:
+                self.build_app()
 
-        config = uvicorn.Config(
-            app=self._app,
-            host=self.host,
-            port=self.port,
-            log_level=self.log_level,
-            loop="asyncio",
-        )
-        self._http_server = uvicorn.Server(config)
+            async with get_session_lock(self._app.state):
+                self._app.state.gateway_closing = False
 
-        logger.info("CrabCode Gateway starting (background) on %s:%d", self.host, self.port)
-        asyncio.ensure_future(self._http_server.serve())
+            await self._start_grpc()
+
+            config = uvicorn.Config(
+                app=self._app,
+                host=self.host,
+                port=self.port,
+                log_level=self.log_level,
+                loop="asyncio",
+            )
+            self._http_server = uvicorn.Server(config)
+
+            logger.info("CrabCode Gateway starting (background) on %s:%d", self.host, self.port)
+            self._http_task = asyncio.create_task(self._serve_background())
+
+    async def _wait_for_previous_stop(self) -> None:
+        """Wait for an earlier stop task before reopening the gateway."""
+        task = self._stop_task
+        if task is not None and not task.done():
+            await asyncio.shield(task)
+        # Surface an internal cleanup failure instead of starting with a
+        # partially torn-down registry/resources.
+        if task is not None:
+            await task
+
+    def _ensure_not_running(self) -> None:
+        """Reject duplicate starts while a transport is still active."""
+        if self._http_task is not None and not self._http_task.done():
+            raise RuntimeError("Gateway server is already running")
+        if self._http_server is not None and not self._http_server.should_exit:
+            raise RuntimeError("Gateway server is already running")
+
+    async def _serve_background(self) -> None:
+        """Run the background HTTP server and fence cleanup on termination.
+
+        ``start_background`` returns the task handle to the embedding process,
+        so that process can cancel it directly.  A raw ``uvicorn.serve`` task
+        would bypass :meth:`stop` in that case and leave sessions and the gRPC
+        adapter alive.  Keep the same cleanup contract as foreground
+        ``start()`` for both cancellation and unexpected server failures.
+        """
+        try:
+            assert self._http_server is not None
+            await self._http_server.serve()
+        except asyncio.CancelledError:
+            # This task is the HTTP task awaited by ``_stop_impl`` during a
+            # normal shutdown.  Detach its handle before entering cleanup so
+            # cancellation of the task itself cannot create a stop -> await
+            # HTTP task -> stop cycle.  If another stop is already draining,
+            # that owner will finish the cleanup after this task terminates.
+            if self._http_task is asyncio.current_task():
+                self._http_task = None
+            if self._stop_task is None or self._stop_task.done():
+                await self.stop()
+            raise
+        except Exception:
+            if self._http_task is asyncio.current_task():
+                self._http_task = None
+            if self._stop_task is None or self._stop_task.done():
+                await self.stop()
+            raise
+        else:
+            # A server can also return normally after an internal shutdown or
+            # an embedding caller setting ``should_exit`` directly. Apply the
+            # same cleanup contract unless another stop already owns it.
+            if self._http_task is asyncio.current_task():
+                self._http_task = None
+            if self._stop_task is None or self._stop_task.done():
+                await self.stop()
+
+    async def _start_grpc(self) -> None:
+        """Start the optional gRPC adapter for both foreground/background modes."""
+        if self.grpc_port is None or self._app is None:
+            return
+        try:
+            from crabcode_gateway.grpc.server import GrpcAdapter
+
+            self._grpc_adapter = GrpcAdapter(
+                self._app.state,
+                password=self.password,
+            )
+            await self._grpc_adapter.start(self.host, self.grpc_port)
+        except Exception:
+            logger.warning("Failed to start gRPC server", exc_info=True)
+            self._grpc_adapter = None
 
     async def stop(self) -> None:
         """Gracefully stop all servers."""
+        # Keep one cleanup operation for concurrent callers and shield it from
+        # cancellation.  A cancelled shutdown must not leave sessions in the
+        # registry with detached query tasks still running.
+        async with self._lifecycle_lock:
+            if self._stop_task is None or self._stop_task.done():
+                self._stop_task = asyncio.create_task(self._stop_impl())
+            stop_task = self._stop_task
+        cancelled = False
+        try:
+            # Keep draining through repeated cancellation requests.  Shutdown
+            # is a resource-release operation, so returning before the shared
+            # child finishes can leak HTTP/gRPC servers and CoreSessions.
+            while not stop_task.done():
+                try:
+                    await asyncio.shield(stop_task)
+                except asyncio.CancelledError:
+                    cancelled = True
+            await stop_task
+        except asyncio.CancelledError:
+            cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _stop_impl(self) -> None:
+        """Perform the actual graceful shutdown."""
+        app = self._app
+
+        # Fence all route handlers before stopping either transport.  The
+        # marker is set while holding the same lock used by new/send/resume
+        # and by archive, so no operation can resolve a session after this
+        # snapshot and then register new work for it.
+        pending: list[tuple[str, Any]] = []
+        if app:
+            async with get_session_lock(app.state):
+                app.state.gateway_closing = True
+                sessions: dict = app.state.sessions
+                pending = list(sessions.items())
+                for sid, _session in pending:
+                    mark_session_closing(app.state, sid)
+                    close_session_events = getattr(app.state.event_bus, "close_session", None)
+                    if callable(close_session_events):
+                        close_session_events(sid, _session)
+                sessions.clear()
+                app.state.default_session_id = None
+                app.state.client_contexts.clear()
+
         if self._http_server:
             self._http_server.should_exit = True
-            await self._http_server.shutdown()
+            try:
+                await self._http_server.shutdown()
+            except Exception:
+                logger.warning("Failed to shut down HTTP server cleanly", exc_info=True)
+
+        http_task = self._http_task
+        if http_task and http_task is not asyncio.current_task():
+            try:
+                await http_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.warning("HTTP server task failed during shutdown", exc_info=True)
+        if self._http_task is http_task:
+            self._http_task = None
 
         if self._grpc_adapter:
-            await self._grpc_adapter.stop()
+            try:
+                await self._grpc_adapter.stop()
+            except Exception:
+                logger.warning("Failed to shut down gRPC server cleanly", exc_info=True)
 
         # Close all sessions
-        if self._app:
-            sessions: dict = self._app.state.sessions
-            for sid, s in list(sessions.items()):
+        if app:
+            for sid, session in pending:
                 try:
-                    await s.close()
+                    # The marker was installed under the registry lock above;
+                    # keep it until CoreSession.close() has completed.
+                    await shielded_cleanup_session(app.state, sid, session)
                 except Exception:
                     logger.warning("Failed to close session %s", sid, exc_info=True)
-            sessions.clear()
+                finally:
+                    # ``shielded_cleanup_session`` normally clears this.  The
+                    # explicit discard also handles a partially initialized
+                    # or custom session whose close path raises unexpectedly.
+                    unmark_session_closing(app.state, sid)
+            close_all_events = getattr(app.state.event_bus, "close_all", None)
+            if callable(close_all_events):
+                close_all_events()
 
         logger.info("CrabCode Gateway stopped")
 

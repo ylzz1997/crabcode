@@ -87,6 +87,7 @@ class ErrorEvent:
     message: str
     recoverable: bool = True
     error_type: str = ""
+    agent_id: str | None = None
 
 
 @dataclass

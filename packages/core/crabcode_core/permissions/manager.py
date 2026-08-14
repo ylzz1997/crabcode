@@ -52,6 +52,15 @@ class PermissionManager:
         """Restore the mode selected by the loaded settings."""
         self.mode = self._configured_mode
 
+    def clear_runtime_allow(self) -> None:
+        """Discard ephemeral ``always allow`` decisions for a session."""
+        self._runtime_allow_keys.clear()
+
+    def reset_session(self) -> None:
+        """Reset all permission state that must not cross a session boundary."""
+        self.clear_runtime_allow()
+        self.reset_mode()
+
     def check(
         self,
         tool: Tool,

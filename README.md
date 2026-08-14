@@ -1184,7 +1184,7 @@ Teams are isolated by default. `TeamBridge` allows controlled messaging between 
 
 ### Crash recovery
 
-When the server restarts while teammates are running, busy teammates are force-transitioned to `ready` (not auto-restarted) and the lead is notified to re-engage them manually. This prevents runaway agents from burning API credits unattended.
+The recovery helper can normalize stale `busy`/`cancelling` teammate states in an existing `TeamManager` runtime (without auto-restarting work). It is not currently wired into gateway startup, and team membership/state are held in memory rather than persisted. A new server process therefore cannot discover or recover teams from a previous process; callers must reconstruct the runtime and invoke recovery explicitly. 
 
 ### REPL commands
 

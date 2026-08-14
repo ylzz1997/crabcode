@@ -1284,6 +1284,7 @@ async def _run_plan_executor_with_runtime_events(
             plan=plan,
             spawn_fn=session.spawn_agent,
             wait_fn=session.wait_agent,
+            cancel_fn=session.cancel_agent,
         )
         try:
             async for plan_event in executor.execute():
@@ -1375,6 +1376,16 @@ async def run_repl(
     resume_session_id: str | None = None,
 ) -> None:
     """Run the interactive REPL."""
+    if resume_session_id:
+        # Defensive resolution for callers that invoke run_repl directly
+        # (without going through the Typer entry point).  Project settings,
+        # tools, and LSP must be initialized against the resumed session's cwd.
+        from crabcode_core.session.storage import SessionStorage
+
+        resolved_storage = SessionStorage.from_session_id(resume_session_id)
+        if resolved_storage is not None:
+            cwd = resolved_storage.cwd
+
     print_banner(console)
     console.print(f"  cwd: {cwd}", style="dim")
     if settings:
@@ -2631,10 +2642,12 @@ async def _handle_command(
     if cmd == "/stats":
         from crabcode_core.session.meta_db import SessionMetaStore as StatsStore
         store = StatsStore()
-        g = store.stats_global()
-        p = store.stats_by_project(os.path.abspath(session.cwd))
-        models = store.stats_by_model(limit=5)
-        store.close()
+        try:
+            g = store.stats_global()
+            p = store.stats_by_project(os.path.abspath(session.cwd))
+            models = store.stats_by_model(limit=5)
+        finally:
+            store.close()
 
         def _fmt_tok(n: int) -> str:
             if n >= 1_000_000:
@@ -2826,16 +2839,20 @@ async def _handle_command(
             return True
         from crabcode_core.session.meta_db import SessionMetaStore as ArchiveStore
         store = ArchiveStore()
-        store.archive(match)
-        store.close()
+        try:
+            store.archive(match)
+        finally:
+            store.close()
         console.print(f"[dim]Archived session [bold]{match[:8]}…[/bold][/]")
         return True
 
     if cmd == "/recent":
         from crabcode_core.session.meta_db import SessionMetaStore
         store = SessionMetaStore()
-        rows = store.list_recent(limit=20)
-        store.close()
+        try:
+            rows = store.list_recent(limit=20)
+        finally:
+            store.close()
         if not rows:
             console.print("[dim]No sessions found.[/]")
             return True
@@ -2894,20 +2911,22 @@ async def _handle_command(
         if not match:
             from crabcode_core.session.meta_db import SessionMetaStore as ResumeStore
             store = ResumeStore()
-            # Try exact match first
-            row = store.get(session_id)
-            if row:
-                match = row["id"]
-                match_source = row.get("cwd", "")
-            else:
-                # Try prefix match across all recent sessions
-                recent = store.list_recent(limit=100)
-                for r in recent:
-                    if r["id"].startswith(session_id):
-                        match = r["id"]
-                        match_source = r.get("cwd", "")
-                        break
-            store.close()
+            try:
+                # Try exact match first
+                row = store.get(session_id)
+                if row:
+                    match = row["id"]
+                    match_source = row.get("cwd", "")
+                else:
+                    # Try prefix match across all recent sessions
+                    recent = store.list_recent(limit=100)
+                    for r in recent:
+                        if r["id"].startswith(session_id):
+                            match = r["id"]
+                            match_source = r.get("cwd", "")
+                            break
+            finally:
+                store.close()
 
         if not match:
             console.print(f"[bold red]Session not found: {session_id}[/]")

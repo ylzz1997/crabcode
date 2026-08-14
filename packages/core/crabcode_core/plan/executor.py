@@ -38,10 +38,13 @@ class PlanExecutor:
         spawn_fn: Callable[..., Awaitable[str]],
         wait_fn: Callable[[str, int | None], Awaitable[Any]],
         max_concurrency: int = 4,
+        *,
+        cancel_fn: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self._plan = plan
         self._spawn_fn = spawn_fn
         self._wait_fn = wait_fn
+        self._cancel_fn = cancel_fn
         self._max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._step_map = {s.id: s for s in plan.steps}
@@ -91,6 +94,7 @@ class PlanExecutor:
                     StreamTextEvent(text=f"  ◉ Starting step [{step.id}]: {step.title}\n")
                 )
 
+                agent_id: str | None = None
                 try:
                     agent_id = await self._spawn_fn(
                         prompt=step.description,
@@ -125,6 +129,18 @@ class PlanExecutor:
                                 text=f"  ✗ Step [{step.id}] failed: {step.error}\n"
                             )
                         )
+                except asyncio.CancelledError:
+                    # Cancelling the plan scheduler only cancels the waiter;
+                    # explicitly stop any sub-agent already spawned for this
+                    # step so plan cancellation cannot leak active work.
+                    if agent_id and self._cancel_fn is not None:
+                        try:
+                            await self._cancel_fn(agent_id)
+                        except Exception:
+                            logger.debug("Failed to cancel plan step agent %s", agent_id, exc_info=True)
+                    step.status = "cancelled"
+                    step.error = "Plan execution cancelled"
+                    raise
                 except Exception as e:
                     step.status = "failed"
                     step.error = str(e)
@@ -194,8 +210,11 @@ class PlanExecutor:
                         if task.done():
                             pending_tasks.pop(sid, None)
                     for t in done:
-                        if t.exception():
-                            logger.warning("Step task raised: %s", t.exception())
+                        if t.cancelled():
+                            continue
+                        exception = t.exception()
+                        if exception:
+                            logger.warning("Step task raised: %s", exception)
             finally:
                 await event_queue.put(done_sentinel)
 
@@ -213,6 +232,19 @@ class PlanExecutor:
                 await producer_task
             except asyncio.CancelledError:
                 pass
+
+            # Cancelling the scheduler does not implicitly cancel tasks it
+            # created.  Stop and await every in-flight step before the caller
+            # can close the session-owned AgentManager/resources.
+            step_tasks = [task for task in pending_tasks.values() if not task.done()]
+            for task in step_tasks:
+                task.cancel()
+            if step_tasks:
+                await asyncio.gather(*step_tasks, return_exceptions=True)
+            for step in self._plan.steps:
+                if step.status == "running":
+                    step.status = "cancelled"
+                    step.error = "Plan execution cancelled"
 
         # Summary
         completed = sum(1 for s in self._plan.steps if s.status == "completed")

@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+from contextlib import asynccontextmanager
+from copy import deepcopy
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from xml.sax.saxutils import escape
 
+from pydantic import BaseModel
+
 from crabcode_core.agent_manager import AgentCompletion, AgentManager, AgentSnapshot
 from crabcode_core.logging_utils import configure_logging, get_logger
 from crabcode_core.lsp.manager import LSPManager
 from crabcode_core.types.config import CrabCodeSettings
 from crabcode_core.types.event import (
+    AgentStateEvent,
     ChoiceResponseEvent,
     CompactEvent,
     CoreEvent,
@@ -27,6 +33,34 @@ from crabcode_core.types.message import Message, find_assistant_reply, message_f
 from crabcode_core.types.tool import Tool, ToolEventCallback
 
 logger = get_logger(__name__)
+
+# Teardown hooks may spawn child tasks that call back into their owning
+# session.  Those children inherit this context and can recognize that the
+# close is already in progress, avoiding a lock cycle while the parent waits
+# for the hook to finish.
+_CLOSE_OWNER: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
+    "crabcode_close_owner",
+    default=None,
+)
+
+# Query producers and tool/hook calls may run in child tasks while the parent
+# session still owns _turn_lock. Context variables propagate into those
+# children, allowing compact() to coalesce at the logical turn boundary rather
+# than waiting on the lock held by its own parent operation.
+_TURN_OWNER: contextvars.ContextVar[
+    tuple[Any, object] | None
+] = contextvars.ContextVar("crabcode_turn_owner", default=None)
+
+
+async def _run_without_turn_owner(
+    operation: Callable[[], Awaitable[Any]],
+) -> None:
+    """Run lifecycle-wide work without inheriting one foreground boundary."""
+    owner_token = _TURN_OWNER.set(None)
+    try:
+        await operation()
+    finally:
+        _TURN_OWNER.reset(owner_token)
 
 
 class CoreSession:
@@ -45,8 +79,24 @@ class CoreSession:
     ):
         self.cwd = os.path.abspath(cwd)
         self.settings = settings or CrabCodeSettings()
+        # Keep caller-provided settings separate from project files loaded
+        # during initialization.  Cross-project resume can then reapply the
+        # explicit overrides while replacing cwd-scoped resources.
+        explicit_settings = getattr(self.settings, "_crabcode_explicit_settings", None)
+        if isinstance(explicit_settings, CrabCodeSettings):
+            self._initial_settings = explicit_settings.model_copy(deep=True)
+        else:
+            self._initial_settings = self.settings.model_copy(deep=True)
         self.messages: list[Message] = []
-        self.tools: list[Tool] = tools or []
+        # Preserve a caller-owned empty list as well as a populated one.  Using
+        # ``tools or []`` silently replaced ``[]``, so initialization rollback
+        # and integrations retaining that list reference observed different
+        # tool containers.
+        self.tools: list[Tool] = tools if tools is not None else []
+        # Instances loaded from project ``extra_tools`` are tracked so a
+        # cross-project resume can close/remove the old set before loading the
+        # target project's extensions.
+        self._project_extra_tools: list[Tool] = []
         self.session_id: str = ""
         self._permission_queue: asyncio.Queue[PermissionResponseEvent] = asyncio.Queue()
         self._choice_queue: asyncio.Queue[ChoiceResponseEvent] = asyncio.Queue()
@@ -64,10 +114,20 @@ class CoreSession:
         self._mcp_manager: Any = None
         self._prompt_profile: Any = None
         self._initialized = False
+        self._initialize_lock = asyncio.Lock()
+        self._active_resume_task: asyncio.Task[Any] | None = None
+        # Query-loop child tasks are owned by this session rather than by the
+        # caller that happens to consume ``send_message``.  Keeping the set
+        # here lets ``close()`` stop an in-flight turn before tearing down
+        # tools, MCP, or LSP resources.
+        self._active_query_tasks: set[asyncio.Task[Any]] = set()
+        self._close_lock = asyncio.Lock()
+        self._close_task: asyncio.Task[None] | None = None
         self._current_model_name: str | None = None
         self.compact_count: int = 0
         self._agent_event_queue: asyncio.Queue[CoreEvent] = asyncio.Queue()
         self._agent_manager: AgentManager | None = None
+        self._pending_agent_snapshots: list[dict[str, Any]] | None = None
         self._hook_manager: Any = None
         self._lsp_manager: LSPManager | None = None
         self._closed = False
@@ -77,9 +137,17 @@ class CoreSession:
         self._current_plan: Any = None  # ExecutionPlan | None
         self._title_generation_task: asyncio.Task[None] | None = None
         self._team_manager: Any = None  # TeamManager
+        self._team_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._turn_lock = asyncio.Lock()
+        self._active_turn_token: object | None = None
+        # Unlike _active_turn_token, this is set only while a consumer exists
+        # for _agent_event_queue. Compact/resume also own a turn boundary but
+        # must not retain managed-agent events for a later prompt.
+        self._active_event_stream_token: object | None = None
         self._managed_callback_lock = asyncio.Lock()
         self._lifecycle_generation = 0
+        self._lifecycle_changed = asyncio.Event()
+        self._closing = False
         self._agent_completion_queue: asyncio.Queue[tuple[int, AgentCompletion]] = asyncio.Queue()
         self._agent_completion_task: asyncio.Task[None] | None = None
         self._monitor_notification_queue: asyncio.Queue[tuple[int, str, str]] = (
@@ -91,14 +159,204 @@ class CoreSession:
         self._background_event_sink: Callable[[CoreEvent], Awaitable[None]] | None = None
         self._pending_manual_compact: str | None = None
         self._persisted_compact_summaries: set[str] = set()
+        # A compaction boundary replaces the in-memory projection while the
+        # CLI's interrupt buffer still contains text emitted before that
+        # boundary.  Keep the visible prefixes committed before each boundary
+        # until the turn is either completed or the next turn starts.
+        self._partial_committed_prefixes: list[str] = []
         # Extension UI override: "ask" | "run_everything" | "ai_review" | None (follow file init only)
         self._client_permission_mode_override: str | None = None
 
+    @staticmethod
+    def _overlay_explicit_model(target: Any, explicit: Any) -> None:
+        """Overlay fields explicitly supplied on a Pydantic settings model.
+
+        ``CrabCodeSettings()`` contains many defaults that must not mask a
+        project's settings.  Pydantic's ``model_fields_set`` lets us preserve
+        the distinction between an omitted default and an intentional value;
+        nested models need a recursive walk because mutating ``settings.api``
+        does not mark the top-level ``api`` field as set.
+        """
+        if not isinstance(explicit, BaseModel):
+            return
+
+        explicit_fields = set(getattr(explicit, "model_fields_set", set()))
+        for field_name in type(explicit).model_fields:
+            source_value = getattr(explicit, field_name, None)
+            nested_explicit = isinstance(source_value, BaseModel) and bool(
+                getattr(source_value, "model_fields_set", set())
+            )
+            if field_name not in explicit_fields and not nested_explicit:
+                continue
+
+            if not hasattr(target, field_name):
+                continue
+            target_value = getattr(target, field_name)
+
+            # A caller that supplied a whole nested model (rather than just
+            # mutating one of its fields) owns its default values too.
+            if (
+                field_name in explicit_fields
+                and isinstance(source_value, BaseModel)
+                and not nested_explicit
+            ):
+                setattr(target, field_name, source_value.model_copy(deep=True))
+                continue
+
+            if isinstance(source_value, BaseModel) and isinstance(target_value, BaseModel):
+                CoreSession._overlay_explicit_model(target_value, source_value)
+                continue
+
+            if isinstance(source_value, dict) and isinstance(target_value, dict):
+                merged_dict = deepcopy(target_value)
+                for key, value in source_value.items():
+                    existing = merged_dict.get(key)
+                    if isinstance(value, BaseModel) and isinstance(existing, BaseModel):
+                        child = existing.model_copy(deep=True)
+                        CoreSession._overlay_explicit_model(child, value)
+                        merged_dict[key] = child
+                    else:
+                        merged_dict[key] = deepcopy(value)
+                setattr(target, field_name, merged_dict)
+                continue
+
+            setattr(target, field_name, deepcopy(source_value))
+
+    def _merge_project_settings(self, file_settings: CrabCodeSettings) -> CrabCodeSettings:
+        """Return file settings with constructor-provided overrides applied."""
+        merged = file_settings.model_copy(deep=True)
+        self._overlay_explicit_model(merged, self._initial_settings)
+        return merged
+
+    @staticmethod
+    async def _gather_cancel_on_error(*awaitables: Awaitable[Any]) -> list[Any]:
+        """Run setup operations as a group and settle siblings on failure.
+
+        ``asyncio.gather`` propagates the first exception but deliberately
+        leaves sibling tasks running.  During initialization that is unsafe:
+        rollback starts closing the same tools while a sibling setup coroutine
+        can still be mutating them.  Keep explicit task handles so every
+        operation is cancelled and awaited before the original error escapes.
+        """
+        tasks = [asyncio.ensure_future(awaitable) for awaitable in awaitables]
+        if not tasks:
+            return []
+        try:
+            return list(await asyncio.gather(*tasks))
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
     async def initialize(self) -> None:
+        """Initialize the session exactly once, even under concurrent requests."""
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+        if self._initialized:
+            return
+        async with self._initialize_lock:
+            if self._closed or self._closing:
+                raise RuntimeError("CoreSession is closed")
+            if self._initialized:
+                return
+            # Keep the caller-owned tool container intact if a late setup step
+            # fails.  ``_initialize_impl`` creates several managers and appends
+            # generated tools; without rollback a retry would leak those
+            # managers and duplicate Agent/Skill tools.
+            original_tools = list(self.tools)
+            original_tools_container = self.tools
+            try:
+                await self._initialize_impl()
+            except BaseException:
+                await self._cleanup_failed_initialization(
+                    original_tools,
+                    original_tools_container,
+                )
+                raise
+
+    async def _cleanup_failed_initialization(
+        self,
+        original_tools: list[Tool],
+        original_tools_container: list[Tool],
+    ) -> None:
+        """Roll back resources allocated by a failed initialization attempt.
+
+        Initialization is intentionally retryable (for example, a transient
+        MCP or custom-tool setup failure should not poison a long-lived
+        gateway session). Cleanup is best effort and never replaces the
+        original initialization exception.
+        """
+        if self._agent_completion_task is not None:
+            self._agent_completion_task.cancel()
+            await asyncio.gather(self._agent_completion_task, return_exceptions=True)
+            self._agent_completion_task = None
+        if self._monitor_notification_task is not None:
+            self._monitor_notification_task.cancel()
+            await asyncio.gather(self._monitor_notification_task, return_exceptions=True)
+            self._monitor_notification_task = None
+
+        if self._agent_manager is not None:
+            try:
+                await self._agent_manager.close()
+            except Exception:
+                logger.warning("Failed to roll back AgentManager initialization", exc_info=True)
+        if self._team_manager is not None:
+            try:
+                await self._team_manager.close()
+            except Exception:
+                logger.warning("Failed to roll back TeamManager initialization", exc_info=True)
+        if self._lsp_manager is not None:
+            try:
+                await self._lsp_manager.shutdown()
+            except Exception:
+                logger.warning("Failed to roll back LSP initialization", exc_info=True)
+        if self._mcp_manager is not None:
+            try:
+                await self._mcp_manager.disconnect_all()
+            except Exception:
+                logger.warning("Failed to roll back MCP initialization", exc_info=True)
+
+        # Close generated wrappers and caller tools that may have completed
+        # only part of setup. Tool close implementations are expected to be
+        # idempotent; failures are isolated so every remaining resource gets a
+        # chance to clean up.
+        current_tools = list(self.tools)
+        for tool in reversed(current_tools):
+            try:
+                await tool.close()
+            except Exception:
+                logger.warning(
+                    "Failed to roll back tool %s initialization",
+                    getattr(tool, "name", type(tool).__name__),
+                    exc_info=True,
+                )
+
+        # Preserve the original list object when the caller supplied one; a
+        # few integrations retain that reference to add tools later.
+        original_tools_container[:] = original_tools
+        self.tools = original_tools_container
+        self.skills = []
+        self._monitor_manager = None
+        self._agent_manager = None
+        self._team_manager = None
+        self._lsp_manager = None
+        self._mcp_manager = None
+        self._hook_manager = None
+        self._permission_manager = None
+        self._ai_reviewer = None
+        self._prompt_profile = None
+        self._api_adapter = None
+        self._initialized = False
+        self._drain_session_queues()
+        await self._drain_team_cleanup_tasks()
+
+    async def _initialize_impl(self) -> None:
         """Late initialization: set up API adapter, load tools, MCP, etc."""
         if self._initialized:
             return
-        if self._closed:
+        if self._closed or self._closing:
             raise RuntimeError("CoreSession is closed")
 
         from crabcode_core.api import create_adapter
@@ -116,106 +374,16 @@ class CoreSession:
         config_mgr = ConfigManager(cwd=self.cwd)
         file_settings = config_mgr.load()
 
-        merged = self.settings
+        # ConfigManager already resolves all file-based layers for this cwd.
+        # Overlay only values explicitly supplied by the caller.  The previous
+        # implementation started with ``self.settings`` and copied a handful
+        # of truthy fields, which both missed valid false/empty overrides and
+        # allowed a prior project's settings to survive a cross-project resume.
+        merged = self._merge_project_settings(file_settings)
+        self.settings = merged
 
-        for key, val in file_settings.env.items():
+        for key, val in merged.env.items():
             os.environ.setdefault(key, val)
-
-        if file_settings.api.provider and not self.settings.api.provider:
-            merged.api.provider = file_settings.api.provider
-        if file_settings.api.model and not self.settings.api.model:
-            merged.api.model = file_settings.api.model
-        if file_settings.api.base_url and not self.settings.api.base_url:
-            merged.api.base_url = file_settings.api.base_url
-        if file_settings.api.api_key_env and not self.settings.api.api_key_env:
-            merged.api.api_key_env = file_settings.api.api_key_env
-        if file_settings.api.codex_auth_path and not self.settings.api.codex_auth_path:
-            merged.api.codex_auth_path = file_settings.api.codex_auth_path
-        if file_settings.api.http_headers and not self.settings.api.http_headers:
-            merged.api.http_headers = dict(file_settings.api.http_headers)
-        if file_settings.api.format and not self.settings.api.format:
-            merged.api.format = file_settings.api.format
-        if (
-            file_settings.api.anthropic_stream_transport != "auto"
-            and self.settings.api.anthropic_stream_transport == "auto"
-        ):
-            merged.api.anthropic_stream_transport = file_settings.api.anthropic_stream_transport
-        if file_settings.api.thinking_enabled is False and self.settings.api.thinking_enabled:
-            merged.api.thinking_enabled = file_settings.api.thinking_enabled
-        if file_settings.api.pass_reasoning_content and not self.settings.api.pass_reasoning_content:
-            merged.api.pass_reasoning_content = file_settings.api.pass_reasoning_content
-        if file_settings.api.max_tokens != 16384 and self.settings.api.max_tokens == 16384:
-            merged.api.max_tokens = file_settings.api.max_tokens
-        if (
-            "max_retries" in file_settings.api.model_fields_set
-            and "max_retries" not in self.settings.api.model_fields_set
-        ):
-            merged.api.max_retries = file_settings.api.max_retries
-        if file_settings.api.extra_body and not self.settings.api.extra_body:
-            merged.api.extra_body = dict(file_settings.api.extra_body)
-        if file_settings.api.context_window and not self.settings.api.context_window:
-            merged.api.context_window = file_settings.api.context_window
-        if file_settings.api.azure_endpoint and not self.settings.api.azure_endpoint:
-            merged.api.azure_endpoint = file_settings.api.azure_endpoint
-        if file_settings.api.azure_api_version and not self.settings.api.azure_api_version:
-            merged.api.azure_api_version = file_settings.api.azure_api_version
-        if file_settings.api.azure_deployment and not self.settings.api.azure_deployment:
-            merged.api.azure_deployment = file_settings.api.azure_deployment
-
-        if file_settings.models:
-            for name, cfg in file_settings.models.items():
-                merged.models.setdefault(name, cfg)
-        if file_settings.default_model and not merged.default_model:
-            merged.default_model = file_settings.default_model
-
-        if file_settings.permissions.allow and not self.settings.permissions.allow:
-            merged.permissions.allow = file_settings.permissions.allow
-        if file_settings.permissions.deny and not self.settings.permissions.deny:
-            merged.permissions.deny = file_settings.permissions.deny
-        if file_settings.permissions.ask and not self.settings.permissions.ask:
-            merged.permissions.ask = file_settings.permissions.ask
-        if file_settings.permissions.default_mode and not self.settings.permissions.default_mode:
-            merged.permissions.default_mode = file_settings.permissions.default_mode
-        if file_settings.permissions.additional_directories and not self.settings.permissions.additional_directories:
-            merged.permissions.additional_directories = file_settings.permissions.additional_directories
-        if file_settings.permissions.run_everything and not self.settings.permissions.run_everything:
-            merged.permissions.run_everything = file_settings.permissions.run_everything
-        if file_settings.permissions.ai_review != self.settings.permissions.ai_review:
-            merged.permissions.ai_review = file_settings.permissions.ai_review
-
-        if file_settings.extra_tools and not self.settings.extra_tools:
-            merged.extra_tools = file_settings.extra_tools
-        if (
-            "auto_compact_enabled" in file_settings.model_fields_set
-            and "auto_compact_enabled" not in self.settings.model_fields_set
-        ):
-            merged.auto_compact_enabled = file_settings.auto_compact_enabled
-        if (
-            file_settings.max_context_length is not None
-            and "max_context_length" not in self.settings.model_fields_set
-        ):
-            merged.max_context_length = file_settings.max_context_length
-        if file_settings.ultra_mode and not self.settings.ultra_mode:
-            merged.ultra_mode = file_settings.ultra_mode
-        if file_settings.tool_call_timeout is not None and self.settings.tool_call_timeout is None:
-            merged.tool_call_timeout = file_settings.tool_call_timeout
-        if file_settings.tool_settings and not self.settings.tool_settings:
-            merged.tool_settings = file_settings.tool_settings
-        elif file_settings.tool_settings:
-            for name, cfg in file_settings.tool_settings.items():
-                merged.tool_settings.setdefault(name, {}).update(cfg)
-        if file_settings.logging.level and merged.logging.level == "WARNING":
-            merged.logging.level = file_settings.logging.level
-        if file_settings.logging.file and not merged.logging.file:
-            merged.logging.file = file_settings.logging.file
-        if file_settings.hooks and not self.settings.hooks:
-            merged.hooks = file_settings.hooks
-        elif file_settings.hooks:
-            for event_name, cfg_list in file_settings.hooks.items():
-                existing = merged.hooks.setdefault(event_name, [])
-                for item in cfg_list:
-                    if item not in existing:
-                        existing.append(item)
 
         configure_logging(self.cwd, merged.logging)
 
@@ -257,15 +425,96 @@ class CoreSession:
         self._hook_manager = HookManager(merged.hooks)
 
         async def _push_agent_event(event: CoreEvent) -> None:
+            # Capture ownership before any await. A session switch can replace
+            # the team manager and event queues while an old agent event is
+            # being handled; such an event must never enter the replacement
+            # session's stream.
+            event_generation = self._lifecycle_generation
+            event_session_id = getattr(event, "_crabcode_session_id", None)
+            event_manager_generation = getattr(
+                event,
+                "_crabcode_session_generation",
+                None,
+            )
+            agent_manager = self._agent_manager
             if self._closed:
                 return
-            if self._foreground_turn_active:
+            if event_session_id is not None and event_session_id != self.session_id:
+                return
+            if (
+                event_manager_generation is not None
+                and agent_manager is not None
+                and event_manager_generation
+                != getattr(agent_manager, "_session_generation", None)
+            ):
+                return
+            event_session_id = event_session_id or self.session_id
+            self._tag_lifecycle_event(
+                event,
+                session_id=event_session_id,
+                generation=event_generation,
+            )
+            # Keep team state synchronized with the underlying managed-agent
+            # lifecycle before forwarding the event to clients.  TeamStateEvent
+            # is deliberately ignored by the hook, so this cannot recurse.
+            team_manager = self._team_manager
+            if team_manager and isinstance(event, AgentStateEvent):
+                await team_manager.handle_agent_event(event)
+            if self._closed or self._lifecycle_generation != event_generation:
+                return
+            if event_session_id is not None and event_session_id != self.session_id:
+                return
+            if (
+                event_manager_generation is not None
+                and self._agent_manager is not None
+                and event_manager_generation
+                != getattr(self._agent_manager, "_session_generation", None)
+            ):
+                return
+            event_stream_token = getattr(
+                event,
+                "_crabcode_event_stream_token",
+                None,
+            )
+            if event_stream_token is None:
+                owner = _TURN_OWNER.get()
+                if owner is not None and owner[0] is self:
+                    # TeamManager emits its own events rather than passing
+                    # through AgentManager's private tagging hook. ContextVars
+                    # preserve the originating run's boundary for those events.
+                    event_stream_token = owner[1]
+            if event_stream_token is not None:
+                try:
+                    setattr(
+                        event,
+                        "_crabcode_event_stream_token",
+                        event_stream_token,
+                    )
+                except (AttributeError, TypeError):
+                    pass
+            if (
+                self._foreground_turn_active
+                and self._active_event_stream_token is not None
+                and event_stream_token is self._active_event_stream_token
+            ):
                 await self._agent_event_queue.put(event)
             else:
-                await self._emit_background_event(event)
+                await self._emit_background_event(
+                    event,
+                    lifecycle_generation=event_generation,
+                    session_id=event_session_id,
+                )
 
         async def _push_agent_completion(completion: AgentCompletion) -> None:
             if self._closed:
+                return
+            completion_generation = completion.run_generation
+            if (
+                completion_generation is not None
+                and self._agent_manager is not None
+                and completion_generation
+                != getattr(self._agent_manager, "_session_generation", None)
+            ):
                 return
             await self._agent_completion_queue.put(
                 (self._lifecycle_generation, completion)
@@ -278,6 +527,12 @@ class CoreSession:
         def _adapter_provider(model_name: str | None) -> Any:
             selected_name = model_name if model_name is not None else self._current_model_name
             return create_adapter(self.settings.get_api_config(selected_name))
+
+        def _event_stream_token_provider() -> object | None:
+            owner = _TURN_OWNER.get()
+            if owner is None or owner[0] is not self:
+                return None
+            return owner[1]
 
         mcp_configs = load_mcp_configs(self.cwd)
         all_mcp_configs = {**mcp_configs}
@@ -294,27 +549,17 @@ class CoreSession:
                     self.tools.append(mcp_tool)
 
         import importlib
+        self._project_extra_tools = []
         for tool_path in merged.extra_tools:
             try:
                 module_path, class_name = tool_path.rsplit(".", 1)
                 mod = importlib.import_module(module_path)
                 tool_cls = getattr(mod, class_name)
-                self.tools.append(tool_cls())
+                extra_tool = tool_cls()
+                self.tools.append(extra_tool)
+                self._project_extra_tools.append(extra_tool)
             except Exception:
                 logger.exception("Failed to load extra tool: %s", tool_path)
-
-        from crabcode_core.types.tool import ToolContext as _ToolContext
-
-        async def _setup_tool(tool: Tool) -> None:
-            ctx = _ToolContext(
-                cwd=self.cwd,
-                env=merged.env,
-                on_event=self.on_tool_event,
-                tool_config=merged.tool_settings.get(tool.name, {}),
-            )
-            await tool.setup(ctx)
-
-        await asyncio.gather(*(_setup_tool(t) for t in self.tools))
 
         from crabcode_core.prompts.profile import PromptProfile
         from crabcode_core.tools.agent import AgentTool
@@ -358,6 +603,7 @@ class CoreSession:
             hook_manager=self._hook_manager,
             lsp_manager=self._lsp_manager,
             ai_reviewer=self._ai_reviewer,
+            event_stream_token_provider=_event_stream_token_provider,
         )
 
         # Initialize TeamManager
@@ -370,6 +616,22 @@ class CoreSession:
             session_id=self.session_id,
         )
         self._agent_manager._team_manager = self._team_manager
+
+        # Initialize LSP before tool setup so every tool receives a complete
+        # session-scoped context.  Previously setup ran before AgentManager,
+        # TeamManager, and LSPManager existed, leaving custom tools with empty
+        # references that they could cache for the lifetime of the session.
+        if merged.lsp is not False:
+            try:
+                self._lsp_manager = LSPManager(cwd=self.cwd, settings=merged)
+                logger.info(
+                    "LSP manager initialized with %d server(s)",
+                    len(self._lsp_manager.servers),
+                )
+            except Exception:
+                logger.warning("Failed to initialize LSP manager", exc_info=True)
+                self._lsp_manager = None
+        self._agent_manager._lsp_manager = self._lsp_manager
 
         has_agent = any(isinstance(t, AgentTool) for t in self.tools)
         if not has_agent:
@@ -391,18 +653,43 @@ class CoreSession:
         if self.skills:
             self.tools.append(SkillTool(self.skills))
 
-        await asyncio.gather(*(t.resolve_prompt() for t in self.tools))
+        from crabcode_core.types.tool import ToolContext as _ToolContext
 
-        # Initialize LSP manager (default on, can be disabled via settings)
-        if merged.lsp is not False:
-            try:
-                self._lsp_manager = LSPManager(cwd=self.cwd, settings=merged)
-                logger.info("LSP manager initialized with %d server(s)", len(self._lsp_manager.servers))
-            except Exception:
-                logger.warning("Failed to initialize LSP manager", exc_info=True)
-                self._lsp_manager = None
+        async def _setup_tool(tool: Tool) -> None:
+            ctx = _ToolContext(
+                cwd=self.cwd,
+                messages=self.messages,
+                session_id=self.session_id,
+                env=merged.env,
+                on_event=self.on_tool_event,
+                tool_config=merged.tool_settings.get(tool.name, {}),
+                choice_queue=self._choice_queue,
+                tool_event_queue=asyncio.Queue(),
+                agent_manager=self._agent_manager,
+                lsp_manager=self._lsp_manager,
+                team_manager=self._team_manager,
+                session=self,
+            )
+            await tool.setup(ctx)
+
+        await self._gather_cancel_on_error(*(_setup_tool(t) for t in self.tools))
+
+        await self._gather_cancel_on_error(*(t.resolve_prompt() for t in self.tools))
 
         self._initialized = True
+        if self._pending_agent_snapshots is not None and self._agent_manager is not None:
+            snapshots = self._pending_agent_snapshots
+            pending_completions = self._agent_manager.restore_snapshots(snapshots)
+            for completion in pending_completions:
+                await self._agent_completion_queue.put(
+                    (self._lifecycle_generation, completion)
+                )
+            if pending_completions:
+                self._ensure_agent_completion_dispatcher()
+            # Keep the source projection until the entire restore succeeds.
+            # Failed initialization is retryable, and cleanup discards the
+            # partially constructed AgentManager that received these records.
+            self._pending_agent_snapshots = None
 
     def set_background_event_sink(
         self,
@@ -411,24 +698,139 @@ class CoreSession:
         """Set the frontend sink used for events emitted outside a user turn."""
         self._background_event_sink = sink
 
-    async def _emit_background_event(self, event: CoreEvent) -> None:
-        if self._closed:
+    def _tag_lifecycle_event(
+        self,
+        event: CoreEvent,
+        *,
+        session_id: str | None = None,
+        generation: int | None = None,
+    ) -> CoreEvent:
+        """Attach private ownership metadata to an asynchronously queued event."""
+        try:
+            setattr(
+                event,
+                "_crabcode_core_session_id",
+                self.session_id if session_id is None else session_id,
+            )
+            setattr(
+                event,
+                "_crabcode_core_lifecycle_generation",
+                self._lifecycle_generation if generation is None else generation,
+            )
+        except (AttributeError, TypeError):
+            # Third-party event objects may be frozen. They still flow through
+            # the explicit generation checks at their call sites.
+            pass
+        return event
+
+    def _event_matches_lifecycle(self, event: CoreEvent) -> bool:
+        event_session_id = getattr(event, "_crabcode_core_session_id", None)
+        event_generation = getattr(
+            event,
+            "_crabcode_core_lifecycle_generation",
+            None,
+        )
+        if event_session_id is None and event_generation is None:
+            return True
+        return self._lifecycle_matches(
+            self.session_id if event_session_id is None else event_session_id,
+            self._lifecycle_generation
+            if event_generation is None
+            else event_generation,
+        )
+
+    def _event_matches_active_stream(self, event: CoreEvent) -> bool:
+        """Reject events left behind by a previous foreground forwarder."""
+        token = getattr(event, "_crabcode_event_stream_token", None)
+        return bool(
+            self._foreground_turn_active
+            and self._active_event_stream_token is not None
+            and token is self._active_event_stream_token
+        )
+
+    async def _emit_background_event(
+        self,
+        event: CoreEvent,
+        *,
+        lifecycle_generation: int | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        """Deliver a background event only within its originating lifecycle.
+
+        A gateway sink can await transport backpressure.  If a session is
+        resumed or replaced during that wait, cancel the pending sink call so
+        an old event cannot complete into the replacement stream.
+        """
+        expected_generation = (
+            self._lifecycle_generation
+            if lifecycle_generation is None
+            else lifecycle_generation
+        )
+        expected_session_id = self.session_id if session_id is None else session_id
+        # Capture the current fence before validating ownership.  If a
+        # synchronous lifecycle switch lands between the validation and sink
+        # task creation, the captured event is already set and will cancel the
+        # stale delivery instead of waiting on the replacement lifecycle's
+        # fresh event forever.
+        lifecycle_changed = self._lifecycle_changed
+        if not self._lifecycle_matches(expected_session_id, expected_generation):
             return
-        if self._background_event_sink is not None:
-            await self._background_event_sink(event)
-        else:
+
+        self._tag_lifecycle_event(
+            event,
+            session_id=expected_session_id,
+            generation=expected_generation,
+        )
+
+        sink = self._background_event_sink
+        if sink is None:
             await self._background_event_queue.put(event)
+            return
+
+        # Re-check the identity as well as the numeric generation.  The event
+        # object changes on every lifecycle transition, which closes the small
+        # window after the first check even when the same session id is resumed.
+        if (
+            lifecycle_changed is not self._lifecycle_changed
+            or not self._lifecycle_matches(expected_session_id, expected_generation)
+        ):
+            return
+        sink_task = asyncio.create_task(sink(event))
+        changed_task = asyncio.create_task(lifecycle_changed.wait())
+        try:
+            done, _ = await asyncio.wait(
+                (sink_task, changed_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if changed_task in done and not sink_task.done():
+                sink_task.cancel()
+                await asyncio.gather(sink_task, return_exceptions=True)
+                return
+            # If both completed together, the sink completed before (or at the
+            # same event-loop turn as) the lifecycle fence; preserve its result.
+            await sink_task
+        except asyncio.CancelledError:
+            sink_task.cancel()
+            await asyncio.gather(sink_task, return_exceptions=True)
+            raise
+        finally:
+            if not changed_task.done():
+                changed_task.cancel()
+            await asyncio.gather(changed_task, return_exceptions=True)
 
     async def next_background_event(self) -> CoreEvent:
         """Wait for an event produced while no foreground turn owns a stream."""
-        return await self._background_event_queue.get()
+        while True:
+            event = await self._background_event_queue.get()
+            if self._event_matches_lifecycle(event):
+                return event
 
     def _ensure_agent_completion_dispatcher(self) -> None:
         if self._closed:
             return
         if self._agent_completion_task is None or self._agent_completion_task.done():
             self._agent_completion_task = asyncio.create_task(
-                self._dispatch_agent_completions()
+                _run_without_turn_owner(self._dispatch_agent_completions)
             )
 
     async def enqueue_monitor_notification(
@@ -481,7 +883,7 @@ class CoreSession:
                 for (generation, session_id), notifications in grouped.items():
                     if not self._lifecycle_matches(session_id, generation):
                         continue
-                    async with self._turn_lock:
+                    async with self._turn_scope():
                         if not self._lifecycle_matches(session_id, generation):
                             continue
                         try:
@@ -490,7 +892,11 @@ class CoreSession:
                                 synthetic=True,
                                 message_uuid=str(uuid.uuid4()),
                             ):
-                                await self._emit_background_event(event)
+                                await self._emit_background_event(
+                                    event,
+                                    lifecycle_generation=generation,
+                                    session_id=session_id,
+                                )
                         except Exception as exc:
                             logger.exception("Automatic Monitor continuation failed")
                             try:
@@ -499,7 +905,9 @@ class CoreSession:
                                         message=f"Monitor continuation failed: {exc}",
                                         recoverable=True,
                                         error_type="monitor_callback",
-                                    )
+                                    ),
+                                    lifecycle_generation=generation,
+                                    session_id=session_id,
                                 )
                             except Exception:
                                 logger.exception("Failed to publish Monitor callback error")
@@ -514,6 +922,14 @@ class CoreSession:
             and self.session_id == session_id
             and self._lifecycle_generation == generation
         )
+
+    def _advance_lifecycle_generation(self) -> int:
+        """Fence callbacks already waiting on an old session lifecycle."""
+        previous = self._lifecycle_changed
+        self._lifecycle_generation += 1
+        self._lifecycle_changed = asyncio.Event()
+        previous.set()
+        return self._lifecycle_generation
 
     async def _dispatch_agent_completions(self) -> None:
         try:
@@ -584,7 +1000,9 @@ class CoreSession:
                                     message=f"Managed-agent callback failed: {exc}",
                                     recoverable=True,
                                     error_type="agent_callback",
-                                )
+                                ),
+                                lifecycle_generation=generation,
+                                session_id=completions[0].session_id,
                             )
                         except Exception:
                             logger.exception(
@@ -704,7 +1122,7 @@ class CoreSession:
             if lifecycle_generation is None
             else lifecycle_generation
         )
-        async with self._turn_lock:
+        async with self._turn_scope():
             if (
                 not self._lifecycle_matches(expected_session_id, generation)
                 or not self._agent_manager
@@ -820,7 +1238,11 @@ class CoreSession:
                 ):
                     if isinstance(event, TurnCompleteEvent):
                         terminal_event = event
-                    await self._emit_background_event(event)
+                    await self._emit_background_event(
+                        event,
+                        lifecycle_generation=generation,
+                        session_id=expected_session_id,
+                    )
             except Exception:
                 logger.exception("Automatic managed-agent continuation failed")
 
@@ -1036,12 +1458,485 @@ class CoreSession:
             self.session_id = generate_session_id()
         self._session_storage = SessionStorage(self.cwd, self.session_id)
         if self._agent_manager:
-            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
+            self._agent_manager.update_session(
+                env=self.settings.env,
+                session_id=self.session_id,
+                cwd=self.cwd,
+            )
+        if self._team_manager is not None:
+            # TeamManager is constructed before lazy storage has a real id.
+            # This is still the same logical session, so rebind its context in
+            # place instead of leaking an empty-session runtime.
+            self._team_manager._session_id = self.session_id
+            self._team_manager._cwd = self.cwd
+        self._refresh_tool_context_bindings()
         active_cfg = self.settings.get_api_config(self._current_model_name)
         self._session_storage.write_meta(
             model=active_cfg.model or "",
             provider=active_cfg.provider or "",
         )
+
+    def _refresh_tool_context_bindings(self) -> None:
+        """Refresh mutable setup contexts after a session/runtime switch.
+
+        Tool setup normally runs once, but session IDs and team runtimes are
+        intentionally lazy/replaced during ``new_session`` and ``resume``.
+        Updating the cached context in place keeps long-lived tools aligned
+        without invoking setup hooks a second time (which may spawn resources
+        or reset tool state).
+        """
+        for tool in self.tools:
+            context = getattr(tool, "_setup_context", None)
+            if context is None:
+                continue
+            updates = {
+                "cwd": self.cwd,
+                "messages": self.messages,
+                "session_id": self.session_id,
+                "env": dict(self.settings.env),
+                "tool_config": dict(
+                    self.settings.tool_settings.get(
+                        getattr(tool, "name", ""),
+                        {},
+                    )
+                ),
+                "choice_queue": self._choice_queue,
+                "tool_event_queue": asyncio.Queue(),
+                "agent_manager": self._agent_manager,
+                "team_manager": self._team_manager,
+                "lsp_manager": self._lsp_manager,
+                "session": self,
+            }
+            for name, value in updates.items():
+                try:
+                    setattr(context, name, value)
+                except (AttributeError, TypeError):
+                    # Lightweight integrations sometimes expose an immutable
+                    # context double. They still remain usable; fields they
+                    # support are refreshed without making session switching
+                    # fail because of an optional attribute.
+                    continue
+
+    def _replace_team_manager(self, *, schedule_old_close: bool = True) -> None:
+        """Create a team runtime bound to the current session.
+
+        TeamManager instances hold message buses and teammate registries. They
+        must not survive a session switch, otherwise a new conversation can
+        address agents and inboxes from the previous conversation.
+        """
+        from crabcode_core.team.manager import TeamManager
+
+        old_manager = self._team_manager
+        if old_manager is None and self._agent_manager is None:
+            return
+        self._team_manager = TeamManager(
+            agent_manager=self._agent_manager,
+            settings=self.settings,
+            event_sink=(
+                getattr(self._agent_manager, "_event_sink", self._emit_background_event)
+                if self._agent_manager
+                else self._emit_background_event
+            ),
+            cwd=self.cwd,
+            session_id=self.session_id,
+        )
+        if self._agent_manager:
+            self._agent_manager._team_manager = self._team_manager
+        self._refresh_tool_context_bindings()
+
+        if schedule_old_close and old_manager is not None and old_manager is not self._team_manager:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                async def _discard_old_team_event(_event: Any) -> None:
+                    return
+
+                old_manager._event_sink = _discard_old_team_event
+
+                async def _close_old_team() -> None:
+                    # Teardown events from the old bus must never enter the new
+                    # session's event stream.
+                    try:
+                        await old_manager.close()
+                    except Exception:
+                        logger.warning("Failed to close replaced team manager", exc_info=True)
+
+                cleanup_task = loop.create_task(_close_old_team())
+                self._team_cleanup_tasks.add(cleanup_task)
+                cleanup_task.add_done_callback(self._team_cleanup_tasks.discard)
+
+    async def _drain_team_cleanup_tasks(self) -> None:
+        """Wait for TeamManagers replaced by synchronous lifecycle calls."""
+        tasks = list(self._team_cleanup_tasks)
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._team_cleanup_tasks.difference_update(tasks)
+
+    async def _discard_prepared_project_resources(
+        self,
+        prepared: dict[str, Any],
+    ) -> None:
+        """Close target-project resources that were staged but never committed."""
+
+        async def _finish_cleanup(
+            awaitable: Awaitable[Any],
+            warning: str,
+            *args: Any,
+        ) -> None:
+            # Rollback is itself entered from an exception/cancellation path.
+            # Shield each owned cleanup task so a repeated cancellation cannot
+            # strand the remaining staged resources.
+            task = asyncio.create_task(awaitable)
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.warning(warning, *args)
+            except Exception:
+                logger.warning(warning, *args, exc_info=True)
+
+        mcp_manager = prepared.get("mcp_manager")
+        if mcp_manager is not None:
+            await _finish_cleanup(
+                mcp_manager.disconnect_all(),
+                "Failed to discard staged MCP resources",
+            )
+        lsp_manager = prepared.get("lsp_manager")
+        if lsp_manager is not None:
+            await _finish_cleanup(
+                lsp_manager.shutdown(),
+                "Failed to discard staged LSP resources",
+            )
+        for tool in reversed(prepared.get("extra_tools", [])):
+            await _finish_cleanup(
+                tool.close(),
+                "Failed to discard staged project tool %s",
+                getattr(tool, "name", type(tool).__name__),
+            )
+
+    async def _prepare_project_resources(self, target_cwd: str) -> dict[str, Any]:
+        """Build all target-project resources before changing session ownership."""
+        from crabcode_core.api import create_adapter
+        from crabcode_core.config.manager import ConfigManager
+        from crabcode_core.mcp.client import McpManager
+        from crabcode_core.mcp.config import load_mcp_configs
+        from crabcode_core.permissions.ai_reviewer import AiPermissionReviewer
+        from crabcode_core.permissions.manager import PermissionManager
+        from crabcode_core.skills.loader import load_skills
+        from crabcode_core.tools.skill import SkillTool
+        import importlib
+
+        prepared: dict[str, Any] = {
+            "mcp_manager": None,
+            "lsp_manager": None,
+            "extra_tools": [],
+        }
+        try:
+            file_settings = ConfigManager(cwd=target_cwd).load()
+            merged = self._merge_project_settings(file_settings)
+            chosen = self._current_model_name
+            if chosen is None or chosen not in merged.models:
+                chosen = merged.default_model
+            api_config = merged.get_api_config(chosen)
+
+            prepared.update(
+                settings=merged,
+                model_name=chosen,
+                api_adapter=create_adapter(api_config),
+                permission_manager=PermissionManager(settings=merged.permissions),
+                ai_reviewer=AiPermissionReviewer(
+                    settings=merged,
+                    default_api_config=api_config,
+                ),
+                prompt_profile=None,
+                hooks={key: list(value) for key, value in merged.hooks.items()},
+            )
+            if merged.prompt_profile:
+                from crabcode_core.prompts.profile import PromptProfile
+
+                prepared["prompt_profile"] = PromptProfile(**merged.prompt_profile)
+
+            extra_tools: list[Tool] = []
+            for tool_path in merged.extra_tools:
+                try:
+                    module_path, class_name = tool_path.rsplit(".", 1)
+                    tool_cls = getattr(importlib.import_module(module_path), class_name)
+                    extra_tools.append(tool_cls())
+                except Exception:
+                    logger.exception("Failed to load resumed project tool: %s", tool_path)
+            prepared["extra_tools"] = extra_tools
+
+            if merged.lsp is not False:
+                try:
+                    prepared["lsp_manager"] = LSPManager(
+                        cwd=target_cwd,
+                        settings=merged,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to initialize resumed project LSP",
+                        exc_info=True,
+                    )
+
+            mcp_configs = load_mcp_configs(target_cwd)
+            for name, config in merged.mcp_servers.items():
+                if name not in mcp_configs:
+                    mcp_configs[name] = config
+            prepared["mcp_configs"] = mcp_configs
+            prepared["mcp_tools"] = []
+            if mcp_configs:
+                mcp_manager = McpManager()
+                prepared["mcp_manager"] = mcp_manager
+                prepared["mcp_tools"] = await mcp_manager.connect(mcp_configs)
+
+            skills = load_skills(target_cwd)
+            prepared["skills"] = skills
+            prepared["skill_tool"] = SkillTool(skills) if skills else None
+            return prepared
+        except BaseException:
+            await self._discard_prepared_project_resources(prepared)
+            raise
+
+    async def _rebind_project_resources(
+        self,
+        prepared: dict[str, Any] | None = None,
+    ) -> None:
+        """Refresh resources whose configuration/working directory is project-scoped.
+
+        ``resume`` can be called on an already initialized CLI session.  The
+        conversation storage may then point at another project, while the old
+        LSP process, skills, MCP clients, and tool setup contexts still point
+        at the original cwd.  Rebind only those resources here; the heavier
+        API/session state remains intact and managed-agent snapshots are
+        restored by the caller immediately afterwards.
+        """
+        if not self._initialized:
+            return
+
+        from crabcode_core.mcp.client import McpToolWrapper
+        from crabcode_core.tools.skill import SkillTool
+        from crabcode_core.types.tool import ToolContext
+
+        if prepared is None:
+            prepared = await self._prepare_project_resources(self.cwd)
+        merged = prepared["settings"]
+        self.settings = merged
+        if self._team_manager is not None:
+            # ``_replace_team_manager`` runs before this rebind so old teams
+            # can be closed without sharing their bus.  Update the fresh,
+            # empty manager with the target project's limits and inbox config
+            # before any resumed tool setup can create a team.
+            self._team_manager._settings = merged
+            self._team_manager._cwd = self.cwd
+
+        # Extra tools can carry subprocesses, caches, or cwd-bound state. They
+        # are project-owned just like MCP wrappers and must not survive a
+        # cross-project resume.
+        old_extra_tools = list(self._project_extra_tools)
+        self._project_extra_tools = []
+        for tool in old_extra_tools:
+            if tool in self.tools:
+                self.tools.remove(tool)
+            try:
+                await tool.close()
+            except Exception:
+                logger.warning("Failed to close old project tool %s", tool.name, exc_info=True)
+
+        self._project_extra_tools = list(prepared["extra_tools"])
+        self.tools.extend(self._project_extra_tools)
+
+        # Rebuild project-sensitive configuration objects as a unit.  Keeping
+        # the old API adapter/reviewer/permission rules was particularly easy
+        # to miss because cwd-scoped tools still appeared healthy afterwards.
+        chosen = prepared["model_name"]
+        self._current_model_name = chosen
+        self._api_adapter = prepared["api_adapter"]
+        self._permission_manager = prepared["permission_manager"]
+        self._ai_reviewer = prepared["ai_reviewer"]
+        self._prompt_profile = prepared["prompt_profile"]
+
+        hooks = prepared["hooks"]
+        if self._hook_manager is not None:
+            try:
+                self._hook_manager.set_hooks(hooks)
+            except Exception:
+                logger.warning("Failed to rebind project hooks", exc_info=True)
+        self.settings.hooks = hooks
+
+        env = dict(merged.env)
+        for key, val in env.items():
+            os.environ.setdefault(key, val)
+
+        # LSP clients are tied to project roots.  Always shut down the old
+        # cache before constructing a manager for the resumed project's root.
+        old_lsp = self._lsp_manager
+        if old_lsp is not None:
+            try:
+                await old_lsp.shutdown()
+            except Exception:
+                logger.warning("Failed to shut down old project LSP", exc_info=True)
+        self._lsp_manager = prepared["lsp_manager"]
+        target_lsp = merged.lsp
+        self.settings.lsp = target_lsp
+
+        # MCP subprocesses and wrappers are also project-scoped.  Remove old
+        # wrappers before connecting the target project's configuration.
+        old_mcp = self._mcp_manager
+        if old_mcp is not None:
+            try:
+                await old_mcp.disconnect_all()
+            except Exception:
+                logger.warning("Failed to disconnect old project MCP", exc_info=True)
+        self._mcp_manager = prepared["mcp_manager"]
+        self.tools = [tool for tool in self.tools if not isinstance(tool, McpToolWrapper)]
+        mcp_configs = prepared["mcp_configs"]
+        self.settings.mcp_servers = dict(mcp_configs)
+        if self._mcp_manager is not None:
+            existing_names = {tool.name for tool in self.tools}
+            self.tools.extend(
+                tool
+                for tool in prepared["mcp_tools"]
+                if tool.name not in existing_names
+            )
+
+        # Skills are loaded from the active project's .claude/.crabcode tree.
+        # Replace the generated SkillTool while preserving caller-provided
+        # tools and the existing AgentTool/monitor instances.
+        self.skills = prepared["skills"]
+        self.tools = [tool for tool in self.tools if not isinstance(tool, SkillTool)]
+        if prepared["skill_tool"] is not None:
+            self.tools.append(prepared["skill_tool"])
+
+        if self._agent_manager is not None:
+            # Publish the new runtime references before custom tool setup
+            # hooks run; setup code is allowed to inspect/spawn through the
+            # manager and must see the resumed project's configuration.
+            self._agent_manager._settings = self.settings
+            self._agent_manager._agent_settings = self.settings.agent
+            self._agent_manager._cwd = self.cwd
+            self._agent_manager._env = dict(self.settings.env)
+            self._agent_manager._permission_manager = self._permission_manager
+            self._agent_manager._ai_reviewer = self._ai_reviewer
+            self._agent_manager._prompt_profile = self._prompt_profile
+            self._agent_manager._hook_manager = self._hook_manager
+            self._agent_manager._lsp_manager = self._lsp_manager
+
+            # AgentTool caches execution and display limits on the tool
+            # instance. Refresh those values when the resumed project uses a
+            # different agent profile; updating only AgentManager would leave
+            # the old project's limits in effect for tool calls.
+            from crabcode_core.tools.agent import AgentTool
+
+            agent_cfg = self.settings.agent
+            for tool in self.tools:
+                if not isinstance(tool, AgentTool):
+                    continue
+                tool._manager = self._agent_manager
+                tool._settings = agent_cfg
+                tool._max_turns = agent_cfg.max_turns
+                tool._timeout = agent_cfg.timeout
+                tool._max_output_chars = agent_cfg.max_output_chars
+                tool._max_display_lines = self.settings.display.get_max_lines("Agent")
+
+        # Tool calls receive a fresh context, but setup hooks (and custom tools
+        # that cache cwd/env) need to be rebound as well.  A failing optional
+        # tool must not make an otherwise valid conversation impossible to
+        # resume.
+        async def _setup_tool(tool: Tool) -> None:
+            context = ToolContext(
+                cwd=self.cwd,
+                messages=self.messages,
+                env=dict(self.settings.env),
+                session_id=self.session_id,
+                on_event=self.on_tool_event,
+                tool_config=self.settings.tool_settings.get(tool.name, {}),
+                choice_queue=self._choice_queue,
+                tool_event_queue=asyncio.Queue(),
+                agent_manager=self._agent_manager,
+                lsp_manager=self._lsp_manager,
+                team_manager=self._team_manager,
+                session=self,
+            )
+            try:
+                await tool.setup(context)
+            except Exception:
+                logger.warning("Failed to rebind tool %s to %s", tool.name, self.cwd, exc_info=True)
+
+        await asyncio.gather(*(_setup_tool(tool) for tool in self.tools))
+
+        async def _resolve_tool_prompt(tool: Tool) -> None:
+            try:
+                await tool.resolve_prompt()
+            except Exception:
+                logger.warning(
+                    "Failed to resolve prompt for rebound tool %s",
+                    tool.name,
+                    exc_info=True,
+                )
+
+        # MCP and Skill tools are newly constructed during a cross-project
+        # resume. Resolve their detailed prompts just like initialization does;
+        # otherwise the next model request receives an empty/short schema.
+        await asyncio.gather(*(_resolve_tool_prompt(tool) for tool in self.tools))
+
+        if self._agent_manager is not None:
+            # AgentManager reads these fields when constructing each new run.
+            self._agent_manager._settings = self.settings
+            self._agent_manager._agent_settings = self.settings.agent
+            self._agent_manager._cwd = self.cwd
+            self._agent_manager._env = dict(self.settings.env)
+            self._agent_manager._permission_manager = self._permission_manager
+            self._agent_manager._ai_reviewer = self._ai_reviewer
+            self._agent_manager._prompt_profile = self._prompt_profile
+            self._agent_manager._hook_manager = self._hook_manager
+            self._agent_manager._lsp_manager = self._lsp_manager
+
+    @staticmethod
+    def _consume_cancelled_title_task(task: asyncio.Task[None]) -> None:
+        """Consume a fire-and-forget title task's terminal exception."""
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("Background title generation failed", exc_info=True)
+
+    def _cancel_title_generation_nowait(self) -> None:
+        """Cancel title generation from synchronous lifecycle APIs.
+
+        ``new_session`` is intentionally synchronous for existing callers, so
+        it cannot await task cancellation.  Registering a done callback both
+        drains any exception and guarantees the old task cannot produce an
+        unhandled-task warning while the new session is being created.
+        """
+        task = self._title_generation_task
+        self._title_generation_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        if task.done():
+            self._consume_cancelled_title_task(task)
+        else:
+            task.add_done_callback(self._consume_cancelled_title_task)
+
+    async def _cancel_title_generation(self) -> None:
+        """Cancel and await the title task during async lifecycle changes."""
+        task = self._title_generation_task
+        self._title_generation_task = None
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     def _maybe_generate_title(self) -> None:
         """Fire-and-forget task to generate an LLM title after the first turn."""
@@ -1066,63 +1961,178 @@ class CoreSession:
 
         storage = self._session_storage
         adapter = self._api_adapter
+        session_id = self.session_id
+        lifecycle_generation = self._lifecycle_generation
 
         async def _gen() -> None:
             try:
                 from crabcode_core.session.title_gen import generate_title
                 new_title = await generate_title(first_msg, first_assistant_text, adapter)
-                if new_title:
+                # A title request can outlive a synchronous ``new_session``
+                # call.  Never write its result into the replacement session
+                # (or into a storage object that has since been detached).
+                if (
+                    new_title
+                    and not self._closed
+                    and self.session_id == session_id
+                    and self._lifecycle_generation == lifecycle_generation
+                    and self._session_storage is storage
+                ):
                     storage.update_title(new_title)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.debug("Background title generation failed", exc_info=True)
 
-        self._title_generation_task = asyncio.create_task(_gen())
+        task = asyncio.create_task(_gen())
+        self._title_generation_task = task
+
+        def _clear_title_task(done: asyncio.Task[None]) -> None:
+            if self._title_generation_task is done:
+                self._title_generation_task = None
+            self._consume_cancelled_title_task(done)
+
+        task.add_done_callback(_clear_title_task)
 
     async def close(self) -> None:
-        """Release session-scoped resources."""
-        if self._closed:
+        """Release session-scoped resources.
+
+        Cleanup runs in an owned task so cancellation of one transport request
+        cannot strand a half-closed session.  Later callers join the same task
+        and therefore still wait for the resources to be released.
+        """
+        # A tool's ``close()`` hook can call back into its owning session.  If
+        # that happens while the owned teardown task is closing the same tool,
+        # waiting on ``_close_lock`` (or on the teardown task itself) would
+        # deadlock the cleanup forever.  Teardown is already in progress in
+        # this task, so the recursive call has nothing useful to do.
+        if asyncio.current_task() is self._close_task or _CLOSE_OWNER.get() is self:
             return
-        self._closed = True
-        self._lifecycle_generation += 1
-        self._drain_session_queues()
+        async with self._close_lock:
+            if self._close_task is None:
+                if self._closed or self._closing:
+                    return
+                self._closing = True
+                # Context variables propagate into the owned teardown task and
+                # any tool-created descendants.  Reset this caller's context
+                # immediately after task creation so unrelated work remains
+                # free to close other sessions normally.
+                owner_token = _CLOSE_OWNER.set(self)
+                try:
+                    self._close_task = asyncio.create_task(self._close_impl())
+                finally:
+                    _CLOSE_OWNER.reset(owner_token)
+                self._close_task.add_done_callback(self._finish_close_task)
+            task = self._close_task
+        await asyncio.shield(task)
 
-        if self._agent_completion_task is not None:
-            self._agent_completion_task.cancel()
-            try:
-                await self._agent_completion_task
-            except asyncio.CancelledError:
+    def _finish_close_task(self, task: asyncio.Task[None]) -> None:
+        self._closing = False
+        # Retrieve terminal exceptions when every caller was cancelled.  A
+        # caller that awaits ``close()`` still receives the original exception.
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except Exception:
+            logger.warning("Session close task failed", exc_info=True)
+
+    async def _close_impl(self) -> None:
+        """Perform the actual teardown in a task owned by :meth:`close`."""
+        # Multiple transports can race to archive/stop the same session.  The
+        # lock makes the second close wait until the first has really released
+        # every resource instead of returning merely because ``_closed`` was
+        # set at the beginning of cleanup.
+        async with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._advance_lifecycle_generation()
+            # Wake any foreground query loop and stop title generation before
+            # its storage/adapter references outlive the session.
+            self._abort_controller.set()
+
+            # An initialization may already be running when shutdown starts.
+            # Wait for it to finish while the closed flag prevents a new
+            # initializer from entering, then tear down the complete object.
+            resume_task = self._active_resume_task
+            if (
+                resume_task is not None
+                and resume_task is not asyncio.current_task()
+                and not resume_task.done()
+            ):
+                resume_task.cancel()
+                await asyncio.gather(resume_task, return_exceptions=True)
+            async with self._initialize_lock:
                 pass
-            self._agent_completion_task = None
 
-        if self._monitor_notification_task is not None:
-            self._monitor_notification_task.cancel()
-            try:
-                await self._monitor_notification_task
-            except asyncio.CancelledError:
-                pass
-            self._monitor_notification_task = None
+            self._drain_session_queues()
+            await self._cancel_title_generation()
 
-        if self._agent_manager is not None:
-            await self._agent_manager.close()
+            # Query-loop children are separate tasks from the consumer of the
+            # async generator.  Cancel and await them before closing tools or
+            # protocol managers; otherwise a late tool event can use a closed
+            # resource or append data to a replacement session.
+            current_task = asyncio.current_task()
+            active_query_tasks = [
+                task for task in self._active_query_tasks if task is not current_task
+            ]
+            for task in active_query_tasks:
+                task.cancel()
+            if active_query_tasks:
+                await asyncio.gather(*active_query_tasks, return_exceptions=True)
+            self._active_query_tasks.clear()
 
-        if self._team_manager is not None:
-            await self._team_manager.close()
+            if self._agent_completion_task is not None:
+                self._agent_completion_task.cancel()
+                try:
+                    await self._agent_completion_task
+                except asyncio.CancelledError:
+                    pass
+                self._agent_completion_task = None
 
-        if self._lsp_manager is not None:
-            try:
-                await self._lsp_manager.shutdown()
-            except Exception:
-                logger.warning("Failed to shut down LSP manager", exc_info=True)
-            self._lsp_manager = None
+            if self._monitor_notification_task is not None:
+                self._monitor_notification_task.cancel()
+                try:
+                    await self._monitor_notification_task
+                except asyncio.CancelledError:
+                    pass
+                self._monitor_notification_task = None
 
-        if self._mcp_manager is not None:
-            await self._mcp_manager.disconnect_all()
+            if self._agent_manager is not None:
+                try:
+                    await self._agent_manager.close()
+                except Exception:
+                    logger.warning("Failed to close agent manager", exc_info=True)
 
-        for tool in reversed(self.tools):
-            try:
-                await tool.close()
-            except Exception:
-                logger.warning("Failed to close tool %s", tool.name, exc_info=True)
+            await self._drain_team_cleanup_tasks()
+
+            if self._team_manager is not None:
+                try:
+                    await self._team_manager.close()
+                except Exception:
+                    logger.warning("Failed to close team manager", exc_info=True)
+
+            if self._lsp_manager is not None:
+                try:
+                    await self._lsp_manager.shutdown()
+                except Exception:
+                    logger.warning("Failed to shut down LSP manager", exc_info=True)
+                self._lsp_manager = None
+
+            if self._mcp_manager is not None:
+                try:
+                    await self._mcp_manager.disconnect_all()
+                except Exception:
+                    logger.warning("Failed to disconnect MCP manager", exc_info=True)
+                self._mcp_manager = None
+
+            for tool in reversed(self.tools):
+                try:
+                    await tool.close()
+                except Exception:
+                    logger.warning("Failed to close tool %s", tool.name, exc_info=True)
+            self._background_event_sink = None
 
     # --- Context extraction helpers for skill auto-trigger ---
 
@@ -1186,6 +2196,8 @@ class CoreSession:
     ) -> AsyncGenerator[CoreEvent, None]:
         """Serialize turns and settle a queued manual compact at a safe boundary."""
         await self.initialize()
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
         if self._agent_completion_task is not None and self._agent_completion_task.done():
             try:
                 error = self._agent_completion_task.exception()
@@ -1209,24 +2221,27 @@ class CoreSession:
             self._monitor_notification_task = None
             if not self._monitor_notification_queue.empty():
                 self._ensure_monitor_notification_dispatcher()
-        async with self._turn_lock:
+        async with self._turn_scope():
             self._foreground_turn_active = True
+            self._active_event_stream_token = self._active_turn_token
+            stream = self._send_message_impl(
+                text,
+                max_turns=max_turns,
+                images=images,
+            )
             try:
-                async for event in self._send_message_impl(
-                    text,
-                    max_turns=max_turns,
-                    images=images,
-                ):
+                async for event in stream:
                     yield event
             finally:
-                self._foreground_turn_active = False
-                if self._pending_manual_compact is not None:
-                    instructions = self._pending_manual_compact
-                    self._pending_manual_compact = None
-                    await self._compact_now(
-                        trigger="manual",
-                        custom_instructions=instructions or None,
-                    )
+                try:
+                    # ``async for`` does not own/finalize its iterator when the
+                    # outer generator is closed at a yield point. Explicitly
+                    # close it so its producer is cancelled and its committed
+                    # projection is flushed before releasing the turn scope.
+                    await stream.aclose()
+                finally:
+                    self._active_event_stream_token = None
+                    self._foreground_turn_active = False
 
     async def _send_message_impl(
         self,
@@ -1247,8 +2262,14 @@ class CoreSession:
                     ``media_type`` (e.g. "image/png") and ``data`` (base64-encoded).
         """
         await self.initialize()
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
         self._ensure_session_storage()
         self._abort_controller.clear()
+        # The REPL buffer belongs to one foreground/synthetic turn.  Any
+        # prefixes retained from an earlier interrupted turn must not be used
+        # to strip text from this request.
+        self._partial_committed_prefixes = []
 
         from crabcode_core.prompts.context import get_system_context, get_user_context
         from crabcode_core.prompts.profile import PromptProfile
@@ -1278,12 +2299,19 @@ class CoreSession:
             if hook_result.blocked:
                 hook_blocked_reason = "; ".join(hook_result.details or []) or "blocked by user_prompt_submit hook"
 
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+
         # Build user message content — text + optional image blocks
         existing_message = next(
             (
                 message
                 for message in self.messages
-                if message_uuid is not None and message.uuid == message_uuid
+                if (
+                    message_uuid is not None
+                    and message.uuid == message_uuid
+                    and getattr(message.role, "value", message.role) == "user"
+                )
             ),
             None,
         )
@@ -1389,6 +2417,9 @@ class CoreSession:
                 or DEFAULT_CONTEXT_WINDOW
             )
 
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+
         tool_names = [t.name for t in self.tools if t.is_enabled]
         model = active_api_cfg.model or "claude-sonnet-4-20250514"
 
@@ -1452,6 +2483,12 @@ class CoreSession:
             compact_threshold=self.settings.max_context_length,
             reply_to_uuid=message_uuid if synthetic else None,
         )
+        query_storage = self._session_storage
+        query_session_id = self.session_id
+        projection_committed = False
+
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
 
         merged_events: asyncio.Queue[CoreEvent | None] = asyncio.Queue()
 
@@ -1473,6 +2510,11 @@ class CoreSession:
         async def _forward_agent_events() -> None:
             while True:
                 event = await self._agent_event_queue.get()
+                if (
+                    not self._event_matches_lifecycle(event)
+                    or not self._event_matches_active_stream(event)
+                ):
+                    continue
                 await merged_events.put(event)
 
         async def _watch_abort() -> None:
@@ -1482,10 +2524,15 @@ class CoreSession:
         producer = asyncio.create_task(_produce_main_events())
         agent_forwarder = asyncio.create_task(_forward_agent_events())
         abort_watcher = asyncio.create_task(_watch_abort())
+        self._active_query_tasks.update((producer, agent_forwarder, abort_watcher))
 
         try:
             while True:
+                if self._closed:
+                    break
                 event = await merged_events.get()
+                if self._closed:
+                    break
                 if event is None:
                     break
                 if isinstance(event, CompactEvent) and event.agent_id is None:
@@ -1494,70 +2541,187 @@ class CoreSession:
                     # racy because the producer may already be processing the retry.
                     source_messages = event.source_messages or []
                     checkpoint_messages = event.checkpoint_messages or list(params.messages)
+                    committed_before_compact = self._assistant_text_for_partial_turn(
+                        source_messages
+                    )
+                    if committed_before_compact:
+                        self._partial_committed_prefixes.append(committed_before_compact)
                     if self._session_storage:
                         for msg in source_messages:
                             self._session_storage.append_message(msg)
                     self.messages = checkpoint_messages
                     from crabcode_core.compact.compact import estimate_token_count
-                    self._persist_compaction(
-                        self.messages,
-                        trigger=event.trigger,
-                        messages_before=event.messages_before,
-                        estimated_tokens_before=estimate_token_count(source_messages),
-                    )
+                    if self.messages and self.messages[0].is_compact_summary:
+                        self._persist_compaction(
+                            self.messages,
+                            trigger=event.trigger,
+                            messages_before=event.messages_before,
+                            estimated_tokens_before=estimate_token_count(source_messages),
+                        )
+                    elif self._session_storage:
+                        self._session_storage.append_projection(
+                            self.messages,
+                            trigger=event.trigger,
+                            messages_before=max(0, event.messages_before),
+                        )
                     event.source_messages = None
                     event.checkpoint_messages = None
                 if isinstance(event, TurnCompleteEvent):
-                    self.messages = params.messages
+                    projection_committed = self._commit_query_projection(
+                        params.messages,
+                        storage=query_storage,
+                        session_id=query_session_id,
+                    )
                     if event.context_used_tokens or event.context_window_tokens:
                         self.last_context_used_tokens = event.context_used_tokens
                         self.last_context_window_tokens = event.context_window_tokens
 
                     if self._session_storage:
-                        # UUID de-duplication makes this safe across compaction, where
-                        # list indices no longer correspond to the pre-loop history.
-                        for msg in self.messages:
-                            self._session_storage.append_message(msg)
                         total_tokens = event.usage.get("input_tokens", 0) + event.usage.get("output_tokens", 0)
                         if total_tokens > 0:
                             self._session_storage.record_tokens(total_tokens)
-                        self._session_storage.record_message_count(len(self.messages))
                         self._session_storage.record_context_usage(
                             self.last_context_used_tokens,
                             self.last_context_window_tokens,
                         )
                         self._maybe_generate_title()
+                    self._partial_committed_prefixes = []
                 yield event
         finally:
-            abort_watcher.cancel()
-            agent_forwarder.cancel()
-            producer.cancel()
+            children = (abort_watcher, agent_forwarder, producer)
+            for child in children:
+                child.cancel()
+            await asyncio.gather(*children, return_exceptions=True)
+            self._active_query_tasks.difference_update(children)
+            if not projection_committed:
+                try:
+                    self._commit_query_projection(
+                        params.messages,
+                        storage=query_storage,
+                        session_id=query_session_id,
+                    )
+                except Exception:
+                    # Do not mask cancellation/GeneratorExit, but make a failed
+                    # durability attempt visible to operators.
+                    logger.exception("Failed to commit interrupted query projection")
+
+    def _commit_query_projection(
+        self,
+        messages: list[Message],
+        *,
+        storage: Any,
+        session_id: str,
+    ) -> bool:
+        """Commit a query-owned projection to its original session lifecycle."""
+        if self._session_storage is not storage or self.session_id != session_id:
+            return False
+
+        self.messages = messages
+        if storage is not None:
+            # UUID de-duplication makes this safe across ordinary terminal,
+            # exception, and generator-close paths.
+            for message in messages:
+                storage.append_message(message)
+            storage.record_message_count(len(messages))
+        return True
 
     async def respond_permission(self, response: PermissionResponseEvent) -> None:
-        if self._agent_manager and response.agent_id:
-            if await self._agent_manager.route_permission(response):
+        if self._closed or self._closing:
+            return
+        if response.agent_id:
+            # An agent-scoped response must never fall through to the
+            # foreground queue.  A stale/mismatched agent id otherwise has a
+            # chance to approve or deny an unrelated main-session tool call.
+            if self._agent_manager and await self._agent_manager.route_permission(response):
                 return
+            return
         await self._permission_queue.put(response)
 
     async def respond_choice(self, response: ChoiceResponseEvent) -> None:
-        if self._agent_manager and response.agent_id:
-            if await self._agent_manager.route_choice(response):
+        if self._closed or self._closing:
+            return
+        if response.agent_id:
+            # Keep the same ownership boundary for choice prompts as for
+            # permission prompts; never inject an agent response into the
+            # main turn when the target agent no longer exists.
+            if self._agent_manager and await self._agent_manager.route_choice(response):
                 return
+            return
         await self._choice_queue.put(response)
 
     async def interrupt(self) -> None:
         self._abort_controller.set()
 
     def record_partial_assistant_output(self, text: str) -> None:
-        """Append assistant text when a turn stops mid-stream so the next round keeps context."""
+        """Append only the uncommitted assistant suffix after an interrupt.
+
+        The CLI keeps one streamed buffer for an entire agentic turn.  A model
+        response can already have been committed to ``self.messages`` before a
+        later tool turn is interrupted, so appending that whole buffer would
+        duplicate the committed response.  Limit the comparison to assistant
+        messages after the latest non-tool user prompt; historical assistant
+        text must never cause a prefix to be stripped from a new turn.
+
+        Prefix removal is deliberately strict.  If the durable projection is
+        not an exact prefix of the streamed buffer, retain the complete input
+        rather than risk dropping valid output from a provider that emitted a
+        different projection.
+        """
         if not text or not text.strip():
             return
         from crabcode_core.types.message import TextBlock, create_assistant_message
 
-        assistant_msg = create_assistant_message(content=[TextBlock(text=text)])
+        committed = self._assistant_text_for_partial_turn(self.messages)
+        partial_text = text
+        # Consume prefixes in stream order.  A projection after compaction can
+        # contain only the post-boundary response, while the saved prefix list
+        # covers the responses that were committed before each boundary.
+        for prefix in [*self._partial_committed_prefixes, committed]:
+            if not prefix:
+                continue
+            if not partial_text.startswith(prefix):
+                # Never guess when the provider's durable projection differs
+                # from the streamed buffer; retaining the text is safer than
+                # deleting a legitimate repeated response.
+                break
+            partial_text = partial_text[len(prefix) :]
+        if not partial_text.strip():
+            return
+
+        assistant_msg = create_assistant_message(
+            content=[TextBlock(text=partial_text)],
+            origin="partial",
+        )
         self.messages.append(assistant_msg)
         if self._session_storage:
             self._session_storage.append_message(assistant_msg)
+
+    @staticmethod
+    def _assistant_text_for_partial_turn(messages: list[Any]) -> str:
+        """Return visible assistant text for the latest real user turn."""
+        turn_start = -1
+        internal_prefixes = (
+            "[Conversation was compacted",
+            "[The previous attempt returned no content after compaction",
+        )
+        for index, message in enumerate(messages):
+            if getattr(message, "role", None) != "user":
+                continue
+            if getattr(message, "tool_use_result", None) is not None:
+                continue
+            if getattr(message, "is_compact_summary", False):
+                continue
+            content = getattr(message, "content", "")
+            if isinstance(content, str) and content.lstrip().startswith(internal_prefixes):
+                continue
+            turn_start = index
+        if turn_start < 0:
+            return ""
+        return "".join(
+            getattr(message, "text_content", "")
+            for message in messages[turn_start + 1 :]
+            if getattr(message, "role", None) == "assistant"
+        )
 
     @staticmethod
     def _drain_queue(queue: asyncio.Queue[Any]) -> None:
@@ -1584,13 +2748,55 @@ class CoreSession:
         self._drain_queue(self._permission_queue)
         self._drain_queue(self._choice_queue)
 
+    @asynccontextmanager
+    async def _turn_scope(self) -> AsyncGenerator[None, None]:
+        """Own one serialized session boundary and settle reentrant compacts."""
+        if self._owns_turn_scope():
+            raise RuntimeError("Session turn operation cannot re-enter its own boundary")
+        async with self._turn_lock:
+            boundary_token = object()
+            self._active_turn_token = boundary_token
+            owner_token = _TURN_OWNER.set((self, boundary_token))
+            try:
+                yield
+            finally:
+                try:
+                    while (
+                        self._pending_manual_compact is not None
+                        and not self._closed
+                        and not self._closing
+                    ):
+                        instructions = self._pending_manual_compact
+                        self._pending_manual_compact = None
+                        await self._compact_now(
+                            trigger="manual",
+                            custom_instructions=instructions or None,
+                        )
+                finally:
+                    self._active_turn_token = None
+                    _TURN_OWNER.reset(owner_token)
+
+    def _owns_turn_scope(self) -> bool:
+        """Return whether this logical context owns the active boundary."""
+        owner = _TURN_OWNER.get()
+        return bool(
+            owner is not None
+            and owner[0] is self
+            and self._active_turn_token is not None
+            and owner[1] is self._active_turn_token
+        )
+
     def new_session(self) -> str:
         """Start a fresh session, preserving tools and config. Returns the new session ID."""
         from crabcode_core.session.storage import SessionStorage, generate_session_id
 
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+        if self._initialize_lock.locked():
+            raise RuntimeError("Cannot start a new session while initialization is running")
         if self._turn_lock.locked():
             raise RuntimeError("Cannot start a new session while a turn is still running")
-        self._lifecycle_generation += 1
+        self._advance_lifecycle_generation()
         if self._monitor_manager and self.session_id:
             self._monitor_manager.cancel_session_now(
                 self.session_id,
@@ -1599,11 +2805,21 @@ class CoreSession:
         if self._agent_manager:
             self._agent_manager.abandon_active_agents("session replaced")
             self._agent_manager.restore_snapshots([])
+        self._pending_agent_snapshots = None
         self._drain_session_queues()
+        self._cancel_title_generation_nowait()
         self.messages.clear()
         self.compact_count = 0
+        self.last_context_used_tokens = 0
+        self.last_context_window_tokens = 0
         self._persisted_compact_summaries.clear()
+        self._partial_committed_prefixes.clear()
         self._pending_manual_compact = None
+        self._current_plan = None
+        self._agent_mode = "agent"
+        self._saved_permission_mode = None
+        self._abort_controller.clear()
+        self._reset_permission_session_state()
         self.session_id = generate_session_id()
         self._session_storage = SessionStorage(self.cwd, self.session_id)
         # Write meta for the new session
@@ -1614,7 +2830,15 @@ class CoreSession:
                 provider=active_api_cfg.provider or "",
             )
         if self._agent_manager:
-            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
+            self._agent_manager.update_session(
+                env=self.settings.env,
+                session_id=self.session_id,
+                cwd=self.cwd,
+                force_generation=True,
+            )
+        self._sync_client_permission_mode()
+        self._replace_team_manager()
+        self._refresh_tool_context_bindings()
         return self.session_id
 
     def _persist_compaction(
@@ -1712,19 +2936,26 @@ class CoreSession:
         return True
 
     async def compact(self, custom_instructions: str | None = None) -> bool:
-        """Run manual compaction now, or coalesce it at the active turn boundary."""
+        """Compact at the next safe boundary without losing concurrent requests."""
         await self.initialize()
         instructions = (custom_instructions or "").strip()
-        if self._turn_lock.locked():
+        if self._owns_turn_scope():
             self._pending_manual_compact = instructions
             return True
-        async with self._turn_lock:
+        async with self._turn_scope():
+            if self._closed or self._closing:
+                raise RuntimeError("CoreSession is closed")
             return await self._compact_now(
                 trigger="manual",
                 custom_instructions=instructions or None,
             )
 
-    def checkpoint(self, label: str = "") -> str | None:
+    def checkpoint(
+        self,
+        label: str = "",
+        *,
+        messages: list[Message] | None = None,
+    ) -> str | None:
         """Create a checkpoint at the current conversation position.
 
         Also creates a file-system snapshot so that ``/revert`` can later
@@ -1739,8 +2970,9 @@ class CoreSession:
             snapshot_id = create_full_snapshot(self.cwd, self.session_id, label=label)
         except Exception:
             logger.debug("Failed to create file snapshot for checkpoint", exc_info=True)
+        projection = self.messages if messages is None else messages
         return self._session_storage.create_checkpoint(
-            self.messages, label=label, snapshot_id=snapshot_id,
+            projection, label=label, snapshot_id=snapshot_id,
         )
 
     def list_checkpoints(self) -> list[dict[str, Any]]:
@@ -1759,12 +2991,33 @@ class CoreSession:
         idx = self._session_storage.rollback_to_checkpoint(checkpoint_id)
         if idx is None:
             return False
-        self.messages = self.messages[: idx + 1]
+
+        # Re-read the active projection after writing the marker.  This is
+        # important when the checkpoint predates a compact boundary: slicing
+        # the current in-memory list by the persisted index can retain the
+        # wrong summary/tail.  Fall back to the historical index for old
+        # transcripts that do not contain enough replay metadata.
+        restored_raw = self._session_storage.load_messages()
+        restored = [
+            message_from_entry(raw)
+            for raw in restored_raw
+            if isinstance(raw, dict)
+        ]
+        restored = [message for message in restored if message is not None]
+        if restored:
+            self.messages[:] = restored
+        else:
+            self.messages[:] = self.messages[: idx + 1]
         if self._session_storage:
             self._session_storage.record_message_count(len(self.messages))
         return True
 
-    def revert(self, checkpoint_id: str) -> dict[str, Any]:
+    def revert(
+        self,
+        checkpoint_id: str,
+        *,
+        messages: list[Message] | None = None,
+    ) -> dict[str, Any]:
         """Revert both files and conversation to a checkpoint.
 
         Returns a dict with keys:
@@ -1790,14 +3043,43 @@ class CoreSession:
         # Look up the checkpoint to get its snapshot_id
         from crabcode_core.session.meta_db import SessionMetaStore
         store = SessionMetaStore()
-        cp = store.get_checkpoint(checkpoint_id)
-        store.close()
+        try:
+            cp = store.get_checkpoint(checkpoint_id)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                logger.debug("Failed to close session metadata store", exc_info=True)
 
         if not cp or cp["session_id"] != self.session_id:
             return result
 
         snapshot_id = cp.get("snapshot_id")
         result["snapshot_id"] = snapshot_id
+
+        # Commit the conversation rollback first.  If the marker cannot be
+        # written (for example, the transcript is read-only), do not restore
+        # files and then incorrectly report an overall successful revert.
+        projection = self.messages if messages is None else messages
+        old_count = len(projection)
+        idx = self._session_storage.rollback_to_checkpoint(checkpoint_id)
+        if idx is None:
+            result["warning"] = "Conversation rollback failed; files were not changed"
+            return result
+
+        restored_raw = self._session_storage.load_messages()
+        restored = [
+            message_from_entry(raw)
+            for raw in restored_raw
+            if isinstance(raw, dict)
+        ]
+        restored = [message for message in restored if message is not None]
+        restored_projection = restored or projection[: idx + 1]
+        projection[:] = restored_projection
+        if projection is not self.messages:
+            self.messages[:] = restored_projection
+        self._session_storage.record_message_count(len(projection))
+        result["messages_rolled_back"] = old_count - len(projection)
 
         # Restore file system if snapshot exists
         files_restored: list[str] = []
@@ -1811,14 +3093,6 @@ class CoreSession:
                 result["warning"] = "File restore failed; only conversation was rolled back"
         else:
             result["warning"] = "No file snapshot for this checkpoint; only conversation was rolled back"
-
-        # Roll back conversation
-        old_count = len(self.messages)
-        idx = self._session_storage.rollback_to_checkpoint(checkpoint_id)
-        if idx is not None:
-            self.messages = self.messages[: idx + 1]
-            self._session_storage.record_message_count(len(self.messages))
-            result["messages_rolled_back"] = old_count - len(self.messages)
 
         result["success"] = True
         return result
@@ -1850,10 +3124,45 @@ class CoreSession:
         from crabcode_core.api import create_adapter
 
         api_config = self.settings.models[name]
-        self._api_adapter = create_adapter(api_config)
+        # Build the replacement before mutating session state.  A malformed
+        # provider configuration should leave the currently usable model in
+        # place instead of advertising a switch that cannot make API calls.
+        try:
+            adapter = create_adapter(api_config)
+        except Exception:
+            logger.warning("Failed to create adapter for model profile %s", name, exc_info=True)
+            return False
+        self._api_adapter = adapter
         self._current_model_name = name
         if self._agent_manager:
             self._agent_manager.set_current_model(name)
+
+        # An unset AI-review model follows the active session model through
+        # ``default_api_config``.  Keep that reference current while retaining
+        # an explicitly configured reviewer profile (``permissions.ai_review``
+        # still takes precedence inside AiPermissionReviewer._api_config()).
+        reviewer = self._ai_reviewer
+        if reviewer is not None:
+            try:
+                if hasattr(reviewer, "settings"):
+                    reviewer.settings = self.settings
+                if hasattr(reviewer, "default_api_config"):
+                    reviewer.default_api_config = api_config
+            except Exception:
+                logger.warning("Failed to refresh AI reviewer after model switch", exc_info=True)
+
+        # Sessions may be switched after their first message has created
+        # storage.  Persist the latest model/provider in both transcript and
+        # SQLite so cross-process resume and session listings agree with the
+        # active runtime.  A pre-initialization switch is persisted when lazy
+        # storage is created using the current model above.
+        if self._session_storage is not None:
+            update_model = getattr(self._session_storage, "update_model", None)
+            if callable(update_model):
+                update_model(
+                    model=api_config.model or "",
+                    provider=api_config.provider or "",
+                )
 
         return True
 
@@ -1877,6 +3186,28 @@ class CoreSession:
         self._permission_manager.mode = mode_from_default_mode(
             self._client_permission_mode_override,
         )
+
+    def _reset_permission_session_state(self) -> None:
+        """Clear permission decisions that are scoped to the old session."""
+        if self._permission_manager is None:
+            return
+        reset_session = getattr(self._permission_manager, "reset_session", None)
+        if callable(reset_session):
+            reset_session()
+            return
+
+        # Keep compatibility with lightweight test doubles and older
+        # permission managers that only expose the original API.
+        clear_runtime_allow = getattr(
+            self._permission_manager,
+            "clear_runtime_allow",
+            None,
+        )
+        if callable(clear_runtime_allow):
+            clear_runtime_allow()
+        reset_mode = getattr(self._permission_manager, "reset_mode", None)
+        if callable(reset_mode):
+            reset_mode()
 
     def set_client_permission_mode(self, mode: str) -> bool:
         """Set tool permission behavior from the extension chat footer.
@@ -1953,8 +3284,10 @@ class CoreSession:
         await self.initialize()
         if not self._agent_manager:
             raise RuntimeError("Agent manager is not initialized")
-        if callback:
-            self._ensure_session_storage()
+        # Standalone gateway/CLI agent spawns are real session work too.  Only
+        # creating storage for callback-enabled agents left callback=False runs
+        # with an empty session id and made them impossible to resume.
+        self._ensure_session_storage()
         return await self._agent_manager.spawn_agent(
             prompt=prompt,
             subagent_type=subagent_type,
@@ -2031,13 +3364,37 @@ class CoreSession:
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous session after any active foreground/background turn."""
-        async with self._turn_lock:
-            return await self._resume_session(session_id)
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+        # Keep the same lock order as send_message (initialize, then turn).
+        # Holding this lock even for a late/uninitialized resume prevents an
+        # in-flight initializer from completing with resources loaded from the
+        # project that resume is replacing.
+        async with self._initialize_lock:
+            async with self._turn_scope():
+                if self._closed or self._closing:
+                    raise RuntimeError("CoreSession is closed")
+                current_task = asyncio.current_task()
+                self._active_resume_task = current_task
+                try:
+                    return await self._resume_session(session_id)
+                except asyncio.CancelledError:
+                    if self._closed or self._closing:
+                        raise RuntimeError(
+                            "CoreSession was closed while resuming"
+                        ) from None
+                    raise
+                finally:
+                    if self._active_resume_task is current_task:
+                        self._active_resume_task = None
 
     async def _resume_session(self, session_id: str) -> bool:
         """Resume a previous session by loading its messages."""
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
         from crabcode_core.session.storage import SessionStorage
-        storage = SessionStorage(self.cwd, session_id)
+        original_cwd = self.cwd
+        storage = SessionStorage(original_cwd, session_id)
         raw_messages = storage.load_messages()
         agent_snapshots = storage.load_agent_snapshots()
 
@@ -2046,40 +3403,145 @@ class CoreSession:
             cross = SessionStorage.from_session_id(session_id)
             if cross is not None:
                 storage = cross
-                self.cwd = storage.cwd
                 raw_messages = storage.load_messages()
                 agent_snapshots = storage.load_agent_snapshots()
 
         if not raw_messages and not storage.meta and not agent_snapshots:
             return False
 
-        self._lifecycle_generation += 1
+        target_cwd = storage.cwd
+        cwd_changed = os.path.abspath(target_cwd) != os.path.abspath(original_cwd)
+        prepared_project: dict[str, Any] | None = None
+        if cwd_changed and self._initialized:
+            try:
+                prepared_project = await self._prepare_project_resources(target_cwd)
+            except Exception:
+                # Preparation happens before lifecycle ownership, cwd, storage,
+                # or active managers are changed. A malformed target project
+                # therefore leaves the current session fully usable.
+                logger.warning(
+                    "Failed to prepare resources for resumed project %s",
+                    target_cwd,
+                    exc_info=True,
+                )
+                return False
+        self._advance_lifecycle_generation()
         lifecycle_generation = self._lifecycle_generation
-        if self._monitor_manager and self.session_id:
-            self._monitor_manager.cancel_session_now(
-                self.session_id,
-                "session resumed elsewhere",
-            )
-        if self._agent_manager:
-            self._agent_manager.abandon_active_agents("session resumed elsewhere")
+
+        def _assert_resume_active() -> None:
+            if self._closed or self._lifecycle_generation != lifecycle_generation:
+                raise RuntimeError("CoreSession was closed while resuming")
+
+        try:
+            if self._monitor_manager and self.session_id:
+                self._monitor_manager.cancel_session_now(
+                    self.session_id,
+                    "session resumed elsewhere",
+                )
+            if self._agent_manager:
+                self._agent_manager.abandon_active_agents("session resumed elsewhere")
+                # Invalidate the manager generation before awaiting detached tasks
+                # or closing the old team.  This matters when the target reuses the
+                # same session ID: an event already inside the old async sink must
+                # still be rejected by the replacement lifecycle.
+                self._agent_manager.update_session(
+                    env=self.settings.env,
+                    session_id=session_id,
+                    cwd=target_cwd,
+                    force_generation=True,
+                )
+                wait_detached = getattr(
+                    self._agent_manager,
+                    "wait_for_detached_agents",
+                    None,
+                )
+                if callable(wait_detached):
+                    await wait_detached()
+                _assert_resume_active()
+            old_team_manager = self._team_manager
+            if old_team_manager is not None:
+                async def _discard_team_event(_event: Any) -> None:
+                    return
+
+                old_team_manager._event_sink = _discard_team_event
+                try:
+                    await old_team_manager.close()
+                except Exception:
+                    logger.warning(
+                        "Failed to close resumed session's team manager",
+                        exc_info=True,
+                    )
+                _assert_resume_active()
+            await self._drain_team_cleanup_tasks()
+            await self._cancel_title_generation()
+            _assert_resume_active()
+        except BaseException:
+            if prepared_project is not None:
+                await self._discard_prepared_project_resources(prepared_project)
+            raise
+        self.cwd = target_cwd
         self.session_id = session_id
         self._session_storage = storage
         self._drain_session_queues()
         self.messages.clear()
         self.compact_count = storage.compact_count
+        self.last_context_used_tokens = storage.last_context_used_tokens
+        self.last_context_window_tokens = storage.last_context_window_tokens
         self._persisted_compact_summaries.clear()
+        self._partial_committed_prefixes.clear()
+        self._current_plan = None
+        self._agent_mode = "agent"
+        self._saved_permission_mode = None
+        self._abort_controller.clear()
+        self._reset_permission_session_state()
+        if self._agent_manager:
+            # Switch manager ownership before any rebound tool setup hook can
+            # call back into AgentManager. Detached old runs are already
+            # marked and rejected by its generation check.
+            self._agent_manager.update_session(
+                env=self.settings.env,
+                session_id=self.session_id,
+                cwd=self.cwd,
+            )
+        # Bind all newly resumed tools to a fresh team runtime before their
+        # setup hooks run.  Otherwise a cross-project resume leaves custom
+        # tools holding the closed team's bus/reference even though the
+        # session's public TeamManager has already been replaced.
+        self._replace_team_manager(schedule_old_close=False)
+        if cwd_changed and self._initialized:
+            rebind_task = asyncio.create_task(
+                self._rebind_project_resources(prepared_project)
+            )
+            try:
+                await asyncio.shield(rebind_task)
+            except asyncio.CancelledError:
+                # Rebinding swaps several related resources. Once commit has
+                # started, let the owned task reach a coherent boundary before
+                # propagating close/transport cancellation.
+                while not rebind_task.done():
+                    try:
+                        await asyncio.shield(rebind_task)
+                    except asyncio.CancelledError:
+                        continue
+                rebind_task.result()
+                raise
+            _assert_resume_active()
         pending_completions: list[AgentCompletion] = []
         if self._agent_manager:
-            self._agent_manager.update_session(env=self.settings.env, session_id=self.session_id)
+            _assert_resume_active()
             pending_completions = self._agent_manager.restore_snapshots(agent_snapshots)
+            self._pending_agent_snapshots = None
+        else:
+            # resume() is intentionally usable before expensive initialization.
+            # Preserve its sidecar projection until _initialize_impl constructs
+            # the AgentManager that can own it.
+            self._pending_agent_snapshots = deepcopy(agent_snapshots)
 
-        # Restore context usage so the gateway can report it after session switch
-        if storage.last_context_used_tokens or storage.last_context_window_tokens:
-            self.last_context_used_tokens = storage.last_context_used_tokens
-            self.last_context_window_tokens = storage.last_context_window_tokens
+        self._sync_client_permission_mode()
 
         # Sync meta to SQLite if it was read from JSONL but missing in DB
         if storage.meta and self._initialized:
+            store = None
             try:
                 from crabcode_core.session.meta_db import SessionMetaStore
                 store = SessionMetaStore()
@@ -2114,9 +3576,14 @@ class CoreSession:
                         "message_count": meta.get("message_count", len(raw_messages)),
                     }
                     store.upsert(sqlite_meta)
-                store.close()
             except Exception:
                 logger.warning("Failed to sync resumed session metadata to SQLite", exc_info=True)
+            finally:
+                if store is not None:
+                    try:
+                        store.close()
+                    except Exception:
+                        logger.debug("Failed to close session metadata store", exc_info=True)
 
         for raw in raw_messages:
             message = message_from_entry(raw)
@@ -2127,6 +3594,7 @@ class CoreSession:
             self._persisted_compact_summaries.add(self.messages[0].uuid)
 
         for completion in pending_completions:
+            _assert_resume_active()
             await self._agent_completion_queue.put(
                 (lifecycle_generation, completion)
             )

@@ -38,7 +38,7 @@ class TeamBridge:
 
     def get_policy(self, team_a: str, team_b: str) -> BridgePolicy:
         """Get the bridge policy between two teams."""
-        return self._manager._bridges.get((team_a, team_b), BridgePolicy.DENY)
+        return self._manager.get_bridge_policy(team_a, team_b)
 
     async def send(
         self,
