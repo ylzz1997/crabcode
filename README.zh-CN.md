@@ -6,7 +6,6 @@
 
 > 整体参考 Claude Code 设计
 
-
 ## 架构
 
 - **crabcode-core**：核心引擎。负责 API 调用、工具执行、提示词构造、会话管理和 MCP 集成。对外暴露纯异步事件流接口，不依赖任何 I/O 或终端。
@@ -138,7 +137,7 @@ crabcode gateway --password secret
 **HTTP API 端点：**
 
 | 端点 | 方法 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `/health` | GET | 健康检查 |
 | `/session/new` | POST | 创建新会话 |
 | `/session/send` | POST | 发送消息（触发 query loop，事件通过 SSE 推送） |
@@ -205,7 +204,7 @@ crabcode acp
 **支持的 ACP 能力：**
 
 | 能力 | 详情 |
-|------|------|
+| ------ | ------ |
 | 会话管理 | 新建、加载、列表、分叉、恢复 |
 | 提示 | 文本、图片、资源链接、嵌入上下文 |
 | MCP 集成 | 从编辑器传入 HTTP/SSE MCP 服务器 |
@@ -282,7 +281,7 @@ export AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
 `api` 字段说明：
 
 | 字段 | 说明 | 默认值 |
-|------|------|--------|
+| ------ | ------ | -------- |
 | `provider` | API 后端：`anthropic` \| `openai` \| `codex` \| `router` \| `ollama` \| `gemini` \| `azure` | `anthropic` |
 | `model` | 模型 ID | — |
 | `base_url` | 自定义 API 地址（适用于第三方转发或本地部署） | — |
@@ -491,7 +490,7 @@ crabcode --model-profile smart    # 简写：-M smart
 ## 内置工具
 
 | 工具 | 类型 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `Bash` | 写 | 执行 shell 命令 |
 | `Read` | 读 | 读取文件内容 |
 | `Write` | 写 | 创建或覆盖文件 |
@@ -509,7 +508,7 @@ crabcode --model-profile smart    # 简写：-M smart
 `Lint` 工具会根据文件语言自动选择合适的检查器：
 
 | 语言 | 检查器 |
-|------|--------|
+| ------ | -------- |
 | Python | `ruff`（风格）、`pylint`（深度分析）、`mypy`（类型检查） |
 | JavaScript / TypeScript | `eslint` |
 | Go | `golangci-lint` |
@@ -530,7 +529,7 @@ CrabCode 集成了 **Language Server Protocol (LSP)** 服务器，为 AI agent �
 **内置服务器**（从 `PATH` 检测）：
 
 | 语言 | 服务器 | 文件扩展名 |
-|------|--------|-----------|
+| ------ | -------- | ----------- |
 | Python | `pyright-langserver` | `.py`、`.pyi`、`.pyw` |
 | TypeScript / JS | `typescript-language-server` | `.ts`、`.tsx`、`.js`、`.jsx`、`.mjs`、`.cjs` |
 | Go | `gopls` | `.go` |
@@ -567,7 +566,7 @@ CrabCode 集成了 **Language Server Protocol (LSP)** 服务器，为 AI agent �
 ```
 
 | 字段 | 说明 |
-|------|------|
+| ------ | ------ |
 | `lsp` | `true` = 启用（默认），`false` = 禁用所有，`{}` = 启用并自定义覆盖 |
 | `command` | 启动 LSP 服务器的命令（必须支持 `--stdio` 模式） |
 | `extensions` | 该服务器处理的文件扩展名 |
@@ -622,11 +621,13 @@ CrabCode 集成了 **Language Server Protocol (LSP)** 服务器，为 AI agent �
 - **Esc** / **Ctrl+C**：取消选择
 
 **适用场景：**
+
 - 存在多种可行方案，需要用户偏好决定
 - 做重大改动前确认方向
 - 用户可能掌握 agent 不了解的上下文
 
 **不适用场景：**
+
 - 答案显而易见，或存在明确最优解
 - 用户已经告诉你要怎么做
 - 只需要简单的是/否确认（agent 直接文字询问即可）
@@ -761,7 +762,7 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 **`/revert` 与 `/rollback` 的区别：**
 
 | 命令 | 对话 | 文件 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `/revert` | 回滚 | 还原到快照状态 |
 | `/rollback` | 回滚 | 不变 |
 | `/undo` | 同 `/revert`（针对最近一次检查点） | 还原到快照状态 |
@@ -774,7 +775,7 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 **网关 API：**
 
 | 端点 | 方法 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `/snapshot/checkpoint` | POST | 创建带文件快照的检查点 |
 | `/snapshot/list` | GET | 列出会话的检查点 |
 | `/snapshot/revert` | POST | 回退文件 + 对话到检查点 |
@@ -783,7 +784,7 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 ## REPL 命令
 
 | 命令 | 说明 |
-|------|------|
+| ------ | ------ |
 | `/help` | 显示所有可用命令和技能 |
 | `/status` | 显示运行状态（模型、上下文占用、压缩次数、agent 摘要） |
 | `/logs` | 列出后台日志（例如搜索索引日志） |
@@ -793,6 +794,7 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 | `/model` | 查看当前模型与全部命名模型 |
 | `/model <名称>` | 切换到 `settings.models` 中的命名模型 |
 | `/agents` | 列出当前会话中的托管子 agent |
+| `/peers` | 列出可进行跨 session 通信的其他活跃 session |
 | `/tasks` | 列出后台 agent 与命令/WebSocket monitor |
 | `/tasks stop <id>` | 停止运行中的后台任务 |
 | `/agent <id>` | 查看单个 agent 的详情（状态、用量、结果、transcript 路径） |
@@ -922,6 +924,7 @@ AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该�
 ```
 
 `ai_review.model` 填的是 `models` 里的配置名，例如上面的 `"review-model"`；省略时会使用当前 agent 正在使用的模型。
+
 - 默认 `decisions` 为 `["allow", "ask"]`，因此 reviewer 不会直接拒绝工具调用，除非你显式开启。
 - 可将 `decisions` 设为 `["allow", "ask", "deny"]` 启用更严格审查，或设为 `["allow", "deny"]` 用于非交互式 allow/deny 行为。
 
@@ -988,7 +991,7 @@ VS Code 扩展默认使用“跟随配置”（`crabcode.permissionMode: "defaul
 以下路径的文件会按顺序加载并合并（后加载的追加在后面）：
 
 | 路径 | 说明 |
-|------|------|
+| ------ | ------ |
 | `~/.claude/CLAUDE.md` | 用户全局，Claude Code 兼容 |
 | `~/.crabcode/CLAUDE.md` | 用户全局，CrabCode 原生 |
 | `<git-root 到 cwd 各级>/CLAUDE.md` | 项目级，从 git 根向下逐级查找 |
@@ -1045,7 +1048,7 @@ when_to_use: "当用户需要提交代码时"
 frontmatter 字段说明：
 
 | 字段 | 说明 |
-|------|------|
+| ------ | ------ |
 | `name` | 技能名称，也是 `/` 命令的调用名（省略时取目录名） |
 | `description` | 对模型展示的简短描述，用于判断何时调用该技能 |
 | `when_to_use` | 触发条件补充说明 |
@@ -1100,7 +1103,7 @@ chainTo: "python-test"
 模式匹配字段说明：
 
 | 字段 | 类型 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `pathPatterns` | 逗号分隔或 YAML 列表 | 与用户消息中的文件路径匹配的 glob 模式（如 `"**/*.py"`、`"src/**/*.ts"`） |
 | `bashPatterns` | 逗号分隔或 YAML 列表 | 与用户消息中的 shell 命令匹配的正则表达式（如 `"pytest .*"`、`"git commit.*"`） |
 | `importPatterns` | 逗号分隔或 YAML 列表 | 与用户消息中的 import/require 语句匹配的正则表达式（如 `"from django"`、`"import React"`） |
@@ -1141,6 +1144,35 @@ name: python-lint
 
 当用户提到 `src/app.py` 时，三个技能会按顺序全部激活：`python-dev` → `python-test` → `python-lint`。
 
+## Session 间通信
+
+同一台 macOS/Linux 机器上的独立 CrabCode session 可以互相发现和发送消息，
+但不会共享完整对话历史。每个活跃 session 会在 `~/.crabcode/peers/` 发布最小
+注册信息，并通过每个 session 独立的随机令牌认证连接到仅当前系统用户可访问的
+Unix domain socket。模型通过 `ListAgents` 发现其他 session，再通过 `SendMessage`
+按名称或 session ID 投递纯文本。
+
+- 接收方正在执行 turn 时，消息会在当前工具批次完成后、下一次模型请求前注入；
+  空闲时消息会触发一个 synthetic turn。
+- 接收方能看到发送方名称、session ID 和工作目录。Peer 消息不代表用户授权，
+  也不能绕过本 session 的权限策略。
+- `SendMessage` 遵循普通写工具的权限确认；注册文件和 socket 仅当前系统用户可访问。
+- 默认 `auto` 入站策略直接接收权限等级相同的 session；权限等级不同时先 `hold`，
+  由用户批准。使用 `hold` 可审批所有消息，可信的无人值守 worker 可显式配为
+  `accept`，完全关闭入站则使用 `refuse`。
+
+```json
+{
+  "cross_session": {
+    "enabled": true,
+    "name": "api-worker",
+    "inbound": "auto",
+    "queue_size": 50,
+    "max_message_size_bytes": 10000
+  }
+}
+```
+
 ## Agent Teams（团队协作）
 
 Agent Teams 允许一个 Lead Agent 生成多个 Teammate，通过消息传递和共享任务板进行协作。每个 Teammate 运行在独立的上下文窗口中，并且可以使用不同的模型——实现多模型协作（例如 Claude 写代码、Gemini 做研究、GPT 做审查）。
@@ -1156,7 +1188,7 @@ Agent Teams 允许一个 Lead Agent 生成多个 Teammate，通过消息传递�
 ### 内置团队工具
 
 | 工具 | 说明 |
-|------|------|
+| ------ | ------ |
 | `TeamCreate` | 创建新团队 |
 | `TeamSpawn` | 生成 teammate，指定角色（worker/researcher/reviewer）和可选模型 |
 | `TeamMessage` | 向指定 teammate 发送消息 |
@@ -1183,7 +1215,7 @@ Agent Teams 允许一个 Lead Agent 生成多个 Teammate，通过消息传递�
 ```
 
 | 字段 | 说明 | 默认值 |
-|------|------|--------|
+| ------ | ------ | -------- |
 | `max_teammates` | 每个团队最大成员数 | `8` |
 | `inbox_dir` | JSONL 收件箱自定义目录（默认：`~/.crabcode/team_inbox/`） | `null` |
 | `backpressure_queue_size` | 每个 teammate 的消息队列大小 | `100` |
@@ -1204,7 +1236,7 @@ Agent Teams 允许一个 Lead Agent 生成多个 Teammate，通过消息传递�
 ### REPL 命令
 
 | 命令 | 说明 |
-|------|------|
+| ------ | ------ |
 | `/team list` | 列出活跃的团队 |
 | `/team status <team_id>` | 显示团队状态表 |
 | `/team messages <team_id>` | 显示团队消息历史 |
@@ -1244,7 +1276,7 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 ```
 
 | 字段 | 说明 | 默认值 |
-|------|------|--------|
+| ------ | ------ | -------- |
 | `max_turns` | 每次子 agent 调用的最大 agentic 轮次 | `10` |
 | `timeout` | 子 agent 的总超时时间（秒） | `300` |
 | `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
@@ -1272,7 +1304,7 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 ```
 
 | 字段 | 说明 | 默认值 |
-|------|------|--------|
+| ------ | ------ | -------- |
 | `model_profile` | 该 agent 类型使用的 `models` 命名配置；显式传入的 `Agent.model_profile` 优先 | 当前模型 |
 | `allowed_tools` | 工具名称白名单。普通 agent 的空列表表示不限制；`explore` 的空列表默认只允许只读工具 | `[]` |
 | `prompt` | 该 agent 类型使用的系统提示词覆盖 | 当前提示词配置 |
@@ -1336,7 +1368,7 @@ REPL 会在空闲时显示自动续跑过程。Gateway 客户端可通过 `/even
 ```
 
 | 字段 | 说明 | 默认值 |
-|------|------|--------|
+| ------ | ------ | -------- |
 | `default_max_lines` | 工具结果的默认最大显示行数 | `50` |
 | `max_chars` | 显示内容的字符数安全上限 | `50000` |
 | `tool_max_lines` | 按工具名覆盖 `default_max_lines`，仅配置需要调整的工具即可 | 见下表 |
@@ -1344,7 +1376,7 @@ REPL 会在空闲时显示自动续跑过程。Gateway 客户端可通过 `/even
 内置工具的默认行数上限：
 
 | 工具 | 默认行数 |
-|------|----------|
+| ------ | ---------- |
 | `Agent` | `120` |
 | `Bash` | `60` |
 | `Grep` | `50` |
@@ -1379,6 +1411,7 @@ REPL 会在空闲时显示自动续跑过程。Gateway 客户端可通过 `/even
 ```
 
 会话启动时，每个额外工具的 `setup()` 方法会被调用，传入包含以下内容的 `ToolContext`：
+
 - `cwd` — 当前工作目录
 - `tool_config` — `tool_settings` 中对应该工具的配置项
 - `on_event` — 向 CLI 发送实时进度事件的回调
@@ -1518,7 +1551,7 @@ agent 会话启动后，索引立即在后台异步建立，CLI 会显示实时�
 通过 `settings.json` 中的 `tool_settings.CodebaseSearch` 配置：
 
 | 后端 | `embedder` 值 | 说明 |
-|------|--------------|------|
+| ------ | -------------- | ------ |
 | Ollama（本地） | `"ollama"` | 默认。需要本地运行 Ollama 服务。 |
 | OpenAI API | `"openai"` | 需要 `OPENAI_API_KEY`。 |
 | Google Gemini API | `"gemini"` | 需要 `GEMINI_API_KEY`。 |
@@ -1578,6 +1611,7 @@ agent 会话启动后，索引立即在后台异步建立，CLI 会显示实时�
 系统提示词可通过 `settings.json` 中的 `prompt_profile` 字段完整配置。这让你可以在不修改引擎代码的情况下，替换 agent 的身份定位与行为约束——适合在 `crabcode-core` 之上构建非编程领域的 agent。
 
 每个字段的规则一致：
+
 - **省略 / `null`** → 使用内置默认值
 - **`""`** → 禁用该段
 - **非空字符串** → 替换为自定义内容
@@ -1600,7 +1634,7 @@ agent 会话启动后，索引立即在后台异步建立，CLI 会显示实时�
 `prompt_profile` 字段说明：
 
 | 字段 | 说明 | 默认值 |
-|------|------|--------|
+| ------ | ------ | -------- |
 | `prefix` | 助手名称及定位的第一句话 | `"You are CrabCode…"` |
 | `intro` | 完整介绍段落覆盖 | 内置 |
 | `system` | 系统行为规则 | 内置 |

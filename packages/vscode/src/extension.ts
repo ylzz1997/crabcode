@@ -41,25 +41,31 @@ class PermissionHandler implements vscode.Disposable {
   constructor(private readonly connection: CrabCodeConnection) {}
 
   handle(payload: PermissionRequestPayload): void {
-    const { tool_name, tool_use_id, reason, agent_id } = payload;
+    const { tool_name, tool_use_id, reason, agent_id, request_kind } = payload;
+    const isPeerMessage = request_kind === "peer_message";
+    const peerName = String(payload.tool_input.from_name ?? "unknown");
+    const peerText = String(payload.tool_input.text ?? "");
 
     const detail =
       (reason ? `${reason}\n\n` : "") +
-      `工具：${tool_name}`;
+      (isPeerMessage ? `来自：${peerName}\n\n${peerText}` : `工具：${tool_name}`);
 
     const allowItem = "允许";
     const alwaysAllowItem = "始终允许";
     const denyItem = "拒绝";
     const denyFeedbackItem = "拒绝并反馈";
 
+    const choices = isPeerMessage
+      ? [allowItem, alwaysAllowItem, denyItem]
+      : [allowItem, alwaysAllowItem, denyItem, denyFeedbackItem];
+
     vscode.window
       .showInformationMessage(
-        `CrabCode：需要你的授权才能执行工具`,
+        isPeerMessage
+          ? `CrabCode：是否接收跨 Session 消息？`
+          : `CrabCode：需要你的授权才能执行工具`,
         { modal: true, detail },
-        allowItem,
-        alwaysAllowItem,
-        denyItem,
-        denyFeedbackItem,
+        ...choices,
       )
       .then(async (choice) => {
         if (choice === denyFeedbackItem) {

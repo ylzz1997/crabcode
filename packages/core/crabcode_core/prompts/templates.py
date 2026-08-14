@@ -50,6 +50,8 @@ TOOL_NAMES = {
     "lint": "Lint",
     "memory": "Memory",
     "agent": "Agent",
+    "list_agents": "ListAgents",
+    "send_message": "SendMessage",
     "web_fetch": "WebFetch",
     "web_search": "WebSearch",
     "browser": "Browser",

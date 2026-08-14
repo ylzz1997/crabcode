@@ -55,6 +55,7 @@ class PermissionRequestEvent:
     reason: str | None = None
     permission_key: str | None = None
     agent_id: str | None = None
+    request_kind: str = "tool"
 
 
 @dataclass
@@ -181,6 +182,16 @@ class TeamMessageEvent:
 
 
 @dataclass
+class PeerMessageEvent:
+    """A message arrived from an independent CrabCode session."""
+    message_id: str
+    from_session_id: str
+    from_name: str
+    from_cwd: str
+    text: str
+
+
+@dataclass
 class TeamStateEvent:
     """A teammate's state changed within a team."""
     team_id: str
@@ -242,6 +253,7 @@ CoreEvent = Union[
     AgentOutputEvent,
     ModeChangeEvent,
     PlanReadyEvent,
+    PeerMessageEvent,
     TeamMessageEvent,
     TeamStateEvent,
     TaskUpdateEvent,

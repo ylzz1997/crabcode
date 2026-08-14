@@ -207,6 +207,7 @@ export interface PermissionRequestPayload {
   reason?: string | null;
   permission_key?: string | null;
   agent_id?: string | null;
+  request_kind?: "tool" | "peer_message";
 }
 
 export interface PermissionResponsePayload {
@@ -298,6 +299,15 @@ export interface PlanReadyPayload {
   type?: "plan_ready";
 }
 
+export interface PeerMessagePayload {
+  message_id: string;
+  from_session_id: string;
+  from_name: string;
+  from_cwd: string;
+  text: string;
+  type?: "peer_message";
+}
+
 export interface TeamMessagePayload {
   team_id: string;
   from_agent: string;
@@ -386,6 +396,7 @@ export type EventPayload =
   AgentOutputPayload |
   ModeChangePayload |
   PlanReadyPayload |
+  PeerMessagePayload |
   TeamMessagePayload |
   TeamStatePayload |
   TaskUpdatePayload |

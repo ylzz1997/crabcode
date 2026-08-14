@@ -256,6 +256,7 @@ class PermissionRequestPayload(BaseModel):
     reason: str | None = None
     permission_key: str | None = None
     agent_id: str | None = None
+    request_kind: Literal["tool", "peer_message"] = "tool"
 
 
 class PermissionResponsePayload(BaseModel):
@@ -358,6 +359,15 @@ class TeamMessagePayload(BaseModel):
     message_id: str = ""
 
 
+class PeerMessagePayload(BaseModel):
+    type: Literal["peer_message"] = "peer_message"
+    message_id: str
+    from_session_id: str
+    from_name: str
+    from_cwd: str
+    text: str
+
+
 class TeamStatePayload(BaseModel):
     type: Literal["team_state"] = "team_state"
     team_id: str
@@ -429,6 +439,7 @@ EventPayload = Union[
     AgentOutputPayload,
     ModeChangePayload,
     PlanReadyPayload,
+    PeerMessagePayload,
     TeamMessagePayload,
     TeamStatePayload,
     TaskUpdatePayload,
@@ -454,6 +465,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
         ModeChangeEvent,
         PermissionRequestEvent,
         PermissionResponseEvent,
+        PeerMessageEvent,
         PlanReadyEvent,
         StreamModeEvent,
         StreamTextEvent,
@@ -495,6 +507,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             reason=event.reason,
             permission_key=event.permission_key,
             agent_id=event.agent_id,
+            request_kind=event.request_kind,
         )
     if isinstance(event, PermissionResponseEvent):
         return PermissionResponsePayload(
@@ -567,6 +580,14 @@ def core_event_to_payload(event: Any) -> EventPayload:
         return ModeChangePayload(mode=event.mode, reason=event.reason)
     if isinstance(event, PlanReadyEvent):
         return PlanReadyPayload(plan=event.plan)
+    if isinstance(event, PeerMessageEvent):
+        return PeerMessagePayload(
+            message_id=event.message_id,
+            from_session_id=event.from_session_id,
+            from_name=event.from_name,
+            from_cwd=event.from_cwd,
+            text=event.text,
+        )
     if isinstance(event, TeamMessageEvent):
         return TeamMessagePayload(
             team_id=event.team_id,

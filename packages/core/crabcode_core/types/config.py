@@ -151,6 +151,18 @@ class TeamSettings(BaseModel):
     bridge_policy: str = "deny"  # deny | allow_tagged | allow_all
 
 
+class CrossSessionSettings(BaseModel):
+    """Settings for messaging between independent local sessions."""
+
+    enabled: bool = True
+    name: str | None = None
+    inbound: Literal["auto", "accept", "hold", "refuse"] = "auto"
+    registry_dir: str | None = None
+    queue_size: int = Field(default=50, gt=0)
+    max_message_size_bytes: int = Field(default=10_000, gt=0)
+    connect_timeout_seconds: float = Field(default=3.0, gt=0)
+
+
 class ScheduleSettings(BaseModel):
     """Settings for the Schedule (cron/interval/once) subsystem."""
 
@@ -182,6 +194,7 @@ class CrabCodeSettings(BaseModel):
     tool_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     team: TeamSettings = Field(default_factory=TeamSettings)
+    cross_session: CrossSessionSettings = Field(default_factory=CrossSessionSettings)
     schedule: ScheduleSettings = Field(default_factory=ScheduleSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)

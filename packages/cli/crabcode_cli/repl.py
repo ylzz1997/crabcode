@@ -37,6 +37,7 @@ from crabcode_core.types.event import (
     ModeChangeEvent,
     PermissionRequestEvent,
     PermissionResponseEvent,
+    PeerMessageEvent,
     PlanReadyEvent,
     StreamModeEvent,
     StreamTextEvent,
@@ -113,6 +114,7 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/agent": [],
     "/plan-status": [],
     "/agents": [],
+    "/peers": [],
     "/tasks": ["stop"],
     "/agent-log": [],
     "/agent-send": [],
@@ -264,6 +266,7 @@ class _CrabCodeCompleter(Completer):
             "/agent": "switch to agent mode / show agent (<id>)",
             "/plan-status": "show current plan status",
             "/agents": "list managed agents",
+            "/peers": "list messageable CrabCode sessions",
             "/tasks": "list/stop background agents and monitors",
             "/agent-log": "show an agent transcript",
             "/agent-send": "send input to an agent",
@@ -556,6 +559,12 @@ def _tool_summary(name: str, inp: dict) -> str:
         for i, opt in enumerate(options, 1):
             lines.append(f"  {i}. {opt}")
         return "\n".join(lines)
+    if name == "PeerMessage":
+        sender = inp.get("from_name", inp.get("from_session_id", "unknown"))
+        sender_id = str(inp.get("from_session_id", ""))[:8]
+        text = str(inp.get("text", ""))
+        preview = text[:500] + ("…" if len(text) > 500 else "")
+        return f"From {sender} · {sender_id}\n\n{preview}"
     import json
     raw = json.dumps(inp, ensure_ascii=False)
     return (raw[:200] + "…") if len(raw) > 200 else raw
@@ -773,8 +782,9 @@ async def _prompt_permission(
     batch_state: dict | None = None,
 ) -> None:
     """Prompt the user for tool permission and push response to session."""
+    is_peer_message = event.request_kind == "peer_message"
     # If a previous request in this batch was denied, auto-deny silently
-    if batch_state and batch_state.get("denied"):
+    if not is_peer_message and batch_state and batch_state.get("denied"):
         await session.respond_permission(
             PermissionResponseEvent(
                 tool_use_id=event.tool_use_id, allowed=False, agent_id=event.agent_id
@@ -791,7 +801,11 @@ async def _prompt_permission(
     console.print(
         Panel(
             Text(summary, style="dim"),
-            title=f"[bold yellow]⚠ {event.tool_name}{f' [{event.agent_id[:8]}]' if event.agent_id else ''}[/]",
+            title=(
+                "[bold yellow]⚠ Cross-session message[/]"
+                if is_peer_message
+                else f"[bold yellow]⚠ {event.tool_name}{f' [{event.agent_id[:8]}]' if event.agent_id else ''}[/]"
+            ),
             border_style="yellow",
             expand=False,
         )
@@ -802,13 +816,18 @@ async def _prompt_permission(
         try:
             choice = await perm_prompt_session.prompt_async(
                 HTML(
-                    f"  Allow <b>{event.tool_name}</b>? "
-                    "(y)es / (n)o / (a)lways allow / (f)eedback: "
+                    (
+                        "  Receive this message? "
+                        "(y)es / (n)o / (a)lways receive from this session: "
+                        if is_peer_message
+                        else f"  Allow <b>{event.tool_name}</b>? "
+                        "(y)es / (n)o / (a)lways allow / (f)eedback: "
+                    )
                 )
             )
             choice = choice.strip().lower()
         except (EOFError, KeyboardInterrupt):
-            if batch_state is not None:
+            if not is_peer_message and batch_state is not None:
                 batch_state["denied"] = True
             await session.respond_permission(
                 PermissionResponseEvent(
@@ -825,7 +844,7 @@ async def _prompt_permission(
             )
             return
         elif choice in ("n", "no"):
-            if batch_state is not None:
+            if not is_peer_message and batch_state is not None:
                 batch_state["denied"] = True
             await session.respond_permission(
                 PermissionResponseEvent(
@@ -852,7 +871,7 @@ async def _prompt_permission(
                 feedback = feedback.strip()
             except (EOFError, KeyboardInterrupt):
                 feedback = ""
-            if batch_state is not None:
+            if not is_peer_message and batch_state is not None:
                 batch_state["denied"] = True
             await session.respond_permission(
                 PermissionResponseEvent(
@@ -1180,6 +1199,12 @@ async def _consume_background_events(
         elif isinstance(event, PlanReadyEvent):
             session.set_plan(event.plan)
             await render(lambda: console.print("  [bold blue]Background plan ready[/]"))
+        elif isinstance(event, PeerMessageEvent):
+            await render(
+                lambda: console.print(
+                    f"  [dim cyan][peer:{event.from_name}] {event.text[:200]}[/]"
+                )
+            )
         elif isinstance(event, TeamMessageEvent):
             await render(
                 lambda: console.print(
@@ -1718,6 +1743,11 @@ async def run_repl(
                             f"{event.text[:100]}[/]"
                         )
 
+                    elif isinstance(event, PeerMessageEvent):
+                        console.print(
+                            f"  [dim cyan][peer:{event.from_name}] {event.text[:200]}[/]"
+                        )
+
                     elif isinstance(event, TeamStateEvent):
                         console.print(
                             f"  [dim magenta][team:{event.team_id[:8]}] "
@@ -1947,6 +1977,7 @@ async def _handle_command(
             "[bold]/agent[/] — switch to agent mode (full execution; no args)\n"
             "[bold]/plan-status[/] — show current plan status\n"
             "[bold]/agents[/] — list managed agents\n"
+            "[bold]/peers[/] — list messageable CrabCode sessions\n"
             "[bold]/tasks[/] — list background agents and monitors\n"
             "[bold]/tasks stop <id>[/] — stop a background task\n"
             "[bold]/agent <id>[/] — show a managed agent\n"
@@ -2440,6 +2471,32 @@ async def _handle_command(
                 str(snapshot.depth),
                 snapshot.callback_state if snapshot.callback_enabled else "—",
                 snapshot.title[:60],
+            )
+        console.print(table)
+        return True
+
+    if cmd == "/peers":
+        try:
+            runtime = await session.ensure_peer_runtime()
+        except Exception as exc:
+            console.print(f"[bold red]Cross-session messaging unavailable: {exc}[/]")
+            return True
+        peers = runtime.list_peers() if runtime is not None else []
+        if not peers:
+            console.print("[dim]No other messageable sessions.[/]")
+            return True
+        from rich.table import Table
+        table = Table(title="CrabCode Session Peers", border_style="blue", expand=False)
+        table.add_column("Name", style="cyan")
+        table.add_column("Session", style="dim", width=10)
+        table.add_column("Permissions", style="dim", width=12)
+        table.add_column("Working Directory")
+        for peer in peers[:50]:
+            table.add_row(
+                peer.name,
+                peer.session_id[:8],
+                peer.permission_class,
+                peer.cwd,
             )
         console.print(table)
         return True

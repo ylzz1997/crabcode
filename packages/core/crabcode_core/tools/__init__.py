@@ -25,6 +25,7 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.lint import LintTool
     from crabcode_core.tools.memory import MemoryTool
     from crabcode_core.tools.monitor import MonitorManager, MonitorTool, TaskListTool, TaskStopTool
+    from crabcode_core.tools.peer import ListAgentsTool, SendMessageTool
     from crabcode_core.tools.revert import RevertTool
     from crabcode_core.tools.switch_mode import SwitchModeTool
     from crabcode_core.tools.team import (
@@ -60,6 +61,8 @@ def get_default_tools() -> list[Tool]:
         AgentWaitTool(),
         AgentCancelTool(),
         AgentSendInputTool(),
+        ListAgentsTool(),
+        SendMessageTool(),
         AskUserTool(),
         CheckpointTool(),
         ChecklistTool(),

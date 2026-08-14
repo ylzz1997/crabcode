@@ -26,6 +26,7 @@ import type {
   FileChangePayload,
   ImageAttachment,
   PermissionRequestPayload,
+  PeerMessagePayload,
   PlanReadyPayload,
   StreamModePayload,
   ToolResultPayload,
@@ -172,6 +173,7 @@ export interface PermissionCard {
   reason: string | null;
   allowed: boolean | null;
   agentId?: string | null;
+  requestKind?: "tool" | "peer_message";
 }
 
 export interface PlanCard {
@@ -1332,6 +1334,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "plan_ready":
         this.handlePlanReadyOnState(state, (payload as PlanReadyPayload).plan, updateWebview);
         break;
+      case "peer_message": {
+        const peer = payload as PeerMessagePayload;
+        this.addMessageOnState(
+          state,
+          "system",
+          `[Peer ${peer.from_name} · ${peer.from_session_id.slice(0, 8)}] ${peer.text}`,
+          updateWebview,
+        );
+        break;
+      }
       case "file_change":
         this.handleFileChangeOnState(state, payload as FileChangePayload, updateWebview);
         break;
@@ -1581,12 +1593,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       reason: payload.reason ?? null,
       allowed: null,
       agentId: payload.agent_id ?? null,
+      requestKind: payload.request_kind ?? "tool",
     };
     state.permissionCards.set(payload.tool_use_id, card);
     state.history.push({ kind: "permission", card });
 
     // If this batch already had a denial, auto-deny immediately
-    if (state.batchDenied) {
+    if (state.batchDenied && card.requestKind !== "peer_message") {
       card.allowed = false;
       const cmd = buildPermissionResponseCommand(card.id, false, {
         agentId: card.agentId ?? undefined,
@@ -1655,10 +1668,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: "permissionResolved", card });
 
     // When denying, mark the batch and auto-deny all other pending cards in this round
-    if (!allowed) {
+    if (!allowed && card.requestKind !== "peer_message") {
       this.currentState.batchDenied = true;
       for (const [otherId, otherCard] of this.permissionCards) {
-        if (otherId !== id && otherCard.allowed === null) {
+        if (
+          otherId !== id &&
+          otherCard.allowed === null &&
+          otherCard.requestKind !== "peer_message"
+        ) {
           otherCard.allowed = false;
           const otherCmd = buildPermissionResponseCommand(otherId, false, {
             agentId: otherCard.agentId ?? undefined,
@@ -4862,16 +4879,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function buildPermissionCardHtml(card) {
+      const isPeerMessage = card.requestKind === 'peer_message';
       const state = card.allowed === null
         ? '<span class="request-status pending">等待确认</span>'
         : (card.allowed ? '<span class="request-status done">已允许</span>' : '<span class="request-status denied">已拒绝</span>');
       const actions = card.allowed === null
-        ? '<button class="request-action primary" data-permission-allow>允许</button>' +
-          '<button class="request-action subtle" data-permission-always-allow>始终允许</button>' +
+        ? '<button class="request-action primary" data-permission-allow>' + (isPeerMessage ? '接收' : '允许') + '</button>' +
+          '<button class="request-action subtle" data-permission-always-allow>' + (isPeerMessage ? '始终接收此 Session' : '始终允许') + '</button>' +
           '<button class="request-action subtle" data-permission-deny>拒绝</button>' +
-          '<button class="request-action subtle" data-permission-deny-feedback>拒绝并反馈</button>'
+          (isPeerMessage ? '' : '<button class="request-action subtle" data-permission-deny-feedback>拒绝并反馈</button>')
         : '';
-      const feedbackRow = card.allowed === null
+      const feedbackRow = card.allowed === null && !isPeerMessage
         ? '<div class="permission-feedback-row hidden">' +
           '<input class="permission-feedback-input" type="text" placeholder="告诉 AI 应该怎么做…" />' +
           '<button class="request-action primary" data-permission-feedback-send>发送</button>' +
@@ -4879,12 +4897,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         : '';
       const reason = card.reason ? '<div class="request-reason">' + escapeHtml(card.reason) + '</div>' : '';
       return '<div class="request-card-header">' +
-        '<span class="icon">⚡</span>' +
-        '<span class="request-title">工具权限 · ' + escapeHtml(card.toolName) + '</span>' +
+        '<span class="icon">' + (isPeerMessage ? '✉' : '⚡') + '</span>' +
+        '<span class="request-title">' + (isPeerMessage ? '跨 Session 消息' : '工具权限 · ' + escapeHtml(card.toolName)) + '</span>' +
         state +
         '</div>' +
         '<div class="request-card-body">' +
-        '<div class="timeline-meta">permission request</div>' +
+        '<div class="timeline-meta">' + (isPeerMessage ? 'peer message approval' : 'permission request') + '</div>' +
         reason +
         '<pre class="request-pre">' + escapeHtml(formatToolInput(card.toolName, card.input)) + '</pre>' +
         '<div class="request-actions">' + actions + '</div>' +

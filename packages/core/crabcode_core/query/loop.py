@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, replace
-from typing import Any, AsyncGenerator, Coroutine
+from typing import Any, AsyncGenerator, Callable, Coroutine
 
 import httpx
 
@@ -193,6 +193,7 @@ class QueryParams:
     auto_compact_enabled: bool = True
     compact_threshold: int | None = None
     reply_to_uuid: str | None = None
+    drain_peer_messages: Callable[[], list[str]] | None = None
 
 
 def _append_system_context(
@@ -794,6 +795,20 @@ async def query_loop(
         # Tools and permission reviewers must always observe the active
         # projection, including this turn's results.
         params.tool_context.messages = messages
+
+        # Peer text is injected only at an agent-loop boundary: never while a
+        # tool is executing, but before the next model request. This lets a
+        # session react after a completed tool batch without waiting for the
+        # entire foreground turn to finish.
+        if params.drain_peer_messages is not None:
+            peer_messages = params.drain_peer_messages()
+            for peer_text in peer_messages:
+                messages.append(
+                    create_user_message(content=peer_text, origin="peer-message")
+                )
+            if peer_messages:
+                params.messages[:] = messages
+                params.tool_context.messages = messages
 
         full_system = _append_system_context(
             params.system_prompt, params.system_context

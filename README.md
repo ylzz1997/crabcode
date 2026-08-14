@@ -6,7 +6,6 @@ AI coding assistant in the terminal — a Python reimplementation with a clean, 
 
 > This project is inspired by the design of Claude Code.
 
-
 ## Architecture
 
 - **crabcode-core**: The engine. Handles API calls, tool execution, prompt construction, session management, and MCP integration. Exposes a pure async event-stream interface — no I/O or terminal dependency.
@@ -139,7 +138,7 @@ crabcode gateway --password secret
 **HTTP API endpoints:**
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
+| ---------- | -------- | ------------- |
 | `/health` | GET | Health check |
 | `/session/new` | POST | Create a new session |
 | `/session/send` | POST | Send a message (starts query loop, events via SSE) |
@@ -206,7 +205,7 @@ crabcode acp
 **Supported ACP capabilities:**
 
 | Capability | Details |
-|-----------|---------|
+| ----------- | --------- |
 | Session management | new, load, list, fork, resume |
 | Prompt | text, image, resource links, embedded context |
 | MCP integration | HTTP and SSE MCP servers from the editor |
@@ -283,7 +282,7 @@ Or configure in `~/.crabcode/settings.json`:
 `api` field reference:
 
 | Field | Description | Default |
-|-------|-------------|---------|
+| ------- | ------------- | --------- |
 | `provider` | Backend: `anthropic` \| `openai` \| `codex` \| `router` \| `ollama` \| `gemini` \| `azure` | `anthropic` |
 | `model` | Model ID | — |
 | `base_url` | Custom API endpoint (for routers or local deployments) | — |
@@ -497,7 +496,7 @@ Switching does not clear conversation history — you can mix models freely with
 ## Built-in Tools
 
 | Tool | Type | Description |
-|------|------|-------------|
+| ------ | ------ | ------------- |
 | `Bash` | write | Execute shell commands |
 | `Read` | read | Read file contents |
 | `Write` | write | Create or overwrite files |
@@ -515,7 +514,7 @@ Switching does not clear conversation history — you can mix models freely with
 The `Lint` tool runs the appropriate linter for the given language automatically:
 
 | Language | Linters |
-|----------|---------|
+| ---------- | --------- |
 | Python | `ruff` (style), `pylint` (deep analysis), `mypy` (type check) |
 | JavaScript / TypeScript | `eslint` |
 | Go | `golangci-lint` |
@@ -536,7 +535,7 @@ CrabCode integrates with **Language Server Protocol (LSP)** servers to provide r
 **Built-in servers** (detected from `PATH`):
 
 | Language | Server | Extensions |
-|----------|--------|------------|
+| ---------- | -------- | ------------ |
 | Python | `pyright-langserver` | `.py`, `.pyi`, `.pyw` |
 | TypeScript / JS | `typescript-language-server` | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` |
 | Go | `gopls` | `.go` |
@@ -573,7 +572,7 @@ If a server isn't installed, it's simply skipped — no error, no delay.
 ```
 
 | Field | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `lsp` | `true` = enable (default), `false` = disable all, `{}` = enable with custom overrides |
 | `command` | Command to start the LSP server (must support `--stdio` mode) |
 | `extensions` | File extensions this server handles |
@@ -628,11 +627,13 @@ The `AskUser` tool lets the agent present a question with multiple options and w
 - **Esc** / **Ctrl+C**: cancel the selection
 
 **When the agent should use it:**
+
 - Multiple reasonable approaches exist and user preference matters
 - Confirming direction before making significant changes
 - The user may have context the agent doesn't
 
 **When NOT to use it:**
+
 - The answer is obvious or there's a clear best approach
 - The user already told you what to do
 - A simple yes/no is enough (the agent can just ask in text)
@@ -767,7 +768,7 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 **Difference between `/revert` and `/rollback`:**
 
 | Command | Conversation | Files |
-|---------|-------------|-------|
+| --------- | ------------- | ------- |
 | `/revert` | Rolled back | Restored to snapshot |
 | `/rollback` | Rolled back | Not touched |
 | `/undo` | Same as `/revert` (targets most recent checkpoint) | Restored to snapshot |
@@ -780,7 +781,7 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 **Gateway API:**
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
+| ---------- | -------- | ------------- |
 | `/snapshot/checkpoint` | POST | Create checkpoint with file snapshot |
 | `/snapshot/list` | GET | List checkpoints for a session |
 | `/snapshot/revert` | POST | Revert files + conversation to a checkpoint |
@@ -789,7 +790,7 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 ## REPL Commands
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `/help` | Show all available commands and skills |
 | `/status` | Show runtime status (model, context usage, compactions, agent summary) |
 | `/logs` | List background logs (for example search index logs) |
@@ -799,6 +800,7 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 | `/model` | Show active model and all configured named models |
 | `/model <name>` | Switch to a named model from `settings.models` |
 | `/agents` | List managed sub-agents in the current session |
+| `/peers` | List other live sessions available for cross-session messaging |
 | `/tasks` | List background agents and command/WebSocket monitors |
 | `/tasks stop <id>` | Stop a running background task |
 | `/agent <id>` | Show details for one agent (`status`, `usage`, `result`, transcript path) |
@@ -995,7 +997,7 @@ Omit `tool_call_timeout` or set it to `null` to let tool calls run indefinitely.
 Files from the following locations are loaded and concatenated in order:
 
 | Path | Scope |
-|------|-------|
+| ------ | ------- |
 | `~/.claude/CLAUDE.md` | User-global, Claude Code compatible |
 | `~/.crabcode/CLAUDE.md` | User-global, CrabCode native |
 | `<each dir from git-root to cwd>/CLAUDE.md` | Project-level, walked downward |
@@ -1053,7 +1055,7 @@ User's additional request: $USER_INPUT
 Frontmatter fields:
 
 | Field | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `name` | Skill name — also the slash-command trigger (defaults to directory name) |
 | `description` | Short description shown to the model to decide when to invoke the skill |
 | `when_to_use` | Additional trigger condition hint |
@@ -1106,7 +1108,7 @@ Follow PEP 8 conventions and use type hints.
 Pattern fields:
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `pathPatterns` | Comma-separated or YAML list | Glob patterns matched against file paths in the user's message (e.g. `"**/*.py"`, `"src/**/*.ts"`) |
 | `bashPatterns` | Comma-separated or YAML list | Regex patterns matched against shell commands in the user's message (e.g. `"pytest .*"`, `"git commit.*"`) |
 | `importPatterns` | Comma-separated or YAML list | Regex patterns matched against import/require lines in the user's message (e.g. `"from django"`, `"import React"`) |
@@ -1147,6 +1149,38 @@ Run ruff check and mypy.
 
 When a user mentions `src/app.py`, all three skills activate in order: `python-dev` → `python-test` → `python-lint`.
 
+## Cross-session messaging
+
+Independent CrabCode sessions on the same macOS/Linux machine can discover and
+message each other without sharing conversation history. Each live session
+publishes a small record under `~/.crabcode/peers/` and listens on a user-only,
+token-authenticated Unix domain socket. The model uses `ListAgents` to discover peers and
+`SendMessage` to deliver plain text by session name or ID.
+
+- Incoming messages received during a turn are injected after the current tool
+  batch and before the next model request. They start a synthetic turn when the
+  session is idle.
+- The receiver sees the sender name, session ID, and working directory. Peer
+  text never counts as user consent and cannot bypass local permissions.
+- `SendMessage` follows the normal write-tool permission flow. Registry and
+  socket files are restricted to the current OS user.
+- The default `auto` inbound policy immediately accepts messages when sender
+  and receiver use the same permission class, and otherwise holds them for
+  user approval. Use `hold` to approve every message, `accept` for an explicitly
+  trusted unattended worker, or `refuse` to disable inbound delivery.
+
+```json
+{
+  "cross_session": {
+    "enabled": true,
+    "name": "api-worker",
+    "inbound": "auto",
+    "queue_size": 50,
+    "max_message_size_bytes": 10000
+  }
+}
+```
+
 ## Agent Teams
 
 Agent Teams let a lead AI spawn multiple teammates that coordinate through message passing and a shared task board. Each teammate runs in its own context window and can use a different model — enabling multi-model collaboration (e.g. Claude for coding, Gemini for research, GPT for review) within a single team.
@@ -1162,7 +1196,7 @@ Agent Teams let a lead AI spawn multiple teammates that coordinate through messa
 ### Built-in Team Tools
 
 | Tool | Description |
-|------|-------------|
+| ------ | ------------- |
 | `TeamCreate` | Create a new team |
 | `TeamSpawn` | Spawn a teammate with a role (worker/researcher/reviewer), optional model profile |
 | `TeamMessage` | Send a message to a specific teammate |
@@ -1189,7 +1223,7 @@ Configure via the `team` field in `settings.json`:
 ```
 
 | Field | Description | Default |
-|-------|-------------|---------|
+| ------- | ------------- | --------- |
 | `max_teammates` | Maximum teammates per team | `8` |
 | `inbox_dir` | Custom directory for JSONL inbox files (default: `~/.crabcode/team_inbox/`) | `null` |
 | `backpressure_queue_size` | Per-teammate message queue size | `100` |
@@ -1205,12 +1239,12 @@ Teams are isolated by default. `TeamBridge` allows controlled messaging between 
 
 ### Crash recovery
 
-The recovery helper can normalize stale `busy`/`cancelling` teammate states in an existing `TeamManager` runtime (without auto-restarting work). It is not currently wired into gateway startup, and team membership/state are held in memory rather than persisted. A new server process therefore cannot discover or recover teams from a previous process; callers must reconstruct the runtime and invoke recovery explicitly. 
+The recovery helper can normalize stale `busy`/`cancelling` teammate states in an existing `TeamManager` runtime (without auto-restarting work). It is not currently wired into gateway startup, and team membership/state are held in memory rather than persisted. A new server process therefore cannot discover or recover teams from a previous process; callers must reconstruct the runtime and invoke recovery explicitly.
 
 ### REPL commands
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `/team list` | List active teams |
 | `/team status <team_id>` | Show team status table |
 | `/team messages <team_id>` | Show team message history |
@@ -1250,7 +1284,7 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
 ```
 
 | Field | Description | Default |
-|-------|-------------|---------|
+| ------- | ------------- | --------- |
 | `max_turns` | Maximum agentic turns per sub-agent invocation | `10` |
 | `timeout` | Total wall-clock timeout in seconds for a sub-agent | `300` |
 | `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
@@ -1278,7 +1312,7 @@ Each entry under `types` supports these fields:
 ```
 
 | Field | Description | Default |
-|-------|-------------|---------|
+| ------- | ------------- | --------- |
 | `model_profile` | Named entry from `models` used by this agent type; an explicit `Agent.model_profile` input takes precedence | Current model |
 | `allowed_tools` | Tool-name allowlist. An empty list is unrestricted for general-purpose agents; `explore` defaults to read-only tools | `[]` |
 | `prompt` | System prompt override for this agent type | Current prompt profile |
@@ -1347,7 +1381,7 @@ The number of lines shown for tool results in the terminal can be configured via
 ```
 
 | Field | Description | Default |
-|-------|-------------|---------|
+| ------- | ------------- | --------- |
 | `default_max_lines` | Default maximum display lines for tool results | `50` |
 | `max_chars` | Character count safety cap for display content | `50000` |
 | `tool_max_lines` | Override `default_max_lines` per tool name; only configure tools you want to adjust | See below |
@@ -1355,7 +1389,7 @@ The number of lines shown for tool results in the terminal can be configured via
 Built-in tool line limits:
 
 | Tool | Default lines |
-|------|---------------|
+| ------ | --------------- |
 | `Agent` | `120` |
 | `Bash` | `60` |
 | `Grep` | `50` |
@@ -1390,6 +1424,7 @@ Sub-agents are concurrency-safe and run in parallel when the parent model issues
 ```
 
 When the session starts, each extra tool's `setup()` method is called with a `ToolContext` that includes:
+
 - `cwd` — the current working directory
 - `tool_config` — the matching entry from `tool_settings`
 - `on_event` — a callback for emitting real-time progress events to the CLI
@@ -1530,7 +1565,7 @@ pip install -e packages/search          # AST chunking + all embedder backends
 
 1. **Chunking** — source files are split into semantic units (functions, classes, methods). Uses tree-sitter AST parsing when available, falls back to regex-based boundary detection.
 2. **Embedding** — each chunk is embedded into a dense vector using a configurable model.
-3. **Storage** — vectors are stored in a local USearch index under `.crabcode/search/`. Repos with fewer than 100k chunks use exact inner-product search; larger repos automatically switch to approximate HNSW traversal. 
+3. **Storage** — vectors are stored in a local USearch index under `.crabcode/search/`. Repos with fewer than 100k chunks use exact inner-product search; larger repos automatically switch to approximate HNSW traversal.
 4. **Search** — at query time, the query is embedded and the nearest chunks are returned with file path, line range, and relevance score.
 
 ### Indexing
@@ -1544,7 +1579,7 @@ Subsequent runs use incremental mtime-based updates — only changed files are r
 Configure via `tool_settings.CodebaseSearch` in `settings.json`:
 
 | Backend | `embedder` value | Notes |
-|---------|-----------------|-------|
+| --------- | ----------------- | ------- |
 | Ollama (local) | `"ollama"` | Default. Requires a running Ollama instance. |
 | OpenAI API | `"openai"` | Requires `OPENAI_API_KEY`. |
 | Google Gemini API | `"gemini"` | Requires `GEMINI_API_KEY`. |
@@ -1604,6 +1639,7 @@ Example using Gemini:
 The system prompt is fully configurable via a `prompt_profile` in `settings.json`. This lets you swap the agent's identity and behavioral sections without touching the engine code — useful for building non-coding agents on top of `crabcode-core`.
 
 Each section field follows the same rule:
+
 - **omitted / `null`** → use the built-in default
 - **`""`** → disable that section entirely
 - **non-empty string** → replace with your own content
@@ -1626,7 +1662,7 @@ Each section field follows the same rule:
 `prompt_profile` field reference:
 
 | Field | Description | Default |
-|-------|-------------|---------|
+| ------- | ------------- | --------- |
 | `prefix` | First sentence that names the assistant | `"You are CrabCode…"` |
 | `intro` | Full intro section override | built-in |
 | `system` | System behaviour rules | built-in |
