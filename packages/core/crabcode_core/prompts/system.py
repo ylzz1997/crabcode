@@ -266,7 +266,7 @@ def _get_team_tools_section(enabled_tools: list[str]) -> str | None:
 
 def _get_ultra_mode_section(enabled_tools: list[str], ultra_mode: bool) -> str | None:
     agent = TOOL_NAMES["agent"]
-    if not ultra_mode or not ({agent, "AgentSpawn"} & set(enabled_tools)):
+    if not ultra_mode or agent not in enabled_tools:
         return None
     return (
         "# Ultra mode\n"
@@ -286,8 +286,7 @@ def _get_session_guidance_section(
 ) -> str | None:
     ask_tool = TOOL_NAMES["ask_user"]
     agent = TOOL_NAMES["agent"]
-    agent_tool = agent if agent in enabled_tools else "AgentSpawn"
-    has_agent_tool = agent_tool in enabled_tools
+    has_agent_tool = agent in enabled_tools
     glob = TOOL_NAMES["glob"]
     grep = TOOL_NAMES["grep"]
     skill = TOOL_NAMES["skill"]
@@ -300,7 +299,7 @@ def _get_session_guidance_section(
     items: list[str | None] = [
         f"If you do not understand why the user has denied a tool call, use the {ask_tool} to ask them." if ask_tool in enabled_tools else None,
         "If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt \u2014 the `!` prefix runs the command in this session so its output lands directly in the conversation.",
-        f"Use the {agent_tool} tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself." if has_agent_tool and not ultra_mode else None,
+        f"Use the {agent} tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself." if has_agent_tool and not ultra_mode else None,
         f"For simple, directed codebase searches (e.g. for a specific file/class/function) use the {glob} or {grep} directly." if has_agent_tool and not ultra_mode else None,
         f"/<skill-name> (e.g. /commit) is shorthand for users to invoke a skill. When the user types a slash command that matches a skill name, use the {skill} tool to execute it. IMPORTANT: Only use {skill} for skills listed in its description \u2014 do not guess or use built-in commands." if skill in enabled_tools else None,
         f"Use {codebase_search} when you need to find code by semantic meaning, purpose, or behavior \u2014 for example: 'where is authentication handled', 'how does the build system work', or 'find the payment processing logic'. Use {glob} or {grep} when you know the exact file name or text pattern you are looking for." if codebase_search in enabled_tools else None,

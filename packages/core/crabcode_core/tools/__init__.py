@@ -8,7 +8,6 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.agent import (
         AgentCancelTool,
         AgentSendInputTool,
-        AgentSpawnTool,
         AgentStatusTool,
         AgentWaitTool,
     )
@@ -56,7 +55,6 @@ def get_default_tools() -> list[Tool]:
         MonitorTool(monitor_manager),
         TaskListTool(monitor_manager),
         TaskStopTool(monitor_manager),
-        AgentSpawnTool(),
         AgentStatusTool(),
         AgentWaitTool(),
         AgentCancelTool(),

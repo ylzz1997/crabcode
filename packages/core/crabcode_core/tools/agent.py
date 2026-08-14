@@ -219,67 +219,6 @@ class AgentTool(Tool):
         )
 
 
-class AgentSpawnTool(Tool):
-    name = "AgentSpawn"
-    description = (
-        "Compatibility alias for Agent with run_in_background=true. Spawn a managed "
-        "sub-agent and return immediately; completion automatically resumes its parent."
-    )
-    is_read_only = False
-    is_concurrency_safe = True
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "prompt": {"type": "string", "description": "Task for the sub-agent."},
-            "subagent_type": {
-                "type": "string",
-                "enum": ["explore", "generalPurpose"],
-                "description": "Sub-agent type.",
-            },
-            "name": {"type": "string", "description": "Optional title for the sub-agent."},
-            "model_profile": {
-                "type": "string",
-                "description": (
-                    "Optional named model profile configured under settings.models. "
-                    "Do not pass a provider model ID."
-                ),
-            },
-        },
-        "required": ["prompt"],
-    }
-
-    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
-        manager = context.agent_manager
-        if not manager:
-            return ToolResult(result_for_model="Error: agent manager unavailable", is_error=True)
-        try:
-            agent_id = await manager.spawn_agent(
-                prompt=tool_input["prompt"],
-                subagent_type=tool_input.get("subagent_type", "generalPurpose"),
-                name=tool_input.get("name"),
-                model_profile=tool_input.get("model_profile"),
-                parent_agent_id=context.agent_id,
-                parent_tool_use_id=context.tool_use_id,
-                depth=context.agent_depth + 1,
-                callback=True,
-            )
-        except ValueError as exc:
-            return ToolResult(result_for_model=f"Error: {exc}", is_error=True)
-        return ToolResult(
-            data={
-                "status": "async_launched",
-                "isAsync": True,
-                "agentId": agent_id,
-                "agent_id": agent_id,
-            },
-            result_for_model=(
-                f"status: async_launched\nagentId: {agent_id}\n"
-                "The result will arrive automatically as a task notification; "
-                "do not poll for completion."
-            ),
-        )
-
-
 class AgentStatusTool(Tool):
     name = "AgentStatus"
     description = "Inspect one or more managed sub-agents."

@@ -1219,7 +1219,11 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
     "max_turns": 10,
     "timeout": 300,
     "max_output_chars": 12000,
-    "stream_send_input_output": false
+    "stream_send_input_output": false,
+    "max_concurrency": 4,
+    "max_depth": 2,
+    "max_active_agents_per_run": 16,
+    "types": {}
   }
 }
 ```
@@ -1230,16 +1234,48 @@ The built-in `Agent` tool spawns sub-agents for parallel or isolated tasks. Its 
 | `timeout` | Total wall-clock timeout in seconds for a sub-agent | `300` |
 | `max_output_chars` | Truncate individual tool results beyond this many characters | `12000` |
 | `stream_send_input_output` | Stream live output after `/agent-send` in REPL; set `false` to send input silently | `false` |
+| `max_concurrency` | Maximum number of sub-agents that may execute concurrently; additional agents remain queued | `4` |
+| `max_depth` | Maximum nesting depth. The main agent is depth 0, so `2` allows children at depth 1 and grandchildren at depth 2 | `2` |
+| `max_active_agents_per_run` | Maximum number of unfinished managed agents in the current session, including queued and running agents | `16` |
+| `types` | Per-`subagent_type` overrides; see below | `{}` |
+
+Each entry under `types` supports these fields:
+
+```json
+{
+  "agent": {
+    "types": {
+      "explore": {
+        "model_profile": "fast-model",
+        "allowed_tools": ["Read", "Grep", "Glob"],
+        "prompt": "Explore the codebase and report evidence concisely.",
+        "enable_lsp": false
+      }
+    }
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `model_profile` | Named entry from `models` used by this agent type; an explicit `Agent.model_profile` input takes precedence | Current model |
+| `allowed_tools` | Tool-name allowlist. An empty list is unrestricted for general-purpose agents; `explore` defaults to read-only tools | `[]` |
+| `prompt` | System prompt override for this agent type | Current prompt profile |
+| `enable_lsp` | Whether this agent type receives the configured LSP manager | `true` |
 
 Like Claude Code, `Agent` runs in the background by default and immediately returns an
 `async_launched` result. Set `run_in_background: false` only when the current turn needs the
-sub-agent result synchronously. `AgentSpawn` remains as a compatibility alias for a background
-launch. When the sub-agent completes, fails, or is stopped, CrabCode injects a
+sub-agent result synchronously. When the
+sub-agent completes, fails, or is stopped, CrabCode injects a
 `<task-notification>` and automatically resumes its direct parent (then the main agent for
 top-level work). Nested callbacks are routed up the parent chain. Callback delivery is persisted
 across session resume and compaction, with the observable states `pending`, `injected`, and
 `delivered`. A queued or running agent left behind by a terminated process is restored as
 `stopped`, never as a phantom running task.
+
+"Sub-agent" describes the managed agent's parent-child relationship; it is not a separate runtime
+class. `TeamSpawn` creates the same kind of managed agent and then adds team membership, messaging,
+and team lifecycle state.
 
 The REPL renders automatic continuations while idle. Gateway clients receive the same
 background events through `/event` or `/ws`; pass `"callback": true` to

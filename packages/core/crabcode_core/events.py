@@ -522,7 +522,9 @@ class CoreSession:
             self._ensure_agent_completion_dispatcher()
 
         def _tools_provider() -> list[Tool]:
-            return [tool for tool in self.tools if tool.name != "Agent"]
+            # Managed agents use the same canonical Agent tool as the parent.
+            # The depth limit in AgentManager is the recursion fence.
+            return list(self.tools)
 
         def _adapter_provider(model_name: str | None) -> Any:
             selected_name = model_name if model_name is not None else self._current_model_name
@@ -633,9 +635,11 @@ class CoreSession:
                 self._lsp_manager = None
         self._agent_manager._lsp_manager = self._lsp_manager
 
-        has_agent = any(isinstance(t, AgentTool) for t in self.tools)
+        has_agent = any(
+            isinstance(tool, AgentTool) and tool.name == "Agent"
+            for tool in self.tools
+        )
         if not has_agent:
-            sub_tools = list(self.tools)
             agent_cfg = merged.agent
             self.tools.append(AgentTool(
                 manager=self._agent_manager,

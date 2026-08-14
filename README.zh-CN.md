@@ -1214,7 +1214,11 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
     "max_turns": 10,
     "timeout": 300,
     "max_output_chars": 12000,
-    "stream_send_input_output": false
+    "stream_send_input_output": false,
+    "max_concurrency": 4,
+    "max_depth": 2,
+    "max_active_agents_per_run": 16,
+    "types": {}
   }
 }
 ```
@@ -1225,14 +1229,45 @@ Lead 生成 teammate 时指定不同的 `model_profile`，每个 teammate 使用
 | `timeout` | 子 agent 的总超时时间（秒） | `300` |
 | `max_output_chars` | 单个工具结果超过此字符数时截断 | `12000` |
 | `stream_send_input_output` | REPL 执行 `/agent-send` 后是否实时流式回显；设为 `false` 时仅发送输入，不自动回显 | `false` |
+| `max_concurrency` | 可同时执行的子 agent 数量上限；超出后继续排队 | `4` |
+| `max_depth` | 最大嵌套深度。主 agent 深度为 0，因此 `2` 允许深度为 1 的子 agent 和深度为 2 的孙级 agent | `2` |
+| `max_active_agents_per_run` | 当前 session 中未完成 managed agent 的数量上限，包括排队中和运行中的 agent | `16` |
+| `types` | 按 `subagent_type` 覆盖配置，字段见下表 | `{}` |
+
+`types` 中的每个条目支持以下字段：
+
+```json
+{
+  "agent": {
+    "types": {
+      "explore": {
+        "model_profile": "fast-model",
+        "allowed_tools": ["Read", "Grep", "Glob"],
+        "prompt": "探索代码库并简洁报告依据。",
+        "enable_lsp": false
+      }
+    }
+  }
+}
+```
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `model_profile` | 该 agent 类型使用的 `models` 命名配置；显式传入的 `Agent.model_profile` 优先 | 当前模型 |
+| `allowed_tools` | 工具名称白名单。普通 agent 的空列表表示不限制；`explore` 的空列表默认只允许只读工具 | `[]` |
+| `prompt` | 该 agent 类型使用的系统提示词覆盖 | 当前提示词配置 |
+| `enable_lsp` | 是否向该 agent 类型提供已配置的 LSP manager | `true` |
 
 与 Claude Code 一样，`Agent` 默认在后台运行并立即返回 `async_launched`；只有当前轮次
-必须同步取得结果时才设置 `run_in_background: false`。`AgentSpawn` 继续作为后台启动的
-兼容别名。子 agent 完成、失败或被停止后，CrabCode 会注入 `<task-notification>`，自动
+必须同步取得结果时才设置 `run_in_background: false`。子 agent 完成、失败或被停止后，
+CrabCode 会注入 `<task-notification>`，自动
 恢复其直接父 agent；顶层任务则恢复主 agent。嵌套 callback 会沿父链逐级路由。
 callback 的投递记录可跨会话恢复和对话压缩保存，并暴露 `pending`、`injected`、
 `delivered` 三种状态。进程终止后遗留的 queued/running agent 会在恢复时被标记为
 `stopped`，不会显示成实际已不存在的运行中任务。
+
+“子 agent”只描述 managed agent 的父子关系，并不是另一种运行时类型。`TeamSpawn` 创建的
+仍是同一种 managed agent，只是在此基础上附加团队成员身份、消息通信和团队生命周期状态。
 
 REPL 会在空闲时显示自动续跑过程。Gateway 客户端可通过 `/event` 或 `/ws` 接收相同的
 后台事件；调用 `POST /agent/spawn` 时传入 `"callback": true` 即可开启。Agent 状态响应
