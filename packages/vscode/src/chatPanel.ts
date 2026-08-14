@@ -63,6 +63,28 @@ function formatPercent(percent: number): string {
   return Math.abs(percent - rounded) < 0.05 ? `${rounded}%` : `${percent.toFixed(1)}%`;
 }
 
+function buildCacheUsageDetail(payload: TurnCompletePayload): string | null {
+  const usage = payload.usage;
+  if (!usage || (!("cache_read_tokens" in usage) && !("cache_write_tokens" in usage))) {
+    return null;
+  }
+  const tokenValue = (key: string): number => {
+    const value = Number(usage[key]);
+    return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+  };
+  const cacheRead = tokenValue("cache_read_tokens");
+  const totalInput = tokenValue("total_input_tokens") || tokenValue("input_tokens");
+  const hitRate = totalInput ? cacheRead / totalInput * 100 : 0;
+  const parts = [
+    `缓存命中 ${formatPercent(hitRate)}`,
+    `读取 ${formatTokenCount(cacheRead)}`,
+  ];
+  if ("cache_write_tokens" in usage) {
+    parts.push(`写入 ${formatTokenCount(tokenValue("cache_write_tokens"))}`);
+  }
+  return parts.join(" · ");
+}
+
 function normalizePendingEditsVisibleFiles(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return 5;
@@ -82,6 +104,7 @@ interface ContextUsageStatus {
   remainingTokens: number;
   usedPercent: number;
   remainingPercent: number;
+  cacheDetail?: string;
   details: string[];
 }
 
@@ -90,16 +113,18 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
   const window = Math.max(0, Math.trunc(payload.context_window_tokens ?? 0));
   if (!used && !window) return null;
   if (!window) {
+    const cacheDetail = buildCacheUsageDetail(payload);
     return {
       usedTokens: used,
       windowTokens: 0,
       remainingTokens: 0,
       usedPercent: 0,
       remainingPercent: 0,
+      cacheDetail: cacheDetail ?? undefined,
       details: [
         "背景信息窗口：",
         `已用 ${formatTokenCount(used)} 标记`,
-        "总量未知",
+        cacheDetail ? `总量未知 · ${cacheDetail}` : "总量未知",
       ],
     };
   }
@@ -113,16 +138,19 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
     0,
     Math.trunc(payload.context_remaining_tokens ?? window - used),
   );
+  const tokenDetail = `已用 ${formatTokenCount(used)} 标记，共 ${formatTokenCount(window)}`;
+  const cacheDetail = buildCacheUsageDetail(payload);
   return {
     usedTokens: used,
     windowTokens: window,
     remainingTokens,
     usedPercent,
     remainingPercent,
+    cacheDetail: cacheDetail ?? undefined,
     details: [
       "背景信息窗口：",
       `${formatPercent(usedPercent)} 已用（剩余 ${formatPercent(remainingPercent)}）`,
-      `已用 ${formatTokenCount(used)} 标记，共 ${formatTokenCount(window)}`,
+      cacheDetail ? `${tokenDetail} · ${cacheDetail}` : tokenDetail,
     ],
   };
 }
@@ -467,6 +495,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const lines = [`**会话 ID：** \`${sid}\``];
           if (usage) {
             lines.push(`**背景窗口：** ${usage.usedTokens.toLocaleString()} / ${usage.windowTokens.toLocaleString()} tokens（${usage.usedPercent.toFixed(1)}% 已用，剩余 ${usage.remainingPercent.toFixed(1)}%）`);
+            if (usage.cacheDetail) lines.push(`**提示缓存：** ${usage.cacheDetail}`);
           } else {
             lines.push("**背景窗口：** 暂无数据");
           }

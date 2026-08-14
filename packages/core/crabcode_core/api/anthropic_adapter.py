@@ -9,7 +9,12 @@ from typing import Any, AsyncGenerator
 import anthropic
 import httpx
 
-from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
+from crabcode_core.api.base import (
+    APIAdapter,
+    ModelConfig,
+    StreamChunk,
+    usage_int_field,
+)
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
@@ -28,6 +33,31 @@ logger = get_logger(__name__)
 
 
 ANTHROPIC_VERSION = "2023-06-01"
+
+
+def _anthropic_usage(
+    raw: Any,
+    *,
+    include_input: bool,
+    include_output: bool,
+) -> dict[str, int]:
+    usage: dict[str, int] = {}
+    if include_input:
+        input_tokens, has_input = usage_int_field(raw, "input_tokens")
+        cache_read, has_cache_read = usage_int_field(raw, "cache_read_input_tokens")
+        cache_write, has_cache_write = usage_int_field(raw, "cache_creation_input_tokens")
+        if has_input:
+            usage["input_tokens"] = input_tokens
+            usage["total_input_tokens"] = input_tokens + cache_read + cache_write
+        if has_cache_read:
+            usage["cache_read_tokens"] = cache_read
+        if has_cache_write:
+            usage["cache_write_tokens"] = cache_write
+    if include_output:
+        output_tokens, has_output = usage_int_field(raw, "output_tokens")
+        if has_output:
+            usage["output_tokens"] = output_tokens
+    return usage
 
 
 def _messages_to_api(messages: list[Message]) -> list[dict[str, Any]]:
@@ -258,10 +288,11 @@ class AnthropicAdapter(APIAdapter):
                         usage = {}
                         raw_usage = event.get("usage")
                         if isinstance(raw_usage, dict):
-                            usage = {
-                                "input_tokens": raw_usage.get("input_tokens", 0),
-                                "output_tokens": raw_usage.get("output_tokens", 0),
-                            }
+                            usage = _anthropic_usage(
+                                raw_usage,
+                                include_input=True,
+                                include_output=True,
+                            )
                         delta = event.get("delta") or {}
                         yield StreamChunk(
                             type="message_delta",
@@ -274,10 +305,11 @@ class AnthropicAdapter(APIAdapter):
                         message = event.get("message") or {}
                         raw_usage = message.get("usage")
                         if isinstance(raw_usage, dict):
-                            usage = {
-                                "input_tokens": raw_usage.get("input_tokens", 0),
-                                "output_tokens": raw_usage.get("output_tokens", 0),
-                            }
+                            usage = _anthropic_usage(
+                                raw_usage,
+                                include_input=True,
+                                include_output=True,
+                            )
                         yield StreamChunk(type="message_start", usage=usage)
 
                     elif event_type == "message_stop":
@@ -426,9 +458,11 @@ class AnthropicAdapter(APIAdapter):
                 elif event_type == "message_delta":
                     usage = {}
                     if hasattr(event, "usage") and event.usage:
-                        usage = {
-                            "output_tokens": getattr(event.usage, "output_tokens", 0),
-                        }
+                        usage = _anthropic_usage(
+                            event.usage,
+                            include_input=True,
+                            include_output=True,
+                        )
                     stop_reason = getattr(event.delta, "stop_reason", "") or ""
                     yield StreamChunk(
                         type="message_delta",
@@ -439,11 +473,11 @@ class AnthropicAdapter(APIAdapter):
                 elif event_type == "message_start":
                     usage = {}
                     if hasattr(event.message, "usage") and event.message.usage:
-                        u = event.message.usage
-                        usage = {
-                            "input_tokens": getattr(u, "input_tokens", 0),
-                            "output_tokens": getattr(u, "output_tokens", 0),
-                        }
+                        usage = _anthropic_usage(
+                            event.message.usage,
+                            include_input=True,
+                            include_output=True,
+                        )
                     yield StreamChunk(type="message_start", usage=usage)
 
                 elif event_type == "message_stop":

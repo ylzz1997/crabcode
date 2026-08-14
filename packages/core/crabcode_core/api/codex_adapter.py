@@ -13,7 +13,12 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
-from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
+from crabcode_core.api.base import (
+    APIAdapter,
+    ModelConfig,
+    StreamChunk,
+    normalize_openai_usage,
+)
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
@@ -228,11 +233,7 @@ def _response_to_stream_chunks(response: Any) -> list[StreamChunk]:
 
     usage = {}
     if hasattr(response, "usage") and response.usage:
-        u = response.usage
-        usage = {
-            "input_tokens": getattr(u, "input_tokens", 0),
-            "output_tokens": getattr(u, "output_tokens", 0),
-        }
+        usage = normalize_openai_usage(response.usage)
 
     if not chunks and getattr(response, "error", None):
         err = response.error
@@ -483,10 +484,7 @@ class CodexAdapter(APIAdapter):
                         usage_payload = (
                             payload.get("response", {}) or {}
                         ).get("usage", {}) or {}
-                        usage = {
-                            "input_tokens": int(usage_payload.get("input_tokens", 0) or 0),
-                            "output_tokens": int(usage_payload.get("output_tokens", 0) or 0),
-                        }
+                        usage = normalize_openai_usage(usage_payload)
                         yield StreamChunk(
                             type="message_stop",
                             stop_reason="end_turn",
@@ -694,11 +692,7 @@ class CodexAdapter(APIAdapter):
                     usage = {}
                     response = event.response
                     if hasattr(response, "usage") and response.usage:
-                        u = response.usage
-                        usage = {
-                            "input_tokens": getattr(u, "input_tokens", 0),
-                            "output_tokens": getattr(u, "output_tokens", 0),
-                        }
+                        usage = normalize_openai_usage(response.usage)
                     yield StreamChunk(
                         type="message_stop",
                         stop_reason="end_turn",

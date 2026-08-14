@@ -2893,7 +2893,11 @@ class CoreSession:
                         self.last_context_window_tokens = event.context_window_tokens
 
                     if self._session_storage:
-                        total_tokens = event.usage.get("input_tokens", 0) + event.usage.get("output_tokens", 0)
+                        input_tokens = event.usage.get(
+                            "total_input_tokens",
+                            event.usage.get("input_tokens", 0),
+                        )
+                        total_tokens = input_tokens + event.usage.get("output_tokens", 0)
                         if total_tokens > 0:
                             self._session_storage.record_tokens(total_tokens)
                             self._record_goal_usage(total_tokens)

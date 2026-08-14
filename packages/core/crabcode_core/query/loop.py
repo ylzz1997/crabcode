@@ -673,7 +673,26 @@ async def query_loop(
     _MAX_COMPACT_RESUME_RETRIES = 1
     _api_retry_attempts = 0
     _awaiting_compact_resume = False
+    usage_keys = (
+        "input_tokens",
+        "output_tokens",
+        "total_input_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+    )
     total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    last_request_usage: dict[str, int] = {key: 0 for key in usage_keys}
+    reported_usage_keys: set[str] = set()
+    reported_total_usage_keys: set[str] = set()
+
+    def _compact_total_usage() -> dict[str, int]:
+        return {
+            key: value
+            for key, value in total_usage.items()
+            if key in {"input_tokens", "output_tokens"}
+            or key in reported_total_usage_keys
+        }
+
     # Frontends can answer a permission prompt after the turn has already
     # been interrupted, or can answer several prompts out of order. Keep only
     # responses for the current model response so a stale approval can never
@@ -917,7 +936,7 @@ async def query_loop(
                 yield TurnCompleteEvent(
                     reason="context_overflow",
                     turn_count=turn_count,
-                    usage=total_usage,
+                    usage=_compact_total_usage(),
                 )
                 return
             if max_tokens > available_output:
@@ -962,7 +981,8 @@ async def query_loop(
             reasoning_effort=request_reasoning_effort,
         )
 
-        last_request_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        last_request_usage = {key: 0 for key in usage_keys}
+        reported_usage_keys = set()
 
         def _usage_int(usage: dict[str, Any], key: str) -> int:
             try:
@@ -973,17 +993,21 @@ async def query_loop(
         def _set_request_usage(usage: dict[str, Any]) -> None:
             """Record this API request's latest usage snapshot.
 
-            Some providers stream usage as partial snapshots and Codex commonly
-            reports the final request usage on message_stop. Keep total_usage in
-            sync by applying only the difference from the prior snapshot.
+            Providers can stream usage as partial snapshots, and Anthropic may
+            repeat cumulative fields on message_delta. Keep total_usage in sync
+            by applying only monotonic differences from the prior snapshot.
             """
-            for key in ("input_tokens", "output_tokens"):
+            for key in usage_keys:
                 if key not in usage:
                     continue
                 value = _usage_int(usage, key)
                 previous = last_request_usage[key]
+                if key in reported_usage_keys and value < previous:
+                    continue
                 last_request_usage[key] = value
-                total_usage[key] += value - previous
+                reported_usage_keys.add(key)
+                reported_total_usage_keys.add(key)
+                total_usage[key] = total_usage.get(key, 0) + value - previous
 
         def _turn_complete_event(reason: str, snapshot: list[Message]) -> TurnCompleteEvent:
             estimated_context_used = estimate_token_count(
@@ -991,7 +1015,11 @@ async def query_loop(
                 system=full_system,
                 tools=tool_schemas,
             )
-            exact_context_used = last_request_usage["input_tokens"] + last_request_usage["output_tokens"]
+            exact_input_used = (
+                last_request_usage["total_input_tokens"]
+                or last_request_usage["input_tokens"]
+            )
+            exact_context_used = exact_input_used + last_request_usage["output_tokens"]
             context_used = exact_context_used if exact_context_used > 0 else estimated_context_used
             context_window_tokens = max(0, context_window or 0)
             context_remaining = (
@@ -1007,7 +1035,7 @@ async def query_loop(
             return TurnCompleteEvent(
                 reason=reason,
                 turn_count=turn_count,
-                usage=total_usage,
+                usage=_compact_total_usage(),
                 context_used_tokens=context_used,
                 context_window_tokens=context_window_tokens,
                 context_remaining_tokens=context_remaining,
@@ -1258,10 +1286,15 @@ async def query_loop(
         )
 
         if has_visible_or_actionable_output:
+            assistant_usage = {
+                key: last_request_usage[key]
+                for key in reported_usage_keys
+            }
             assistant_msg = create_assistant_message(
                 content=assistant_content,
                 parent_uuid=messages[-1].uuid if messages else None,
                 reply_to_uuid=params.reply_to_uuid,
+                usage=assistant_usage,
             )
             messages.append(assistant_msg)
             # Keep the caller-owned projection current at each completed model

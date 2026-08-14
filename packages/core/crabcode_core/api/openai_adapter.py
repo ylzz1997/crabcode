@@ -6,7 +6,12 @@ import json
 import os
 from typing import Any, AsyncGenerator
 
-from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk
+from crabcode_core.api.base import (
+    APIAdapter,
+    ModelConfig,
+    StreamChunk,
+    normalize_openai_usage,
+)
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
@@ -183,6 +188,7 @@ class OpenAIAdapter(APIAdapter):
                 pass_reasoning_content=self.config.pass_reasoning_content,
             ),
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
         api_tools = _tools_to_openai(tools)
@@ -201,6 +207,11 @@ class OpenAIAdapter(APIAdapter):
         stream = await self.client.chat.completions.create(**params)
         async for chunk in stream:
             if not chunk.choices:
+                if chunk.usage:
+                    yield StreamChunk(
+                        type="message_delta",
+                        usage=normalize_openai_usage(chunk.usage),
+                    )
                 continue
 
             delta = chunk.choices[0].delta
@@ -255,12 +266,7 @@ class OpenAIAdapter(APIAdapter):
                 tool_call_buffers.clear()
 
             if finish_reason == "stop":
-                usage = {}
-                if chunk.usage:
-                    usage = {
-                        "input_tokens": chunk.usage.prompt_tokens,
-                        "output_tokens": chunk.usage.completion_tokens,
-                    }
+                usage = normalize_openai_usage(chunk.usage) if chunk.usage else {}
                 yield StreamChunk(
                     type="message_stop",
                     stop_reason="end_turn",

@@ -85,25 +85,47 @@ def _format_percent(percent: float) -> str:
     return f"{percent:.1f}%"
 
 
+def _cache_usage_text(usage: dict[str, Any]) -> str | None:
+    if "cache_read_tokens" not in usage and "cache_write_tokens" not in usage:
+        return None
+    cache_read = max(0, int(usage.get("cache_read_tokens", 0) or 0))
+    cache_write = max(0, int(usage.get("cache_write_tokens", 0) or 0))
+    total_input = max(
+        0,
+        int(usage.get("total_input_tokens", usage.get("input_tokens", 0)) or 0),
+    )
+    hit_rate = cache_read / total_input * 100 if total_input else 0.0
+    parts = [
+        f"Cache: {_format_percent(hit_rate)} hit",
+        f"read {_format_token_count(cache_read)}",
+    ]
+    if "cache_write_tokens" in usage:
+        parts.append(f"write {_format_token_count(cache_write)}")
+    return " · ".join(parts)
+
+
 def _render_context_usage(event: TurnCompleteEvent) -> None:
     used = max(0, int(getattr(event, "context_used_tokens", 0) or 0))
     window = max(0, int(getattr(event, "context_window_tokens", 0) or 0))
-    if not used and not window:
+    cache_text = _cache_usage_text(event.usage)
+    if not used and not window and not cache_text:
         return
 
+    parts: list[str] = []
     if window:
         used_percent = max(0.0, float(getattr(event, "context_used_percent", 0.0) or 0.0))
         remaining_percent = max(0.0, 100.0 - used_percent)
-        console.print(
-            "  [dim]Context: "
+        parts.append(
+            "Context: "
             f"{_format_percent(used_percent)} used "
             f"({_format_percent(remaining_percent)} remaining) · "
-            f"{_format_token_count(used)} tokens used of {_format_token_count(window)}[/]"
+            f"{_format_token_count(used)} tokens used of {_format_token_count(window)}"
         )
-    else:
-        console.print(
-            f"  [dim]Context: {_format_token_count(used)} tokens used (window unknown)[/]"
-        )
+    elif used:
+        parts.append(f"Context: {_format_token_count(used)} tokens used (window unknown)")
+    if cache_text:
+        parts.append(cache_text)
+    console.print(f"  [dim]{' · '.join(parts)}[/]")
 
 
 # Slash commands with their arguments for auto-completion

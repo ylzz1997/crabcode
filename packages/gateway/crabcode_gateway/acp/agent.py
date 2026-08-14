@@ -1507,17 +1507,32 @@ def _usage_from_payload(raw: Any) -> Usage | None:
                 return int(value)
         return 0
 
-    input_tokens = _number("input_tokens", "inputTokens", "prompt_tokens")
+    input_tokens = _number(
+        "total_input_tokens",
+        "input_tokens",
+        "inputTokens",
+        "prompt_tokens",
+    )
     output_tokens = _number("output_tokens", "outputTokens", "completion_tokens")
     thought_tokens = _number("thought_tokens", "thoughtTokens", "reasoning_tokens")
+    cached_read_tokens = _number("cache_read_tokens", "cachedReadTokens")
+    cached_write_tokens = _number("cache_write_tokens", "cachedWriteTokens")
     total_tokens = _number("total_tokens", "totalTokens")
     if total_tokens == 0:
         total_tokens = input_tokens + output_tokens + thought_tokens
-    if not (input_tokens or output_tokens or total_tokens):
+    if not (
+        input_tokens
+        or output_tokens
+        or total_tokens
+        or cached_read_tokens
+        or cached_write_tokens
+    ):
         return None
     return Usage(
-        inputTokens=input_tokens,
-        outputTokens=output_tokens,
-        thoughtTokens=thought_tokens or None,
-        totalTokens=total_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        thought_tokens=thought_tokens or None,
+        cached_read_tokens=cached_read_tokens or None,
+        cached_write_tokens=cached_write_tokens or None,
+        total_tokens=total_tokens,
     )
