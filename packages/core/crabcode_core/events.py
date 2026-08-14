@@ -15,6 +15,7 @@ from xml.sax.saxutils import escape
 from pydantic import BaseModel
 
 from crabcode_core.agent_manager import AgentCompletion, AgentManager, AgentSnapshot
+from crabcode_core.goal import Goal, GoalStatus
 from crabcode_core.logging_utils import configure_logging, get_logger
 from crabcode_core.lsp.manager import LSPManager
 from crabcode_core.types.config import CrabCodeSettings
@@ -50,6 +51,8 @@ _CLOSE_OWNER: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
 _TURN_OWNER: contextvars.ContextVar[
     tuple[Any, object] | None
 ] = contextvars.ContextVar("crabcode_turn_owner", default=None)
+
+_KEEP_GOAL_BUDGET = object()
 
 
 async def _run_without_turn_owner(
@@ -135,6 +138,7 @@ class CoreSession:
         self._foreground_turn_active = False
         self._saved_permission_mode: Any = None
         self._current_plan: Any = None  # ExecutionPlan | None
+        self._goal: Goal | None = None
         self._title_generation_task: asyncio.Task[None] | None = None
         self._team_manager: Any = None  # TeamManager
         self._team_cleanup_tasks: set[asyncio.Task[None]] = set()
@@ -2441,6 +2445,8 @@ class CoreSession:
             ultra_mode=self.settings.ultra_mode,
         )
         system_context = get_system_context(self.cwd)
+        if self._goal is not None and self._goal.status == "active":
+            system_context["activeGoal"] = self._goal.prompt_context()
         user_context = get_user_context(self.cwd)
 
         tool_context = ToolContext(
@@ -2584,6 +2590,7 @@ class CoreSession:
                         total_tokens = event.usage.get("input_tokens", 0) + event.usage.get("output_tokens", 0)
                         if total_tokens > 0:
                             self._session_storage.record_tokens(total_tokens)
+                            self._record_goal_usage(total_tokens)
                         self._session_storage.record_context_usage(
                             self.last_context_used_tokens,
                             self.last_context_window_tokens,
@@ -2820,6 +2827,7 @@ class CoreSession:
         self._partial_committed_prefixes.clear()
         self._pending_manual_compact = None
         self._current_plan = None
+        self._goal = None
         self._agent_mode = "agent"
         self._saved_permission_mode = None
         self._abort_controller.clear()
@@ -3273,6 +3281,93 @@ class CoreSession:
     def set_plan(self, plan: Any) -> None:
         self._current_plan = plan
 
+    @property
+    def current_goal(self) -> Goal | None:
+        return self._goal
+
+    def get_goal(self) -> Goal | None:
+        """Return the session goal, including paused or terminal state."""
+        return self._goal
+
+    def create_goal(
+        self,
+        objective: str,
+        *,
+        token_budget: int | None = None,
+    ) -> Goal:
+        """Create a goal unless an unfinished goal already owns the session."""
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+        if self._goal is not None and not self._goal.is_terminal:
+            raise RuntimeError(
+                "An unfinished goal already exists; edit, complete, block, or clear it first"
+            )
+        self._goal = Goal(objective=objective, token_budget=token_budget)
+        self._persist_goal()
+        return self._goal
+
+    def edit_goal(
+        self,
+        objective: str,
+        *,
+        token_budget: int | None | object = _KEEP_GOAL_BUDGET,
+    ) -> Goal:
+        """Edit an unfinished goal without losing its usage or creation time."""
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+        if self._goal is None:
+            raise RuntimeError("No goal is set")
+        if self._goal.is_terminal:
+            raise RuntimeError("The current goal is terminal; create a new goal instead")
+        if token_budget is _KEEP_GOAL_BUDGET:
+            budget = self._goal.token_budget
+        elif token_budget is None or isinstance(token_budget, int):
+            budget = token_budget
+        else:
+            raise ValueError("Goal token budget must be a positive integer or None")
+        self._goal = Goal(
+            objective=objective,
+            status=self._goal.status,
+            token_budget=budget,
+            tokens_used=self._goal.tokens_used,
+            created_at=self._goal.created_at,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self._persist_goal()
+        return self._goal
+
+    def update_goal(self, status: GoalStatus) -> Goal:
+        """Move the current goal to another lifecycle state."""
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+        if self._goal is None:
+            raise RuntimeError("No goal is set")
+        self._goal = self._goal.with_status(status)
+        self._persist_goal()
+        return self._goal
+
+    def clear_goal(self) -> None:
+        """Remove the goal and stop injecting it into future turns."""
+        if self._closed or self._closing:
+            raise RuntimeError("CoreSession is closed")
+        if self._goal is None:
+            return
+        self._goal = None
+        self._persist_goal()
+
+    def _record_goal_usage(self, tokens: int) -> None:
+        if self._goal is None or self._goal.status != "active" or tokens <= 0:
+            return
+        self._goal = self._goal.with_added_usage(tokens)
+        self._persist_goal()
+
+    def _persist_goal(self) -> None:
+        self._ensure_session_storage()
+        if self._session_storage is not None:
+            self._session_storage.update_goal(
+                self._goal.to_dict() if self._goal is not None else None
+            )
+
     async def spawn_agent(
         self,
         *,
@@ -3494,6 +3589,19 @@ class CoreSession:
         self._persisted_compact_summaries.clear()
         self._partial_committed_prefixes.clear()
         self._current_plan = None
+        goal_data = storage.meta.get("goal")
+        if isinstance(goal_data, dict):
+            try:
+                self._goal = Goal.from_dict(goal_data)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Ignoring malformed goal metadata for session %s",
+                    session_id,
+                    exc_info=True,
+                )
+                self._goal = None
+        else:
+            self._goal = None
         self._agent_mode = "agent"
         self._saved_permission_mode = None
         self._abort_controller.clear()

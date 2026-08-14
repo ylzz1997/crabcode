@@ -11,6 +11,8 @@ from crabcode_core.skills.loader import load_skills
 from crabcode_gateway.session_registry import get_session_lock
 from crabcode_gateway.schemas import (
     ContextPushRequest,
+    GoalRequest,
+    GoalState,
     ModelInfo,
     SkillInfo,
     SwitchModeRequest,
@@ -28,6 +30,34 @@ async def _switch_model(session: Any, name: str) -> bool:
 
 async def _switch_mode(session: Any, mode: str) -> bool:
     return bool(session.switch_mode(mode))
+
+
+async def _manage_goal(session: Any, req: GoalRequest) -> dict[str, Any] | None:
+    action = req.action
+    if action in {"set", "edit"}:
+        if not req.objective or not req.objective.strip():
+            raise ValueError("objective is required for set/edit")
+        if action == "set":
+            goal = session.create_goal(
+                req.objective,
+                token_budget=req.token_budget,
+            )
+        elif "token_budget" in req.model_fields_set:
+            goal = session.edit_goal(
+                req.objective,
+                token_budget=req.token_budget,
+            )
+        else:
+            goal = session.edit_goal(req.objective)
+        return goal.to_dict()
+    if action == "clear":
+        session.clear_goal()
+        return None
+    status = {
+        "pause": "paused",
+        "resume": "active",
+    }.get(action, action)
+    return session.update_goal(status).to_dict()
 
 
 async def _store_context(request: Request, session: Any, req: ContextPushRequest) -> None:
@@ -131,6 +161,37 @@ async def switch_mode(req: SwitchModeRequest, request: Request):
     if not ok:
         raise HTTPException(status_code=400, detail=f"Invalid mode '{req.mode}'")
     return {"status": "ok", "mode": req.mode}
+
+
+@router.get("/config/goal", response_model=GoalState)
+async def get_goal(request: Request, session_id: str | None = None) -> GoalState:
+    """Return the current session goal."""
+    async with get_session_lock(request.app.state):
+        session = _get_session(request, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        goal = session.get_goal()
+        data = goal.to_dict() if goal is not None else None
+    return GoalState(goal=data)
+
+
+@router.post("/config/goal", response_model=GoalState)
+async def manage_goal(req: GoalRequest, request: Request) -> GoalState:
+    """Set, edit, pause, resume, finish, block, or clear a session goal."""
+    session = _get_session(request, req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        data = await run_session_operation(
+            request.app.state,
+            session,
+            lambda: _manage_goal(session, req),
+        )
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GoalState(goal=data)
 
 
 @router.get("/tools", response_model=list[ToolInfo])

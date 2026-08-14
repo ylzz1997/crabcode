@@ -20,6 +20,7 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.file_edit import FileEditTool
     from crabcode_core.tools.file_write import FileWriteTool
     from crabcode_core.tools.grep import GrepTool
+    from crabcode_core.tools.goal import CreateGoalTool, GetGoalTool, UpdateGoalTool
     from crabcode_core.tools.glob import GlobTool
     from crabcode_core.tools.lint import LintTool
     from crabcode_core.tools.memory import MemoryTool
@@ -62,6 +63,9 @@ def get_default_tools() -> list[Tool]:
         AskUserTool(),
         CheckpointTool(),
         ChecklistTool(),
+        CreateGoalTool(),
+        GetGoalTool(),
+        UpdateGoalTool(),
         SwitchModeTool(),
         TeamCreateTool(),
         TeamSpawnTool(),

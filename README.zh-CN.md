@@ -73,6 +73,25 @@ crabcode --continue      # 或 -c
 crabcode --resume <id>   # 或 -r <id>
 ```
 
+### 持久目标
+
+使用 `/goal` 可让一个可验收的目标在多轮对话、上下文压缩和会话恢复后继续生效。
+Goal 与执行计划相互独立：Goal 描述最终结果，`/plan` 描述实现步骤。
+
+```text
+/goal 修复认证问题，并通过 pytest tests/auth 验证
+/goal                         # 查看当前目标
+/goal edit <目标>             # 修改目标
+/goal pause                   # 暂停向模型上下文注入目标
+/goal resume
+/goal complete                # 标记结果已验证
+/goal blocked                 # 标记当前无法继续
+/goal clear
+```
+
+设置或修改 Goal 时可用 `--budget N` 跟踪模型 token 用量；使用
+`/goal edit --no-budget <目标>` 可移除已有预算。
+
 ### 会话管理 CLI
 
 ```bash
@@ -138,6 +157,7 @@ crabcode gateway --password secret
 | `/config/models` | GET | 列出可用模型 |
 | `/config/switch-model` | POST | 切换模型 |
 | `/config/switch-mode` | POST | 切换 agent/plan 模式 |
+| `/config/goal` | GET/POST | 查看或管理会话 Goal |
 | `/tools` | GET | 列出可用工具（含 MCP） |
 | `/context` | POST | 推送工作区上下文（活动文件、选中内容、光标位置） |
 | `/snapshot/checkpoint` | POST | 创建带文件快照的检查点 |

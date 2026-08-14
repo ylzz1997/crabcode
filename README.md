@@ -73,6 +73,26 @@ crabcode --continue      # or -c
 crabcode --resume <id>   # or -r <id>
 ```
 
+### Persistent Goals
+
+Use `/goal` to keep a measurable objective active across turns, compaction, and
+session resume. Goals are separate from execution plans: a goal describes the
+outcome, while `/plan` describes the steps.
+
+```text
+/goal Ship the auth fix and verify it with pytest tests/auth
+/goal                         # view the current goal
+/goal edit <objective>        # revise it
+/goal pause                   # stop injecting it into model context
+/goal resume
+/goal complete                # mark the outcome verified
+/goal blocked                 # mark it unable to progress
+/goal clear
+```
+
+Add `--budget N` when setting or editing a goal to track model token usage.
+Use `--no-budget` with `/goal edit` to remove an existing budget.
+
 ### Session Management CLI
 
 ```bash
@@ -138,6 +158,7 @@ crabcode gateway --password secret
 | `/config/models` | GET | List available models |
 | `/config/switch-model` | POST | Switch model |
 | `/config/switch-mode` | POST | Switch agent/plan mode |
+| `/config/goal` | GET/POST | View or manage the session goal |
 | `/tools` | GET | List available tools (including MCP) |
 | `/context` | POST | Push workspace context (active file, selection, cursor) |
 | `/snapshot/checkpoint` | POST | Create checkpoint with file snapshot |

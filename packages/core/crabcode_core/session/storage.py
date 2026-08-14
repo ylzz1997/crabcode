@@ -1140,6 +1140,18 @@ class SessionStorage:
         except Exception:
             logger.warning("Failed to persist session summary for %s", self.session_id, exc_info=True)
 
+    def update_goal(self, goal: dict[str, Any] | None) -> None:
+        """Persist the session goal in the append-only JSONL metadata."""
+        try:
+            self._commit_metadata_update(
+                lambda _meta: {
+                    "goal": goal,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        except Exception:
+            logger.warning("Failed to persist session goal for %s", self.session_id, exc_info=True)
+
     def record_tokens(self, tokens: int) -> None:
         """Accumulate token usage in JSONL and SQLite."""
         def accumulate(meta: dict[str, Any]) -> dict[str, Any]:

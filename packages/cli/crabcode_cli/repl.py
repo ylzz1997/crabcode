@@ -108,6 +108,7 @@ def _render_context_usage(event: TurnCompleteEvent) -> None:
 # Slash commands with their arguments for auto-completion
 _SLASH_COMMANDS: dict[str, list[str]] = {
     "/help": [],
+    "/goal": ["set", "edit", "pause", "resume", "complete", "blocked", "clear"],
     "/plan": [],
     "/agent": [],
     "/plan-status": [],
@@ -258,6 +259,7 @@ class _CrabCodeCompleter(Completer):
     def _get_command_description(self, cmd: str) -> str:
         descriptions = {
             "/help": "show help",
+            "/goal": "set or manage the persistent task goal",
             "/plan": "switch to plan mode (read-only analysis)",
             "/agent": "switch to agent mode / show agent (<id>)",
             "/plan-status": "show current plan status",
@@ -1938,6 +1940,9 @@ async def _handle_command(
             skills_section = f"\n\n[bold]Skills[/]\n{skill_lines}"
         console.print(Panel(
             "[bold]/help[/] — show this help\n"
+            "[bold]/goal [objective][/] — set or view the persistent task goal\n"
+            "[bold]/goal edit <objective>[/] — edit the current goal\n"
+            "[bold]/goal pause|resume|complete|blocked|clear[/] — manage goal state\n"
             "[bold]/plan[/] — switch to plan mode (read-only analysis)\n"
             "[bold]/agent[/] — switch to agent mode (full execution; no args)\n"
             "[bold]/plan-status[/] — show current plan status\n"
@@ -1985,6 +1990,127 @@ async def _handle_command(
             title="[bold]Commands[/]",
             border_style="blue",
         ))
+        return True
+
+    if cmd == "/goal":
+        import shlex
+
+        def render_goal() -> None:
+            goal = session.get_goal()
+            if goal is None:
+                console.print("[dim]No goal is set.[/]")
+                return
+            status_styles = {
+                "active": "green",
+                "paused": "yellow",
+                "complete": "cyan",
+                "blocked": "red",
+            }
+            style = status_styles.get(goal.status, "white")
+            body = Text(goal.objective)
+            body.append("\n\nStatus: ")
+            body.append(goal.status, style=style)
+            if goal.token_budget is not None:
+                remaining = goal.remaining_tokens
+                body.append(
+                    f"\nTokens: {goal.tokens_used:,} / {goal.token_budget:,} "
+                    f"({remaining:,} remaining)"
+                )
+            console.print(Panel(body, title="Goal", border_style=style, expand=False))
+
+        if not arg or arg.lower() in {"show", "status", "view"}:
+            render_goal()
+            return True
+
+        try:
+            tokens = shlex.split(arg)
+        except ValueError as exc:
+            console.print(f"[bold red]Invalid goal command:[/] {exc}")
+            return True
+        if not tokens:
+            render_goal()
+            return True
+
+        action = tokens[0].lower()
+        if action in {"pause", "resume", "complete", "blocked"}:
+            if len(tokens) != 1:
+                console.print(f"[dim]Usage: /goal {action}[/]")
+                return True
+            status = {
+                "pause": "paused",
+                "resume": "active",
+            }.get(action, action)
+            try:
+                session.update_goal(status)
+            except (RuntimeError, ValueError) as exc:
+                console.print(f"[bold red]{exc}[/]")
+                return True
+            render_goal()
+            return True
+
+        if action == "clear":
+            if len(tokens) != 1:
+                console.print("[dim]Usage: /goal clear[/]")
+                return True
+            session.clear_goal()
+            console.print("[dim]Goal cleared.[/]")
+            return True
+
+        edit = action == "edit"
+        if action in {"set", "edit"}:
+            tokens = tokens[1:]
+
+        token_budget: int | None = None
+        budget_was_set = False
+        objective_parts: list[str] = []
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--no-budget":
+                token_budget = None
+                budget_was_set = True
+                index += 1
+                continue
+            if token == "--budget":
+                if index + 1 >= len(tokens):
+                    console.print("[dim]Usage: /goal [set|edit] [--budget N] <objective>[/]")
+                    return True
+                try:
+                    token_budget = int(tokens[index + 1])
+                except ValueError:
+                    console.print("[bold red]Goal token budget must be a positive integer.[/]")
+                    return True
+                budget_was_set = True
+                index += 2
+                continue
+            if token.startswith("--budget="):
+                try:
+                    token_budget = int(token.split("=", 1)[1])
+                except ValueError:
+                    console.print("[bold red]Goal token budget must be a positive integer.[/]")
+                    return True
+                budget_was_set = True
+                index += 1
+                continue
+            objective_parts.append(token)
+            index += 1
+
+        objective = " ".join(objective_parts).strip()
+        if not objective:
+            console.print("[dim]Usage: /goal [set|edit] [--budget N] <objective>[/]")
+            return True
+        try:
+            if edit:
+                if budget_was_set:
+                    session.edit_goal(objective, token_budget=token_budget)
+                else:
+                    session.edit_goal(objective)
+            else:
+                session.create_goal(objective, token_budget=token_budget)
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"[bold red]{exc}[/]")
+            return True
+        render_goal()
         return True
 
     if cmd == "/plan":

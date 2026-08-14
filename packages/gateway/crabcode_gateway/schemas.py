@@ -95,6 +95,15 @@ class SwitchModeRequest(BaseModel):
     session_id: str | None = None
 
 
+class GoalRequest(BaseModel):
+    action: Literal[
+        "set", "edit", "pause", "resume", "complete", "blocked", "clear"
+    ] = "set"
+    objective: str | None = None
+    token_budget: int | None = Field(default=None, gt=0)
+    session_id: str | None = None
+
+
 class ContextPushRequest(BaseModel):
     """Client pushes workspace context to the server.
 
@@ -147,6 +156,20 @@ class SessionInfo(BaseModel):
     provider: str = ""
     created_at: str = ""
     title: str = ""
+
+
+class GoalInfo(BaseModel):
+    objective: str
+    status: Literal["active", "paused", "complete", "blocked"]
+    token_budget: int | None = None
+    tokens_used: int = 0
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
+class GoalState(BaseModel):
+    goal: GoalInfo | None = None
 
 
 class AgentInfo(BaseModel):
