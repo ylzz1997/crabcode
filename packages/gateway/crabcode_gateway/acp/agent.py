@@ -58,6 +58,7 @@ from acp.schema import (
     UsageUpdate,
 )
 
+from crabcode_core import VERSION
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.acp.session import ACPSessionManager
 from crabcode_gateway.acp.types import ACPConfig, ACPSessionState, ModelSelection, to_locations, to_tool_kind
@@ -816,7 +817,7 @@ class CrabCodeACPAgent:
                 ),
             ),
             auth_methods=[auth_method],
-            agent_info=Implementation(name="CrabCode", version="0.1.3"),
+            agent_info=Implementation(name="CrabCode", version=VERSION),
         )
 
     async def new_session(

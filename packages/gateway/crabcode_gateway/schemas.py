@@ -10,6 +10,7 @@ from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
+from crabcode_core import VERSION
 from crabcode_core.types.config import ReasoningEffort
 
 
@@ -224,7 +225,7 @@ class ModelInfo(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.1.3"
+    version: str = VERSION
 
 
 # ── CoreEvent serialization ──────────────────────────────────────

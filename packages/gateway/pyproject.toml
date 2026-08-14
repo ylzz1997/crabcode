@@ -1,5 +1,6 @@
 [project]
 name = "crabcode-gateway"
+# Synced from packages/core/crabcode_core/_version.py by scripts/sync_version.py.
 version = "0.1.3"
 description = "CrabCode Gateway - multi-protocol (HTTP/gRPC) server for CrabCode"
 requires-python = ">=3.10"

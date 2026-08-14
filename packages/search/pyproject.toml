@@ -4,6 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "crabcode-search"
+# Synced from packages/core/crabcode_core/_version.py by scripts/sync_version.py.
 version = "0.1.3"
 description = "Semantic codebase search for CrabCode"
 requires-python = ">=3.10"

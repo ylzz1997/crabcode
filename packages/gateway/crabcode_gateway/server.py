@@ -17,6 +17,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI
 
+from crabcode_core import VERSION
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.middleware import register_middleware
@@ -74,7 +75,7 @@ class GatewayServer:
         """Build and configure the FastAPI application."""
         app = FastAPI(
             title="crabcode",
-            version="0.1.3",
+            version=VERSION,
             description="CrabCode Gateway API",
         )
 

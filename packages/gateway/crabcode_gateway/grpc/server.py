@@ -24,6 +24,7 @@ from typing import Any
 
 import grpc
 
+from crabcode_core import VERSION
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.adapter import ProtocolAdapter
 from crabcode_gateway.schemas import core_event_to_payload
@@ -403,7 +404,7 @@ class _CrabCodeServicer:
 
     async def HealthCheck(self, request: dict, context: Any) -> dict:
         # Keep health probes public, matching the HTTP /health endpoint.
-        return {"status": "ok", "version": "0.1.3"}
+        return {"status": "ok", "version": VERSION}
 
     # ── Server-streaming RPCs ────────────────────────────────────
 
