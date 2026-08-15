@@ -29,6 +29,7 @@ import type {
   PeerMessagePayload,
   PlanReadyPayload,
   StreamModePayload,
+  SteeringAppliedPayload,
   ToolResultPayload,
   ToolUsePayload,
   TurnCompletePayload,
@@ -275,6 +276,7 @@ interface SessionState {
   contextUsage: ContextUsageStatus | null;
   batchDenied: boolean;
   mode: "agent" | "plan";
+  pendingSteeringMessages: ChatMessage[];
 }
 
 function createEmptySessionState(): SessionState {
@@ -291,6 +293,7 @@ function createEmptySessionState(): SessionState {
     contextUsage: null,
     batchDenied: false,
     mode: "agent",
+    pendingSteeringMessages: [],
   };
 }
 
@@ -399,6 +402,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.postMessage({ type: "busyState", busy: this.isBusy });
           this.postMessage({ type: "contextUsage", usage: this.latestContextUsage ?? null });
           this.postMessage({ type: "pendingEditReview", summary: this.pendingEditReview });
+          this.postMessage({
+            type: "steeringQueue",
+            messages: this.currentState.pendingSteeringMessages,
+          });
           break;
         case "setModel":
           if (typeof msg.name === "string" && msg.name.length > 0) {
@@ -476,6 +483,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.postMessage({ type: "history", items: [] });
           this.postMessage({ type: "busyState", busy: false });
           this.postMessage({ type: "contextUsage", usage: null });
+          this.postMessage({ type: "steeringQueue", messages: [] });
           break;
         }
         case "fetchSessions":
@@ -920,12 +928,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.postMessage({ type: "busyState", busy: cached.isBusy });
       this.postMessage({ type: "contextUsage", usage: cached.contextUsage ?? null });
       this.postMessage({ type: "modeChange", mode: cached.mode });
+      this.postMessage({ type: "steeringQueue", messages: cached.pendingSteeringMessages });
     } else {
       // No cached state — clear display and request from server
       this.postMessage({ type: "history", items: [] });
       this.postMessage({ type: "busyState", busy: this.busySessions.has(sessionId) });
       this.postMessage({ type: "contextUsage", usage: null });
       this.postMessage({ type: "modeChange", mode: "agent" });
+      this.postMessage({ type: "steeringQueue", messages: [] });
     }
     // Rendering cached state does not make it the WebSocket's active session.
     // Always synchronize server ownership when the selected conversation is
@@ -1415,10 +1425,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** Send a pre-composed prompt (e.g. from context-menu commands). */
   public sendPrompt(text: string): void {
-    this.addMessage("user", text);
     this.ensureSessionIfNeeded();
-    this.setBusy(true);
-    this.connection.send(text);
+    if (this.isBusy) {
+      this.queueSteeringMessageOnState(this.currentState, text);
+      this.connection.steer(text);
+    } else {
+      this.addMessage("user", text);
+      this.setBusy(true);
+      this.connection.send(text);
+    }
     this.reveal();
   }
 
@@ -1436,10 +1451,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   // ── Internals ──────────────────────────────────────────────────
 
   private handleUserMessage(text: string, images?: ImageAttachment[]): void {
-    this.addMessage("user", text, images);
     this.ensureSessionIfNeeded();
-    this.setBusy(true);
-    this.connection.send(text, { images });
+    if (this.isBusy) {
+      this.queueSteeringMessageOnState(this.currentState, text, images);
+      this.connection.steer(text, { images });
+    } else {
+      this.addMessage("user", text, images);
+      this.setBusy(true);
+      this.connection.send(text, { images });
+    }
   }
 
   private ensureSessionIfNeeded(): void {
@@ -1522,6 +1542,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       case "stream_mode":
         this.handleStreamModeOnState(state, payload as StreamModePayload, updateWebview);
+        break;
+      case "steering_applied":
+        this.flushSteeringMessagesOnState(
+          state,
+          updateWebview,
+          (payload as SteeringAppliedPayload).count ?? 1,
+        );
         break;
       case "agent_state":
         this.handleAgentStateOnState(state, payload as AgentStatePayload, updateWebview);
@@ -1964,6 +1991,47 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private addMessage(role: ChatMessageRole, text: string, images?: ImageAttachment[]): void {
     this.addMessageOnState(this.currentState, role, text, true, images);
+  }
+
+  private queueSteeringMessageOnState(
+    state: SessionState,
+    text: string,
+    images?: ImageAttachment[],
+  ): void {
+    state.pendingSteeringMessages.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      role: "user",
+      text,
+      timestamp: Date.now(),
+      images,
+    });
+    if (state === this.currentState) {
+      this.postMessage({
+        type: "steeringQueue",
+        messages: state.pendingSteeringMessages,
+      });
+    }
+  }
+
+  private flushSteeringMessagesOnState(
+    state: SessionState,
+    updateWebview: boolean,
+    count: number,
+  ): void {
+    if (state.pendingSteeringMessages.length === 0) return;
+    const appliedCount = Math.max(0, Math.trunc(count));
+    const queued = state.pendingSteeringMessages.splice(0, appliedCount);
+    for (const message of queued) {
+      state.messages.push(message);
+      state.history.push({ kind: "message", message });
+      if (updateWebview) this.postMessage({ type: "newMessage", message });
+    }
+    if (updateWebview) {
+      this.postMessage({
+        type: "steeringQueue",
+        messages: state.pendingSteeringMessages,
+      });
+    }
   }
 
   private addMessageOnState(state: SessionState, role: ChatMessageRole, text: string, updateWebview: boolean, images?: ImageAttachment[]): void {
@@ -2948,6 +3016,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       gap: 6px;
       background: var(--vscode-sideBar-background);
       border-top: 1px solid var(--border);
+      position: relative;
+      z-index: 20;
     }
     #composer-wrap.drag-hover #composer-card {
       outline: 1.5px dashed var(--accent);
@@ -2965,6 +3035,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       display: flex;
       flex-direction: column;
       transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    #composer-card.is-steering {
+      border-color: color-mix(in srgb, var(--accent) 58%, var(--border-strong));
+      box-shadow: var(--shadow-md), 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
     }
     #composer-card:focus-within {
       border-color: color-mix(in srgb, var(--accent) 40%, var(--border-strong));
@@ -3122,6 +3196,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       line-height: 1.5;
     }
     #input::placeholder { color: color-mix(in srgb, var(--vscode-input-foreground) 35%, transparent); }
+    #steering-hint {
+      display: none;
+      align-items: flex-start;
+      gap: 7px;
+      padding: 0 12px 7px;
+      color: var(--text-muted);
+      font-size: 10.5px;
+      line-height: 1.35;
+    }
+    #steering-hint.visible { display: flex; }
+    .steering-dot {
+      width: 6px;
+      height: 6px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+      margin-top: 4px;
+    }
+    .steering-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    #steering-queue-preview {
+      display: none;
+      color: color-mix(in srgb, var(--vscode-foreground) 78%, transparent);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    #steering-queue-preview.visible { display: block; }
 
     /* ── Slash command popup ───────────────────────────────────── */
     #slash-popup {
@@ -3462,6 +3570,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .tb-send-circle:active { transform: scale(0.95); }
     .tb-send-circle svg { display: block; }
+    .composer-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .tb-stop-circle {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      border: 1px solid var(--border-strong);
+      background: transparent;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.8;
+    }
+    .tb-stop-circle:hover {
+      opacity: 1;
+      border-color: var(--vscode-errorForeground, #f48771);
+      color: var(--vscode-errorForeground, #f48771);
+      background: color-mix(in srgb, var(--vscode-errorForeground, #f48771) 9%, transparent);
+    }
+    .tb-stop-circle[hidden] { display: none; }
 
     /* ── Mode selector ─────────────────────────────────────────── */
     .tb-mode-wrap { position: relative; flex-shrink: 0; }
@@ -3976,6 +4110,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         <div id="attachment-bar"></div>
       </div>
       <textarea id="input" rows="3" placeholder="输入问题或命令（如 /help）…"></textarea>
+      <div id="steering-hint" aria-live="polite">
+        <span class="steering-dot" aria-hidden="true"></span>
+        <span class="steering-copy">
+          <span id="steering-hint-label">Agent 正在运行；发送的新消息会在下一次工具调用后生效</span>
+          <span id="steering-queue-preview"></span>
+        </span>
+      </div>
       <div id="input-toolbar" class="composer-toolbar">
         <div class="toolbar-left">
           <div class="tb-left-wrap">
@@ -3994,9 +4135,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             <div id="context-tooltip" class="context-tooltip" role="tooltip"></div>
           </div>
         </div>
-        <button type="button" class="tb-send-circle" id="send-btn" title="发送 (⌘↵ / Ctrl+Enter)" aria-label="发送">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
-        </button>
+        <div class="composer-actions">
+          <button type="button" class="tb-stop-circle" id="stop-btn" title="中断当前任务" aria-label="中断当前任务" hidden>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          </button>
+          <button type="button" class="tb-send-circle" id="send-btn" title="发送 (⌘↵ / Ctrl+Enter)" aria-label="发送">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
       </div>
     </div>
     <div id="footer-bar">
@@ -4068,6 +4214,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const msgContainer = document.getElementById('messages');
         const input = document.getElementById('input');
         const sendBtn = document.getElementById('send-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const steeringHint = document.getElementById('steering-hint');
+        const steeringHintLabel = document.getElementById('steering-hint-label');
+        const steeringQueuePreview = document.getElementById('steering-queue-preview');
         const attachmentBar = document.getElementById('attachment-bar');
         const composerWrap = document.getElementById('composer-wrap');
         const composerCard = document.getElementById('composer-card');
@@ -4126,11 +4276,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let pendingEditsCollapsed = false;
     let pendingEditsVisibleFiles = 5;
     let currentPendingEditSummary = null;
+    let pendingSteeringQueue = [];
     let turnCounter = 0;
     let activeTurn = null;
     const turns = [];
     const SEND_ICON_HTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
-    const STOP_ICON_HTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 
     // pendingImages: { media_type, data, dataUrl }; pendingTextFiles: { name, text }
     const pendingImages = [];
@@ -5196,10 +5346,41 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (busy && busyLabel) {
         busyLabel.textContent = 'CrabCode 正在处理';
       }
+      if (composerCard) composerCard.classList.toggle('is-steering', busy);
+      if (steeringHint) steeringHint.classList.toggle('visible', busy);
+      if (stopBtn) stopBtn.hidden = !busy;
       if (sendBtn) {
-        sendBtn.innerHTML = busy ? STOP_ICON_HTML : SEND_ICON_HTML;
-        sendBtn.title = busy ? '中断当前会话' : '发送 (⌘↵ / Ctrl+Enter)';
-        sendBtn.setAttribute('aria-label', busy ? '中断当前会话' : '发送');
+        sendBtn.innerHTML = SEND_ICON_HTML;
+        sendBtn.title = busy ? '追加指令 (⌘↵ / Ctrl+Enter)' : '发送 (⌘↵ / Ctrl+Enter)';
+        sendBtn.setAttribute('aria-label', busy ? '追加指令' : '发送');
+      }
+      updateComposerPlaceholder();
+    }
+
+    function renderSteeringQueue(messages) {
+      pendingSteeringQueue = Array.isArray(messages) ? messages : [];
+      const count = pendingSteeringQueue.length;
+      if (steeringHintLabel) {
+        steeringHintLabel.textContent = count > 0
+          ? count + ' 条消息待注入；将在下一次工具调用后生效'
+          : 'Agent 正在运行；发送的新消息会在下一次工具调用后生效';
+      }
+      if (steeringQueuePreview) {
+        const latest = count > 0 ? String(pendingSteeringQueue[count - 1].text || '').trim() : '';
+        steeringQueuePreview.textContent = latest ? '↳ ' + latest : '';
+        steeringQueuePreview.classList.toggle('visible', !!latest);
+        steeringQueuePreview.title = latest;
+      }
+    }
+
+    function updateComposerPlaceholder() {
+      if (!input) return;
+      if (isBusy) {
+        input.placeholder = '补充或纠正 Agent 的下一步行为…';
+      } else {
+        input.placeholder = currentMode === 'plan'
+          ? '描述目标，CrabCode 会先只读分析并生成计划…'
+          : '输入问题或命令（如 /help）…';
       }
     }
 
@@ -5858,10 +6039,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     };
 
     function send() {
-      if (isBusy) {
-        vscode.postMessage({ type: 'interrupt' });
-        return;
-      }
       let text = input.value.trim();
       let extra = '';
       const bt = String.fromCharCode(96);
@@ -5898,6 +6075,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     sendBtn.addEventListener('click', send);
+    if (stopBtn) {
+      stopBtn.addEventListener('click', function() {
+        if (isBusy) vscode.postMessage({ type: 'interrupt' });
+      });
+    }
     input.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
     });
@@ -5909,7 +6091,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function updateModeButton(mode) {
       currentMode = mode;
       if (modeLabel) modeLabel.textContent = mode === 'plan' ? 'Plan' : 'Agent';
-      if (input) input.placeholder = mode === 'plan' ? '描述目标，CrabCode 会先只读分析并生成计划…' : '输入问题或命令（如 /help）…';
+      updateComposerPlaceholder();
       if (modeMenu) modeMenu.querySelectorAll('.mode-item').forEach(function(el) {
         el.classList.toggle('active', el.getAttribute('data-mode') === mode);
       });
@@ -6372,6 +6554,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         case 'busyState':
           setBusyState(msg.busy);
+          break;
+        case 'steeringQueue':
+          renderSteeringQueue(msg.messages);
           break;
         case 'contextUsage':
           renderContextUsage(msg.usage);

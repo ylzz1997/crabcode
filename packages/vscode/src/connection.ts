@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 
 import {
   buildSendMessageCommand,
+  buildSteerMessageCommand,
   buildPushContextCommand,
   buildSwitchModelCommand,
   buildSetPermissionModeCommand,
@@ -187,6 +188,18 @@ export class CrabCodeConnection implements vscode.Disposable {
     this.sendCommand(cmd);
   }
 
+  /** Queue guidance for the active turn instead of starting a competing turn. */
+  steer(text: string, options?: { sessionId?: string; images?: ImageAttachment[] }): void {
+    this.log(
+      `steer_message requested session=${options?.sessionId ?? this._sessionId ?? "(none)"} ` +
+      `images=${options?.images?.length ?? 0} chars=${text.length}`,
+    );
+    this.sendCommand(buildSteerMessageCommand(text, {
+      sessionId: options?.sessionId ?? this._sessionId ?? undefined,
+      images: options?.images,
+    }));
+  }
+
   pushContext(context: Omit<ContextPushRequest, "session_id">): void {
     const full: ContextPushRequest = {
       session_id: this._sessionId ?? "",
@@ -344,6 +357,7 @@ export class CrabCodeConnection implements vscode.Disposable {
   private requiresActiveSession(cmd: WsCommand): boolean {
     switch (cmd.type) {
       case "send_message":
+      case "steer_message":
       case "push_context":
       case "switch_model":
       case "set_permission_mode":

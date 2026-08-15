@@ -33,6 +33,7 @@ from crabcode_core.types.event import (
     PermissionResponseEvent,
     StreamModeEvent,
     StreamTextEvent,
+    SteeringAppliedEvent,
     ThinkingEvent,
     ToolResultEvent,
     ToolUseEvent,
@@ -194,6 +195,10 @@ class QueryParams:
     compact_threshold: int | None = None
     reply_to_uuid: str | None = None
     drain_peer_messages: Callable[[], list[str]] | None = None
+    # User guidance submitted while the foreground turn is running.  These
+    # messages are drained only at model-request boundaries, after a complete
+    # tool-result batch has been appended to the conversation.
+    drain_steering_messages: Callable[[], list[Message]] | None = None
 
 
 def _plan_mode_is_active(params: QueryParams) -> bool:
@@ -712,6 +717,17 @@ async def query_loop(
     # authorize a later tool call.
     buffered_permission_responses: dict[str, PermissionResponseEvent] = {}
 
+    def _drain_steering_messages() -> list[Message]:
+        if params.drain_steering_messages is None:
+            return []
+        steering_messages = params.drain_steering_messages()
+        if not steering_messages:
+            return []
+        messages.extend(steering_messages)
+        params.messages[:] = messages
+        params.tool_context.messages = messages
+        return steering_messages
+
     cfg = params.api_config
     adapter_config = getattr(params.api_adapter, "config", None)
     effective_model = (
@@ -827,6 +843,14 @@ async def query_loop(
         # Tools and permission reviewers must always observe the active
         # projection, including this turn's results.
         params.tool_context.messages = messages
+
+        # Follow-up guidance from the user is applied at the same safe
+        # boundary as tool results: immediately before the next model request.
+        # Keeping it out of _run_tools preserves provider requirements that a
+        # complete tool-result batch directly follows its assistant tool call.
+        steering_messages = _drain_steering_messages()
+        if steering_messages:
+            yield SteeringAppliedEvent(count=len(steering_messages))
 
         # Peer text is injected only at an agent-loop boundary: never while a
         # tool is executing, but before the next model request. This lets a
@@ -1344,6 +1368,13 @@ async def query_loop(
             return
 
         if not tool_use_blocks:
+            # A message can arrive while the model is streaming a text-only
+            # response. Continue this foreground operation instead of ending
+            # it and leaving that guidance stranded for a future prompt.
+            steering_messages = _drain_steering_messages()
+            if steering_messages:
+                yield SteeringAppliedEvent(count=len(steering_messages))
+                continue
             yield _turn_complete_event("end_turn", messages)
             params.messages[:] = messages
             return

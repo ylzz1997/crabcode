@@ -10,13 +10,29 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.application import in_terminal
+from prompt_toolkit.application import get_app_or_none, in_terminal
+from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import (
+    ConditionalContainer,
+    Dimension,
+    Float,
+    FloatContainer,
+    HSplit,
+    VerticalAlign,
+    Window,
+)
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -45,6 +61,7 @@ from crabcode_core.types.event import (
     PlanReadyEvent,
     StreamModeEvent,
     StreamTextEvent,
+    SteeringAppliedEvent,
     TaskUpdateEvent,
     TeamMessageEvent,
     TeamStateEvent,
@@ -341,6 +358,15 @@ class _CrabCodeCompleter(Completer):
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _VERBS = ["Thinking", "Reasoning", "Analyzing", "Processing", "Understanding"]
 
+_COMPOSER_STYLE = Style.from_dict(
+    {
+        # prompt_toolkit gives bottom toolbars reverse video by default. This
+        # toolbar is the lower edge of the frame, so retain the normal terminal
+        # background.
+        "bottom-toolbar": "noreverse",
+    }
+)
+
 
 def _force_exit(code: int = 130) -> None:
     """Exit immediately without waiting for executor/native thread cleanup."""
@@ -352,6 +378,369 @@ def _force_exit(code: int = 130) -> None:
 
 
 _CTRL_C_EXIT_WINDOW_S = 5.0
+
+
+def _composer_columns() -> int:
+    """Return the live renderer width so frame edges follow terminal resizes."""
+    app = get_app_or_none()
+    if app is not None:
+        return max(4, app.output.get_size().columns)
+    try:
+        return max(4, os.get_terminal_size(sys.stdout.fileno()).columns)
+    except (OSError, ValueError):
+        return 80
+
+
+def _composer_frame_parts(
+    left: str,
+    label: str,
+    right: str,
+) -> tuple[str, str]:
+    """Fit a label and return it with enough dashes to reach the right edge."""
+    available = max(
+        0,
+        _composer_columns() - get_cwidth(left) - get_cwidth(right),
+    )
+    fitted: list[str] = []
+    used = 0
+    for char in label:
+        char_width = get_cwidth(char)
+        if used + char_width > available:
+            break
+        fitted.append(char)
+        used += char_width
+    return "".join(fitted), "─" * max(0, available - used)
+
+
+def _composer_prompt(
+    session: CoreSession,
+    *,
+    pending_images: bool = False,
+) -> HTML:
+    """Render the persistent, framed prompt used by idle and active turns."""
+    mode = getattr(session, "_agent_mode", "agent")
+    if mode == "plan":
+        title = "CrabCode · plan"
+    else:
+        title = "CrabCode"
+    attachment = " 📎" if pending_images else ""
+    fitted_title, dashes = _composer_frame_parts("╭─ ", f"{title} ", "╮")
+    return HTML(
+        f"<ansicyan>╭─ {fitted_title}{dashes}╮</ansicyan>\n"
+        f"<ansicyan>│</ansicyan><b> ❯{attachment} </b>"
+    )
+
+
+def _composer_toolbar(*, busy: bool = False, queued_count: int = 0) -> HTML:
+    if busy and queued_count:
+        hint = f" {queued_count} queued · Enter adds another · Ctrl+C interrupts "
+    elif busy:
+        hint = " Enter sends after the next tool call · Ctrl+C interrupts "
+    else:
+        hint = " Enter sends · Ctrl+D exits "
+    fitted_hint, dashes = _composer_frame_parts("╰─", hint, "╯")
+    return HTML(
+        f"<ansicyan>╰─</ansicyan><gray>{fitted_hint}</gray>"
+        f"<ansicyan>{dashes}╯</ansicyan>"
+    )
+
+
+def _configure_composer_layout(
+    prompt_session: PromptSession[str],
+    *,
+    status_text: Callable[[], Any] | None = None,
+    queued_text: Callable[[], Any] | None = None,
+    has_queued_text: Callable[[], bool] | None = None,
+) -> None:
+    """Keep the composer and its status rows together at the terminal bottom."""
+    root = prompt_session.layout.container
+    if not isinstance(root, HSplit) or not root.children:
+        return
+    main = root.children[0]
+    if not isinstance(main, FloatContainer) or not isinstance(main.content, HSplit):
+        return
+
+    # PromptSession lets its input container fill the area above a bottom
+    # toolbar. Bottom-aligning the prompt within that area removes the large
+    # gap that otherwise splits the frame in two.
+    main.content.align = VerticalAlign.BOTTOM
+
+    prefix_rows: list[Any] = []
+    if status_text is not None:
+        prefix_rows.append(
+            Window(
+                FormattedTextControl(status_text),
+                height=Dimension.exact(1),
+                dont_extend_height=True,
+            )
+        )
+    if queued_text is not None and has_queued_text is not None:
+        prefix_rows.append(
+            ConditionalContainer(
+                Window(
+                    FormattedTextControl(queued_text),
+                    height=Dimension.exact(1),
+                    dont_extend_height=True,
+                ),
+                filter=Condition(has_queued_text),
+            )
+        )
+    if prefix_rows:
+        main.content.children = [*prefix_rows, *main.content.children]
+
+    # The single-line input Window is also unbounded by default. Keep its
+    # editing row at one line; completion menus remain floats and can still use
+    # the free space above the composer.
+    input_window = prompt_session.layout.current_window
+    if isinstance(input_window, Window):
+        input_window.height = Dimension.exact(1)
+
+    # The stock bottom-toolbar Window has only a minimum height, so HSplit can
+    # stretch it across all remaining rows and draw its text on the final one.
+    # The frame edge is intrinsically a single line.
+    toolbar = root.children[-1]
+    if isinstance(toolbar, ConditionalContainer) and isinstance(
+        toolbar.content,
+        Window,
+    ):
+        toolbar.content.height = Dimension.exact(1)
+
+    # Some embedded terminals clip the glyphs drawn on their physical last
+    # row. Keep one reserved row below the frame so its lower border remains
+    # fully visible instead of being cut in half by the terminal viewport.
+    root.children.append(
+        Window(
+            height=Dimension.exact(1),
+            dont_extend_height=True,
+        )
+    )
+
+    main.floats.append(
+        Float(
+            right=0,
+            ycursor=True,
+            width=1,
+            height=1,
+            allow_cover_cursor=True,
+            content=Window(
+                FormattedTextControl(HTML("<ansicyan>│</ansicyan>")),
+                width=1,
+                height=1,
+            ),
+        )
+    )
+
+
+def _render_submitted_input(text: str, *, steering: bool = False) -> None:
+    """Put submitted text into scrollback without leaving a stale frame."""
+    prefix = "  ↳ " if steering else "  ❯ "
+    line = Text(prefix, style="cyan")
+    line.append(text)
+    console.print(line)
+
+
+class _PersistentComposer:
+    """One long-lived input application shared by idle and working states."""
+
+    def __init__(
+        self,
+        session: CoreSession,
+        pending_images: list[dict[str, str]],
+    ) -> None:
+        self._session = session
+        self._pending_images = pending_images
+        self._events: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._busy = False
+        self._phase = ""
+        self._activity_running = False
+        self._activity_started_at = 0.0
+        self._verb_index = 0
+        self._notice = ""
+        self._queued_messages: list[str] = []
+        self._task: asyncio.Task[str] | None = None
+        self._animation_task: asyncio.Task[None] | None = None
+
+        bindings = KeyBindings()
+
+        @bindings.add("c-c", eager=True)
+        def _interrupt(event: Any) -> None:
+            self._events.put_nowait(("interrupt", ""))
+
+        @bindings.add("c-d", eager=True)
+        def _eof(event: Any) -> None:
+            self._events.put_nowait(("eof", ""))
+
+        self.prompt_session: PromptSession[str] = PromptSession(
+            message=lambda: _composer_prompt(
+                self._session,
+                pending_images=bool(self._pending_images),
+            ),
+            bottom_toolbar=lambda: _composer_toolbar(
+                busy=self._busy,
+                queued_count=len(self._queued_messages),
+            ),
+            history=InMemoryHistory(),
+            completer=_CrabCodeCompleter(session),
+            complete_while_typing=True,
+            key_bindings=bindings,
+            style=_COMPOSER_STYLE,
+            erase_when_done=True,
+        )
+        _configure_composer_layout(
+            self.prompt_session,
+            status_text=self._status_text,
+            queued_text=self._queued_text,
+            has_queued_text=lambda: bool(self._queued_messages),
+        )
+        self.prompt_session.default_buffer.accept_handler = self._accept
+
+    def _accept(self, buffer: Buffer) -> bool:
+        text = buffer.text.strip()
+        if text:
+            self._notice = ""
+            self._events.put_nowait(("submit", text))
+        return False
+
+    def _status_text(self) -> HTML:
+        if self._busy:
+            if self._activity_running:
+                elapsed = max(
+                    0.0,
+                    time.monotonic() - self._activity_started_at,
+                )
+                frame = _SPINNER_FRAMES[
+                    int(elapsed / 0.08) % len(_SPINNER_FRAMES)
+                ]
+                suffix = f" ({elapsed:.0f}s)" if elapsed >= 2 else ""
+                return HTML(
+                    f"<ansicyan>  {frame} {self._phase}…</ansicyan>"
+                    f"<gray>{suffix}</gray>"
+                )
+            return HTML("<ansicyan>  ● Working</ansicyan>")
+        if self._notice:
+            return HTML(f"<gray>  ● {self._notice}</gray>")
+        return HTML("<gray>  ● Ready</gray>")
+
+    def _queued_text(self) -> list[tuple[str, str]]:
+        latest = self._queued_messages[-1] if self._queued_messages else ""
+        suffix = (
+            f"  ({len(self._queued_messages)} queued)"
+            if len(self._queued_messages) > 1
+            else ""
+        )
+        return [
+            ("fg:ansicyan", "  ↳ "),
+            ("", latest),
+            ("fg:ansigray", suffix),
+        ]
+
+    def _invalidate(self) -> None:
+        if self.prompt_session.app.is_running:
+            self.prompt_session.app.invalidate()
+
+    async def _animate_status(self) -> None:
+        try:
+            while self._busy and self._activity_running:
+                self._invalidate()
+                await asyncio.sleep(0.08)
+        except asyncio.CancelledError:
+            pass
+
+    def _start_animation(self) -> None:
+        if self._animation_task is None or self._animation_task.done():
+            self._animation_task = asyncio.create_task(self._animate_status())
+
+    def _stop_animation(self) -> None:
+        if self._animation_task is not None and not self._animation_task.done():
+            self._animation_task.cancel()
+        self._animation_task = None
+
+    def start(self) -> None:
+        self._task = asyncio.create_task(
+            self.prompt_session.app.run_async(handle_sigint=False)
+        )
+
+    async def close(self) -> None:
+        if self._task is None:
+            return
+        animation_task = self._animation_task
+        self._stop_animation()
+        if animation_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await animation_task
+        if not self._task.done() and self.prompt_session.app.is_running:
+            self.prompt_session.app.exit(result="")
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+
+    async def next_event(self) -> tuple[str, str]:
+        return await self._events.get()
+
+    @property
+    def has_notice(self) -> bool:
+        return bool(self._notice)
+
+    def set_busy(self, busy: bool) -> None:
+        if busy and not self._busy:
+            self._notice = ""
+            self._verb_index = 0
+        self._busy = busy
+        if not busy:
+            self._activity_running = False
+            self._phase = ""
+            self._stop_animation()
+        self._invalidate()
+
+    def start_activity(self, message: str | None = None) -> None:
+        """Start one old-style spinner phase; keep its label stable."""
+        if not self._busy or self._activity_running:
+            return
+        if message is None:
+            message = _VERBS[self._verb_index % len(_VERBS)]
+        # Legacy _Spinner advanced this counter for every phase start,
+        # including named phases such as Generating and Running.
+        self._verb_index += 1
+        self._phase = message
+        self._activity_started_at = time.monotonic()
+        self._activity_running = True
+        self._start_animation()
+        self._invalidate()
+
+    def update_activity(self, message: str) -> None:
+        """Match the legacy spinner update without starting a stopped phase."""
+        if not self._busy or not self._activity_running:
+            return
+        self._phase = message
+        self._activity_started_at = time.monotonic()
+        self._invalidate()
+
+    def stop_activity(self) -> None:
+        if not self._activity_running:
+            return
+        self._activity_running = False
+        self._phase = ""
+        self._stop_animation()
+        self._invalidate()
+
+    def set_notice(self, notice: str) -> None:
+        self._busy = False
+        self._activity_running = False
+        self._phase = ""
+        self._notice = notice
+        self._stop_animation()
+        self._invalidate()
+
+    def add_guidance(self, text: str) -> None:
+        self._queued_messages.append(text)
+        self._invalidate()
+
+    def mark_guidance_applied(self, count: int) -> list[str]:
+        count = min(max(0, count), len(self._queued_messages))
+        applied = self._queued_messages[:count]
+        del self._queued_messages[:count]
+        self._invalidate()
+        return applied
 
 
 class _CtrlCDoubleExit:
@@ -485,8 +874,9 @@ async def _follow_log(path: Path, name: str) -> None:
 class _Spinner:
     """Async terminal spinner with phase-aware messaging and elapsed timer."""
 
-    def __init__(self, ansi_enabled: bool = True) -> None:
+    def __init__(self, ansi_enabled: bool = True, visible: bool = True) -> None:
         self._ansi_enabled = ansi_enabled
+        self._visible = visible
         self._task: asyncio.Task[None] | None = None
         self._message = ""
         self._running = False
@@ -501,7 +891,8 @@ class _Spinner:
         self._verb_index += 1
         self._running = True
         self._start_time = time.monotonic()
-        self._task = asyncio.create_task(self._animate())
+        if self._visible:
+            self._task = asyncio.create_task(self._animate())
 
     def update(self, message: str) -> None:
         self._message = message
@@ -516,7 +907,8 @@ class _Spinner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
-        self._clear_line()
+        if self._visible:
+            self._clear_line()
         sys.stdout.flush()
         return elapsed
 
@@ -1474,6 +1866,7 @@ async def run_repl(
         )
     console.print(
         "  Type /help for commands. "
+        "You can send guidance while the agent is working. "
         f"Ctrl+C interrupts; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit. "
         "Ctrl+D exits.",
         style="dim",
@@ -1494,6 +1887,8 @@ async def run_repl(
 
     session = CoreSession(cwd=cwd, settings=settings)
     background_consumer: asyncio.Task[None] | None = None
+    composer: _PersistentComposer | None = None
+    stdout_patch: Any | None = None
 
     # Pending image attachments for the next user message
     pending_images: list[dict[str, str]] = []
@@ -1547,68 +1942,89 @@ async def run_repl(
         else:
             pass
 
-        prompt_session: PromptSession[str] = PromptSession(
-            history=InMemoryHistory(),
-            completer=_CrabCodeCompleter(session),
-            complete_while_typing=True,
-        )
+        composer = _PersistentComposer(session, pending_images)
+        stdout_patch = patch_stdout(raw=True)
+        stdout_patch.__enter__()
+        composer.start()
         background_consumer = asyncio.create_task(
             _consume_background_events(session)
         )
 
+        async def _force_exit_cleanly() -> None:
+            """Restore terminal modes before the REPL's immediate exit path."""
+            await composer.close()
+            if stdout_patch is not None:
+                stdout_patch.__exit__(None, None, None)
+            try:
+                await session.close()
+            except Exception:
+                logger.debug("Failed to close session during forced exit", exc_info=True)
+            _force_exit()
+
         ctrl_c_exit = _CtrlCDoubleExit()
+        input_state: dict[str, Any] = {
+            "shutdown": False,
+            "deferred": [],
+            "interrupt_requested": False,
+            "force_exit": False,
+        }
 
         while True:
-            try:
-                mode = getattr(session, '_agent_mode', 'agent')
-                if mode == "plan":
-                    prompt_html = HTML("<b><ansiblue>[plan]</ansiblue> <ansicyan>❯ </ansicyan></b>")
-                elif pending_images:
-                    prompt_html = HTML("<b><ansicyan>❯ 📎 </ansicyan></b>")
-                else:
-                    prompt_html = HTML("<b><ansicyan>❯ </ansicyan></b>")
-                user_input = await prompt_session.prompt_async(prompt_html)
-            except EOFError:
-                console.print("\nGoodbye!", style="dim")
-                try:
-                    await session.interrupt()
-                except Exception:
-                    logger.debug("Failed to interrupt session during EOF shutdown", exc_info=True)
-                try:
-                    await session.close()
-                except Exception:
-                    logger.debug("Failed to close session during EOF shutdown", exc_info=True)
-                _force_exit()
-            except _REPL_INTERRUPT_EXCS:
-                if ctrl_c_exit.should_exit_now():
+            deferred_inputs = input_state.get("deferred", [])
+            if deferred_inputs:
+                user_input = deferred_inputs.pop(0)
+            else:
+                while True:
+                    event_kind, event_text = await composer.next_event()
+                    if event_kind == "submit":
+                        user_input = event_text
+                        break
+                    if event_kind == "eof":
+                        input_state["shutdown"] = True
+                        break
+                    if event_kind == "interrupt":
+                        if ctrl_c_exit.should_exit_now():
+                            console.print("\nGoodbye!", style="dim")
+                            try:
+                                await session.interrupt()
+                            except Exception:
+                                logger.debug(
+                                    "Failed to interrupt session during forced exit",
+                                    exc_info=True,
+                                )
+                            await _force_exit_cleanly()
+                        try:
+                            await session.interrupt()
+                        except Exception:
+                            logger.debug(
+                                "Failed to interrupt session after Ctrl+C",
+                                exc_info=True,
+                            )
+                        composer.set_notice(
+                            f"Interrupted · Ctrl+C again within "
+                            f"{_CTRL_C_EXIT_WINDOW_S:.0f}s to exit"
+                        )
+
+                if input_state.get("shutdown"):
                     console.print("\nGoodbye!", style="dim")
-                    try:
-                        await session.interrupt()
-                    except Exception:
-                        logger.debug("Failed to interrupt session during forced exit", exc_info=True)
-                    try:
-                        await session.close()
-                    except Exception:
-                        logger.debug("Failed to close session during forced exit", exc_info=True)
-                    _force_exit()
-                _clear_sigint_cancel()
-                try:
-                    await session.interrupt()
-                except Exception:
-                    logger.debug("Failed to interrupt session after Ctrl+C", exc_info=True)
-                console.print(
-                    f"\n[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
-                )
-                continue
+                    break
 
             user_input = user_input.strip()
             if not user_input:
                 continue
 
+            _render_submitted_input(user_input)
+
             ctrl_c_exit.clear()
 
             if user_input.startswith("/"):
-                result = await _handle_command(user_input, session, settings, pending_images)
+                async with in_terminal():
+                    result = await _handle_command(
+                        user_input,
+                        session,
+                        settings,
+                        pending_images,
+                    )
                 if result is False:
                     break
                 if isinstance(result, str):
@@ -1619,17 +2035,30 @@ async def run_repl(
             if user_input.startswith("! "):
                 cmd = user_input[2:]
                 import subprocess
-                result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=False)
+                async with in_terminal():
+                    subprocess.run(cmd, shell=True, cwd=cwd, capture_output=False)
                 continue
 
             streamed_text = ""
             streamed_text_for_context = ""
-            spinner = _Spinner(ansi_enabled=_ANSI_ENABLED)
+            # The persistent composer itself shows the working state. Avoid a
+            # rapidly redrawn spinner competing with prompt_toolkit for the
+            # terminal's bottom row.
+            spinner = _Spinner(ansi_enabled=_ANSI_ENABLED, visible=False)
             thinking_start: float = 0.0
             is_thinking = False
 
+            def _finish_stream_line() -> None:
+                nonlocal streamed_text
+                if streamed_text:
+                    if not streamed_text.endswith("\n"):
+                        sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    streamed_text = ""
+
             async def _stop_spinner_with_thinking() -> None:
                 nonlocal is_thinking
+                composer.stop_activity()
                 if not spinner.is_running:
                     return
                 await spinner.stop()
@@ -1642,6 +2071,38 @@ async def run_repl(
                 is_thinking = False
 
             plan_pending = False
+            input_state["interrupt_requested"] = False
+            input_state["force_exit"] = False
+            composer.set_busy(True)
+
+            async def _consume_turn_input() -> None:
+                while True:
+                    event_kind, event_text = await composer.next_event()
+                    if event_kind == "submit":
+                        text = event_text.strip()
+                        if not text:
+                            continue
+                        if await session.steer_message(text):
+                            composer.add_guidance(text)
+                            continue
+                        input_state.setdefault("deferred", []).append(text)
+                        return
+
+                    if event_kind == "eof":
+                        input_state["shutdown"] = True
+                        await session.interrupt()
+                        return
+
+                    if event_kind == "interrupt":
+                        if ctrl_c_exit.should_exit_now():
+                            input_state["force_exit"] = True
+                        else:
+                            input_state["interrupt_requested"] = True
+                        composer.stop_activity()
+                        composer.start_activity("Interrupting")
+                        await session.interrupt()
+
+            steering_task = asyncio.create_task(_consume_turn_input())
             try:
                 send_images = pending_images.copy() if pending_images else None
                 pending_images.clear()
@@ -1650,33 +2111,32 @@ async def run_repl(
                     if isinstance(event, StreamModeEvent):
                         if event.mode == "requesting":
                             spinner.start()
+                            composer.start_activity()
                             is_thinking = False
                             thinking_start = 0.0
                         elif event.mode == "compacting":
                             spinner.start("Compacting")
+                            composer.start_activity("Compacting")
                             is_thinking = False
                             thinking_start = 0.0
                         elif event.mode == "thinking":
                             thinking_start = time.monotonic()
                             is_thinking = True
                             spinner.update("Thinking")
+                            composer.update_activity("Thinking")
                         elif event.mode == "responding":
                             await _stop_spinner_with_thinking()
                         elif event.mode == "tool-input":
                             batch_state["denied"] = False
                             await _stop_spinner_with_thinking()
-                            if streamed_text:
-                                sys.stdout.write("\n")
-                                sys.stdout.flush()
-                                streamed_text = ""
+                            _finish_stream_line()
                             spinner.start("Generating")
+                            composer.start_activity("Generating")
                         elif event.mode == "tool-running":
                             await _stop_spinner_with_thinking()
-                            if streamed_text:
-                                sys.stdout.write("\n")
-                                sys.stdout.flush()
-                                streamed_text = ""
+                            _finish_stream_line()
                             spinner.start("Running")
+                            composer.start_activity("Running")
 
                     elif isinstance(event, ThinkingEvent):
                         pass
@@ -1685,7 +2145,12 @@ async def run_repl(
                         await _stop_spinner_with_thinking()
                         chunk = safe_utf8_str(event.text)
                         sys.stdout.write(chunk)
-                        sys.stdout.flush()
+                        # StdoutProxy keeps a partial line until it receives a
+                        # newline. Flushing every token makes a persistent
+                        # prompt repaint those fragments at the same cursor
+                        # position, which visually drops the beginning of the
+                        # response. Complete lines are emitted immediately;
+                        # _finish_stream_line commits the final partial line.
                         streamed_text += chunk
                         streamed_text_for_context += event.text
 
@@ -1694,13 +2159,11 @@ async def run_repl(
                             pass
                         else:
                             await _stop_spinner_with_thinking()
-                            if streamed_text:
-                                sys.stdout.write("\n")
-                                sys.stdout.flush()
-                                streamed_text = ""
+                            _finish_stream_line()
                             _render_tool_use(event)
 
                     elif isinstance(event, AgentStateEvent):
+                        _finish_stream_line()
                         style = {
                             "queued": "dim",
                             "running": "cyan",
@@ -1715,27 +2178,25 @@ async def run_repl(
 
                     elif isinstance(event, AgentOutputEvent):
                         if event.stream == "tool_use" and event.tool_name:
+                            _finish_stream_line()
                             console.print(
                                 f"  [dim cyan]↳ agent {event.agent_id[:8]} using {event.tool_name}[/]"
                             )
 
                     elif isinstance(event, PermissionRequestEvent):
                         await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
-                        await _prompt_permission(event, session, batch_state)
+                        _finish_stream_line()
+                        async with in_terminal():
+                            await _prompt_permission(event, session, batch_state)
 
                     elif isinstance(event, ChoiceRequestEvent):
                         await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
-                        await _prompt_choice(event, session)
+                        _finish_stream_line()
+                        async with in_terminal():
+                            await _prompt_choice(event, session)
 
                     elif isinstance(event, ToolResultEvent):
+                        _finish_stream_line()
                         if event.tool_name == "AskUser":
                             await _stop_spinner_with_thinking()
                             if event.is_error:
@@ -1748,12 +2209,14 @@ async def run_repl(
 
                     elif isinstance(event, CompactEvent):
                         await _stop_spinner_with_thinking()
+                        _finish_stream_line()
                         console.print(
                             f"\n[dim italic]Conversation compacted: {event.summary}[/]"
                         )
 
                     elif isinstance(event, ErrorEvent):
                         await _stop_spinner_with_thinking()
+                        _finish_stream_line()
                         console.print(
                             f"\n[bold red]Error: {safe_utf8_str(event.message)}[/]"
                         )
@@ -1762,10 +2225,7 @@ async def run_repl(
 
                     elif isinstance(event, ModeChangeEvent):
                         await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
+                        _finish_stream_line()
                         session.switch_mode(event.mode)
                         if event.mode == "plan":
                             console.print(
@@ -1777,6 +2237,7 @@ async def run_repl(
                             )
 
                     elif isinstance(event, TeamMessageEvent):
+                        _finish_stream_line()
                         console.print(
                             f"  [dim magenta][team:{event.team_id[:8]}] "
                             f"{event.from_agent[:8]} → {event.to_agent[:8]}: "
@@ -1784,17 +2245,20 @@ async def run_repl(
                         )
 
                     elif isinstance(event, PeerMessageEvent):
+                        _finish_stream_line()
                         console.print(
                             f"  [dim cyan][peer:{event.from_name}] {event.text[:200]}[/]"
                         )
 
                     elif isinstance(event, TeamStateEvent):
+                        _finish_stream_line()
                         console.print(
                             f"  [dim magenta][team:{event.team_id[:8]}] "
                             f"{event.agent_id[:8]} {event.old_state} → {event.new_state}[/]"
                         )
 
                     elif isinstance(event, TaskUpdateEvent):
+                        _finish_stream_line()
                         console.print(
                             f"  [dim magenta][team:{event.team_id[:8]}] "
                             f"task {event.task_id[:8]} {event.status}"
@@ -1803,10 +2267,7 @@ async def run_repl(
 
                     elif isinstance(event, PlanReadyEvent):
                         await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
+                        _finish_stream_line()
                         session.set_plan(event.plan)
                         from crabcode_core.plan.types import ExecutionPlan
                         plan = ExecutionPlan.from_dict(event.plan)
@@ -1825,11 +2286,15 @@ async def run_repl(
 
                     elif isinstance(event, TurnCompleteEvent):
                         await _stop_spinner_with_thinking()
-                        if streamed_text:
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                            streamed_text = ""
+                        _finish_stream_line()
                         _render_context_usage(event)
+
+                    elif isinstance(event, SteeringAppliedEvent):
+                        applied = composer.mark_guidance_applied(event.count)
+                        if applied:
+                            _finish_stream_line()
+                        for guidance in applied:
+                            _render_submitted_input(guidance, steering=True)
 
             except _REPL_INTERRUPT_EXCS:
                 await spinner.stop()
@@ -1842,22 +2307,50 @@ async def run_repl(
                     _persist_partial_assistant_for_interrupt(
                         session, streamed_text_for_context
                     )
-                    try:
-                        await session.close()
-                    except Exception:
-                        logger.debug("Failed to close session while streaming on exit", exc_info=True)
-                    _force_exit()
+                    await _force_exit_cleanly()
                 _clear_sigint_cancel()
                 try:
                     await session.interrupt()
                 except Exception:
                     logger.debug("Failed to interrupt session while streaming", exc_info=True)
-                _persist_partial_assistant_for_interrupt(
-                    session, streamed_text_for_context
+                if streamed_text_for_context.strip():
+                    _persist_partial_assistant_for_interrupt(
+                        session, streamed_text_for_context
+                    )
+                composer.set_notice(
+                    f"Interrupted · Ctrl+C again within "
+                    f"{_CTRL_C_EXIT_WINDOW_S:.0f}s to exit"
                 )
-                console.print(
-                    f"[dim]Interrupted. Press Ctrl+C again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit.[/]"
+            finally:
+                steering_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await steering_task
+
+            if input_state.get("force_exit"):
+                console.print("\nGoodbye!", style="dim")
+                if streamed_text_for_context.strip():
+                    _persist_partial_assistant_for_interrupt(
+                        session,
+                        streamed_text_for_context,
+                    )
+                await _force_exit_cleanly()
+
+            if input_state.pop("interrupt_requested", False):
+                if streamed_text_for_context.strip():
+                    _persist_partial_assistant_for_interrupt(
+                        session,
+                        streamed_text_for_context,
+                    )
+                composer.set_notice(
+                    f"Interrupted · Ctrl+C again within "
+                    f"{_CTRL_C_EXIT_WINDOW_S:.0f}s to exit"
                 )
+            elif not composer.has_notice:
+                composer.set_busy(False)
+
+            if input_state.get("shutdown"):
+                console.print("\nGoodbye!", style="dim")
+                break
 
             if streamed_text:
                 sys.stdout.write("\n")
@@ -1866,7 +2359,8 @@ async def run_repl(
             # Execute plan after the send_message generator has fully completed,
             # to avoid deadlock with the event queue inside send_message.
             if plan_pending:
-                await _prompt_plan_action(session, console)
+                async with in_terminal():
+                    await _prompt_plan_action(session, console)
 
             console.print()
     finally:
@@ -1874,7 +2368,13 @@ async def run_repl(
             background_consumer.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await background_consumer
-        await session.close()
+        try:
+            await session.close()
+        finally:
+            if composer is not None:
+                await composer.close()
+            if stdout_patch is not None:
+                stdout_patch.__exit__(None, None, None)
 
 
 async def _prompt_plan_action(session: CoreSession, console: Console) -> None:
@@ -2059,6 +2559,7 @@ async def _handle_command(
             "[bold]/image <path>[/] — attach image(s) to your next message\n"
             "[bold]/exit[/] — exit CrabCode\n"
             f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
+            "[bold]While working[/] — type and press Enter to steer after the next tool call\n"
             "\n"
             "[bold]! <cmd>[/] — run a shell command"
             + skills_section,

@@ -34,6 +34,7 @@ from crabcode_core.types.event import (
     PermissionRequestEvent,
     PermissionResponseEvent,
     PlanReadyEvent,
+    SteeringAppliedEvent,
     TurnCompleteEvent,
 )
 from crabcode_core.types.message import Message, find_assistant_reply, message_from_entry
@@ -109,6 +110,7 @@ class CoreSession:
         self.session_id: str = ""
         self._permission_queue: asyncio.Queue[PermissionResponseEvent] = asyncio.Queue()
         self._choice_queue: asyncio.Queue[ChoiceResponseEvent] = asyncio.Queue()
+        self._steering_messages: list[Message] = []
         self._abort_controller: asyncio.Event = asyncio.Event()
 
         self.skills: list = []
@@ -2559,8 +2561,29 @@ class CoreSession:
                 images=images,
             )
             try:
-                async for event in stream:
-                    yield event
+                while True:
+                    async for event in stream:
+                        yield event
+                    await stream.aclose()
+
+                    # A steering message may arrive after query_loop emitted
+                    # its final event but before the Gateway finished
+                    # publishing it. Keep the foreground boundary alive and
+                    # immediately run that input as the next continuation.
+                    queued = self._drain_steering_messages_for_query()
+                    if not queued:
+                        break
+                    yield SteeringAppliedEvent(count=len(queued))
+                    self.messages.extend(queued)
+                    latest = queued[-1]
+                    stream = self._send_message_impl(
+                        latest.text_content,
+                        max_turns=max_turns,
+                        synthetic=True,
+                        message_uuid=latest.uuid,
+                        reuse_existing_message=True,
+                        message_origin="user-steering",
+                    )
             finally:
                 try:
                     # ``async for`` does not own/finalize its iterator when the
@@ -2571,6 +2594,47 @@ class CoreSession:
                 finally:
                     self._active_event_stream_token = None
                     self._foreground_turn_active = False
+
+    async def steer_message(
+        self,
+        text: str,
+        images: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """Queue user guidance for the next safe foreground-turn boundary.
+
+        Returns ``False`` when no foreground turn is active, allowing a
+        transport to fall back to starting a normal serialized turn.
+        """
+        if self._closed or self._closing or not self._foreground_turn_active:
+            return False
+        if len(self._steering_messages) >= 100:
+            raise RuntimeError("Too many queued steering messages")
+
+        from crabcode_core.types.message import (
+            ImageBlock,
+            TextBlock,
+            create_user_message,
+        )
+
+        if images:
+            content: list[Any] = []
+            if text:
+                content.append(TextBlock(text=text))
+            for image in images:
+                content.append(
+                    ImageBlock(
+                        source={
+                            "type": "base64",
+                            "media_type": image.get("media_type", "image/png"),
+                            "data": image.get("data", ""),
+                        },
+                    )
+                )
+            message = create_user_message(content=content, origin="user-steering")
+        else:
+            message = create_user_message(content=text, origin="user-steering")
+        self._steering_messages.append(message)
+        return True
 
     async def _send_message_impl(
         self,
@@ -2821,6 +2885,7 @@ class CoreSession:
             compact_threshold=self.settings.max_context_length,
             reply_to_uuid=message_uuid if synthetic else None,
             drain_peer_messages=self._drain_peer_messages_for_query,
+            drain_steering_messages=self._drain_steering_messages_for_query,
         )
         query_storage = self._session_storage
         query_session_id = self.session_id
@@ -3106,10 +3171,17 @@ class CoreSession:
         self._held_peer_messages.clear()
         self._peer_always_allowed_sessions.clear()
 
+    def _drain_steering_messages_for_query(self) -> list[Message]:
+        """Drain user guidance at an agent-loop boundary."""
+        messages = self._steering_messages
+        self._steering_messages = []
+        return messages
+
     def _drain_session_queues(self) -> None:
         self._drain_agent_completion_queue()
         self._drain_monitor_notification_queue()
         self._drain_peer_notification_queue()
+        self._drain_steering_messages_for_query()
         self._drain_background_event_queue()
         self._drain_queue(self._agent_event_queue)
         self._drain_queue(self._permission_queue)

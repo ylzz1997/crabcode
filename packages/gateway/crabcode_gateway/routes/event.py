@@ -230,6 +230,8 @@ async def websocket_endpoint(ws: WebSocket):
                     await _handle_choice_response(ws, msg)
                 elif msg_type == "send_message":
                     await _handle_send_message(ws, msg)
+                elif msg_type == "steer_message":
+                    await _handle_steer_message(ws, msg)
                 elif msg_type == "new_session":
                     await _handle_new_session(ws, msg)
                 elif msg_type == "resume_session":
@@ -582,6 +584,63 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
         )
         await ws.send_text(json.dumps({"type": "error", "message": message}))
         return
+
+
+async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
+    """Inject user guidance at the foreground loop's next safe boundary."""
+    text = msg.get("text", "")
+    images = msg.get("images")
+    if not isinstance(text, str) or not text.strip():
+        await ws.send_text(json.dumps({
+            "type": "error",
+            "message": "text must be a non-empty string",
+        }))
+        return
+    if images is not None and (
+        not isinstance(images, list)
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("media_type"), str)
+            or not isinstance(item.get("data"), str)
+            for item in images
+        )
+    ):
+        await ws.send_text(json.dumps({
+            "type": "error",
+            "message": "images must be a list of media attachments",
+        }))
+        return
+
+    session = _resolve_session(ws, msg)
+    if session is None:
+        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        return
+
+    try:
+        queued = await run_session_operation(
+            ws.app.state,
+            session,
+            lambda: session.steer_message(text, images=images),
+            **_ws_owner_args(ws),
+        )
+    except SessionOperationRejected:
+        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        return
+
+    logger.info(
+        "ws steer_message %s session=%s chars=%d images=%d",
+        "queued" if queued else "continued as a new turn",
+        session.session_id,
+        len(text),
+        len(images) if isinstance(images, list) else 0,
+    )
+    if not queued:
+        # The frontend can race with a just-completed turn. Falling back to the
+        # ordinary serialized path ensures the user's message is never lost.
+        fallback = dict(msg)
+        fallback["type"] = "send_message"
+        fallback.setdefault("max_turns", 0)
+        await _handle_send_message(ws, fallback)
 
 
 async def _handle_new_session(ws: WebSocket, msg: dict) -> None:

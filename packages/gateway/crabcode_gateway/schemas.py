@@ -333,6 +333,11 @@ class StreamModePayload(BaseModel):
     agent_id: str | None = None
 
 
+class SteeringAppliedPayload(BaseModel):
+    type: Literal["steering_applied"] = "steering_applied"
+    count: int = 1
+
+
 class AgentStatePayload(BaseModel):
     type: Literal["agent_state"] = "agent_state"
     agent_id: str
@@ -449,6 +454,7 @@ EventPayload = Union[
     ErrorPayload,
     TurnCompletePayload,
     StreamModePayload,
+    SteeringAppliedPayload,
     AgentStatePayload,
     AgentOutputPayload,
     ModeChangePayload,
@@ -482,6 +488,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
         PeerMessageEvent,
         PlanReadyEvent,
         StreamModeEvent,
+        SteeringAppliedEvent,
         StreamTextEvent,
         TaskUpdateEvent,
         TeamMessageEvent,
@@ -573,6 +580,8 @@ def core_event_to_payload(event: Any) -> EventPayload:
         )
     if isinstance(event, StreamModeEvent):
         return StreamModePayload(mode=event.mode, agent_id=event.agent_id)
+    if isinstance(event, SteeringAppliedEvent):
+        return SteeringAppliedPayload(count=event.count)
     if isinstance(event, AgentStateEvent):
         return AgentStatePayload(
             agent_id=event.agent_id,

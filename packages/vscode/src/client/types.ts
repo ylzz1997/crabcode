@@ -269,6 +269,11 @@ export interface StreamModePayload {
   agent_id?: string | null;
 }
 
+export interface SteeringAppliedPayload {
+  type?: "steering_applied";
+  count?: number;
+}
+
 export interface AgentStatePayload {
   agent_id: string;
   status: string;
@@ -392,6 +397,7 @@ export type EventPayload =
   ErrorPayload |
   TurnCompletePayload |
   StreamModePayload |
+  SteeringAppliedPayload |
   AgentStatePayload |
   AgentOutputPayload |
   ModeChangePayload |

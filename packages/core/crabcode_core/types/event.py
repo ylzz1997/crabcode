@@ -137,6 +137,12 @@ class StreamModeEvent:
 
 
 @dataclass
+class SteeringAppliedEvent:
+    """Queued user guidance entered the conversation at a safe boundary."""
+    count: int = 1
+
+
+@dataclass
 class AgentStateEvent:
     """Lifecycle update for a managed sub-agent."""
     agent_id: str
@@ -249,6 +255,7 @@ CoreEvent = Union[
     ErrorEvent,
     TurnCompleteEvent,
     StreamModeEvent,
+    SteeringAppliedEvent,
     AgentStateEvent,
     AgentOutputEvent,
     ModeChangeEvent,

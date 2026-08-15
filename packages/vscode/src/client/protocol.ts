@@ -25,6 +25,14 @@ export interface SendMessageCommand {
   images?: ImageAttachment[];
 }
 
+/** Add user guidance to the foreground turn at its next safe tool boundary. */
+export interface SteerMessageCommand {
+  type: "steer_message";
+  text: string;
+  session_id: string | null;
+  images?: ImageAttachment[];
+}
+
 export interface PermissionResponseCommand {
   type: "permission_response";
   tool_use_id: string;
@@ -75,6 +83,7 @@ export interface PlanActionCommand {
 /** Union of all commands the client can send over the WebSocket. */
 export type WsCommand =
   | SendMessageCommand
+  | SteerMessageCommand
   | PermissionResponseCommand
   | ChoiceResponseCommand
   | PushContextCommand
@@ -95,6 +104,22 @@ export function buildSendMessageCommand(
     type: "send_message",
     text,
     max_turns: options.maxTurns ?? 0,
+    session_id: options.sessionId ?? null,
+  };
+  if (options.images && options.images.length > 0) {
+    cmd.images = options.images;
+  }
+  return cmd;
+}
+
+/** Build a message that steers an already-running foreground turn. */
+export function buildSteerMessageCommand(
+  text: string,
+  options: { sessionId?: string; images?: ImageAttachment[] } = {},
+): SteerMessageCommand {
+  const cmd: SteerMessageCommand = {
+    type: "steer_message",
+    text,
     session_id: options.sessionId ?? null,
   };
   if (options.images && options.images.length > 0) {
