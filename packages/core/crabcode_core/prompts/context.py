@@ -194,9 +194,12 @@ def _load_claude_md(cwd: str) -> str | None:
 
 
 def _load_memories_context(cwd: str) -> str | None:
-    """Load persistent memories and format them for context injection."""
+    """Load a compact memory directory for context injection."""
     try:
-        from crabcode_core.tools.memory import load_all_memories
+        from crabcode_core.tools.memory import (
+            format_memory_directory,
+            load_all_memories,
+        )
     except ImportError:
         return None
 
@@ -204,13 +207,14 @@ def _load_memories_context(cwd: str) -> str | None:
     if not memories:
         return None
 
-    lines = []
-    for m in memories:
-        scope = m.pop("_scope", "?")
-        lines.append(f"- [{scope}] {m['title']}: {m['content']}")
+    directory = format_memory_directory(memories)
+    if not directory:
+        return None
 
     return (
-        "The following memories were saved from previous conversations. "
-        "They may or may not be relevant to the current task.\n\n"
-        + "\n".join(lines)
+        "The following compact directory lists memories saved from previous "
+        "conversations. Titles are summaries, not the full memory content. "
+        "They may or may not be relevant to the current task. Use the Memory "
+        "tool's search and read actions when details are needed.\n\n"
+        + directory
     )

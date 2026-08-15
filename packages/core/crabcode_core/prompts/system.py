@@ -197,7 +197,8 @@ def _get_using_tools_section(enabled_tools: list[str]) -> str:
   - Do NOT proactively create memories unless asked.
   - If the user contradicts an existing memory, DELETE it — do not update.
   - Use 'project' scope (default) for project-specific info, 'global' for universal preferences.
-  - Memories are automatically loaded into context at the start of each conversation.""" if memory in enabled_tools else None,
+  - A compact memory directory is automatically loaded into context.
+  - Use search to find relevant memories and read to retrieve full content when the directory summary is insufficient.""" if memory in enabled_tools else None,
         f"""Break down and manage your work with the {todo} tool. Use it proactively for complex multi-step tasks (3+ steps), but skip it for simple tasks completable in 1-2 steps. Guidelines:
   - Create specific, actionable items. Only ONE task should be in_progress at a time.
   - Mark each task as completed immediately after finishing — do not batch.

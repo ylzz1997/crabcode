@@ -601,10 +601,13 @@ If a server isn't installed, it's simply skipped — no error, no delay.
 
 The `Memory` tool gives the agent persistent notes that survive across sessions.
 
-- **Global memory** — stored in `~/.crabcode/memory.json`
-- **Project memory** — stored in `<project>/.crabcode/memory.json`
+- **Global memory** — stored in `~/.crabcode/memories.json`
+- **Project memory** — stored in `<project>/.crabcode/memories.json`
 
-Memories are automatically injected at the top of each conversation. The agent uses them to remember user preferences, recurring conventions, and project-specific facts without re-explaining them every session.
+A bounded directory containing memory IDs and title summaries is automatically
+injected into each conversation. Full memory content stays out of the prompt until
+the agent retrieves it with `Memory`'s `search` and `read` actions. The tool also
+supports `create`, `update`, `delete`, and title-only `list` actions.
 
 ### AskUser
 

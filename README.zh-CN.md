@@ -595,10 +595,10 @@ CrabCode 集成了 **Language Server Protocol (LSP)** 服务器，为 AI agent �
 
 `Memory` 工具让 agent 拥有跨会话持久化的笔记能力。
 
-- **全局记忆** — 存储在 `~/.crabcode/memory.json`
-- **项目记忆** — 存储在 `<项目>/.crabcode/memory.json`
+- **全局记忆** — 存储在 `~/.crabcode/memories.json`
+- **项目记忆** — 存储在 `<项目>/.crabcode/memories.json`
 
-记忆内容会在每次对话开始时自动注入。agent 用它来记住用户偏好、常用约定、项目专有知识，无需每次重新说明。
+每次对话只会自动注入一份有数量上限的记忆目录，其中包含记忆 ID 和标题摘要。完整正文不会直接占用上下文；agent 会通过 `Memory` 的 `search` 和 `read` 操作按需检索。该工具同时支持 `create`、`update`、`delete` 和只显示标题的 `list` 操作。
 
 ### AskUser（用户选择）
 
