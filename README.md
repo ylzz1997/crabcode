@@ -1,3 +1,5 @@
+
+
 # CrabCode
 
 [中文](./README.zh-CN.md)
@@ -957,7 +959,7 @@ Set `"default_mode": "run_everything"` to skip all permission prompts and execut
 
 > **Use with caution.** In this mode CrabCode will run shell commands and write files without asking.
 
-The VS Code extension defaults to **Follow settings** (`crabcode.permissionMode: "default"`),
+The VS Code extension defaults to **Follow settings** (`crabcode.permissionMode: "default`),
 so it honors `permissions.default_mode` from `settings.json`. Choosing another mode
 explicitly from the extension footer overrides the file setting for the active gateway session.
 
@@ -1009,6 +1011,7 @@ Files from the following locations are loaded and concatenated in order:
 | `~/.crabcode/CLAUDE.md` | User-global, CrabCode native |
 | `<each dir from git-root to cwd>/CLAUDE.md` | Project-level, walked downward |
 | `<each dir from git-root to cwd>/.claude/CLAUDE.md` | Same, inside `.claude/` subdirectory |
+| `<each dir from git-root to cwd>/.crabcode/CLAUDE.md` | Project-level, inside `.crabcode/` subdirectory |
 
 ### Example
 
