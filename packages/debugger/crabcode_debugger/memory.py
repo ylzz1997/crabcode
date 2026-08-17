@@ -626,9 +626,9 @@ class MemoryInspector:
     def __init__(self, *, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
         self.backend = _select_memory_backend()
-        self.max_search_results = int(self.config.get("max_search_results", 100))
-        self.max_search_bytes = int(self.config.get("max_search_bytes", 128 * 1024 * 1024))
-        self.chunk_size = int(self.config.get("memory_search_chunk_bytes", 1024 * 1024))
+        self.max_search_results = max(1, int(self.config.get("max_search_results", 100)))
+        self.max_search_bytes = max(1, int(self.config.get("max_search_bytes", 128 * 1024 * 1024)))
+        self.chunk_size = max(1, int(self.config.get("memory_search_chunk_bytes", 1024 * 1024)))
         self._searches: dict[str, dict[str, Any]] = {}
         self._freezes: dict[str, dict[str, Any]] = {}
         self._aob_scans: dict[str, dict[str, Any]] = {}
@@ -716,6 +716,8 @@ class MemoryInspector:
     ) -> dict[str, Any]:
         parsed_address = parse_address(address)
         new_bytes = encode_value(value_type, value=value, value_hex=value_hex, endian=endian)
+        if not new_bytes:
+            return {"pid": pid, "address": hex(parsed_address), "error": "write value encoded to empty bytes"}
         max_write = int(self.config.get("max_memory_write_bytes", 64))
         if len(new_bytes) > max_write:
             return {
@@ -756,6 +758,8 @@ class MemoryInspector:
 
         parsed_address = parse_address(address)
         data = encode_value(value_type, value=value, value_hex=value_hex, endian=endian)
+        if not data:
+            return {"pid": pid, "address": hex(parsed_address), "error": "freeze value encoded to empty bytes"}
         max_write = int(self.config.get("max_memory_write_bytes", 64))
         if len(data) > max_write:
             return {
@@ -871,8 +875,8 @@ class MemoryInspector:
         needle = encode_value(value_type, value=value, value_hex=value_hex, endian=endian)
         if not needle:
             return {"error": "search value encoded to empty bytes"}
-        limit_results = max(1, int(max_results or self.max_search_results))
-        limit_bytes = max(1, int(max_scan_bytes or self.max_search_bytes))
+        limit_results = self._bounded_limit(max_results, self.max_search_results)
+        limit_bytes = self._bounded_limit(max_scan_bytes, self.max_search_bytes)
         try:
             regions = [
                 region
@@ -891,13 +895,18 @@ class MemoryInspector:
             endian=endian,
         )
         search_id = f"mem-{uuid.uuid4().hex[:10]}"
-        self._searches[search_id] = {
-            "pid": pid,
-            "value_type": value_type,
-            "endian": endian,
-            "bytes": needle.hex(),
-            "results": results,
-        }
+        self._remember(
+            self._searches,
+            search_id,
+            {
+                "pid": pid,
+                "value_type": value_type,
+                "endian": endian,
+                "bytes": needle.hex(),
+                "results": results,
+            },
+            int(self.config.get("max_memory_searches", 64)),
+        )
         return {
             "pid": pid,
             "search_id": search_id,
@@ -929,7 +938,7 @@ class MemoryInspector:
         expected = None
         if comparison == "equals":
             expected = encode_value(value_type, value=value, value_hex=value_hex, endian=endian)
-        limit_results = max(1, int(max_results or self.max_search_results))
+        limit_results = self._bounded_limit(max_results, self.max_search_results)
         refined: list[dict[str, Any]] = []
         for result in previous["results"]:
             if len(refined) >= limit_results:
@@ -950,13 +959,18 @@ class MemoryInspector:
             ):
                 refined.append(self._result_entry(address, current, value_type, endian))
         new_search_id = f"mem-{uuid.uuid4().hex[:10]}"
-        self._searches[new_search_id] = {
-            "pid": pid,
-            "value_type": value_type,
-            "endian": endian,
-            "bytes": (expected or bytes.fromhex(str(previous["bytes"]))).hex(),
-            "results": refined,
-        }
+        self._remember(
+            self._searches,
+            new_search_id,
+            {
+                "pid": pid,
+                "value_type": value_type,
+                "endian": endian,
+                "bytes": (expected or bytes.fromhex(str(previous["bytes"]))).hex(),
+                "results": refined,
+            },
+            int(self.config.get("max_memory_searches", 64)),
+        )
         return {
             "pid": pid,
             "source_search_id": search_id,
@@ -982,8 +996,8 @@ class MemoryInspector:
         parsed = parse_aob_pattern(pattern)
         if not parsed:
             return {"error": "pattern is empty"}
-        limit_results = max(1, int(max_results or self.max_search_results))
-        limit_bytes = max(1, int(max_scan_bytes or self.max_search_bytes))
+        limit_results = self._bounded_limit(max_results, self.max_search_results)
+        limit_bytes = self._bounded_limit(max_scan_bytes, self.max_search_bytes)
         regions = []
         try:
             for region in self._linux_regions(pid):
@@ -1006,11 +1020,12 @@ class MemoryInspector:
             limit_bytes=limit_bytes,
         )
         aob_id = f"aob-{uuid.uuid4().hex[:10]}"
-        self._aob_scans[aob_id] = {
-            "pid": pid,
-            "pattern": pattern,
-            "results": results,
-        }
+        self._remember(
+            self._aob_scans,
+            aob_id,
+            {"pid": pid, "pattern": pattern, "results": results},
+            int(self.config.get("max_aob_scans", 64)),
+        )
         return {
             "pid": pid,
             "aob_id": aob_id,
@@ -1046,8 +1061,9 @@ class MemoryInspector:
         step = max(1, int(align or ptr_size))
         depth_limit = max(1, min(int(max_depth), int(self.config.get("max_pointer_scan_depth", 5))))
         offset_limit = max(0, int(max_offset))
-        limit_results = max(1, int(max_results or self.config.get("max_pointer_scan_results", 100)))
-        limit_bytes = max(1, int(max_scan_bytes or self.max_search_bytes))
+        pointer_result_cap = max(1, int(self.config.get("max_pointer_scan_results", 100)))
+        limit_results = self._bounded_limit(max_results, pointer_result_cap)
+        limit_bytes = self._bounded_limit(max_scan_bytes, self.max_search_bytes)
         endian = str(self.config.get("pointer_endian", "little"))
 
         try:
@@ -1186,15 +1202,38 @@ class MemoryInspector:
         patch_id: str | None = None,
     ) -> dict[str, Any]:
         parsed_address = parse_address(address)
-        patch = encode_value("bytes", value_hex=patch_hex)
+        try:
+            patch = encode_value("bytes", value_hex=patch_hex)
+            expected = encode_value("bytes", value_hex=expected_hex) if expected_hex else None
+        except ValueError as exc:
+            return {"pid": pid, "address": hex(parsed_address), "error": str(exc)}
+        if not patch:
+            return {"pid": pid, "address": hex(parsed_address), "error": "patch_hex encoded to empty bytes"}
         max_patch = int(self.config.get("max_code_patch_bytes", 64))
         if len(patch) > max_patch:
             return {"pid": pid, "address": hex(parsed_address), "error": f"patch size {len(patch)} exceeds max_code_patch_bytes={max_patch}"}
-        expected = encode_value("bytes", value_hex=expected_hex) if expected_hex else None
         if expected is not None and len(expected) != len(patch):
             return {"pid": pid, "address": hex(parsed_address), "error": "expected_hex length must match patch_hex length"}
+        saved_patch_id = patch_id or self._new_patch_id()
+        if saved_patch_id in self._patches:
+            return {"pid": pid, "address": hex(parsed_address), "error": f"patch_id is already active: {saved_patch_id}"}
+        overlap = self._overlapping_patch(pid, parsed_address, len(patch))
+        if overlap is not None:
+            return {
+                "pid": pid,
+                "address": hex(parsed_address),
+                "error": f"patch overlaps active patch: {overlap}",
+            }
+        write_attempted = False
+        old = b""
         try:
             old = self._read_memory(pid, parsed_address, len(patch))
+            if len(old) != len(patch):
+                return {
+                    "pid": pid,
+                    "address": hex(parsed_address),
+                    "error": f"could not read all original bytes: expected {len(patch)}, got {len(old)}",
+                }
             if expected is not None and old != expected:
                 return {
                     "pid": pid,
@@ -1211,6 +1250,7 @@ class MemoryInspector:
                 executable=True,
             )
             try:
+                write_attempted = True
                 self._write_memory(pid, parsed_address, patch)
                 flush_error = self._try_flush_instruction_cache(pid, parsed_address, len(patch))
                 verify = self._read_memory(pid, parsed_address, len(patch))
@@ -1222,8 +1262,20 @@ class MemoryInspector:
                 if token is not None:
                     self._restore_protection(pid, parsed_address, len(patch), token)
         except Exception as exc:
+            if write_attempted:
+                record = {
+                    "patch_id": saved_patch_id,
+                    "pid": pid,
+                    "address": hex(parsed_address),
+                    "old_hex": old.hex(),
+                    "patch_hex": patch.hex(),
+                    "verified": False,
+                    "active": True,
+                    "error": f"patch write may have succeeded; restore record retained: {exc}",
+                }
+                self._patches[saved_patch_id] = record
+                return dict(record)
             return {"pid": pid, "address": hex(parsed_address), "error": str(exc)}
-        saved_patch_id = patch_id or f"patch-{uuid.uuid4().hex[:10]}"
         record = {
             "patch_id": saved_patch_id,
             "pid": pid,
@@ -1232,10 +1284,17 @@ class MemoryInspector:
             "patch_hex": patch.hex(),
             "verify_hex": verify.hex(),
             "verified": verify == patch,
-            "active": verify == patch,
+            "active": verify != old,
         }
         if flush_error is not None:
             record["flush_warning"] = str(flush_error)
+        if verify != patch:
+            record["error"] = "patch verification failed; restore record retained"
+            if verify != old:
+                self._patches[saved_patch_id] = record
+            else:
+                record["recovery_not_needed"] = True
+            return dict(record)
         self._patches[saved_patch_id] = record
         return dict(record)
 
@@ -1256,7 +1315,7 @@ class MemoryInspector:
             return {"error": "patch_id is required unless all_patches=true"}
         restored: list[dict[str, Any]] = []
         missing: list[str] = []
-        for target_id in target_ids:
+        for target_id in reversed(target_ids):
             record = self._patches.get(target_id)
             if not record:
                 missing.append(target_id)
@@ -1264,7 +1323,20 @@ class MemoryInspector:
             pid = int(record["pid"])
             address = parse_address(record["address"])
             old = bytes.fromhex(str(record["old_hex"]))
+            patch = bytes.fromhex(str(record["patch_hex"]))
             try:
+                if record.get("verified", False):
+                    current = self._read_memory(pid, address, len(patch))
+                    if current != patch:
+                        restored.append(
+                            {
+                                **record,
+                                "restored": False,
+                                "error": "current bytes no longer match the recorded patch",
+                                "actual_hex": current.hex(),
+                            }
+                        )
+                        continue
                 token, protect_error = self._try_protect_memory(
                     pid,
                     address,
@@ -1286,13 +1358,53 @@ class MemoryInspector:
             except Exception as exc:
                 restored.append({**record, "restored": False, "error": str(exc)})
                 continue
-            record["active"] = False
-            restored_record = {**record, "restored": verify == old, "verify_hex": verify.hex()}
+            restore_verified = verify == old
+            if restore_verified:
+                record["active"] = False
+            restored_record = {**record, "restored": restore_verified, "verify_hex": verify.hex()}
             if flush_error is not None:
                 restored_record["flush_warning"] = str(flush_error)
+            if not restore_verified:
+                restored_record["error"] = "restore verification failed; restore record retained"
+                restored.append(restored_record)
+                continue
             restored.append(restored_record)
             self._patches.pop(target_id, None)
         return {"restored": restored, "missing": missing}
+
+    def _new_patch_id(self) -> str:
+        while True:
+            patch_id = f"patch-{uuid.uuid4().hex[:10]}"
+            if patch_id not in self._patches:
+                return patch_id
+
+    def _overlapping_patch(self, pid: int, address: int, size: int) -> str | None:
+        end = address + size
+        for patch_id, record in self._patches.items():
+            if int(record["pid"]) != pid:
+                continue
+            existing_start = parse_address(record["address"])
+            existing_end = existing_start + len(bytes.fromhex(str(record["patch_hex"])))
+            if address < existing_end and existing_start < end:
+                return patch_id
+        return None
+
+    @staticmethod
+    def _bounded_limit(requested: int | None, maximum: int) -> int:
+        requested_value = maximum if requested is None else int(requested)
+        return min(max(1, requested_value), max(1, int(maximum)))
+
+    @staticmethod
+    def _remember(
+        entries: dict[str, dict[str, Any]],
+        entry_id: str,
+        value: dict[str, Any],
+        maximum: int,
+    ) -> None:
+        limit = max(1, int(maximum))
+        while len(entries) >= limit:
+            entries.pop(next(iter(entries)))
+        entries[entry_id] = value
 
     def _linux_regions(self, pid: int) -> list[MemoryRegion]:
         return self.backend.regions(pid)
@@ -1363,7 +1475,7 @@ class MemoryInspector:
                 index = haystack.find(needle)
                 while index != -1:
                     address = base + index
-                    if address >= region.start + offset or not tail:
+                    if address + len(needle) > region.start + offset:
                         results.append(self._result_entry(address, needle, value_type, endian))
                         if len(results) >= limit_results:
                             stopped_reason = "max_results"
@@ -1413,7 +1525,7 @@ class MemoryInspector:
                 base = region.start + offset - len(tail)
                 for index in find_aob_matches(haystack, pattern):
                     address = base + index
-                    if address < region.start + offset and tail:
+                    if address + len(pattern) <= region.start + offset:
                         continue
                     matched = haystack[index : index + len(pattern)]
                     results.append(
@@ -1653,10 +1765,13 @@ def encode_value(
     normalized = value_type.lower()
     if normalized == "bytes":
         raw = value_hex if value_hex is not None else str(value or "")
-        cleaned = re.sub(r"0[xX]", "", raw)
-        cleaned = re.sub(r"[^0-9a-fA-F]", "", cleaned)
+        cleaned = re.sub(r"0[xX]", "", raw.strip())
+        invalid = re.search(r"[^0-9a-fA-F\s,;:_-]", cleaned)
+        if invalid:
+            raise ValueError(f"invalid hexadecimal character: {invalid.group(0)!r}")
+        cleaned = re.sub(r"[\s,;:_-]", "", cleaned)
         if len(cleaned) % 2:
-            cleaned = "0" + cleaned
+            raise ValueError("hexadecimal byte strings must contain an even number of digits")
         return bytes.fromhex(cleaned)
     if normalized == "string":
         return str(value or "").encode("utf-8")

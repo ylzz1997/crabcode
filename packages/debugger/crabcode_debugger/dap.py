@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,7 @@ class DAPClient:
         cwd: str,
         env: dict[str, str] | None = None,
         timeout: float = 30.0,
+        max_events: int = 10_000,
     ) -> None:
         self.command = command
         self.cwd = cwd
@@ -39,15 +41,19 @@ class DAPClient:
         self.timeout = timeout
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
         self._seq = 0
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._pending_commands: dict[int, str] = {}
         self._write_lock = asyncio.Lock()
-        self.events: asyncio.Queue[DAPEvent] = asyncio.Queue()
+        self.events: asyncio.Queue[DAPEvent] = asyncio.Queue(maxsize=max(1, int(max_events)))
+        self._dropped_events = 0
 
     async def start(self) -> None:
         if self._process is not None:
-            return
+            if self._process.returncode is None:
+                return
+            raise DAPError(f"debug adapter exited with code {self._process.returncode}")
         self._process = await asyncio.create_subprocess_exec(
             *self.command,
             cwd=self.cwd,
@@ -57,12 +63,14 @@ class DAPClient:
             stderr=asyncio.subprocess.PIPE,
         )
         self._reader_task = asyncio.create_task(self._reader_loop())
-        asyncio.create_task(self._drain_stderr())
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
 
     async def close(self) -> None:
         for future in list(self._pending.values()):
             if not future.done():
-                future.set_exception(DAPError("DAP client closed"))
+                future.cancel()
+            elif not future.cancelled():
+                future.exception()
         self._pending.clear()
         self._pending_commands.clear()
 
@@ -72,6 +80,15 @@ class DAPClient:
                 await self._reader_task
             except asyncio.CancelledError:
                 pass
+        self._reader_task = None
+
+        if self._stderr_task and not self._stderr_task.done():
+            self._stderr_task.cancel()
+            try:
+                await self._stderr_task
+            except asyncio.CancelledError:
+                pass
+        self._stderr_task = None
 
         if self._process and self._process.returncode is None:
             self._process.terminate()
@@ -146,6 +163,17 @@ class DAPClient:
 
     async def drain_events(self) -> list[DAPEvent]:
         drained: list[DAPEvent] = []
+        if self._dropped_events:
+            drained.append(
+                DAPEvent(
+                    event="output",
+                    body={
+                        "category": "console",
+                        "output": f"CrabCode dropped {self._dropped_events} buffered DAP events.\n",
+                    },
+                )
+            )
+            self._dropped_events = 0
         while True:
             try:
                 drained.append(self.events.get_nowait())
@@ -159,14 +187,22 @@ class DAPClient:
         *,
         timeout: float | None = None,
     ) -> DAPEvent | None:
-        deadline = timeout if timeout is not None else self.timeout
+        deadline = time.monotonic() + (timeout if timeout is not None else self.timeout)
+        unmatched: list[DAPEvent] = []
         try:
             while True:
-                event = await asyncio.wait_for(self.events.get(), timeout=deadline)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                event = await asyncio.wait_for(self.events.get(), timeout=remaining)
                 if event.event == event_name:
                     return event
+                unmatched.append(event)
         except asyncio.TimeoutError:
             return None
+        finally:
+            for event in unmatched:
+                self._queue_event(event)
 
     async def _send(self, payload: dict[str, Any]) -> None:
         if not self._process or not self._process.stdin:
@@ -187,7 +223,7 @@ class DAPClient:
                 while True:
                     line = await reader.readline()
                     if not line:
-                        return
+                        raise EOFError("debug adapter closed stdout")
                     if line in {b"\r\n", b"\n"}:
                         break
                     text = line.decode("ascii", errors="replace").strip()
@@ -220,7 +256,38 @@ class DAPClient:
             event = str(message.get("event", ""))
             body = message.get("body", {})
             event_body = body if isinstance(body, dict) else {}
-            await self.events.put(DAPEvent(event=event, body=event_body))
+            self._queue_event(DAPEvent(event=event, body=event_body))
+
+    def _queue_event(self, event: DAPEvent) -> None:
+        try:
+            self.events.put_nowait(event)
+            return
+        except asyncio.QueueFull:
+            pass
+
+        if event.event == "output":
+            self._dropped_events += 1
+            return
+
+        retained: list[DAPEvent] = []
+        discarded = False
+        while True:
+            try:
+                queued = self.events.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if not discarded and queued.event == "output":
+                self._dropped_events += 1
+                discarded = True
+                continue
+            retained.append(queued)
+
+        if not discarded and retained:
+            retained.pop(0)
+            self._dropped_events += 1
+        for queued in retained:
+            self.events.put_nowait(queued)
+        self.events.put_nowait(event)
 
     async def _drain_stderr(self) -> None:
         if not self._process or not self._process.stderr:

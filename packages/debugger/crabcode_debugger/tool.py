@@ -9,7 +9,7 @@ from crabcode_core.types.tool import PermissionBehavior, PermissionResult, Tool,
 
 from crabcode_debugger.adapters import AdapterRegistry, infer_language
 from crabcode_debugger.process import ProcessInspector
-from crabcode_debugger.runtime import get_debug_session_manager
+from crabcode_debugger.runtime import get_debug_session_manager, release_debug_session_manager
 
 
 _DEBUGGER_ACTIONS = {
@@ -78,6 +78,23 @@ def _as_int(value: Any, default: int | None = None) -> int | None:
         return default
 
 
+def _is_positive_pid(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _debug_owner_id(context: ToolContext) -> str:
+    if context.session_id:
+        return context.session_id
+    if context.session is not None:
+        return f"session-object:{id(context.session)}"
+    return f"tool-context:{id(context)}"
+
+
 class DebuggerTool(Tool):
     name = "Debugger"
     description = "Debug programs through official Debug Adapter Protocol adapters."
@@ -117,21 +134,34 @@ class DebuggerTool(Tool):
         self._manager: Any = None
         self._max_chars = 20_000
         self._allow_evaluate = False
+        self._manager_scope: tuple[str, str] | None = None
 
     async def setup(self, context: ToolContext) -> None:
         await super().setup(context)
+        await self._release_manager()
         self._config = dict(context.tool_config)
         self._max_chars = int(self._config.get("max_output_chars", 20_000))
         self._allow_evaluate = bool(self._config.get("allow_evaluate", False))
+        owner_id = _debug_owner_id(context)
         self._manager = get_debug_session_manager(
             cwd=context.cwd,
+            owner_id=owner_id,
             env=context.env,
             config=self._config,
         )
+        self._manager_scope = (context.cwd, owner_id)
 
     async def close(self) -> None:
-        if self._manager is not None:
-            await self._manager.close()
+        await self._release_manager()
+
+    async def _release_manager(self) -> None:
+        if self._manager is None or self._manager_scope is None:
+            return
+        cwd, owner_id = self._manager_scope
+        manager = self._manager
+        self._manager = None
+        self._manager_scope = None
+        await release_debug_session_manager(cwd=cwd, owner_id=owner_id, manager=manager)
 
     async def get_prompt(self, **kwargs: Any) -> str:
         return (
@@ -152,8 +182,8 @@ class DebuggerTool(Tool):
                 return "session_id is required for this action"
         if action == "start" and not (tool_input.get("language") or tool_input.get("program")):
             return "language or program is required for start"
-        if action == "attach" and not tool_input.get("pid"):
-            return "pid is required for attach"
+        if action == "attach" and not _is_positive_pid(tool_input.get("pid")):
+            return "pid must be a positive integer for attach"
         if action == "attach" and not tool_input.get("language"):
             return "language is required for attach"
         if action == "set_breakpoints" and not (tool_input.get("path") and tool_input.get("lines")):
@@ -168,7 +198,16 @@ class DebuggerTool(Tool):
 
     async def check_permissions(self, tool_input: dict[str, Any], context: ToolContext) -> PermissionResult:
         action = str(tool_input.get("action", ""))
-        if action in {"adapters", "sessions", "events"}:
+        if action == "adapters":
+            probe_commands = self._configured_probe_commands()
+            if probe_commands:
+                return PermissionResult(
+                    behavior=PermissionBehavior.ASK,
+                    reason=f"Adapter discovery will execute configured probe commands: {probe_commands}",
+                    permission_key=self.get_permission_key(tool_input),
+                )
+            return PermissionResult(behavior=PermissionBehavior.ALLOW)
+        if action in {"sessions", "events"}:
             return PermissionResult(behavior=PermissionBehavior.ALLOW)
         if action == "evaluate" and not self._allow_evaluate:
             return PermissionResult(
@@ -187,6 +226,19 @@ class DebuggerTool(Tool):
             reason=f"Debugger action '{action}' can inspect or control a debuggee process",
             permission_key=self.get_permission_key(tool_input),
         )
+
+    def _configured_probe_commands(self) -> list[list[str]]:
+        adapters = self._config.get("adapters", {})
+        if not isinstance(adapters, dict):
+            return []
+        commands: list[list[str]] = []
+        for raw in adapters.values():
+            if not isinstance(raw, dict):
+                continue
+            probe = raw.get("probe_command")
+            if isinstance(probe, list) and probe:
+                commands.append([str(part) for part in probe])
+        return commands
 
     def get_permission_key(self, tool_input: dict[str, Any]) -> str:
         action = str(tool_input.get("action", ""))
@@ -375,9 +427,14 @@ class ProcessDebuggerTool(Tool):
         self._inspector: ProcessInspector | None = None
         self._debug_manager: Any = None
         self._max_chars = 20_000
+        self._manager_scope: tuple[str, str] | None = None
 
     async def setup(self, context: ToolContext) -> None:
         await super().setup(context)
+        await self._release_manager()
+        if self._inspector is not None:
+            await self._inspector.close()
+            self._inspector = None
         self._config = dict(context.tool_config)
         self._max_chars = int(self._config.get("max_output_chars", 20_000))
         self._inspector = ProcessInspector(cwd=context.cwd, config=self._config)
@@ -386,17 +443,29 @@ class ProcessDebuggerTool(Tool):
             debugger_config["adapters"] = self._config["adapters"]
         if isinstance(self._config.get("debugger"), dict):
             debugger_config.update(self._config["debugger"])
+        owner_id = _debug_owner_id(context)
         self._debug_manager = get_debug_session_manager(
             cwd=context.cwd,
+            owner_id=owner_id,
             env=context.env,
             config=debugger_config,
         )
+        self._manager_scope = (context.cwd, owner_id)
 
     async def close(self) -> None:
         if self._inspector is not None:
             await self._inspector.close()
-        if self._debug_manager is not None:
-            await self._debug_manager.close()
+            self._inspector = None
+        await self._release_manager()
+
+    async def _release_manager(self) -> None:
+        if self._debug_manager is None or self._manager_scope is None:
+            return
+        cwd, owner_id = self._manager_scope
+        manager = self._debug_manager
+        self._debug_manager = None
+        self._manager_scope = None
+        await release_debug_session_manager(cwd=cwd, owner_id=owner_id, manager=manager)
 
     async def get_prompt(self, **kwargs: Any) -> str:
         return (
@@ -438,6 +507,8 @@ class ProcessDebuggerTool(Tool):
                     return "session_id is required for detach"
             elif tool_input.get("pid") is None:
                 return "pid is required for this action"
+            elif not _is_positive_pid(tool_input.get("pid")):
+                return "pid must be a positive integer for this action"
         if action == "attach_debugger" and not tool_input.get("language"):
             return "language is required for attach_debugger"
         if action == "memory_read":

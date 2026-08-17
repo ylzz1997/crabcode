@@ -298,7 +298,8 @@ class ProcessInspector:
         executable: bool | None = None,
         limit: int = 500,
     ) -> dict[str, Any]:
-        return self.memory.regions(
+        return await asyncio.to_thread(
+            self.memory.regions,
             pid,
             readable=readable,
             writable=writable,
@@ -321,7 +322,8 @@ class ProcessInspector:
         max_results: int | None = None,
         max_scan_bytes: int | None = None,
     ) -> dict[str, Any]:
-        return self.memory.search(
+        return await asyncio.to_thread(
+            self.memory.search,
             pid,
             value_type=value_type,
             value=value,
@@ -341,7 +343,8 @@ class ProcessInspector:
         value_hex: str | None = None,
         max_results: int | None = None,
     ) -> dict[str, Any]:
-        return self.memory.refine(
+        return await asyncio.to_thread(
+            self.memory.refine,
             search_id,
             comparison=comparison,
             value=value,
@@ -411,7 +414,8 @@ class ProcessInspector:
         max_results: int | None = None,
         max_scan_bytes: int | None = None,
     ) -> dict[str, Any]:
-        return self.memory.aob_scan(
+        return await asyncio.to_thread(
+            self.memory.aob_scan,
             pid,
             pattern=pattern,
             executable_only=executable_only,
@@ -434,7 +438,8 @@ class ProcessInspector:
         max_results: int | None = None,
         max_scan_bytes: int | None = None,
     ) -> dict[str, Any]:
-        return self.memory.pointer_scan(
+        return await asyncio.to_thread(
+            self.memory.pointer_scan,
             pid,
             target_address=target_address,
             max_depth=max_depth,
@@ -457,7 +462,8 @@ class ProcessInspector:
         pointer_size: int | None = None,
         endian: str = "little",
     ) -> dict[str, Any]:
-        return self.memory.pointer_resolve(
+        return await asyncio.to_thread(
+            self.memory.pointer_resolve,
             pid,
             base_address=base_address,
             offsets=offsets,
@@ -531,6 +537,8 @@ class ProcessInspector:
         return {"pid": pid, "path": str(out), "duration_seconds": duration}
 
     async def signal_process(self, pid: int, *, sig: str) -> dict[str, Any]:
+        if isinstance(pid, bool) or pid <= 0:
+            return {"pid": pid, "error": "pid must be a positive integer"}
         system = platform.system().lower()
         normalized = sig.lower()
         if system == "windows":

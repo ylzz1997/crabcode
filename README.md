@@ -1538,6 +1538,8 @@ Memory and patch details:
 - `code_patch` writes explicit bytes only, stores the original bytes, can verify
   `expected_hex` before writing, and uses backend protection/cache primitives
   where available.
+- Patch hex input is validated strictly. Active patch IDs must be unique, and
+  overlapping active patches are rejected so the original bytes remain recoverable.
 - `code_restore` restores saved patches by `patch_id` or `all=true`.
 - Direct memory access is subject to operating-system process rights. Windows
   requires sufficient `OpenProcess` rights and can fail for elevated or protected
@@ -1550,6 +1552,8 @@ Process and debuggee actions default to permission confirmation. The tools retur
 `ASK` for process inspection, memory reads/writes/freezes, attach, dump, trace,
 and code patching. When `permissions.default_mode` is `"run_everything"` or legacy `permissions.run_everything` is enabled, those `ASK`
 permissions are bypassed by the normal CrabCode permission mode.
+Adapter discovery also asks for confirmation when a configured adapter declares
+a custom `probe_command`, because discovery will execute that command.
 
 The intended use is local, authorized process debugging, diagnostics, testing,
 and research. `crabcode-debugger` does not provide stealth injection,

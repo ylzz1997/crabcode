@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,7 @@ class DebugSessionManager:
         self.registry = AdapterRegistry(self.config)
         self.sessions: dict[str, DebugSession] = {}
         self.timeout = float(self.config.get("default_timeout_seconds", 30))
+        self.disconnect_timeout = float(self.config.get("disconnect_timeout_seconds", 10))
 
     def update_config(self, config: dict[str, Any] | None) -> None:
         """Merge later tool configuration into the shared manager."""
@@ -47,10 +49,16 @@ class DebugSessionManager:
         self.config = _merge_dicts(self.config, config)
         self.registry = AdapterRegistry(self.config)
         self.timeout = float(self.config.get("default_timeout_seconds", self.timeout))
+        self.disconnect_timeout = float(
+            self.config.get("disconnect_timeout_seconds", self.disconnect_timeout)
+        )
 
     async def close(self) -> None:
         for session_id in list(self.sessions):
-            await self.stop(session_id, terminate_debuggee=False)
+            try:
+                await self.stop(session_id, terminate_debuggee=False)
+            except Exception:
+                continue
 
     async def start(
         self,
@@ -78,44 +86,49 @@ class DebugSessionManager:
             cwd=cwd or self.cwd,
             env=self.env,
             timeout=self.timeout,
+            max_events=int(self.config.get("max_dap_events", 10_000)),
         )
-        await client.start()
-        capabilities = await client.request(
-            "initialize",
-            {
-                "clientID": "crabcode",
-                "clientName": "CrabCode",
-                "adapterID": adapter.adapter_id,
-                "pathFormat": "path",
-                "linesStartAt1": True,
-                "columnsStartAt1": True,
-                "supportsVariableType": True,
-                "supportsVariablePaging": True,
-                "supportsRunInTerminalRequest": False,
-            },
-        )
+        try:
+            await client.start()
+            capabilities = await client.request(
+                "initialize",
+                {
+                    "clientID": "crabcode",
+                    "clientName": "CrabCode",
+                    "adapterID": adapter.adapter_id,
+                    "pathFormat": "path",
+                    "linesStartAt1": True,
+                    "columnsStartAt1": True,
+                    "supportsVariableType": True,
+                    "supportsVariablePaging": True,
+                    "supportsRunInTerminalRequest": False,
+                },
+            )
 
-        launch_args: dict[str, Any] = dict(launch_config or {})
-        launch_args.setdefault("cwd", cwd or self.cwd)
-        if program:
-            program_path = Path(program)
-            if not program_path.is_absolute():
-                program_path = Path(cwd or self.cwd) / program_path
-            launch_args.setdefault("program", str(program_path.resolve()))
-        if args is not None:
-            launch_args.setdefault("args", args)
+            launch_args: dict[str, Any] = dict(launch_config or {})
+            launch_args.setdefault("cwd", cwd or self.cwd)
+            if program:
+                program_path = Path(program)
+                if not program_path.is_absolute():
+                    program_path = Path(cwd or self.cwd) / program_path
+                launch_args.setdefault("program", str(program_path.resolve()))
+            if args is not None:
+                launch_args.setdefault("args", args)
 
-        pending_seq = await client.start_request("launch", launch_args)
-        session = DebugSession(
-            session_id=f"dbg-{uuid.uuid4().hex[:10]}",
-            language=normalized,
-            adapter=adapter,
-            client=client,
-            target={"mode": "launch", "program": program, "cwd": cwd or self.cwd},
-            capabilities=capabilities,
-            pending_configuration_seq=pending_seq,
-        )
-        self.sessions[session.session_id] = session
+            pending_seq = await client.start_request("launch", launch_args)
+            session = DebugSession(
+                session_id=f"dbg-{uuid.uuid4().hex[:10]}",
+                language=normalized,
+                adapter=adapter,
+                client=client,
+                target={"mode": "launch", "program": program, "cwd": cwd or self.cwd},
+                capabilities=capabilities,
+                pending_configuration_seq=pending_seq,
+            )
+            self.sessions[session.session_id] = session
+        except BaseException:
+            await self._close_failed_client(client)
+            raise
         return {
             "session_id": session.session_id,
             "language": normalized,
@@ -132,6 +145,8 @@ class DebugSessionManager:
         adapter_id: str | None = None,
         attach_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if isinstance(pid, bool) or pid <= 0:
+            return {"error": "pid must be a positive integer for attach"}
         normalized = infer_language(language)
         if not normalized:
             return {"error": "language is required for attach"}
@@ -142,33 +157,43 @@ class DebugSessionManager:
                 "install_hints": self.registry.install_hints(normalized),
                 "adapters": [s.to_dict() for s in self.registry.status(normalized)],
             }
-        client = DAPClient(adapter.command, cwd=self.cwd, env=self.env, timeout=self.timeout)
-        await client.start()
-        capabilities = await client.request(
-            "initialize",
-            {
-                "clientID": "crabcode",
-                "clientName": "CrabCode",
-                "adapterID": adapter.adapter_id,
-                "pathFormat": "path",
-                "linesStartAt1": True,
-                "columnsStartAt1": True,
-                "supportsVariableType": True,
-            },
+        client = DAPClient(
+            adapter.command,
+            cwd=self.cwd,
+            env=self.env,
+            timeout=self.timeout,
+            max_events=int(self.config.get("max_dap_events", 10_000)),
         )
-        args = dict(attach_config or {})
-        args.setdefault("processId", pid)
-        pending_seq = await client.start_request("attach", args)
-        session = DebugSession(
-            session_id=f"dbg-{uuid.uuid4().hex[:10]}",
-            language=normalized,
-            adapter=adapter,
-            client=client,
-            target={"mode": "attach", "pid": pid},
-            capabilities=capabilities,
-            pending_configuration_seq=pending_seq,
-        )
-        self.sessions[session.session_id] = session
+        try:
+            await client.start()
+            capabilities = await client.request(
+                "initialize",
+                {
+                    "clientID": "crabcode",
+                    "clientName": "CrabCode",
+                    "adapterID": adapter.adapter_id,
+                    "pathFormat": "path",
+                    "linesStartAt1": True,
+                    "columnsStartAt1": True,
+                    "supportsVariableType": True,
+                },
+            )
+            args = dict(attach_config or {})
+            args.setdefault("processId", pid)
+            pending_seq = await client.start_request("attach", args)
+            session = DebugSession(
+                session_id=f"dbg-{uuid.uuid4().hex[:10]}",
+                language=normalized,
+                adapter=adapter,
+                client=client,
+                target={"mode": "attach", "pid": pid},
+                capabilities=capabilities,
+                pending_configuration_seq=pending_seq,
+            )
+            self.sessions[session.session_id] = session
+        except BaseException:
+            await self._close_failed_client(client)
+            raise
         return {
             "session_id": session.session_id,
             "language": normalized,
@@ -187,7 +212,7 @@ class DebugSessionManager:
         session = self._require(session_id)
         source_path = Path(path)
         if not source_path.is_absolute():
-            source_path = Path(self.cwd) / source_path
+            source_path = Path(str(session.target.get("cwd") or self.cwd)) / source_path
         body = await session.client.request(
             "setBreakpoints",
             {
@@ -283,16 +308,28 @@ class DebugSessionManager:
     async def stop(self, session_id: str, *, terminate_debuggee: bool = False) -> dict[str, Any]:
         session = self._require(session_id)
         result: dict[str, Any] = {}
+        disconnect_error: str | None = None
         try:
             result = await session.client.request(
                 "disconnect",
                 {"terminateDebuggee": terminate_debuggee},
-                timeout=5,
+                timeout=self.disconnect_timeout,
             )
+        except Exception as exc:
+            disconnect_error = f"{type(exc).__name__}: {exc}"
         finally:
-            await session.client.close()
-            self.sessions.pop(session_id, None)
-        return {"stopped": session_id, "terminate_debuggee": terminate_debuggee, "result": result}
+            try:
+                await session.client.close()
+            finally:
+                self.sessions.pop(session_id, None)
+        response = {
+            "stopped": session_id,
+            "terminate_debuggee": terminate_debuggee,
+            "result": result,
+        }
+        if disconnect_error is not None:
+            response["disconnect_warning"] = disconnect_error
+        return response
 
     def list_sessions(self) -> dict[str, Any]:
         return {
@@ -331,6 +368,13 @@ class DebugSessionManager:
             if event.event in {"terminated", "exited"}:
                 session.last_stopped_thread_id = None
         return events
+
+    @staticmethod
+    async def _close_failed_client(client: DAPClient) -> None:
+        try:
+            await asyncio.shield(client.close())
+        except Exception:
+            pass
 
 
 def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

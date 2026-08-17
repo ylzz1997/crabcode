@@ -1512,6 +1512,8 @@ pip install -e packages/debugger
 - 基于模块路径的指针解析取决于当前 backend 是否能为内存区域提供模块路径。
 - `code_patch` 只写入明确 bytes，会保存原始 bytes，可在写入前校验 `expected_hex`，
   并在 backend 支持时使用页面保护和指令缓存刷新原语。
+- Patch 十六进制输入会被严格校验；活动中的 patch ID 必须唯一，并拒绝相互重叠的
+  活动 patch，以确保原始 bytes 仍可恢复。
 - `code_restore` 可按 `patch_id` 恢复，也可用 `all=true` 恢复全部。
 - 直接内存访问受操作系统进程权限限制。Windows 需要足够的 `OpenProcess` 权限，
   遇到提权或受保护进程可能失败。macOS 需要通过 `task_for_pid` 获得调试权限或足够
@@ -1522,6 +1524,7 @@ pip install -e packages/debugger
 进程和 debuggee 相关动作默认触发权限确认。工具对进程检查、内存读写/冻结、attach、
 dump、trace、代码 patch 等动作返回 `ASK`。当 `permissions.default_mode` 为 `"run_everything"` 或启用旧配置 `permissions.run_everything` 时，
 这些 `ASK` 权限会通过 CrabCode 现有权限模式自动放行。
+当自定义 adapter 配置了 `probe_command` 时，adapter 枚举也会请求确认，因为枚举过程会执行该命令。
 
 该功能面向本机授权进程调试、诊断、测试和研究。不提供隐蔽注入、反调试绕过、
 DRM 绕过、持久化、凭据提取或远程进程攻击能力。代码 patch 是字节级原语；agent
