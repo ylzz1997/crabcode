@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
-from crabcode_core.types.config import CrabCodeSettings
+from crabcode_core.types.config import CrabCodeSettings, GatewaySecuritySettings
 
 logger = get_logger(__name__)
 
@@ -111,6 +111,36 @@ class ConfigManager:
     def reset_cache(self) -> None:
         """Clear the cached settings."""
         self._cache = None
+
+    def load_gateway_security(
+        self,
+        overrides: dict[str, Any] | None = None,
+    ) -> GatewaySecuritySettings:
+        """Load process-level gateway security without project overrides.
+
+        A repository must not be able to weaken authentication for a gateway
+        launched from that repository. CLI overrides sit between user and
+        managed policy settings, matching the normal precedence model.
+        """
+        merged: dict[str, Any] = {}
+        for source in ("userSettings",):
+            raw = self.get_settings_for_source(source) or {}
+            gateway = raw.get("gateway", {})
+            security = gateway.get("security", {}) if isinstance(gateway, dict) else {}
+            if isinstance(security, dict):
+                merged = _merge_settings(merged, security)
+        if overrides:
+            merged = _merge_settings(merged, overrides)
+        raw_policy = self.get_settings_for_source("policySettings") or {}
+        policy_gateway = raw_policy.get("gateway", {})
+        policy_security = (
+            policy_gateway.get("security", {})
+            if isinstance(policy_gateway, dict)
+            else {}
+        )
+        if isinstance(policy_security, dict):
+            merged = _merge_settings(merged, policy_security)
+        return GatewaySecuritySettings.model_validate(merged)
 
     def get_settings_for_source(self, source: str) -> dict[str, Any] | None:
         """Get raw settings from a single source."""

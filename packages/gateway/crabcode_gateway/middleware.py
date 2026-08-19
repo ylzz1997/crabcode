@@ -14,15 +14,14 @@ import base64
 import binascii
 import hmac
 import time
-from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
-from starlette.requests import ClientDisconnect
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_gateway.auth import decode_jwt, verify_password
 
 logger = get_logger(__name__)
 
@@ -55,19 +54,33 @@ def _scope_query(scope: Scope, name: str) -> str | None:
     return values[0] if values else None
 
 
-def is_authorized(scope: Scope, *, username: str, password: str | None) -> bool:
+def is_authorized(
+    scope: Scope,
+    *,
+    username: str = "crabcode",
+    password: str | None = None,
+    password_hash: str | None = None,
+    mode: str = "password",
+    jwt_secret: str | None = None,
+) -> bool:
     """Validate gateway credentials for an HTTP or WebSocket ASGI scope.
 
     The gateway historically accepted a Basic password, a Bearer token, and
     the ``auth_token`` query parameter.  Keep all three forms so existing
     clients continue to work, while applying the same policy to WebSockets.
     """
-    if not password:
+    if mode == "none":
         return True
 
     query_token = _scope_query(scope, "auth_token")
-    if query_token is not None and hmac.compare_digest(query_token, password):
-        return True
+    if query_token is not None:
+        if jwt_secret and decode_jwt(query_token, jwt_secret):
+            return True
+        if mode in ("password", "mixed"):
+            if password and hmac.compare_digest(query_token, password):
+                return True
+            if password_hash and verify_password(query_token, password_hash):
+                return True
 
     auth_header = _scope_header(scope, "authorization")
     scheme, separator, credentials = auth_header.partition(" ")
@@ -75,9 +88,19 @@ def is_authorized(scope: Scope, *, username: str, password: str | None) -> bool:
         return False
 
     if scheme.lower() == "bearer":
-        return hmac.compare_digest(credentials, password)
+        if jwt_secret and decode_jwt(credentials, jwt_secret):
+            return True
+        # Keep the existing static bearer password working during migration.
+        if mode in ("password", "mixed"):
+            if password and hmac.compare_digest(credentials, password):
+                return True
+            if password_hash and verify_password(credentials, password_hash):
+                return True
+        return False
 
     if scheme.lower() != "basic":
+        return False
+    if mode not in ("password", "mixed"):
         return False
 
     try:
@@ -85,8 +108,9 @@ def is_authorized(scope: Scope, *, username: str, password: str | None) -> bool:
         user, supplied_password = decoded.split(":", 1)
     except (ValueError, UnicodeDecodeError, binascii.Error):
         return False
-    return hmac.compare_digest(user, username) and hmac.compare_digest(
-        supplied_password, password
+    return hmac.compare_digest(user, username) and (
+        (password is not None and hmac.compare_digest(supplied_password, password))
+        or (password_hash is not None and verify_password(supplied_password, password_hash))
     )
 
 
@@ -94,24 +118,38 @@ def is_authorized(scope: Scope, *, username: str, password: str | None) -> bool:
 
 
 class AuthMiddleware:
-    """Basic auth or bearer token authentication.
+    """JWT, public-key bootstrap, and compatible password authentication.
 
-    Skipped if no password is configured.
+    Skipped when gateway security mode is ``none``.
     The same credentials are required for WebSocket upgrades.  Rejecting
     before ``websocket.accept`` avoids exposing an unauthenticated stream.
     """
 
-    def __init__(self, app: ASGIApp, username: str = "crabcode", password: str | None = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        username: str = "crabcode",
+        password: str | None = None,
+        password_hash: str | None = None,
+        mode: str = "password",
+        jwt_secret: str | None = None,
+    ) -> None:
         self.app = app
         self.username = username
         self.password = password
+        self.password_hash = password_hash
+        self.mode = mode
+        self.jwt_secret = jwt_secret
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if _is_websocket(scope):
-            if self.password and not is_authorized(
+            if self.mode != "none" and not is_authorized(
                 scope,
                 username=self.username,
                 password=self.password,
+                password_hash=self.password_hash,
+                mode=self.mode,
+                jwt_secret=self.jwt_secret,
             ):
                 await send({
                     "type": "websocket.close",
@@ -134,11 +172,22 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        if not self.password:
+        if self.mode == "none":
             await self.app(scope, receive, send)
             return
 
-        if is_authorized(scope, username=self.username, password=self.password):
+        if request.url.path.startswith("/auth/"):
+            await self.app(scope, receive, send)
+            return
+
+        if is_authorized(
+            scope,
+            username=self.username,
+            password=self.password,
+            password_hash=self.password_hash,
+            mode=self.mode,
+            jwt_secret=self.jwt_secret,
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -268,14 +317,26 @@ def register_middleware(
     app: FastAPI,
     *,
     password: str | None = None,
+    password_hash: str | None = None,
+    security_mode: str | None = None,
+    jwt_secret: str | None = None,
     cors_origins: list[str] | None = None,
 ) -> None:
     """Register the full middleware stack on the FastAPI app."""
     # Order matters: outermost first
     app.add_middleware(ErrorMiddleware)
 
-    if password:
-        app.add_middleware(AuthMiddleware, password=password)
+    resolved_mode = security_mode or (
+        "password" if password is not None or password_hash is not None else "none"
+    )
+    if resolved_mode != "none":
+        app.add_middleware(
+            AuthMiddleware,
+            password=password,
+            password_hash=password_hash,
+            mode=resolved_mode,
+            jwt_secret=jwt_secret,
+        )
 
     app.add_middleware(LoggerMiddleware)
 

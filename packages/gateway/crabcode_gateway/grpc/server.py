@@ -27,6 +27,7 @@ import grpc
 from crabcode_core import VERSION
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.adapter import ProtocolAdapter
+from crabcode_gateway.auth import decode_jwt, verify_password
 from crabcode_gateway.schemas import core_event_to_payload
 from crabcode_gateway.task_registry import (
     SessionOperationRejected,
@@ -166,15 +167,23 @@ class _CrabCodeServicer:
         *,
         username: str = "crabcode",
         password: str | None = None,
+        password_hash: str | None = None,
+        security_mode: str | None = None,
+        jwt_secret: str | None = None,
     ) -> None:
         self._app_state = app_state
         self._event_bus = getattr(app_state, "event_bus", None)
         self._auth_username = username
         self._auth_password = password
+        self._auth_password_hash = password_hash
+        self._security_mode = security_mode or (
+            "password" if password or password_hash else "none"
+        )
+        self._jwt_secret = jwt_secret
 
     async def _require_auth(self, context: Any) -> None:
         """Apply the same credentials as HTTP/WS when gRPC is protected."""
-        if not self._auth_password:
+        if self._security_mode == "none":
             return
         metadata = {}
         try:
@@ -188,14 +197,19 @@ class _CrabCodeServicer:
         scheme, separator, credentials = header.partition(" ")
         authorized = False
         if separator and scheme.lower() == "bearer":
-            authorized = hmac.compare_digest(credentials, self._auth_password)
-        elif separator and scheme.lower() == "basic":
+            authorized = bool(self._jwt_secret and decode_jwt(credentials, self._jwt_secret))
+            if not authorized and self._security_mode in ("password", "mixed"):
+                authorized = bool(
+                    (self._auth_password and hmac.compare_digest(credentials, self._auth_password))
+                    or (self._auth_password_hash and verify_password(credentials, self._auth_password_hash))
+                )
+        elif separator and scheme.lower() == "basic" and self._security_mode in ("password", "mixed"):
             try:
                 decoded = base64.b64decode(credentials, validate=True).decode("utf-8")
                 user, supplied = decoded.split(":", 1)
-                authorized = (
-                    hmac.compare_digest(user, self._auth_username)
-                    and hmac.compare_digest(supplied, self._auth_password)
+                authorized = hmac.compare_digest(user, self._auth_username) and bool(
+                    (self._auth_password and hmac.compare_digest(supplied, self._auth_password))
+                    or (self._auth_password_hash and verify_password(supplied, self._auth_password_hash))
                 )
             except (ValueError, UnicodeDecodeError, binascii.Error):
                 authorized = False
@@ -512,9 +526,21 @@ class GrpcAdapter(ProtocolAdapter):
     Starts a grpcio async server on the configured port.
     """
 
-    def __init__(self, app_state: Any, password: str | None = None) -> None:
+    def __init__(
+        self,
+        app_state: Any,
+        password: str | None = None,
+        password_hash: str | None = None,
+        security_mode: str | None = None,
+        jwt_secret: str | None = None,
+    ) -> None:
         self._app_state = app_state
         self._password = password
+        self._password_hash = password_hash
+        self._security_mode = security_mode or (
+            "password" if password or password_hash else "none"
+        )
+        self._jwt_secret = jwt_secret
         self._server: Any = None
         self._running = False
         self._bound_port: int | None = None
@@ -546,6 +572,9 @@ class GrpcAdapter(ProtocolAdapter):
                 if self._password is not None
                 else getattr(self._app_state, "gateway_password", None)
             ),
+            password_hash=self._password_hash,
+            security_mode=self._security_mode,
+            jwt_secret=self._jwt_secret,
         )
 
         self._server = grpc_aio.server(futures.ThreadPoolExecutor(max_workers=4))

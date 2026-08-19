@@ -12,6 +12,10 @@ both HTTP and gRPC servers.  Mirrors OpenCode's server.ts architecture:
 from __future__ import annotations
 
 import asyncio
+import hmac
+import os
+import secrets
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -19,10 +23,13 @@ from fastapi import FastAPI
 
 from crabcode_core import VERSION
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.types.config import GatewaySecuritySettings
+from crabcode_gateway.auth import verify_password
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.middleware import register_middleware
 from crabcode_gateway.routes import (
     agent,
+    auth,
     config,
     event,
     health,
@@ -62,6 +69,11 @@ class GatewayServer:
         port: int = 4096,
         grpc_port: int | None = None,
         password: str | None = None,
+        security_mode: str | None = None,
+        password_hash: str | None = None,
+        jwt_secret: str | None = None,
+        authorized_keys_path: str | None = None,
+        token_ttl_seconds: int = 900,
         cors_origins: list[str] | None = None,
         log_level: str = "info",
     ) -> None:
@@ -69,6 +81,11 @@ class GatewayServer:
         self.port = port
         self.grpc_port = grpc_port
         self.password = password
+        self.security_mode = security_mode
+        self.password_hash = password_hash
+        self.jwt_secret = jwt_secret
+        self.authorized_keys_path = authorized_keys_path
+        self.token_ttl_seconds = token_ttl_seconds
         self.cors_origins = cors_origins
         self.log_level = log_level
 
@@ -103,12 +120,55 @@ class GatewayServer:
         # gRPC is a separate transport and cannot see FastAPI middleware; make
         # the same gateway credentials available to its adapter explicitly.
         app.state.gateway_username = "crabcode"
-        app.state.gateway_password = self.password
+        mode = self.security_mode or (
+            "password" if self.password or self.password_hash else "none"
+        )
+        if mode not in ("none", "password", "publickey", "mixed"):
+            raise ValueError("security_mode must be none, password, publickey, or mixed")
+        security = GatewaySecuritySettings(
+            mode=mode,
+            password=self.password or os.getenv("CRABCODE_GATEWAY_PASSWORD"),
+            password_hash=self.password_hash,
+            jwt_secret=self.jwt_secret or os.getenv("CRABCODE_GATEWAY_JWT_SECRET") or secrets.token_urlsafe(32),
+            authorized_keys=self.authorized_keys_path or "~/.ssh/authorized_keys",
+            token_ttl_seconds=self.token_ttl_seconds,
+        )
+        if mode in ("password", "mixed") and not (
+            security.password or security.password_hash
+        ):
+            raise ValueError(f"Gateway security mode {mode!r} requires a password")
+        if mode != "none" and (
+            security.jwt_secret is None or len(security.jwt_secret.encode()) < 32
+        ):
+            raise ValueError("Gateway jwt_secret must be at least 32 bytes")
+        if mode in ("publickey", "mixed") and not Path(
+            security.authorized_keys
+        ).expanduser().is_file():
+            raise ValueError(
+                f"Gateway authorized_keys file does not exist: {security.authorized_keys}"
+            )
+        self._security = security
+        app.state.gateway_password = security.password
+        app.state.gateway_security = security
+        app.state.gateway_jwt_secret = security.jwt_secret
+        app.state.auth_challenges: dict[str, int] = {}
+        app.state.auth_failures: dict[str, list[float]] = {}
+        app.state.verify_gateway_password = lambda value: (
+            (security.password is not None and hmac.compare_digest(value, security.password))
+            or (security.password_hash is not None and verify_password(value, security.password_hash))
+        )
+        if mode == "none" and self.host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                "Gateway is listening on %s without authentication", self.host
+            )
 
         # Middleware stack
         register_middleware(
             app,
-            password=self.password,
+            password=security.password,
+            password_hash=security.password_hash,
+            security_mode=security.mode,
+            jwt_secret=security.jwt_secret,
             cors_origins=self.cors_origins,
         )
 
@@ -119,6 +179,7 @@ class GatewayServer:
         app.include_router(permission.router)
         app.include_router(schedule.router)
         app.include_router(config.router)
+        app.include_router(auth.router)
         app.include_router(event.router)
         app.include_router(snapshot.router)
         app.include_router(tasks.router)
@@ -263,7 +324,10 @@ class GatewayServer:
 
             self._grpc_adapter = GrpcAdapter(
                 self._app.state,
-                password=self.password,
+                password=self._security.password,
+                password_hash=self._security.password_hash,
+                security_mode=self._security.mode,
+                jwt_secret=self._security.jwt_secret,
             )
             await self._grpc_adapter.start(self.host, self.grpc_port)
         except Exception:
@@ -372,6 +436,11 @@ def run_server(
     port: int = 4096,
     grpc_port: int | None = None,
     password: str | None = None,
+    security_mode: str | None = None,
+    password_hash: str | None = None,
+    jwt_secret: str | None = None,
+    authorized_keys_path: str | None = None,
+    token_ttl_seconds: int = 900,
     cors_origins: list[str] | None = None,
     log_level: str = "info",
 ) -> None:
@@ -381,6 +450,11 @@ def run_server(
         port=port,
         grpc_port=grpc_port,
         password=password,
+        security_mode=security_mode,
+        password_hash=password_hash,
+        jwt_secret=jwt_secret,
+        authorized_keys_path=authorized_keys_path,
+        token_ttl_seconds=token_ttl_seconds,
         cors_origins=cors_origins,
         log_level=log_level,
     )

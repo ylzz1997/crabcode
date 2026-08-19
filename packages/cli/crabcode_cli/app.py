@@ -399,7 +399,11 @@ def gateway(
     port: int = typer.Option(4096, "--port", "-p", help="HTTP port"),
     grpc_port: Optional[int] = typer.Option(None, "--grpc-port", help="gRPC port (optional)"),
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
-    password: Optional[str] = typer.Option(None, "--password", help="Basic Auth password"),
+    password: Optional[str] = typer.Option(None, "--password", help="Gateway password"),
+    security_mode: Optional[str] = typer.Option(None, "--security-mode", help="none, password, publickey, or mixed"),
+    password_hash: Optional[str] = typer.Option(None, "--password-hash", help="PBKDF2 password hash"),
+    authorized_keys: Optional[str] = typer.Option(None, "--authorized-keys", help="OpenSSH authorized_keys path"),
+    jwt_secret: Optional[str] = typer.Option(None, "--jwt-secret", help="JWT signing secret"),
     cors: Optional[str] = typer.Option(None, "--cors", help="Allowed CORS origin"),
     log_level: str = typer.Option("info", "--log-level", help="Log level"),
 ) -> None:
@@ -414,11 +418,32 @@ def gateway(
 
     from crabcode_gateway.server import run_server
 
+    from crabcode_core.config.manager import ConfigManager
+    overrides = {
+        key: value
+        for key, value in {
+            "mode": security_mode,
+            "password": password,
+            "password_hash": password_hash,
+            "authorized_keys": authorized_keys,
+            "jwt_secret": jwt_secret,
+        }.items()
+        if value is not None
+    }
+    if password is not None and security_mode is None:
+        overrides["mode"] = "password"
+    configured = ConfigManager(cwd=os.getcwd()).load_gateway_security(overrides)
+
     run_server(
         host=host,
         port=port,
         grpc_port=grpc_port,
-        password=password,
+        password=configured.password,
+        security_mode=configured.mode,
+        password_hash=configured.password_hash,
+        authorized_keys_path=configured.authorized_keys,
+        jwt_secret=configured.jwt_secret,
+        token_ttl_seconds=configured.token_ttl_seconds,
         cors_origins=cors_origins,
         log_level=log_level,
     )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -186,6 +186,23 @@ class ScheduleSettings(BaseModel):
     log_retention_days: int = 30
 
 
+class GatewaySecuritySettings(BaseModel):
+    """Authentication settings for the HTTP/WebSocket/gRPC gateway."""
+
+    mode: Literal["none", "password", "publickey", "mixed"] = "none"
+    # A plain password is accepted for local development; deployments should
+    # prefer password_hash or the CLI/environment instead.
+    password: str | None = None
+    password_hash: str | None = None
+    jwt_secret: str | None = None
+    authorized_keys: str = "~/.ssh/authorized_keys"
+    token_ttl_seconds: int = Field(default=900, gt=0, le=86_400)
+
+
+class GatewaySettings(BaseModel):
+    security: GatewaySecuritySettings = Field(default_factory=GatewaySecuritySettings)
+
+
 class CrabCodeSettings(BaseModel):
     """Full settings.json schema."""
     permissions: PermissionsSettings = Field(default_factory=PermissionsSettings)
@@ -208,6 +225,7 @@ class CrabCodeSettings(BaseModel):
     team: TeamSettings = Field(default_factory=TeamSettings)
     cross_session: CrossSessionSettings = Field(default_factory=CrossSessionSettings)
     schedule: ScheduleSettings = Field(default_factory=ScheduleSettings)
+    gateway: GatewaySettings = Field(default_factory=GatewaySettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     lsp: dict[str, LspServerConfig] | bool = Field(default_factory=dict)

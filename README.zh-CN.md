@@ -134,6 +134,45 @@ crabcode gateway --port 4096 --grpc-port 50051
 crabcode gateway --password secret
 ```
 
+#### Gateway 安全模式
+
+Gateway 默认不启用认证。可在用户级 `~/.crabcode/settings.json` 中设置
+`none`、`password`、`publickey` 或 `mixed`；项目级配置不能覆盖该安全设置。
+
+```json
+{
+  "gateway": {
+    "security": {
+      "mode": "mixed",
+      "password": "change-me",
+      "authorized_keys": "~/.ssh/authorized_keys",
+      "token_ttl_seconds": 900
+    }
+  }
+}
+```
+
+生产环境可用 `CRABCODE_GATEWAY_PASSWORD` 代替配置中的明文 `password`，也可设置
+`password_hash`（`pbkdf2_sha256$...`）。`publickey` 与 `mixed` 默认读取
+`~/.ssh/authorized_keys`，支持 Ed25519、RSA-SHA256 和 ECDSA-SHA256。`mixed`
+表示密码或公钥任意一种认证成功即可，因此密码侧仍应使用强密码。
+
+```bash
+python -c 'from getpass import getpass; from crabcode_gateway.auth import hash_password; print(hash_password(getpass("Password: ")))'
+```
+
+密码客户端向 `POST /auth/token` 提交
+`{"grant_type":"password","password":"..."}`。公钥客户端先请求
+`GET /auth/challenge`，使用私钥签署响应中的 UTF-8 `signing_payload`，再向
+`POST /auth/token` 提交 `grant_type=publickey`、公钥注释或 `SHA256:` 指纹形式的
+`key_id`、`challenge` 和 Base64 签名。私钥始终留在客户端。两种方式都会返回短期
+JWT，后续 HTTP、WebSocket 和 gRPC 请求使用 `Authorization: Bearer <token>`。
+challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 60 秒。
+如显式配置 `jwt_secret`，其长度必须至少为 32 字节；未配置时每次启动自动生成。
+
+旧的 `--password` 和静态 Bearer/Basic 密码仍然兼容，但新客户端应使用
+`/auth/token` 获取 JWT。监听非本机地址时还应使用 HTTPS/WSS。
+
 **HTTP API 端点：**
 
 | 端点 | 方法 | 说明 |

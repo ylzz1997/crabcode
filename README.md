@@ -135,6 +135,51 @@ crabcode gateway --port 4096 --grpc-port 50051
 crabcode gateway --password secret
 ```
 
+#### Gateway security modes
+
+Gateway authentication is disabled by default. Configure `none`, `password`,
+`publickey`, or `mixed` in the user-level `~/.crabcode/settings.json`. Project
+settings cannot override this process-level security setting.
+
+```json
+{
+  "gateway": {
+    "security": {
+      "mode": "mixed",
+      "password": "change-me",
+      "authorized_keys": "~/.ssh/authorized_keys",
+      "token_ttl_seconds": 900
+    }
+  }
+}
+```
+
+For deployments, use `CRABCODE_GATEWAY_PASSWORD` instead of a plaintext
+`password`, or configure a `password_hash` in `pbkdf2_sha256$...` format.
+`publickey` and `mixed` read `~/.ssh/authorized_keys` by default and support
+Ed25519, RSA-SHA256, and ECDSA-SHA256. In `mixed` mode either method grants
+access, so the password must still be strong.
+
+```bash
+python -c 'from getpass import getpass; from crabcode_gateway.auth import hash_password; print(hash_password(getpass("Password: ")))'
+```
+
+Password clients submit `{"grant_type":"password","password":"..."}` to
+`POST /auth/token`. Public-key clients first call `GET /auth/challenge`, sign
+the returned UTF-8 `signing_payload` locally, then submit `grant_type=publickey`,
+the authorized-key comment or `SHA256:` fingerprint as `key_id`, the challenge,
+and the Base64 signature to `POST /auth/token`. The private key never leaves the
+client. Both flows return a short-lived JWT used as
+`Authorization: Bearer <token>` for HTTP, WebSocket, and gRPC requests.
+Challenges expire after 60 seconds and are single-use. Five consecutive
+password failures are rate-limited for 60 seconds.
+An explicitly configured `jwt_secret` must be at least 32 bytes; otherwise a
+new secret is generated for each gateway process.
+
+The existing `--password` and static Bearer/Basic password behavior remains
+compatible, but new clients should exchange credentials at `/auth/token`.
+Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
+
 **HTTP API endpoints:**
 
 | Endpoint | Method | Description |
