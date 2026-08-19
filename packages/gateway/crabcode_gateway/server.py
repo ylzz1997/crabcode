@@ -40,6 +40,7 @@ from crabcode_gateway.routes import (
     snapshot,
     tasks,
     team,
+    workspace,
 )
 from crabcode_gateway.session_registry import get_session_lock
 from crabcode_gateway.task_registry import (
@@ -113,6 +114,13 @@ class GatewayServer:
         app.state.default_session_id: str | None = None
         app.state.event_bus = self._event_bus
         app.state.client_contexts: dict[str, Any] = {}
+        from crabcode_core.config.manager import ConfigManager
+
+        workspace_settings = ConfigManager(cwd=os.getcwd()).load_gateway_workspace()
+        app.state.workspace_info = workspace.build_workspace_info(
+            os.getcwd(),
+            workspace_settings.browse_roots,
+        )
         app.state.session_lock = asyncio.Lock()
         app.state.session_load_lock = asyncio.Lock()
         ensure_task_state(app.state)
@@ -185,6 +193,7 @@ class GatewayServer:
         app.include_router(tasks.router)
         app.include_router(peer.router)
         app.include_router(team.router)
+        app.include_router(workspace.router)
 
         self._app = app
         return app

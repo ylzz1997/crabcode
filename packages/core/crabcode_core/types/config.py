@@ -199,8 +199,15 @@ class GatewaySecuritySettings(BaseModel):
     token_ttl_seconds: int = Field(default=900, gt=0, le=86_400)
 
 
+class GatewayWorkspaceSettings(BaseModel):
+    """Directories the Gateway may expose through workspace discovery APIs."""
+
+    browse_roots: list[str] = Field(default_factory=list)
+
+
 class GatewaySettings(BaseModel):
     security: GatewaySecuritySettings = Field(default_factory=GatewaySecuritySettings)
+    workspace: GatewayWorkspaceSettings = Field(default_factory=GatewayWorkspaceSettings)
 
 
 class CrabCodeSettings(BaseModel):

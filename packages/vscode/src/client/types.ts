@@ -14,6 +14,19 @@ export interface ImageAttachment {
   data: string;
 }
 
+export interface WorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+  hidden?: boolean;
+  is_symlink?: boolean;
+}
+
+export interface WorkspaceDirectoryListing {
+  path: string;
+  parent?: string | null;
+  directories?: WorkspaceDirectoryEntry[];
+}
+
 /** Observable state for the optional semantic-search indexer. */
 export interface SearchIndexStatus {
   state: string;
@@ -396,6 +409,12 @@ export interface SessionInfo {
   cwd?: string;
   tokens_used?: number;
   preview?: string;
+}
+
+export interface WorkspaceInfo {
+  startup_cwd: string;
+  home: string;
+  browse_roots?: string[];
 }
 
 export interface GoalInfo {

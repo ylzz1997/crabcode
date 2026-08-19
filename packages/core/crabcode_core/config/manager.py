@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
-from crabcode_core.types.config import CrabCodeSettings, GatewaySecuritySettings
+from crabcode_core.types.config import (
+    CrabCodeSettings,
+    GatewaySecuritySettings,
+    GatewayWorkspaceSettings,
+)
 
 logger = get_logger(__name__)
 
@@ -141,6 +145,30 @@ class ConfigManager:
         if isinstance(policy_security, dict):
             merged = _merge_settings(merged, policy_security)
         return GatewaySecuritySettings.model_validate(merged)
+
+    def load_gateway_workspace(self) -> GatewayWorkspaceSettings:
+        """Load filesystem discovery policy without project overrides."""
+        merged: dict[str, Any] = {}
+        raw_user = self.get_settings_for_source("userSettings") or {}
+        user_gateway = raw_user.get("gateway", {})
+        user_workspace = (
+            user_gateway.get("workspace", {})
+            if isinstance(user_gateway, dict)
+            else {}
+        )
+        if isinstance(user_workspace, dict):
+            merged = _merge_settings(merged, user_workspace)
+
+        raw_policy = self.get_settings_for_source("policySettings") or {}
+        policy_gateway = raw_policy.get("gateway", {})
+        policy_workspace = (
+            policy_gateway.get("workspace", {})
+            if isinstance(policy_gateway, dict)
+            else {}
+        )
+        if isinstance(policy_workspace, dict):
+            merged = _merge_settings(merged, policy_workspace)
+        return GatewayWorkspaceSettings.model_validate(merged)
 
     def get_settings_for_source(self, source: str) -> dict[str, Any] | None:
         """Get raw settings from a single source."""

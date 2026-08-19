@@ -184,7 +184,7 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/session/compact` | POST | 手动触发对话压缩 |
 | `/session/clear` | POST | 清空活动上下文并持久化清空边界 |
 | `/session/messages` | GET | 读取结构化的活动消息投影 |
-| `/session/list` | GET | 列出当前项目的持久化会话 |
+| `/session/list` | GET | 列出当前项目或可选 `cwd` 对应的持久化会话 |
 | `/session/recent` | GET | 跨项目列出最近会话 |
 | `/session/search` | POST | 按标题或消息搜索会话 |
 | `/session/resolve` | GET | 解析完整 ID、唯一前缀或当前项目序号 |
@@ -216,6 +216,8 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/skills/expand` | POST | 使用用户输入展开 Skill 调用 |
 | `/context` | POST | 推送工作区上下文（活动文件、选中内容、光标位置） |
 | `/context/{session_id}` | GET | 读取最新客户端工作区上下文 |
+| `/workspace/info` | GET | 读取启动目录、用户 Home 和允许浏览的根目录 |
+| `/workspace/directories` | GET | 列出允许的工作区根目录内的子目录 |
 | `/logs` | GET | 列出、读取尾部或清空后台日志 |
 | `/logs/follow` | GET | 通过 SSE 实时跟随后台日志 |
 | `/tasks`, `/tasks/{id}` | GET | 列出后台任务或读取单个任务 |
@@ -243,6 +245,18 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/ws` | WebSocket | 双向通信（VSCode 扩展首选） |
 
 **WebSocket `/ws`** 覆盖完整交互命令链路：会话新建/恢复（`new_session`、`resume_session`）、消息与 steering、中断、权限/选择回复、工作区上下文、模型/模式/权限切换和计划操作。`new_session` 与 `resume_session` 接受和 HTTP 生命周期端点相同的五个 API 覆盖字段；目标会话已经加载时会拒绝覆盖，避免一个客户端静默替换另一个客户端正在使用的 runtime。一个连接会持续订阅它显式选择过的所有 session，因此界面切换后仍能收到旧 session 的后台事件，同时不会暴露未选择的其他 session。前台与计划命令携带 `operation_id`；steering 和 interrupt 应回传该 ID，避免误投到更新的轮次。命令校验失败使用有类型、非终止性的 error envelope；每个已受理 operation 最终只以一个 `turn_complete` 结束。完整客户端还必须消费结构化会话历史，以及带 session 标识的 `agent_state`、`agent_output`、`team_message`、`team_state`、`task_update`、`schedule_run`、`compact`、权限/选择回复、文件变更、snapshot 和 revert 事件。Schedule 的增删改查使用上面的 HTTP 端点，客户端无需轮询执行结果。
+
+### Crab Desktop 与浏览器界面
+
+`packages/desktop` 中的 React 客户端既可通过 `npm run dev` 在浏览器直接
+运行，也可通过 `npm run tauri dev` 使用 Tauri 桌面壳。两种形态都支持本地/
+远程 Gateway、项目、多会话并行、流式聊天、权限、计划、diff 和检查点恢复。
+Tauri 额外提供系统凭据库与本地 Gateway 自动启动；浏览器版连接已经运行的
+Gateway，密码只保留在当前浏览器标签页中。
+
+Tauri 将不含敏感信息的 UI 状态写入
+`~/.crabcode/settings_desktop.json`；Gateway 模型和工具配置仍使用原有
+`settings.json` 配置层。
 
 直接执行 `! <cmd>` 被刻意限定为可信客户端能力：CLI 在本地进程中执行，VSCode 扩展发送到本地集成终端。Gateway 不提供该端点，因为这会形成绕过权限系统的远程 Shell。
 

@@ -191,7 +191,7 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/session/compact` | POST | Trigger manual compaction |
 | `/session/clear` | POST | Clear the active context and persist the clear boundary |
 | `/session/messages` | GET | Read the structured active message projection |
-| `/session/list` | GET | List persisted sessions for the current project |
+| `/session/list` | GET | List persisted sessions for the current project, or for an optional `cwd` |
 | `/session/recent` | GET | List recent sessions across projects |
 | `/session/search` | POST | Search sessions by title or message |
 | `/session/resolve` | GET | Resolve a full ID, unique prefix, or current-project index |
@@ -223,6 +223,8 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/skills/expand` | POST | Expand a skill invocation with user input |
 | `/context` | POST | Push workspace context (active file, selection, cursor) |
 | `/context/{session_id}` | GET | Read the latest client workspace context |
+| `/workspace/info` | GET | Read the startup directory, user home, and allowed browse roots |
+| `/workspace/directories` | GET | List subdirectories within the allowed browse roots |
 | `/logs` | GET | List, tail, or clear background logs |
 | `/logs/follow` | GET | Follow a background log as SSE |
 | `/tasks`, `/tasks/{id}` | GET | List background tasks or read one task |
@@ -250,6 +252,18 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/ws` | WebSocket | Bidirectional channel (preferred for VSCode) |
 
 **WebSocket `/ws`** supports the complete interactive command path: session lifecycle (`new_session`, `resume_session`), messages and steering, interrupt, permission/choice responses, workspace context, model/mode/permission changes, and plan actions. `new_session` and `resume_session` accept the same five API override fields as the HTTP lifecycle endpoints. Overrides are rejected for an already-loaded resume target so one client cannot silently replace another client's runtime. A connection remains subscribed to every session it explicitly selects, so background events from an earlier session remain visible after the active UI switches to another one; unrelated sessions are still filtered out. Foreground and plan commands carry an `operation_id`: steering and interrupt should send that ID to avoid targeting a newer turn. Command-validation failures use a typed, non-terminal error envelope, while every admitted operation finishes with exactly one `turn_complete` event. A complete client must also consume structured session history and the session-tagged `agent_state`, `agent_output`, `team_message`, `team_state`, `task_update`, `schedule_run`, `compact`, permission/choice response, file-change, snapshot, and revert events. Schedule CRUD uses the HTTP endpoints above; clients do not need to poll for execution completion.
+
+### Crab Desktop and Browser UI
+
+The React client in `packages/desktop` runs in a browser with `npm run dev`, or
+inside the Tauri shell with `npm run tauri dev`. Both forms support local and
+remote Gateways, projects, concurrent sessions, streaming chat, permissions,
+plans, diffs, and checkpoint recovery. Tauri additionally provides system
+credential storage and automatic local Gateway startup; browser mode connects
+to an already-running Gateway and retains passwords only for the current tab.
+
+Tauri writes non-secret UI state to `~/.crabcode/settings_desktop.json`.
+Gateway model and tool settings continue to use the normal `settings.json`.
 
 Direct `! <cmd>` execution is intentionally a trusted-client feature: the CLI runs it in its local process and the VSCode extension sends it to a local integrated terminal. It is not exposed as a Gateway endpoint because doing so would create a permission-bypassing remote shell. 
 

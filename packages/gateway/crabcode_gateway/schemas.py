@@ -529,6 +529,25 @@ class SessionInfo(BaseModel):
     preview: str = ""
 
 
+class WorkspaceInfo(BaseModel):
+    startup_cwd: str
+    home: str
+    browse_roots: list[str] = Field(default_factory=list)
+
+
+class WorkspaceDirectoryEntry(BaseModel):
+    name: str
+    path: str
+    hidden: bool = False
+    is_symlink: bool = False
+
+
+class WorkspaceDirectoryListing(BaseModel):
+    path: str
+    parent: str | None = None
+    directories: list[WorkspaceDirectoryEntry] = Field(default_factory=list)
+
+
 class SearchIndexStatus(BaseModel):
     """Observable state for the optional semantic-search indexer."""
 

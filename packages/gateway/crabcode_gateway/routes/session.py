@@ -6,6 +6,7 @@ import os
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -513,7 +514,10 @@ async def session_messages(
 
 
 @router.get("/list", response_model=list[SessionInfo])
-async def list_sessions(request: Request) -> list[SessionInfo]:
+async def list_sessions(
+    request: Request,
+    cwd: str | None = None,
+) -> list[SessionInfo]:
     """List all persisted sessions for the current working directory.
 
     Uses SessionStorage.list_sessions (disk-based) so sub-agent sessions
@@ -522,20 +526,31 @@ async def list_sessions(request: Request) -> list[SessionInfo]:
     import os
     from crabcode_core.session.storage import SessionStorage
 
-    # Determine cwd from the active session, or fall back to process cwd
-    async with get_session_lock(request.app.state):
-        sessions: dict = request.app.state.sessions
-        default_id = request.app.state.default_session_id
-        cwd = os.getcwd()
-        if default_id and default_id in sessions:
-            cwd = getattr(sessions[default_id], "cwd", cwd)
+    # Preserve the existing default-session behavior when cwd is omitted.
+    selected_cwd = cwd
+    if selected_cwd is None:
+        async with get_session_lock(request.app.state):
+            sessions: dict = request.app.state.sessions
+            default_id = request.app.state.default_session_id
+            selected_cwd = os.getcwd()
+            if default_id and default_id in sessions:
+                selected_cwd = getattr(sessions[default_id], "cwd", selected_cwd)
+    else:
+        candidate = Path(selected_cwd).expanduser()
+        try:
+            candidate = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise HTTPException(status_code=404, detail="Working directory not found") from exc
+        if not candidate.is_dir():
+            raise HTTPException(status_code=400, detail="cwd must be a directory")
+        selected_cwd = str(candidate)
 
     try:
-        stored = SessionStorage.list_sessions(cwd)
+        stored = SessionStorage.list_sessions(selected_cwd)
     except Exception:
         stored = []
 
-    return [_session_info_from_row({**s, "cwd": cwd}) for s in stored]
+    return [_session_info_from_row({**s, "cwd": selected_cwd}) for s in stored]
 
 
 @router.get("/resolve", response_model=SessionInfo)
