@@ -177,7 +177,7 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 
 | 端点 | 方法 | 说明 |
 | ------ | ------ | ------ |
-| `/health` | GET | 健康检查 |
+| `/health` | GET | 健康检查；返回 CrabCode 版本及 gateway 协议版本/兼容范围 |
 | `/session/new` | POST | 创建会话；除 `cwd` 外可传 `model`、`provider`、`base_url`、`api_format`、`model_profile` 覆盖 |
 | `/session/send` | POST | 发送消息（触发 query loop，事件通过 SSE 推送） |
 | `/session/interrupt` | POST | 中断当前轮次 |

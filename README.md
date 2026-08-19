@@ -184,7 +184,7 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 
 | Endpoint | Method | Description |
 | ---------- | -------- | ------------- |
-| `/health` | GET | Health check |
+| `/health` | GET | Health check with the CrabCode version and gateway protocol compatibility range |
 | `/session/new` | POST | Create a session; accepts `cwd` plus optional `model`, `provider`, `base_url`, `api_format`, and `model_profile` overrides |
 | `/session/send` | POST | Send a message (starts query loop, events via SSE) |
 | `/session/interrupt` | POST | Interrupt current turn |

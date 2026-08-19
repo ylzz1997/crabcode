@@ -379,6 +379,7 @@ function createStatusBar(
 function registerCommands(
   chatProvider: ChatPanelProvider,
   connection: CrabCodeConnection,
+  extensionVersion: string,
 ): void {
   // Open Chat
   push(
@@ -469,11 +470,18 @@ function registerCommands(
 
   // Connect
   push(
-    vscode.commands.registerCommand("crabcode.connect", () => {
-      if (!connection.connected) {
-        connection.resetReconnect();
-        connection.connect();
-      }
+    vscode.commands.registerCommand("crabcode.connect", async () => {
+      if (connection.connected || !gatewayProc || !outputChannel) return;
+      const config = vscode.workspace.getConfiguration("crabcode");
+      const result = await ensureGateway(
+        config,
+        outputChannel,
+        gatewayProc,
+        extensionVersion,
+      );
+      if (!result.gatewayReady) return;
+      connection.resetReconnect();
+      connection.connect();
     }),
   );
 
@@ -511,7 +519,12 @@ function registerCommands(
       push(gatewayProc);
 
       const config = vscode.workspace.getConfiguration("crabcode");
-      const result = await ensureGateway(config, outputChannel, gatewayProc);
+      const result = await ensureGateway(
+        config,
+        outputChannel,
+        gatewayProc,
+        extensionVersion,
+      );
       if (result.gatewayReady) {
         if (!connection.connected) {
           connection.connect();
@@ -527,6 +540,7 @@ function registerCommands(
 async function autoConnect(
   connection: CrabCodeConnection,
   config: vscode.WorkspaceConfiguration,
+  extensionVersion: string,
 ): Promise<void> {
   const autoConnectEnabled = config.get<boolean>("autoConnect", true);
   if (!autoConnectEnabled) {
@@ -535,11 +549,14 @@ async function autoConnect(
 
   // Ensure the gateway is ready before attempting WebSocket connection
   if (gatewayProc && outputChannel) {
-    const result = await ensureGateway(config, outputChannel, gatewayProc);
+    const result = await ensureGateway(
+      config,
+      outputChannel,
+      gatewayProc,
+      extensionVersion,
+    );
     if (!result.gatewayReady) {
-      vscode.window.showWarningMessage(
-        "CrabCode：网关未就绪，将自动重试连接。请检查输出面板。",
-      );
+      return;
     }
   }
 
@@ -683,13 +700,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   // 7. Register all commands
-  registerCommands(activeChatProvider, activeConnection);
+  const extensionVersion = String(context.extension.packageJSON.version ?? "");
+  registerCommands(activeChatProvider, activeConnection, extensionVersion);
 
   // 8. Status bar item
   push(createStatusBar(activeConnection));
 
   // 9. Auto-connect
-  await autoConnect(activeConnection, config);
+  await autoConnect(activeConnection, config, extensionVersion);
 
   // Push remaining disposables into the extension context
   context.subscriptions.push(...disposables);

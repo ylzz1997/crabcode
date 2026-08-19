@@ -13,6 +13,11 @@ from typing import Any, Literal, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from crabcode_core import VERSION
+from crabcode_gateway.protocol import (
+    GATEWAY_MAX_PROTOCOL_VERSION,
+    GATEWAY_MIN_PROTOCOL_VERSION,
+    GATEWAY_PROTOCOL_VERSION,
+)
 from crabcode_core.types.config import ReasoningEffort
 
 
@@ -809,6 +814,9 @@ class ModelInfo(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = VERSION
+    protocol_version: int = GATEWAY_PROTOCOL_VERSION
+    min_protocol_version: int = GATEWAY_MIN_PROTOCOL_VERSION
+    max_protocol_version: int = GATEWAY_MAX_PROTOCOL_VERSION
 
 
 # ── CoreEvent serialization ──────────────────────────────────────

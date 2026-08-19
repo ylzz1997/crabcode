@@ -621,6 +621,9 @@ export interface ModelInfo {
 export interface HealthResponse {
   status?: string;
   version?: string;
+  protocol_version?: number;
+  min_protocol_version?: number;
+  max_protocol_version?: number;
 }
 
 
