@@ -16,12 +16,18 @@ from sse_starlette.sse import EventSourceResponse
 
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.event_bus import EventBus
+from crabcode_gateway.schemas import (
+    ImageAttachment,
+    SessionHistoryPayload,
+    SessionMessagePayload,
+)
 from crabcode_gateway.session_registry import get_session_load_lock, get_session_lock
 from crabcode_gateway.task_registry import (
     cancel_operation_task,
     cancel_owner_tasks,
     cancel_tasks,
     claim_operation,
+    get_operation_task,
     operation_is_registered,
     OperationAlreadyRegistered,
     release_operation_claim,
@@ -34,6 +40,7 @@ from crabcode_gateway.task_registry import (
 logger = get_logger(__name__)
 
 _ACTIVE_SESSION_KEY = "crabcode_active_session_id"
+_WS_SUBSCRIPTIONS_KEY = "crabcode_subscribed_session_ids"
 _WS_TASKS_KEY = "crabcode_background_tasks"
 _WS_TASK_SESSIONS_KEY = "crabcode_background_task_sessions"
 # Keep the historical app-state name so embedding integrations that inspect
@@ -126,9 +133,10 @@ async def event_stream(request: Request):
 async def websocket_endpoint(ws: WebSocket):
     """Bidirectional WebSocket endpoint.
 
-    Uses a global subscription — events from ALL sessions are forwarded
-    to the client (each tagged with session_id). The client filters by
-    active session. This ensures no events are lost when switching sessions.
+    Uses a global subscription with an explicit per-connection session set.
+    The active session is always selected, and commands that target another
+    session add it to the set.  This keeps background events visible after a
+    UI switch without exposing unrelated sessions.
     """
     query_session_id = ws.query_params.get("session_id")
     event_bus: EventBus = ws.app.state.event_bus
@@ -167,10 +175,14 @@ async def websocket_endpoint(ws: WebSocket):
     # Snapshot the default at connection time.  Looking it up for every
     # command would let another client's new/resume operation retarget this
     # connection unexpectedly.
-    ws.scope[_ACTIVE_SESSION_KEY] = (
+    active_session_id = (
         query_session_id
         if query_session_id is not None
         else ws.app.state.default_session_id
+    )
+    ws.scope[_ACTIVE_SESSION_KEY] = active_session_id
+    ws.scope[_WS_SUBSCRIPTIONS_KEY] = (
+        {active_session_id} if active_session_id else set()
     )
     owner_tasks: set[asyncio.Task[Any]] = set()
     owner_sessions: dict[asyncio.Task[Any], str] = {}
@@ -178,12 +190,12 @@ async def websocket_endpoint(ws: WebSocket):
     ws.scope[_WS_TASK_SESSIONS_KEY] = owner_sessions
 
     # A global queue survives session switches; ws_stream filters payloads to
-    # this connection's active session before sending them.
+    # this connection's explicit session subscriptions before sending them.
     push_task = asyncio.create_task(
         event_bus.ws_stream(
             ws,
             None,
-            session_id_getter=lambda: ws.scope.get(_ACTIVE_SESSION_KEY),
+            session_id_getter=lambda: ws.scope.get(_WS_SUBSCRIPTIONS_KEY),
             subscriber=subscriber,
         )
     )
@@ -242,15 +254,24 @@ async def websocket_endpoint(ws: WebSocket):
                     await _handle_push_context(ws, msg)
                 elif msg_type == "switch_model":
                     await _handle_switch_model(ws, msg)
+                elif msg_type == "switch_mode":
+                    await _handle_switch_mode(ws, msg)
+                elif msg_type == "set_reasoning_effort":
+                    await _handle_set_reasoning_effort(ws, msg)
+                elif msg_type == "set_ultra_mode":
+                    await _handle_set_ultra_mode(ws, msg)
                 elif msg_type == "set_permission_mode":
                     await _handle_set_permission_mode(ws, msg)
                 elif msg_type == "plan_action":
                     await _handle_plan_action(ws, msg)
                 else:
-                    await ws.send_text(json.dumps({
-                        "type": "error",
-                        "message": f"unknown message type: {msg_type}",
-                    }))
+                    await _send_ws_command_error(
+                        ws,
+                        f"unknown message type: {msg_type}",
+                        command=msg_type or "unknown",
+                        request=msg,
+                        error_type="unknown_command",
+                    )
             except WebSocketDisconnect:
                 # The transport is already gone; attempting to send a second
                 # error frame here can mask the disconnect and skip clean
@@ -262,7 +283,13 @@ async def websocket_endpoint(ws: WebSocket):
                 # log their domain failures; this boundary keeps the transport
                 # usable for the next command.
                 logger.warning("WebSocket command failed (%s)", msg_type, exc_info=True)
-                await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+                await _send_ws_command_error(
+                    ws,
+                    str(exc),
+                    command=msg_type or "unknown",
+                    request=msg,
+                    error_type="internal_command_error",
+                )
     except WebSocketDisconnect:
         transport_disconnected = True
         logger.info("WebSocket disconnected")
@@ -320,6 +347,9 @@ def _resolve_session(ws: WebSocket, msg: dict):
 
 def _set_active_session(ws: WebSocket, session_id: str) -> None:
     ws.scope[_ACTIVE_SESSION_KEY] = session_id
+    subscriptions = ws.scope.setdefault(_WS_SUBSCRIPTIONS_KEY, set())
+    if isinstance(subscriptions, set):
+        subscriptions.add(session_id)
 
 
 async def _store_ws_context(contexts: dict, session: Any, payload: dict) -> None:
@@ -343,6 +373,75 @@ def _ws_owner_args(ws: WebSocket) -> dict[str, Any]:
     }
 
 
+async def _send_ws_command_error(
+    ws: WebSocket,
+    message: str,
+    *,
+    command: str,
+    request: dict[str, Any] | None = None,
+    session_id: str | None = None,
+    operation_id: str | None = None,
+    error_type: str = "command",
+) -> None:
+    """Send a typed command failure without pretending it ended a turn."""
+    if session_id is None and request is not None:
+        requested_session = request.get("session_id")
+        sessions = getattr(ws.app.state, "sessions", {})
+        if (
+            isinstance(requested_session, str)
+            and requested_session
+            and requested_session in sessions
+        ):
+            session_id = requested_session
+        else:
+            active_session = ws.scope.get(_ACTIVE_SESSION_KEY)
+            if isinstance(active_session, str) and active_session:
+                session_id = active_session
+    if operation_id is None and request is not None:
+        requested_operation = request.get("operation_id")
+        if isinstance(requested_operation, str) and requested_operation:
+            operation_id = requested_operation
+    payload: dict[str, Any] = {
+        "type": "error",
+        "message": message,
+        "recoverable": True,
+        "error_type": error_type,
+        "command": command,
+        "command_error": True,
+    }
+    if session_id:
+        payload["session_id"] = session_id
+    if operation_id:
+        payload["operation_id"] = operation_id
+    await ws.send_text(json.dumps(payload))
+
+
+def _validate_ws_images(value: Any) -> list[dict[str, str]]:
+    """Apply the same attachment contract used by the HTTP endpoint."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("images must be a list of media attachments")
+
+    validated: list[dict[str, str]] = []
+    for index, item in enumerate(value):
+        try:
+            attachment = ImageAttachment.model_validate(item)
+        except Exception as exc:
+            # The full Pydantic message contains model names and help URLs;
+            # keep command-channel feedback short and actionable.
+            errors = getattr(exc, "errors", None)
+            detail = "invalid media attachment"
+            if callable(errors):
+                entries = errors()
+                if entries:
+                    detail = str(entries[0].get("msg") or detail)
+                    detail = detail.removeprefix("Value error, ")
+            raise ValueError(f"image {index + 1}: {detail}") from exc
+        validated.append(attachment.model_dump())
+    return validated
+
+
 async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
     """Route a permission response from the client to the session."""
     from crabcode_core.types.event import PermissionResponseEvent
@@ -350,8 +449,15 @@ async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
     session = _resolve_session(ws, msg)
     if not session:
         logger.warning("ws permission_response rejected: no active session")
-        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        await _send_ws_command_error(
+            ws,
+            "no active session",
+            command="permission_response",
+            request=msg,
+        )
         return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
 
     tool_use_id = msg.get("tool_use_id", "")
     allowed = msg.get("allowed", False)
@@ -365,7 +471,13 @@ async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
         or (agent_id is not None and not isinstance(agent_id, str))
         or (feedback is not None and not isinstance(feedback, str))
     ):
-        await ws.send_text(json.dumps({"type": "error", "message": "invalid permission response"}))
+        await _send_ws_command_error(
+            ws,
+            "invalid permission response",
+            command="permission_response",
+            request=msg,
+            session_id=session.session_id,
+        )
         return
     event = PermissionResponseEvent(
         tool_use_id=tool_use_id,
@@ -382,7 +494,14 @@ async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
             **_ws_owner_args(ws),
         )
     except SessionOperationRejected:
-        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        await _send_ws_command_error(
+            ws,
+            "session is closing",
+            command="permission_response",
+            request=msg,
+            session_id=session.session_id,
+            error_type="session_closing",
+        )
 
 
 async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
@@ -392,8 +511,15 @@ async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
     session = _resolve_session(ws, msg)
     if not session:
         logger.warning("ws choice_response rejected: no active session")
-        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        await _send_ws_command_error(
+            ws,
+            "no active session",
+            command="choice_response",
+            request=msg,
+        )
         return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
 
     tool_use_id = msg.get("tool_use_id", "")
     selected = msg.get("selected", [])
@@ -406,7 +532,13 @@ async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
         or not isinstance(cancelled, bool)
         or (agent_id is not None and not isinstance(agent_id, str))
     ):
-        await ws.send_text(json.dumps({"type": "error", "message": "invalid choice response"}))
+        await _send_ws_command_error(
+            ws,
+            "invalid choice response",
+            command="choice_response",
+            request=msg,
+            session_id=session.session_id,
+        )
         return
     event = ChoiceResponseEvent(
         tool_use_id=tool_use_id,
@@ -422,7 +554,14 @@ async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
             **_ws_owner_args(ws),
         )
     except SessionOperationRejected:
-        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        await _send_ws_command_error(
+            ws,
+            "session is closing",
+            command="choice_response",
+            request=msg,
+            session_id=session.session_id,
+            error_type="session_closing",
+        )
 
 
 async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
@@ -430,33 +569,63 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
     event_bus: EventBus = ws.app.state.event_bus
     text = msg.get("text", "")
     max_turns = msg.get("max_turns", 0)
-    images = msg.get("images")  # Optional list of {media_type, data} dicts
+    raw_images = msg.get("images")  # Optional list of {media_type, data} dicts
     requested_operation_id = msg.get("operation_id")
 
-    if not isinstance(text, str) or not text.strip():
-        await ws.send_text(json.dumps({"type": "error", "message": "text must be a non-empty string"}))
+    if not isinstance(text, str):
+        await _send_ws_command_error(
+            ws,
+            "text must be a string",
+            command="send_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="invalid_request",
+        )
         return
     if isinstance(max_turns, bool) or not isinstance(max_turns, int) or max_turns < 0:
-        await ws.send_text(json.dumps({"type": "error", "message": "max_turns must be a non-negative integer"}))
+        await _send_ws_command_error(
+            ws,
+            "max_turns must be a non-negative integer",
+            command="send_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="invalid_request",
+        )
         return
     if requested_operation_id is not None and (
         not isinstance(requested_operation_id, str)
         or not requested_operation_id
     ):
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "message": "operation_id must be a non-empty string",
-        }))
+        await _send_ws_command_error(
+            ws,
+            "operation_id must be a non-empty string",
+            command="send_message",
+            request=msg,
+            error_type="invalid_request",
+        )
         return
-    if images is not None:
-        if not isinstance(images, list) or any(
-            not isinstance(item, dict)
-            or not isinstance(item.get("media_type"), str)
-            or not isinstance(item.get("data"), str)
-            for item in images
-        ):
-            await ws.send_text(json.dumps({"type": "error", "message": "images must be a list of media attachments"}))
-            return
+    try:
+        images = _validate_ws_images(raw_images)
+    except ValueError as exc:
+        await _send_ws_command_error(
+            ws,
+            str(exc),
+            command="send_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="invalid_images",
+        )
+        return
+    if not text.strip() and not images:
+        await _send_ws_command_error(
+            ws,
+            "text or at least one image is required",
+            command="send_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="invalid_request",
+        )
+        return
 
     # Resolve and create the detached task under the registry lock used by
     # archive/stop.  This prevents a stale WebSocket command from starting a
@@ -472,6 +641,12 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                 ws.app.state, "closing_sessions", set()
             ):
                 session = None
+            elif isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+                # A global WS subscriber filters outgoing events by this
+                # connection's active session.  Honor an explicit target so
+                # its stream is not silently discarded while the connection
+                # still points at a different conversation.
+                _set_active_session(ws, session.session_id)
 
         if session is None:
             error_message = (
@@ -490,18 +665,27 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
         session.session_id if session is not None else None,
         operation_id,
         len(text),
-        len(images) if isinstance(images, list) else 0,
+        len(images),
         max_turns,
     )
 
     async def _run():
         try:
-            from crabcode_core.types.event import ErrorEvent, TurnCompleteEvent
+            from crabcode_core.types.event import TurnCompleteEvent
 
             kwargs = {"max_turns": max_turns}
-            if images and isinstance(images, list):
+            if images:
                 kwargs["images"] = images
+            pending_terminal: TurnCompleteEvent | None = None
             async for event in session.send_message(text, **kwargs):
+                if isinstance(event, TurnCompleteEvent):
+                    # Core can continue the same foreground operation when a
+                    # steering message lands just after query_loop generated
+                    # its terminal.  Hold that candidate until the generator
+                    # actually ends; any following event invalidates it.
+                    pending_terminal = event
+                    continue
+                pending_terminal = None
                 await event_bus.publish(
                     session.session_id,
                     event,
@@ -509,21 +693,38 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                     operation_id=operation_id,
                     operation_scope="foreground",
                 )
-                if isinstance(event, TurnCompleteEvent) or (
-                    isinstance(event, ErrorEvent) and event.agent_id is None
-                ):
-                    current = asyncio.current_task()
-                    if current is not None:
-                        setattr(current, "_crabcode_terminal_published", True)
+            if pending_terminal is None:
+                # Core normally emits TurnCompleteEvent, but a custom/older
+                # session adapter may end its generator after an ErrorEvent.
+                # Keep every foreground transport on one explicit terminal
+                # contract so clients never remain busy indefinitely.
+                pending_terminal = TurnCompleteEvent(reason="error")
+            await event_bus.publish(
+                session.session_id,
+                pending_terminal,
+                source=session,
+                operation_id=operation_id,
+                operation_scope="foreground",
+            )
+            current = asyncio.current_task()
+            if current is not None:
+                setattr(current, "_crabcode_terminal_published", True)
             logger.info("ws send_message completed session=%s", session.session_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.exception("ws send_message failed session=%s", session.session_id)
-            from crabcode_core.types.event import ErrorEvent
+            from crabcode_core.types.event import ErrorEvent, TurnCompleteEvent
             await event_bus.publish(
                 session.session_id,
                 ErrorEvent(message=str(exc), recoverable=False, error_type="internal"),
+                source=session,
+                operation_id=operation_id,
+                operation_scope="foreground",
+            )
+            await event_bus.publish(
+                session.session_id,
+                TurnCompleteEvent(reason="error"),
                 source=session,
                 operation_id=operation_id,
                 operation_scope="foreground",
@@ -533,7 +734,13 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                 setattr(current, "_crabcode_terminal_published", True)
 
     if session is None:
-        await ws.send_text(json.dumps({"type": "error", "message": error_message}))
+        await _send_ws_command_error(
+            ws,
+            error_message,
+            command="send_message",
+            request=msg,
+            operation_id=operation_id,
+        )
         return
 
     duplicate_operation = False
@@ -582,49 +789,129 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
             if duplicate_operation
             else "session is closing"
         )
-        await ws.send_text(json.dumps({"type": "error", "message": message}))
+        await _send_ws_command_error(
+            ws,
+            message,
+            command="send_message",
+            request=msg,
+            session_id=session.session_id,
+            operation_id=operation_id,
+            error_type=("operation_conflict" if duplicate_operation else "session_closing"),
+        )
         return
 
 
 async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
     """Inject user guidance at the foreground loop's next safe boundary."""
     text = msg.get("text", "")
-    images = msg.get("images")
-    if not isinstance(text, str) or not text.strip():
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "message": "text must be a non-empty string",
-        }))
-        return
-    if images is not None and (
-        not isinstance(images, list)
-        or any(
-            not isinstance(item, dict)
-            or not isinstance(item.get("media_type"), str)
-            or not isinstance(item.get("data"), str)
-            for item in images
+    raw_images = msg.get("images")
+    requested_operation_id = msg.get("operation_id")
+    if not isinstance(text, str):
+        await _send_ws_command_error(
+            ws,
+            "text must be a string",
+            command="steer_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="invalid_request",
         )
+        return
+    if requested_operation_id is not None and (
+        not isinstance(requested_operation_id, str)
+        or not requested_operation_id
     ):
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "message": "images must be a list of media attachments",
-        }))
+        await _send_ws_command_error(
+            ws,
+            "operation_id must be a non-empty string",
+            command="steer_message",
+            request=msg,
+            error_type="invalid_request",
+        )
+        return
+    try:
+        images = _validate_ws_images(raw_images)
+    except ValueError as exc:
+        await _send_ws_command_error(
+            ws,
+            str(exc),
+            command="steer_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="invalid_images",
+        )
+        return
+    if not text.strip() and not images:
+        await _send_ws_command_error(
+            ws,
+            "text or at least one image is required",
+            command="steer_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="invalid_request",
+        )
         return
 
     session = _resolve_session(ws, msg)
     if session is None:
-        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        await _send_ws_command_error(
+            ws,
+            "no active session",
+            command="steer_message",
+            request=msg,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+        )
         return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
+
+    async def _steer() -> bool | None:
+        """Steer only the explicitly named live foreground operation.
+
+        ``None`` means the operation disappeared or was not a foreground
+        operation.  The caller must not silently fall back to a new turn in
+        that case: doing so can put a late steering message into the next
+        user request.
+        """
+        if requested_operation_id is not None:
+            async with get_session_lock(ws.app.state):
+                owner = get_operation_task(
+                    ws.app.state,
+                    session.session_id,
+                    requested_operation_id,
+                    operation_scope="foreground",
+                )
+                if owner is None:
+                    return None
+        return await session.steer_message(text, images=images or None)
 
     try:
         queued = await run_session_operation(
             ws.app.state,
             session,
-            lambda: session.steer_message(text, images=images),
+            _steer,
             **_ws_owner_args(ws),
         )
     except SessionOperationRejected:
-        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        await _send_ws_command_error(
+            ws,
+            "session is closing",
+            command="steer_message",
+            request=msg,
+            session_id=session.session_id,
+            operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
+            error_type="session_closing",
+        )
+        return
+
+    if queued is None:
+        await _send_ws_command_error(
+            ws,
+            f"operation not found or not foreground: {requested_operation_id}",
+            command="steer_message",
+            session_id=session.session_id,
+            operation_id=requested_operation_id,
+            error_type="operation_not_found",
+        )
         return
 
     logger.info(
@@ -632,8 +919,18 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         "queued" if queued else "continued as a new turn",
         session.session_id,
         len(text),
-        len(images) if isinstance(images, list) else 0,
+        len(images),
     )
+    if not queued and requested_operation_id is not None:
+        await _send_ws_command_error(
+            ws,
+            f"operation is no longer active: {requested_operation_id}",
+            command="steer_message",
+            session_id=session.session_id,
+            operation_id=requested_operation_id,
+            error_type="operation_inactive",
+        )
+        return
     if not queued:
         # The frontend can race with a just-completed turn. Falling back to the
         # ordinary serialized path ensures the user's message is never lost.
@@ -647,16 +944,28 @@ async def _handle_new_session(ws: WebSocket, msg: dict) -> None:
     """Create a new session and publish its id to connected clients."""
     import os
     from crabcode_core.session import CoreSession
-    from crabcode_core.types.config import CrabCodeSettings
-    from crabcode_gateway.schemas import ServerConnectedPayload
+    from crabcode_gateway.routes.session import _build_session_settings
+    from crabcode_gateway.schemas import NewSessionRequest, ServerConnectedPayload
 
     if getattr(ws.app.state, "gateway_closing", False):
-        await ws.send_text(json.dumps({"type": "error", "message": "gateway shutting down"}))
+        await _send_ws_command_error(
+            ws, "gateway shutting down", command="new_session", request=msg,
+            error_type="gateway_closing",
+        )
         return
 
     previous_id = ws.scope.get(_ACTIVE_SESSION_KEY)
-    cwd = msg.get("cwd") or os.getcwd()
-    settings = CrabCodeSettings()
+    try:
+        req = NewSessionRequest.model_validate(msg)
+        cwd = req.cwd or os.getcwd()
+        settings = _build_session_settings(req, cwd)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None)
+        await _send_ws_command_error(
+            ws, str(detail if detail is not None else exc), command="new_session", request=msg,
+            error_type="validation",
+        )
+        return
     session = CoreSession(cwd=cwd, settings=settings)
     async def _publish_background(event) -> None:
         await ws.app.state.event_bus.publish_background(
@@ -689,7 +998,10 @@ async def _handle_new_session(ws: WebSocket, msg: dict) -> None:
                 session,
                 owns_registry=False,
             )
-            await ws.send_text(json.dumps({"type": "error", "message": "gateway shutting down"}))
+            await _send_ws_command_error(
+                ws, "gateway shutting down", command="new_session", request=msg,
+                error_type="gateway_closing",
+            )
             return
     except asyncio.CancelledError:
         if not registered:
@@ -714,7 +1026,10 @@ async def _handle_new_session(ws: WebSocket, msg: dict) -> None:
                 )
             except Exception:
                 logger.warning("Failed to clean up failed WebSocket session creation", exc_info=True)
-        await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+        await _send_ws_command_error(
+            ws, str(exc), command="new_session", request=msg,
+            error_type="session_create_failed",
+        )
         return
     logger.info("ws new_session created session=%s cwd=%s", session.session_id, cwd)
 
@@ -743,17 +1058,27 @@ async def _handle_interrupt(ws: WebSocket, msg: dict) -> None:
     session = _resolve_session(ws, msg)
     if not session:
         logger.warning("ws interrupt rejected: no active session")
-        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        await _send_ws_command_error(
+            ws,
+            "no active session",
+            command="interrupt",
+            request=msg,
+        )
         return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
 
     operation_id = msg.get("operation_id")
     if operation_id is not None and (
         not isinstance(operation_id, str) or not operation_id
     ):
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "message": "operation_id must be a non-empty string",
-        }))
+        await _send_ws_command_error(
+            ws,
+            "operation_id must be a non-empty string",
+            command="interrupt",
+            request=msg,
+            session_id=session.session_id,
+        )
         return
 
     logger.info(
@@ -769,10 +1094,14 @@ async def _handle_interrupt(ws: WebSocket, msg: dict) -> None:
             expected_session=session,
         )
         if cancelled is None:
-            await ws.send_text(json.dumps({
-                "type": "error",
-                "message": f"operation not found: {operation_id}",
-            }))
+            await _send_ws_command_error(
+                ws,
+                f"operation not found: {operation_id}",
+                command="interrupt",
+                session_id=session.session_id,
+                operation_id=operation_id,
+                error_type="operation_not_found",
+            )
             return
         task = cancelled.task
         try:
@@ -807,7 +1136,14 @@ async def _handle_interrupt(ws: WebSocket, msg: dict) -> None:
             **_ws_owner_args(ws),
         )
     except SessionOperationRejected:
-        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        await _send_ws_command_error(
+            ws,
+            "session is closing",
+            command="interrupt",
+            request=msg,
+            session_id=session.session_id,
+            error_type="session_closing",
+        )
 
 
 async def _handle_push_context(ws: WebSocket, msg: dict) -> None:
@@ -815,6 +1151,8 @@ async def _handle_push_context(ws: WebSocket, msg: dict) -> None:
     contexts: dict = ws.app.state.client_contexts
     session = _resolve_session(ws, msg)
     if session:
+        if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+            _set_active_session(ws, session.session_id)
         try:
             await run_session_operation(
                 ws.app.state,
@@ -823,11 +1161,24 @@ async def _handle_push_context(ws: WebSocket, msg: dict) -> None:
                 **_ws_owner_args(ws),
             )
         except SessionOperationRejected:
-            await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+            await _send_ws_command_error(
+                ws,
+                "session is closing",
+                command="push_context",
+                request=msg,
+                session_id=session.session_id,
+                error_type="session_closing",
+            )
             return
         logger.info("ws push_context session=%s active_file=%s", session.session_id, msg.get("active_file"))
     else:
         logger.warning("ws push_context ignored: no active session")
+        await _send_ws_command_error(
+            ws,
+            "no active session",
+            command="push_context",
+            request=msg,
+        )
 
 
 async def _handle_switch_model(ws: WebSocket, msg: dict) -> None:
@@ -835,12 +1186,17 @@ async def _handle_switch_model(ws: WebSocket, msg: dict) -> None:
     session = _resolve_session(ws, msg)
     if not session:
         logger.warning("ws switch_model rejected: no active session")
-        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        await _send_ws_command_error(ws, "no active session", command="switch_model", request=msg)
         return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
 
     name = msg.get("name", "")
     if not isinstance(name, str) or not name.strip():
-        await ws.send_text(json.dumps({"type": "error", "message": "model name must be a string"}))
+        await _send_ws_command_error(
+            ws, "model name must be a string", command="switch_model", request=msg,
+            session_id=session.session_id,
+        )
         return
     try:
         ok = await run_session_operation(
@@ -850,15 +1206,141 @@ async def _handle_switch_model(ws: WebSocket, msg: dict) -> None:
             **_ws_owner_args(ws),
         )
     except SessionOperationRejected:
-        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        await _send_ws_command_error(
+            ws, "session is closing", command="switch_model", request=msg,
+            session_id=session.session_id, error_type="session_closing",
+        )
         return
     if not ok:
         logger.warning("ws switch_model failed session=%s name=%s", session.session_id, name)
-        await ws.send_text(
-            json.dumps({"type": "error", "message": f"model not found: {name}"}),
+        await _send_ws_command_error(
+            ws, f"model not found: {name}", command="switch_model", request=msg,
+            session_id=session.session_id, error_type="model_not_found",
         )
         return
     logger.info("ws switch_model session=%s name=%s", session.session_id, name)
+
+
+async def _handle_switch_mode(ws: WebSocket, msg: dict) -> None:
+    """Switch the active session between agent and plan mode."""
+    session = _resolve_session(ws, msg)
+    if not session:
+        await _send_ws_command_error(ws, "no active session", command="switch_mode", request=msg)
+        return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
+    mode = msg.get("mode")
+    if not isinstance(mode, str) or mode not in {"agent", "plan"}:
+        await _send_ws_command_error(
+            ws, "mode must be 'agent' or 'plan'", command="switch_mode", request=msg,
+            session_id=session.session_id,
+        )
+        return
+    try:
+        ok = await run_session_operation(
+            ws.app.state,
+            session,
+            lambda: _switch_ws_mode(session, mode),
+            **_ws_owner_args(ws),
+        )
+    except SessionOperationRejected:
+        await _send_ws_command_error(
+            ws, "session is closing", command="switch_mode", request=msg,
+            session_id=session.session_id, error_type="session_closing",
+        )
+        return
+    if not ok:
+        await _send_ws_command_error(
+            ws, f"invalid mode: {mode}", command="switch_mode", request=msg,
+            session_id=session.session_id,
+        )
+        return
+    logger.info("ws switch_mode session=%s mode=%s", session.session_id, mode)
+
+
+async def _switch_ws_mode(session: Any, mode: str) -> bool:
+    await session.initialize()
+    return bool(session.switch_mode(mode))
+
+
+async def _handle_set_reasoning_effort(ws: WebSocket, msg: dict) -> None:
+    """Set reasoning effort for subsequent requests on one session."""
+    session = _resolve_session(ws, msg)
+    if not session:
+        await _send_ws_command_error(
+            ws, "no active session", command="set_reasoning_effort", request=msg,
+        )
+        return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
+    effort = msg.get("effort")
+    if not isinstance(effort, str) or not effort.strip():
+        await _send_ws_command_error(
+            ws, "effort must be a string", command="set_reasoning_effort", request=msg,
+            session_id=session.session_id,
+        )
+        return
+    try:
+        ok = await run_session_operation(
+            ws.app.state,
+            session,
+            lambda: _set_ws_reasoning_effort(session, effort),
+            **_ws_owner_args(ws),
+        )
+    except SessionOperationRejected:
+        await _send_ws_command_error(
+            ws, "session is closing", command="set_reasoning_effort", request=msg,
+            session_id=session.session_id, error_type="session_closing",
+        )
+        return
+    if not ok:
+        await _send_ws_command_error(
+            ws, f"invalid reasoning effort: {effort}", command="set_reasoning_effort",
+            request=msg, session_id=session.session_id,
+        )
+        return
+    logger.info("ws set_reasoning_effort session=%s effort=%s", session.session_id, effort)
+
+
+async def _set_ws_reasoning_effort(session: Any, effort: str) -> bool:
+    await session.initialize()
+    return bool(session.set_reasoning_effort(effort))
+
+
+async def _handle_set_ultra_mode(ws: WebSocket, msg: dict) -> None:
+    """Set or toggle Ultra mode for one session."""
+    session = _resolve_session(ws, msg)
+    if not session:
+        await _send_ws_command_error(ws, "no active session", command="set_ultra_mode", request=msg)
+        return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
+    enabled = msg.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        await _send_ws_command_error(
+            ws, "enabled must be boolean or null", command="set_ultra_mode", request=msg,
+            session_id=session.session_id,
+        )
+        return
+    try:
+        result = await run_session_operation(
+            ws.app.state,
+            session,
+            lambda: _set_ws_ultra_mode(session, enabled),
+            **_ws_owner_args(ws),
+        )
+    except SessionOperationRejected:
+        await _send_ws_command_error(
+            ws, "session is closing", command="set_ultra_mode", request=msg,
+            session_id=session.session_id, error_type="session_closing",
+        )
+        return
+    logger.info("ws set_ultra_mode session=%s enabled=%s", session.session_id, result)
+
+
+async def _set_ws_ultra_mode(session: Any, enabled: bool | None) -> bool:
+    await session.initialize()
+    return bool(session.set_ultra_mode(enabled))
 
 
 async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
@@ -866,12 +1348,19 @@ async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
     session = _resolve_session(ws, msg)
     if not session:
         logger.warning("ws set_permission_mode rejected: no active session")
-        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        await _send_ws_command_error(
+            ws, "no active session", command="set_permission_mode", request=msg,
+        )
         return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
 
     mode = msg.get("mode", "default")
     if not isinstance(mode, str):
-        await ws.send_text(json.dumps({"type": "error", "message": "permission mode must be a string"}))
+        await _send_ws_command_error(
+            ws, "permission mode must be a string", command="set_permission_mode", request=msg,
+            session_id=session.session_id,
+        )
         return
     try:
         ok = await run_session_operation(
@@ -881,12 +1370,16 @@ async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
             **_ws_owner_args(ws),
         )
     except SessionOperationRejected:
-        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        await _send_ws_command_error(
+            ws, "session is closing", command="set_permission_mode", request=msg,
+            session_id=session.session_id, error_type="session_closing",
+        )
         return
     if not ok:
         logger.warning("ws set_permission_mode failed session=%s mode=%s", session.session_id, mode)
-        await ws.send_text(
-            json.dumps({"type": "error", "message": f"invalid permission mode: {mode}"}),
+        await _send_ws_command_error(
+            ws, f"invalid permission mode: {mode}", command="set_permission_mode",
+            request=msg, session_id=session.session_id,
         )
         return
     logger.info("ws set_permission_mode session=%s mode=%s", session.session_id, mode)
@@ -897,9 +1390,11 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
     event_bus: EventBus = ws.app.state.event_bus
     async with get_session_lock(ws.app.state):
         session = None if getattr(ws.app.state, "gateway_closing", False) else _resolve_session(ws, msg)
+        if session is not None and isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+            _set_active_session(ws, session.session_id)
     if not session:
         logger.warning("ws plan_action rejected: no active session")
-        await ws.send_text(json.dumps({"type": "error", "message": "no active session"}))
+        await _send_ws_command_error(ws, "no active session", command="plan_action", request=msg)
         return
 
     action = msg.get("action")
@@ -908,10 +1403,10 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
         not isinstance(requested_operation_id, str)
         or not requested_operation_id
     ):
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "message": "operation_id must be a non-empty string",
-        }))
+        await _send_ws_command_error(
+            ws, "operation_id must be a non-empty string", command="plan_action",
+            request=msg, session_id=session.session_id,
+        )
         return
     operation_id = requested_operation_id or uuid.uuid4().hex
 
@@ -937,7 +1432,11 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
                 **_ws_owner_args(ws),
             )
         except SessionOperationRejected:
-            await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+            await _send_ws_command_error(
+                ws, "session is closing", command="plan_action", request=msg,
+                session_id=session.session_id, operation_id=operation_id,
+                error_type="session_closing",
+            )
         return
 
     if action == "cancel":
@@ -970,13 +1469,18 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
                         running_plan = owner
                         running_operation_id = owner_operation_id
         if invalid:
-            await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+            await _send_ws_command_error(
+                ws, "session is closing", command="plan_action", request=msg,
+                session_id=session.session_id, operation_id=operation_id,
+                error_type="session_closing",
+            )
             return
         if requested_operation_id is not None and running_plan is None:
-            await ws.send_text(json.dumps({
-                "type": "error",
-                "message": f"operation not found: {requested_operation_id}",
-            }))
+            await _send_ws_command_error(
+                ws, f"operation not found: {requested_operation_id}", command="plan_action",
+                session_id=session.session_id, operation_id=requested_operation_id,
+                error_type="operation_not_found",
+            )
             return
 
         cancellation_claim: object | None = None
@@ -1044,7 +1548,10 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
         return
 
     if action != "execute":
-        await ws.send_text(json.dumps({"type": "error", "message": f"invalid plan action: {action}"}))
+        await _send_ws_command_error(
+            ws, f"invalid plan action: {action}", command="plan_action", request=msg,
+            session_id=session.session_id, operation_id=operation_id,
+        )
         return
 
     from crabcode_core.plan.executor import PlanExecutor
@@ -1299,16 +1806,25 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
     if rejected_task is not None:
         await asyncio.gather(rejected_task, return_exceptions=True)
     if invalid:
-        await ws.send_text(json.dumps({"type": "error", "message": "session is closing"}))
+        await _send_ws_command_error(
+            ws, "session is closing", command="plan_action", request=msg,
+            session_id=session.session_id, operation_id=operation_id,
+            error_type="session_closing",
+        )
         return
     if plan_busy:
-        await ws.send_text(json.dumps({"type": "error", "message": "plan already executing"}))
+        await _send_ws_command_error(
+            ws, "plan already executing", command="plan_action", request=msg,
+            session_id=session.session_id, operation_id=operation_id,
+            error_type="plan_busy",
+        )
         return
     if duplicate_operation or task is None:
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "message": f"operation already active: {operation_id}",
-        }))
+        await _send_ws_command_error(
+            ws, f"operation already active: {operation_id}", command="plan_action",
+            request=msg, session_id=session.session_id, operation_id=operation_id,
+            error_type="operation_conflict",
+        )
         return
     logger.info(
         "ws plan_action started execution session=%s operation=%s",
@@ -1318,18 +1834,36 @@ async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
 
 
 async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
-    """Resume an existing session by ID and make it the active WS session."""
+    """Resume a selected session and make it the active WS session."""
     import os
     from crabcode_core.session import CoreSession
-    from crabcode_core.types.config import CrabCodeSettings
-    from crabcode_gateway.schemas import ServerConnectedPayload
+    from crabcode_gateway.routes.session import (
+        _build_session_settings,
+        _has_session_overrides,
+        _resolve_session_selector,
+        _validate_session_id,
+    )
+    from crabcode_gateway.schemas import ResumeSessionRequest, ServerConnectedPayload
 
-    session_id = msg.get("session_id")
-    if not session_id:
-        await ws.send_text(json.dumps({"type": "error", "message": "session_id required"}))
+    try:
+        req = ResumeSessionRequest.model_validate(msg)
+    except Exception as exc:
+        await _send_ws_command_error(
+            ws, str(exc), command="resume_session", request=msg,
+            error_type="validation",
+        )
+        return
+    if not req.session_id:
+        await _send_ws_command_error(
+            ws, "session_id required", command="resume_session", request=msg,
+            error_type="validation",
+        )
         return
     if getattr(ws.app.state, "gateway_closing", False):
-        await ws.send_text(json.dumps({"type": "error", "message": "gateway shutting down"}))
+        await _send_ws_command_error(
+            ws, "gateway shutting down", command="resume_session", request=msg,
+            error_type="gateway_closing",
+        )
         return
 
     # Keep the previous session intact until the requested target has been
@@ -1338,6 +1872,41 @@ async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
     # the old session, but its query/plan had already been interrupted.
     previous_id = ws.scope.get(_ACTIVE_SESSION_KEY)
 
+    async with get_session_lock(ws.app.state):
+        loaded = dict(ws.app.state.sessions)
+        selector_cwd = os.getcwd()
+        current_id = ws.app.state.default_session_id
+        if current_id and current_id in loaded:
+            selector_cwd = str(getattr(loaded[current_id], "cwd", selector_cwd))
+    try:
+        resolved = _resolve_session_selector(
+            req.session_id,
+            selector_cwd,
+            loaded_sessions=loaded,
+        )
+    except Exception as exc:
+        await _send_ws_command_error(
+            ws, str(exc), command="resume_session", request=msg,
+            error_type="session_resolve_failed",
+        )
+        return
+    if resolved is None:
+        await _send_ws_command_error(
+            ws, "session not found or selector is ambiguous", command="resume_session",
+            request=msg, error_type="session_not_found",
+        )
+        return
+    session_id, resolved_cwd = resolved
+    try:
+        _validate_session_id(session_id)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None)
+        await _send_ws_command_error(
+            ws, str(detail if detail is not None else exc), command="resume_session",
+            request=msg, session_id=session_id, error_type="validation",
+        )
+        return
+
     # Reuse an already-loaded session or load/register it atomically. The
     # shared load lock serializes expensive disk/provider work with the HTTP
     # resume route; the short registry lock only fences the in-memory map.
@@ -1345,6 +1914,8 @@ async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
     rejected = False
     session = None
     reused = False
+    override_conflict = False
+    create_candidate = False
     try:
         async with get_session_load_lock(ws.app.state):
             # Fast path and candidate construction run under the registry lock
@@ -1356,19 +1927,24 @@ async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
                 elif session_id in getattr(ws.app.state, "closing_sessions", set()):
                     rejected = True
                 elif session_id in sessions:
-                    session = sessions[session_id]
-                    if ws.app.state.default_session_id is None:
-                        ws.app.state.default_session_id = session_id
-                    _set_active_session(ws, session_id)
-                    reused = True
+                    if _has_session_overrides(req):
+                        override_conflict = True
+                    else:
+                        session = sessions[session_id]
+                        if ws.app.state.default_session_id is None:
+                            ws.app.state.default_session_id = session_id
+                        _set_active_session(ws, session_id)
+                        reused = True
                 else:
-                    cwd = os.getcwd()
-                    current_id = ws.app.state.default_session_id
-                    if current_id and current_id in sessions:
-                        cwd = getattr(sessions[current_id], "cwd", cwd)
-                    session = CoreSession(cwd=cwd, settings=CrabCodeSettings())
+                    create_candidate = True
 
-            if not rejected and not reused and session is not None:
+            if create_candidate:
+                session = CoreSession(
+                    cwd=resolved_cwd,
+                    settings=_build_session_settings(req, resolved_cwd),
+                )
+
+            if not rejected and not override_conflict and not reused and session is not None:
                 candidate = session
 
                 async def _publish_background(event) -> None:
@@ -1452,14 +2028,30 @@ async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
         raise
     except Exception as exc:
         logger.warning("WebSocket session resume failed", exc_info=True)
-        await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+        await _send_ws_command_error(
+            ws, str(exc), command="resume_session", request=msg,
+            session_id=session_id, error_type="session_resume_failed",
+        )
         return
 
+    if override_conflict:
+        await _send_ws_command_error(
+            ws, "cannot apply model overrides to an already loaded session",
+            command="resume_session", request=msg, session_id=session_id,
+            error_type="override_conflict",
+        )
+        return
     if rejected:
-        await ws.send_text(json.dumps({"type": "error", "message": "gateway shutting down"}))
+        await _send_ws_command_error(
+            ws, "gateway shutting down", command="resume_session", request=msg,
+            session_id=session_id, error_type="gateway_closing",
+        )
         return
     if resume_failed:
-        await ws.send_text(json.dumps({"type": "error", "message": f"session {session_id} not found"}))
+        await _send_ws_command_error(
+            ws, f"session {session_id} not found", command="resume_session", request=msg,
+            session_id=session_id, error_type="session_not_found",
+        )
         return
 
     # The target is now installed/reused and the active selector has been
@@ -1497,28 +2089,101 @@ async def _handle_resume_session(ws: WebSocket, msg: dict) -> None:
 
 
 async def _send_session_history(ws: WebSocket, session: Any) -> None:
-    """Send existing conversation messages as a session_history payload."""
+    """Send the complete active message projection for structured replay."""
     messages = getattr(session, "messages", [])
-    if not messages:
-        return
-
-    history_items = []
+    history_items: list[SessionMessagePayload] = []
     for msg in messages:
-        role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-        text = msg.text_content if hasattr(msg, "text_content") else ""
-        if not text:
+        try:
+            item = msg.model_dump(mode="json")
+        except (AttributeError, TypeError, ValueError):
+            if isinstance(msg, dict):
+                item = dict(msg)
+            else:
+                item = {
+                    key: getattr(msg, key)
+                    for key in (
+                        "uuid",
+                        "parent_uuid",
+                        "role",
+                        "content",
+                        "timestamp",
+                        "is_compact_summary",
+                        "origin",
+                        "usage",
+                        "tool_use_result",
+                        "source_tool_assistant_uuid",
+                        "reply_to_uuid",
+                        "api_error",
+                        "request_id",
+                    )
+                    if hasattr(msg, key)
+                }
+                if "uuid" not in item and hasattr(msg, "id"):
+                    item["uuid"] = getattr(msg, "id")
+                if "content" not in item:
+                    item["content"] = getattr(
+                        msg,
+                        "text_content",
+                        getattr(msg, "text", ""),
+                    )
+        if not isinstance(item, dict):
             continue
-        history_items.append({
-            "id": getattr(msg, "uuid", ""),
-            "role": role,
-            "text": text,
-        })
+        role = item.get("role")
+        if hasattr(role, "value"):
+            role = role.value
+        item["role"] = role if role in {"user", "assistant", "system"} else "user"
+        content = item.get("content")
+        if isinstance(content, list):
+            normalized_content: list[dict[str, Any]] = []
+            for block in content:
+                dumper = getattr(block, "model_dump", None)
+                if callable(dumper):
+                    try:
+                        block = dumper(mode="json")
+                    except (TypeError, ValueError):
+                        pass
+                if isinstance(block, dict):
+                    normalized_content.append(block)
+                elif isinstance(block, str):
+                    normalized_content.append({"type": "text", "text": block})
+                else:
+                    normalized_content.append({"type": "text", "text": str(block)})
+            item["content"] = normalized_content
+        elif not isinstance(content, str):
+            item["content"] = "" if content is None else str(content)
+        # Keep compatibility with small integration doubles that expose only
+        # ``text_content``/``role`` and omit durable metadata.
+        uuid_value = item.get("uuid")
+        if not isinstance(uuid_value, str) or not uuid_value:
+            uuid_value = str(getattr(msg, "id", "")) or f"history-{len(history_items)}"
+        item["uuid"] = uuid_value
+        timestamp = item.get("timestamp")
+        item["timestamp"] = timestamp if isinstance(timestamp, str) else (str(timestamp) if timestamp is not None else "")
+        for key in (
+            "parent_uuid",
+            "origin",
+            "tool_use_result",
+            "source_tool_assistant_uuid",
+            "reply_to_uuid",
+            "api_error",
+            "request_id",
+        ):
+            value = item.get(key)
+            if value is not None and not isinstance(value, str):
+                item[key] = str(value)
+        if item.get("usage") is not None and not isinstance(item.get("usage"), dict):
+            item["usage"] = None
+        try:
+            history_items.append(SessionMessagePayload.model_validate(item))
+        except (TypeError, ValueError):
+            logger.warning("Skipping malformed session history message")
 
-    if history_items:
-        await ws.send_text(json.dumps({
-            "type": "session_history",
-            "messages": history_items,
-        }))
+    await ws.send_text(
+        SessionHistoryPayload(
+            session_id=getattr(session, "session_id", ""),
+            messages=history_items,
+        ).model_dump_json()
+    )
 
     # Restore context usage so the frontend meter reflects the last turn
     used = getattr(session, "last_context_used_tokens", 0) or 0

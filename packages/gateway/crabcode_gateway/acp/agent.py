@@ -21,7 +21,6 @@ from acp.schema import (
     AgentCapabilities,
     AllowedOutcome,
     AuthenticateResponse,
-    AuthMethodAgent,
     ContentToolCallContent,
     FileEditToolCallContent,
     ForkSessionResponse,
@@ -794,12 +793,6 @@ class CrabCodeACPAgent:
     ) -> InitializeResponse:
         logger.info("acp_initialize", extra={"protocol_version": protocol_version})
 
-        auth_method = AuthMethodAgent(
-            id="crabcode-login",
-            name="Login with CrabCode",
-            description="Run `crabcode auth login` in the terminal",
-        )
-
         return InitializeResponse(
             protocol_version=acp.PROTOCOL_VERSION,
             agent_capabilities=AgentCapabilities(
@@ -816,7 +809,10 @@ class CrabCodeACPAgent:
                     resume=SessionResumeCapabilities(),
                 ),
             ),
-            auth_methods=[auth_method],
+            # Gateway authentication is handled by the transport (Basic Auth
+            # / bearer middleware).  Do not advertise an ACP login method that
+            # the CLI does not implement.
+            auth_methods=[],
             agent_info=Implementation(name="CrabCode", version=VERSION),
         )
 

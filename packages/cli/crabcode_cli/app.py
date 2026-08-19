@@ -34,7 +34,7 @@ def main(
     image: Optional[list[str]] = typer.Option(None, "-i", "--image", help="Image file(s) to attach (repeatable)"),
 ) -> None:
     """CrabCode — AI coding assistant in the terminal."""
-    from crabcode_core.types.config import ApiConfig, CrabCodeSettings
+    from crabcode_core.types.config import CrabCodeSettings
 
     work_dir = cwd or os.getcwd()
 
@@ -289,16 +289,69 @@ def sessions_export(
     """Export a session transcript to Markdown or JSON."""
     work_dir = cwd or os.getcwd()
     from crabcode_core.session.export import export_json, export_markdown
+
+    try:
+        resolved_id, resolved_cwd = _resolve_export_session(session_id, work_dir)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if fmt not in {"md", "json"}:
+        typer.echo("Error: --format must be 'md' or 'json'", err=True)
+        raise typer.Exit(1)
     if fmt == "json":
-        content = export_json(session_id, work_dir)
+        content = export_json(resolved_id, resolved_cwd)
         ext = ".json"
     else:
-        content = export_markdown(session_id, work_dir)
+        content = export_markdown(resolved_id, resolved_cwd)
         ext = ".md"
-    out_path = output or os.path.join(work_dir, f"{session_id[:8]}{ext}")
+    out_path = output or os.path.join(work_dir, f"{resolved_id[:8]}{ext}")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(content)
     typer.echo(f"Exported to {out_path}")
+
+
+def _resolve_export_session(selector: str, cwd: str) -> tuple[str, str]:
+    """Resolve an export selector without silently producing an empty file."""
+    from crabcode_core.session.meta_db import SessionMetaStore
+    from crabcode_core.session.storage import SessionStorage, get_transcript_path
+
+    value = str(selector or "").strip()
+    if not value:
+        raise ValueError("session ID is required")
+
+    work_dir = os.path.abspath(cwd)
+    local_ids = [
+        str(row.get("session_id") or "")
+        for row in SessionStorage.list_sessions(work_dir)
+        if row.get("session_id")
+    ]
+    if value in local_ids:
+        return value, work_dir
+    local_matches = [session_id for session_id in local_ids if session_id.startswith(value)]
+    if len(local_matches) == 1:
+        return local_matches[0], work_dir
+    if len(local_matches) > 1:
+        raise ValueError(f"session selector is ambiguous: {value}")
+
+    store = SessionMetaStore()
+    try:
+        exact = store.get(value)
+        if exact is not None:
+            return value, str(exact.get("cwd") or work_dir)
+        matches = store.find_active_by_prefix(value, limit=2)
+    finally:
+        store.close()
+    if len(matches) == 1:
+        return str(matches[0]["id"]), str(matches[0].get("cwd") or work_dir)
+    if len(matches) > 1:
+        raise ValueError(f"session selector is ambiguous: {value}")
+
+    try:
+        if get_transcript_path(work_dir, value).exists():
+            return value, work_dir
+    except (TypeError, ValueError):
+        pass
+    raise ValueError(f"session not found: {value}")
 
 
 @sessions_app.command("prune")
@@ -352,7 +405,7 @@ def gateway(
 ) -> None:
     """Start the CrabCode HTTP/gRPC gateway server."""
     from crabcode_core.logging_utils import configure_logging
-    from crabcode_core.types.config import CrabCodeSettings, LoggingSettings
+    from crabcode_core.types.config import LoggingSettings
 
     log_settings = LoggingSettings(level=log_level.upper())
     configure_logging(os.getcwd(), log_settings)
@@ -403,7 +456,7 @@ def acp_cmd(
     import asyncio
 
     from crabcode_core.logging_utils import configure_logging
-    from crabcode_core.types.config import CrabCodeSettings, LoggingSettings
+    from crabcode_core.types.config import LoggingSettings
 
     work_dir = cwd or os.getcwd()
     log_settings = LoggingSettings(level=log_level.upper())

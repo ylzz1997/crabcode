@@ -28,6 +28,15 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.peer import ListAgentsTool, SendMessageTool
     from crabcode_core.tools.revert import RevertTool
     from crabcode_core.tools.switch_mode import SwitchModeTool
+    from crabcode_core.tools.schedule import (
+        ScheduleCancelTool,
+        ScheduleCreateTool,
+        ScheduleListTool,
+        SchedulePauseTool,
+        ScheduleResumeTool,
+        ScheduleRunTool,
+        ScheduleStatusTool,
+    )
     from crabcode_core.tools.team import (
         TeamBroadcastTool,
         TeamCreateTool,
@@ -80,6 +89,13 @@ def get_default_tools() -> list[Tool]:
         TeamTaskCompleteTool(),
         TeamShutdownTool(),
         RevertTool(),
+        ScheduleCreateTool(),
+        ScheduleListTool(),
+        ScheduleCancelTool(),
+        ScheduleStatusTool(),
+        SchedulePauseTool(),
+        ScheduleResumeTool(),
+        ScheduleRunTool(),
     ]
 
 

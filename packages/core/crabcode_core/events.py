@@ -173,6 +173,7 @@ class CoreSession:
         )
         self._monitor_notification_task: asyncio.Task[None] | None = None
         self._monitor_manager: Any = None
+        self._schedule_manager: Any = None
         self._peer_runtime: Any = None
         self._peer_runtime_lock = asyncio.Lock()
         self._peer_notification_queue: asyncio.Queue[tuple[int, str, Any]] = (
@@ -255,6 +256,33 @@ class CoreSession:
         self._overlay_explicit_model(merged, self._initial_settings)
         return merged
 
+    def _select_model_profile(self, settings: CrabCodeSettings) -> str | None:
+        """Choose a named profile without masking explicit base API flags.
+
+        ``--model``/``--provider`` target ``settings.api``.  A project's
+        implicit ``default_model`` must not redirect the request to an
+        unrelated named profile.  An explicit ``--model-profile`` still wins,
+        as does a valid profile selected at runtime with ``/model``.
+        """
+        current = self._current_model_name
+        if current is not None and current in settings.models:
+            return current
+
+        explicit_fields = set(
+            getattr(self._initial_settings, "model_fields_set", set())
+        )
+        explicit_api_fields = set(
+            getattr(self._initial_settings.api, "model_fields_set", set())
+        )
+        if explicit_api_fields and "default_model" not in explicit_fields:
+            # ``get_api_config(None)`` follows ``default_model`` internally;
+            # clear an implicit project profile so the explicit base API
+            # fields actually take effect.
+            settings.default_model = None
+            return None
+        default = settings.default_model
+        return default if default in settings.models else None
+
     @staticmethod
     async def _gather_cancel_on_error(*awaitables: Awaitable[Any]) -> list[Any]:
         """Run setup operations as a group and settle siblings on failure.
@@ -334,6 +362,11 @@ class CoreSession:
                 logger.warning("Failed to roll back peer messaging initialization", exc_info=True)
             self._peer_runtime = None
 
+        if self._schedule_manager is not None:
+            try:
+                await self._schedule_manager.close()
+            except Exception:
+                logger.warning("Failed to roll back ScheduleManager initialization", exc_info=True)
         if self._agent_manager is not None:
             try:
                 await self._agent_manager.close()
@@ -376,6 +409,7 @@ class CoreSession:
         self.tools = original_tools_container
         self.skills = []
         self._monitor_manager = None
+        self._schedule_manager = None
         self._agent_manager = None
         self._team_manager = None
         self._lsp_manager = None
@@ -427,9 +461,7 @@ class CoreSession:
         configure_logging(self.cwd, merged.logging)
 
         # Keep a /model switch that ran before the first initialize() (late init).
-        chosen = self._current_model_name
-        if chosen is None or chosen not in merged.models:
-            chosen = merged.default_model
+        chosen = self._select_model_profile(merged)
         self._current_model_name = chosen
         active_api_config = merged.get_api_config(self._current_model_name)
         if self._reasoning_effort_override is not None:
@@ -469,6 +501,19 @@ class CoreSession:
         from crabcode_core.hooks.manager import HookManager
 
         self._hook_manager = HookManager(merged.hooks)
+
+        # Scheduling is a session-facing capability, but its SQLite leases
+        # make persisted jobs safe to recover even when several sessions or
+        # gateway workers are alive in the same process.
+        from crabcode_core.schedule.manager import ScheduleManager
+
+        self._schedule_manager = ScheduleManager(
+            settings=merged.schedule,
+            cwd=self.cwd,
+            session_id=self.session_id,
+            event_sink=self._emit_background_event,
+        )
+        await self._schedule_manager.start()
 
         async def _push_agent_event(event: CoreEvent) -> None:
             # Capture ownership before any await. A session switch can replace
@@ -651,6 +696,7 @@ class CoreSession:
             hook_manager=self._hook_manager,
             lsp_manager=self._lsp_manager,
             ai_reviewer=self._ai_reviewer,
+            schedule_manager=self._schedule_manager,
             event_stream_token_provider=_event_stream_token_provider,
         )
 
@@ -718,6 +764,7 @@ class CoreSession:
                 agent_manager=self._agent_manager,
                 lsp_manager=self._lsp_manager,
                 team_manager=self._team_manager,
+                schedule_manager=self._schedule_manager,
                 session=self,
             )
             await tool.setup(ctx)
@@ -1781,6 +1828,12 @@ class CoreSession:
             # place instead of leaking an empty-session runtime.
             self._team_manager._session_id = self.session_id
             self._team_manager._cwd = self.cwd
+        if self._schedule_manager is not None:
+            self._schedule_manager.update_context(
+                cwd=self.cwd,
+                session_id=self.session_id,
+                settings=self.settings.schedule,
+            )
         self._refresh_tool_context_bindings()
         active_cfg = self.settings.get_api_config(self._current_model_name)
         self._session_storage.write_meta(
@@ -1817,6 +1870,7 @@ class CoreSession:
                 "agent_manager": self._agent_manager,
                 "team_manager": self._team_manager,
                 "lsp_manager": self._lsp_manager,
+                "schedule_manager": self._schedule_manager,
                 "session": self,
             }
             for name, value in updates.items():
@@ -1957,9 +2011,7 @@ class CoreSession:
             merged = self._merge_project_settings(file_settings)
             if self._ultra_mode_override is not None:
                 merged.ultra_mode = self._ultra_mode_override
-            chosen = self._current_model_name
-            if chosen is None or chosen not in merged.models:
-                chosen = merged.default_model
+            chosen = self._select_model_profile(merged)
             api_config = merged.get_api_config(chosen)
             if self._reasoning_effort_override is not None:
                 api_config.reasoning_effort = self._reasoning_effort_override
@@ -2046,6 +2098,24 @@ class CoreSession:
             prepared = await self._prepare_project_resources(self.cwd)
         merged = prepared["settings"]
         self.settings = merged
+        if self._schedule_manager is not None:
+            if self._schedule_manager.settings.persist != merged.schedule.persist:
+                await self._schedule_manager.close()
+                from crabcode_core.schedule.manager import ScheduleManager
+
+                self._schedule_manager = ScheduleManager(
+                    settings=merged.schedule,
+                    cwd=self.cwd,
+                    session_id=self.session_id,
+                    event_sink=self._emit_background_event,
+                )
+                await self._schedule_manager.start()
+            else:
+                await self._schedule_manager.reconfigure(
+                    cwd=self.cwd,
+                    session_id=self.session_id,
+                    settings=merged.schedule,
+                )
         if self._team_manager is not None:
             # ``_replace_team_manager`` runs before this rebind so old teams
             # can be closed without sharing their bus.  Update the fresh,
@@ -2145,6 +2215,7 @@ class CoreSession:
             self._agent_manager._prompt_profile = self._prompt_profile
             self._agent_manager._hook_manager = self._hook_manager
             self._agent_manager._lsp_manager = self._lsp_manager
+            self._agent_manager._schedule_manager = self._schedule_manager
 
             # AgentTool caches execution and display limits on the tool
             # instance. Refresh those values when the resumed project uses a
@@ -2180,6 +2251,7 @@ class CoreSession:
                 agent_manager=self._agent_manager,
                 lsp_manager=self._lsp_manager,
                 team_manager=self._team_manager,
+                schedule_manager=self._schedule_manager,
                 session=self,
             )
             try:
@@ -2429,6 +2501,13 @@ class CoreSession:
                 except Exception:
                     logger.warning("Failed to close peer messaging runtime", exc_info=True)
                 self._peer_runtime = None
+
+            if self._schedule_manager is not None:
+                try:
+                    await self._schedule_manager.close()
+                except Exception:
+                    logger.warning("Failed to close schedule manager", exc_info=True)
+                self._schedule_manager = None
 
             if self._agent_manager is not None:
                 try:
@@ -2853,6 +2932,7 @@ class CoreSession:
             agent_manager=self._agent_manager,
             lsp_manager=self._lsp_manager,
             team_manager=self._team_manager,
+            schedule_manager=self._schedule_manager,
             session=self,
         )
 
@@ -3277,6 +3357,11 @@ class CoreSession:
                 cwd=self.cwd,
                 force_generation=True,
             )
+        if self._schedule_manager is not None:
+            self._schedule_manager.update_context(
+                cwd=self.cwd,
+                session_id=self.session_id,
+            )
         self._sync_client_permission_mode()
         self._replace_team_manager()
         self._refresh_tool_context_bindings()
@@ -3390,6 +3475,30 @@ class CoreSession:
                 trigger="manual",
                 custom_instructions=instructions or None,
             )
+
+    async def clear_history(self) -> int:
+        """Clear the active conversation and persist that projection boundary."""
+        await self.initialize()
+        async with self._turn_scope():
+            if self._closed or self._closing:
+                raise RuntimeError("CoreSession is closed")
+            messages_before = len(self.messages)
+            self._ensure_session_storage()
+            if self._session_storage:
+                self._session_storage.append_clear_boundary(
+                    messages_before=messages_before,
+                )
+                self._session_storage.record_message_count(0)
+            self.messages.clear()
+            self.compact_count = 0
+            self.last_context_used_tokens = 0
+            self.last_context_window_tokens = 0
+            self._persisted_compact_summaries.clear()
+            self._partial_committed_prefixes.clear()
+            self._pending_manual_compact = None
+            self._current_plan = None
+            self._drain_steering_messages_for_query()
+            return messages_before
 
     def checkpoint(
         self,
@@ -3710,6 +3819,11 @@ class CoreSession:
         self._client_permission_mode_override = None if mode == "default" else mode
         self._sync_client_permission_mode()
         return True
+
+    @property
+    def client_permission_mode(self) -> str:
+        """Return the client permission override, or ``default``."""
+        return self._client_permission_mode_override or "default"
 
     def switch_mode(self, mode: str) -> bool:
         """Switch between 'agent' and 'plan' mode.
@@ -4059,6 +4173,11 @@ class CoreSession:
         self.cwd = target_cwd
         self.session_id = session_id
         self._session_storage = storage
+        if self._schedule_manager is not None:
+            self._schedule_manager.update_context(
+                cwd=self.cwd,
+                session_id=self.session_id,
+            )
         self._drain_session_queues()
         self.messages.clear()
         self.compact_count = storage.compact_count

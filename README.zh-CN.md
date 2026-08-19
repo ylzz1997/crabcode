@@ -139,15 +139,26 @@ crabcode gateway --password secret
 | 端点 | 方法 | 说明 |
 | ------ | ------ | ------ |
 | `/health` | GET | 健康检查 |
-| `/session/new` | POST | 创建新会话 |
+| `/session/new` | POST | 创建会话；除 `cwd` 外可传 `model`、`provider`、`base_url`、`api_format`、`model_profile` 覆盖 |
 | `/session/send` | POST | 发送消息（触发 query loop，事件通过 SSE 推送） |
 | `/session/interrupt` | POST | 中断当前轮次 |
 | `/session/compact` | POST | 手动触发对话压缩 |
-| `/session/list` | GET | 列出活跃会话 |
-| `/session/resume` | POST | 恢复会话 |
+| `/session/clear` | POST | 清空活动上下文并持久化清空边界 |
+| `/session/messages` | GET | 读取结构化的活动消息投影 |
+| `/session/list` | GET | 列出当前项目的持久化会话 |
+| `/session/recent` | GET | 跨项目列出最近会话 |
+| `/session/search` | POST | 按标题或消息搜索会话 |
+| `/session/resolve` | GET | 解析完整 ID、唯一前缀或当前项目序号 |
+| `/session/resume` | POST | 按完整 ID、唯一前缀或序号恢复冷会话，并支持同样的 API 覆盖字段 |
+| `/session/status` | GET | 读取模型、模式、推理强度和上下文窗口状态 |
+| `/session/archive` | POST | 归档已加载或仅持久化的会话 |
+| `/session/prune` | POST | 归档过期的非活动会话，并可选清理其文件 |
+| `/session/export` | POST | 按 ID、前缀或序号导出 Markdown/JSON |
+| `/session/stats` | GET | 读取全局、项目和模型维度用量统计 |
 | `/agent/spawn` | POST | 生成子 agent |
 | `/agent/{id}` | GET | 获取 agent 状态 |
 | `/agent/list` | GET | 列出所有 agent |
+| `/agent/{id}/transcript` | GET | 读取 agent transcript/日志尾部 |
 | `/agent/{id}/cancel` | POST | 取消 agent |
 | `/agent/{id}/input` | POST | 向 agent 发送输入 |
 | `/agent/wait` | POST | 等待 agent 完成 |
@@ -156,19 +167,47 @@ crabcode gateway --password secret
 | `/config/models` | GET | 列出可用模型 |
 | `/config/switch-model` | POST | 切换模型 |
 | `/config/switch-mode` | POST | 切换 agent/plan 模式 |
+| `/config/reasoning-effort` | POST | 设置推理强度 |
+| `/config/ultra-mode` | POST | 切换或设置 Ultra mode |
+| `/config/permission-mode` | POST | 设置客户端工具权限覆盖 |
 | `/config/goal` | GET/POST | 查看或管理会话 Goal |
+| `/config/plan-status` | GET | 读取当前计划执行状态 |
 | `/tools` | GET | 列出可用工具（含 MCP） |
+| `/skills` | GET | 列出可用 Skills |
+| `/skills/expand` | POST | 使用用户输入展开 Skill 调用 |
 | `/context` | POST | 推送工作区上下文（活动文件、选中内容、光标位置） |
+| `/context/{session_id}` | GET | 读取最新客户端工作区上下文 |
+| `/logs` | GET | 列出、读取尾部或清空后台日志 |
+| `/logs/follow` | GET | 通过 SSE 实时跟随后台日志 |
+| `/tasks`, `/tasks/{id}` | GET | 列出后台任务或读取单个任务 |
+| `/tasks/{id}/output` | GET | 读取持久化的后台任务输出 |
+| `/tasks/stop` | POST | 停止后台任务 |
+| `/schedule`, `/schedule/{id}` | GET | 列出定时任务，或按 ID/唯一前缀读取单个任务 |
+| `/schedule/{id}/runs` | GET | 读取定时任务的持久化执行历史 |
+| `/schedule/create` | POST | 创建 cron、固定间隔或单次任务；支持启用状态、下次执行时间覆盖、复用执行会话、标签和扩展元数据 |
+| `/schedule/pause`, `/schedule/resume` | POST | 暂停或恢复定时任务 |
+| `/schedule/trigger`, `/schedule/cancel` | POST | 立即执行或永久删除定时任务 |
+| `/peer/list`, `/peer/send` | GET/POST | 列出可通信会话或发送跨会话消息 |
+| `/team/list`, `/team/{id}/*` | GET | 读取 Team、状态、消息和任务板 |
+| `/team/create`, `/team/spawn`, `/team/shutdown` | POST | 管理 Team 生命周期 |
+| `/team/message`, `/team/broadcast` | POST | 发送 teammate 消息 |
+| `/team/remove`, `/team/messages/read` | POST | 移除 teammate 或将其消息标记为已读 |
+| `/team/task/*` | POST | 添加、认领、完成或标记失败 Team 任务 |
+| `/team/bridge`, `/team/{a}/bridge/{b}` | POST/GET | 注册或查看跨 Team Bridge 策略 |
+| `/team/cross-message` | POST | 发送经过策略检查的跨 Team 消息 |
 | `/snapshot/checkpoint` | POST | 创建带文件快照的检查点 |
 | `/snapshot/list` | GET | 列出会话的检查点 |
 | `/snapshot/revert` | POST | 回退文件 + 对话到检查点 |
 | `/snapshot/rollback` | POST | 仅回滚对话（不还原文件） |
+| `/snapshot/undo` | POST | 回退最近的检查点 |
 | `/event` | GET (SSE) | 实时事件流（10 秒心跳） |
 | `/ws` | WebSocket | 双向通信（VSCode 扩展首选） |
 
-**WebSocket `/ws`** 支持收发命令（`send_message`、`permission_response`、`choice_response`、`push_context`）和事件推送 —— 单个连接即可完成所有交互，适合 VSCode 扩展使用。
+**WebSocket `/ws`** 覆盖完整交互命令链路：会话新建/恢复（`new_session`、`resume_session`）、消息与 steering、中断、权限/选择回复、工作区上下文、模型/模式/权限切换和计划操作。`new_session` 与 `resume_session` 接受和 HTTP 生命周期端点相同的五个 API 覆盖字段；目标会话已经加载时会拒绝覆盖，避免一个客户端静默替换另一个客户端正在使用的 runtime。一个连接会持续订阅它显式选择过的所有 session，因此界面切换后仍能收到旧 session 的后台事件，同时不会暴露未选择的其他 session。前台与计划命令携带 `operation_id`；steering 和 interrupt 应回传该 ID，避免误投到更新的轮次。命令校验失败使用有类型、非终止性的 error envelope；每个已受理 operation 最终只以一个 `turn_complete` 结束。完整客户端还必须消费结构化会话历史，以及带 session 标识的 `agent_state`、`agent_output`、`team_message`、`team_state`、`task_update`、`schedule_run`、`compact`、权限/选择回复、文件变更、snapshot 和 revert 事件。Schedule 的增删改查使用上面的 HTTP 端点，客户端无需轮询执行结果。
 
-**gRPC** 在启用 `--grpc-port` 后可用，提供流式 `SendMessage` 和 `SubscribeEvents` RPC。完整服务定义见 `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto`。
+直接执行 `! <cmd>` 被刻意限定为可信客户端能力：CLI 在本地进程中执行，VSCode 扩展发送到本地集成终端。Gateway 不提供该端点，因为这会形成绕过权限系统的远程 Shell。Crab Desktop 也应保持同一边界，只在本地宿主进程中执行此命令。
+
+**gRPC** 在启用 `--grpc-port` 后可用，提供流式对话/事件，以及 `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto` 中定义的 agent、权限、选择、模型和模式 RPC。HTTP + WebSocket 是完整客户端能力面，Crab Desktop 应使用这一组合。
 
 ### ACP（Agent Client Protocol）支持
 
@@ -810,9 +849,22 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 | `/wait <id>` | 等待某个 agent 完成并输出摘要 |
 | `/cancel-agent <id>` | 取消运行中的 agent |
 | `/team list` | 列出活跃的 agent 团队 |
+| `/team create <name> [max]` | 创建团队 |
 | `/team status <team_id>` | 显示团队状态表 |
 | `/team messages <team_id>` | 显示团队消息历史 |
+| `/team tasks <team_id>` | 显示共享任务板 |
+| `/team spawn <team_id> [options] <prompt>` | 添加 teammate |
+| `/team message <team_id> <agent_id> <text>` | 向 teammate 发消息 |
+| `/team broadcast <team_id> <text>` | 向所有 teammate 广播 |
+| `/team task-add <team_id> <description>` | 添加任务 |
+| `/team task-claim <team_id> <task_id> [agent_id]` | 认领任务 |
+| `/team task-complete <team_id> <task_id> [result]` | 完成任务 |
 | `/team shutdown <team_id>` | 关闭团队 |
+| `/schedule list` | 列出定时任务 |
+| `/schedule show <job_id>` | 查看定时任务详情 |
+| `/schedule runs <job_id>` | 查看定时任务执行历史 |
+| `/schedule create <name> <type> <schedule> <prompt>` | 创建 cron/interval/once 定时任务 |
+| `/schedule pause\|resume\|run\|cancel <job_id>` | 管理定时任务生命周期 |
 | `/new` | 新建会话（清空内存中的对话历史） |
 | `/compact` | 手动压缩对话历史，节省上下文 |
 | `/clear` | 清空当前内存对话消息 |
@@ -1242,8 +1294,16 @@ Agent Teams 允许一个 Lead Agent 生成多个 Teammate，通过消息传递�
 | 命令 | 说明 |
 | ------ | ------ |
 | `/team list` | 列出活跃的团队 |
+| `/team create <name> [max]` | 创建团队 |
 | `/team status <team_id>` | 显示团队状态表 |
 | `/team messages <team_id>` | 显示团队消息历史 |
+| `/team tasks <team_id>` | 显示共享任务板 |
+| `/team spawn <team_id> [options] <prompt>` | 添加 teammate |
+| `/team message <team_id> <agent_id> <text>` | 向 teammate 发消息 |
+| `/team broadcast <team_id> <text>` | 向所有 teammate 广播 |
+| `/team task-add <team_id> <description>` | 添加任务 |
+| `/team task-claim <team_id> <task_id> [agent_id]` | 认领任务 |
+| `/team task-complete <team_id> <task_id> [result]` | 完成任务 |
 | `/team shutdown <team_id>` | 关闭团队 |
 
 ### 多模型混编示例

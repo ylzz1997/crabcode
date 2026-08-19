@@ -226,6 +226,7 @@ class AgentManager:
         hook_manager: Any = None,
         lsp_manager: Any = None,
         ai_reviewer: Any = None,
+        schedule_manager: Any = None,
         event_stream_token_provider: Callable[[], object | None] | None = None,
     ) -> None:
         self._settings = settings
@@ -247,6 +248,7 @@ class AgentManager:
         self._hook_manager = hook_manager
         self._lsp_manager = lsp_manager
         self._ai_reviewer = ai_reviewer
+        self._schedule_manager = schedule_manager
         self._event_stream_token_provider = event_stream_token_provider
         self._team_manager: Any = None  # Set by CoreSession after construction
         self._runs: dict[str, _AgentRun] = {}
@@ -1467,6 +1469,7 @@ class AgentManager:
                         if run.run_team_manager is not None
                         else self._team_manager
                     ),
+                    schedule_manager=self._schedule_manager,
                 )
                 params = QueryParams(
                     messages=list(run.messages),

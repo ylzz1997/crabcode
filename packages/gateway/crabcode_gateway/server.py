@@ -21,7 +21,19 @@ from crabcode_core import VERSION
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.middleware import register_middleware
-from crabcode_gateway.routes import agent, config, event, health, permission, session, snapshot
+from crabcode_gateway.routes import (
+    agent,
+    config,
+    event,
+    health,
+    peer,
+    permission,
+    schedule,
+    session,
+    snapshot,
+    tasks,
+    team,
+)
 from crabcode_gateway.session_registry import get_session_lock
 from crabcode_gateway.task_registry import (
     ensure_task_state,
@@ -105,9 +117,13 @@ class GatewayServer:
         app.include_router(session.router)
         app.include_router(agent.router)
         app.include_router(permission.router)
+        app.include_router(schedule.router)
         app.include_router(config.router)
         app.include_router(event.router)
         app.include_router(snapshot.router)
+        app.include_router(tasks.router)
+        app.include_router(peer.router)
+        app.include_router(team.router)
 
         self._app = app
         return app

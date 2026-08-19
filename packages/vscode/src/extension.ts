@@ -76,6 +76,7 @@ class PermissionHandler implements vscode.Disposable {
           const cmd = buildPermissionResponseCommand(tool_use_id, false, {
             agentId: agent_id ?? undefined,
             feedback: feedback || undefined,
+            sessionId: payload.session_id,
           });
           this.connection.sendRaw(serializeCommand(cmd));
           return;
@@ -85,6 +86,7 @@ class PermissionHandler implements vscode.Disposable {
         const cmd = buildPermissionResponseCommand(tool_use_id, allowed, {
           alwaysAllow,
           agentId: agent_id ?? undefined,
+          sessionId: payload.session_id,
         });
         this.connection.sendRaw(serializeCommand(cmd));
       });
@@ -116,6 +118,7 @@ class ChoiceHandler implements vscode.Disposable {
           const cmd = buildChoiceResponseCommand(tool_use_id, selected, {
             cancelled,
             agentId: agent_id ?? undefined,
+            sessionId: payload.session_id,
           });
           this.connection.sendRaw(serializeCommand(cmd));
         });
@@ -131,6 +134,7 @@ class ChoiceHandler implements vscode.Disposable {
           const cmd = buildChoiceResponseCommand(tool_use_id, selected, {
             cancelled,
             agentId: agent_id ?? undefined,
+            sessionId: payload.session_id,
           });
           this.connection.sendRaw(serializeCommand(cmd));
         });
@@ -224,7 +228,8 @@ class ContextProvider implements vscode.Disposable {
 
   private pushContext(): void {
     const editor = this.activeEditor;
-    if (!editor || !this.connection.sessionId) {
+    const sessionId = this.connection.sessionId;
+    if (!editor || !sessionId) {
       return;
     }
 
@@ -242,7 +247,7 @@ class ContextProvider implements vscode.Disposable {
       language_id: doc.languageId,
     };
     const signature = JSON.stringify({
-      session_id: this.connection.sessionId,
+      session_id: sessionId,
       ...context,
     });
     if (signature === this.lastContextSignature) {
@@ -250,7 +255,7 @@ class ContextProvider implements vscode.Disposable {
     }
     this.lastContextSignature = signature;
 
-    this.connection.pushContext(context);
+    this.connection.pushContext(context, sessionId);
   }
 
   dispose(): void {

@@ -5,12 +5,14 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from crabcode_gateway.schemas import (
+    AgentTranscriptResponse,
     AgentInfo,
     AgentInputRequest,
     SpawnAgentRequest,
     WaitAgentRequest,
 )
 from crabcode_gateway.session_registry import get_session_lock
+from crabcode_gateway.safe_file import read_regular_file_tail
 from crabcode_gateway.task_registry import SessionOperationRejected, run_session_operation
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -47,15 +49,25 @@ def _get_session(
         if not ids:
             return True
         try:
-            return all(candidate.get_agent(item) is not None for item in ids)  # type: ignore[attr-defined]
+            agents = list(candidate.list_agents())  # type: ignore[attr-defined]
+            for selector in ids:
+                exact = [item for item in agents if item.agent_id == selector]
+                if exact:
+                    continue
+                if len([item for item in agents if item.agent_id.startswith(selector)]) != 1:
+                    return False
+            return True
         except Exception:
             return False
 
-    # An explicit selector is authoritative.  Falling back to the default
-    # session here can cancel or inject input into an unrelated conversation.
+    # An explicit selector is authoritative.  It chooses the session only;
+    # agent existence is resolved inside the admitted operation so a missing
+    # agent is reported as an agent 404 rather than "Session not found".
     if requested is not None:
         selected = sessions.get(requested)
-        return selected if _owns(selected) else None
+        if selected is None or getattr(selected, "session_id", None) in closing:
+            return None
+        return selected
 
     default_id = request.app.state.default_session_id
     selected = sessions.get(default_id) if default_id else None
@@ -77,21 +89,57 @@ def _agent_info(snapshot) -> AgentInfo:
         agent_id=snapshot.agent_id,
         session_id=snapshot.session_id,
         parent_agent_id=snapshot.parent_agent_id,
+        parent_tool_use_id=getattr(snapshot, "parent_tool_use_id", None),
         title=snapshot.title,
         subagent_type=snapshot.subagent_type,
         status=snapshot.status,
         model=snapshot.model,
+        model_profile=getattr(snapshot, "model_profile", None),
         created_at=snapshot.created_at,
+        started_at=getattr(snapshot, "started_at", None),
         finished_at=snapshot.finished_at,
+        updated_at=getattr(snapshot, "updated_at", snapshot.created_at),
         usage=snapshot.usage,
         final_result=snapshot.final_result,
         error=snapshot.error,
+        depth=getattr(snapshot, "depth", 0),
         transcript_path=snapshot.transcript_path,
         callback_enabled=snapshot.callback_enabled,
         callback_state=snapshot.callback_state,
         callback_message_id=snapshot.callback_message_id,
         callback_epoch=snapshot.callback_epoch,
     )
+
+
+def _resolve_agent(session, selector: str):
+    """Resolve an exact id or a unique CLI-style id prefix."""
+    value = str(selector or "").strip()
+    if not value:
+        return None
+    exact = session.get_agent(value)
+    if exact is not None:
+        return exact
+    matches = [item for item in session.list_agents() if item.agent_id.startswith(value)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _read_agent_tail(
+    session,
+    agent_id: str,
+    max_lines: int = 200,
+) -> tuple[str, list[str], bool]:
+    from crabcode_core.session.storage import get_agent_transcript_path
+
+    path = get_agent_transcript_path(
+        session.cwd,
+        session.session_id,
+        agent_id,
+    )
+    try:
+        lines, truncated = read_regular_file_tail(path, max_lines=max_lines)
+    except OSError:
+        return str(path), [], False
+    return str(path), lines, truncated
 
 
 @router.post("/spawn", response_model=AgentInfo)
@@ -124,6 +172,8 @@ async def spawn_agent(req: SpawnAgentRequest, request: Request) -> AgentInfo:
         )
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not snapshot:
         raise HTTPException(status_code=500, detail="Agent spawn failed")
 
@@ -137,7 +187,17 @@ async def list_agents(request: Request) -> list[AgentInfo]:
         session = _get_session(request, request.query_params.get("session_id"))
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        snapshots = list(session.list_agents())
+
+    async def _list():
+        initializer = getattr(session, "initialize", None)
+        if callable(initializer):
+            await initializer()
+        return list(session.list_agents())
+
+    try:
+        snapshots = await run_session_operation(request.app.state, session, _list)
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return [_agent_info(snapshot) for snapshot in snapshots]
 
@@ -153,11 +213,59 @@ async def get_agent(agent_id: str, request: Request) -> AgentInfo:
         )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        snapshot = session.get_agent(agent_id)
+
+    async def _get():
+        initializer = getattr(session, "initialize", None)
+        if callable(initializer):
+            await initializer()
+        return _resolve_agent(session, agent_id)
+
+    try:
+        snapshot = await run_session_operation(request.app.state, session, _get)
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not snapshot:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
     return _agent_info(snapshot)
+
+
+@router.get("/{agent_id}/transcript", response_model=AgentTranscriptResponse)
+@router.get("/{agent_id}/log", response_model=AgentTranscriptResponse)
+async def get_agent_transcript(agent_id: str, request: Request) -> AgentTranscriptResponse:
+    """Return the stored tail of an agent transcript for desktop clients."""
+    async with get_session_lock(request.app.state):
+        session = _get_session(
+            request,
+            request.query_params.get("session_id"),
+            agent_id=agent_id,
+        )
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    async def _get():
+        initializer = getattr(session, "initialize", None)
+        if callable(initializer):
+            await initializer()
+        return _resolve_agent(session, agent_id)
+
+    try:
+        snapshot = await run_session_operation(request.app.state, session, _get)
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not snapshot:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    try:
+        limit = max(1, min(10_000, int(request.query_params.get("lines", "200"))))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="lines must be an integer")
+    path, lines, truncated = _read_agent_tail(session, snapshot.agent_id, limit)
+    return AgentTranscriptResponse(
+        agent_id=snapshot.agent_id,
+        path=path,
+        lines=lines,
+        truncated=truncated,
+    )
 
 
 @router.post("/{agent_id}/cancel")
@@ -171,14 +279,25 @@ async def cancel_agent(agent_id: str, request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    async def _cancel():
+        initializer = getattr(session, "initialize", None)
+        if callable(initializer):
+            await initializer()
+        snapshot = _resolve_agent(session, agent_id)
+        if snapshot is None:
+            return None
+        return await session.cancel_agent(snapshot.agent_id)
+
     try:
         ok = await run_session_operation(
             request.app.state,
             session,
-            lambda: session.cancel_agent(agent_id),
+            _cancel,
         )
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if ok is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ok:
         raise HTTPException(status_code=400, detail=f"Could not cancel agent {agent_id}")
     return {"status": "ok"}
@@ -197,14 +316,29 @@ async def send_agent_input(agent_id: str, req: AgentInputRequest, request: Reque
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    async def _send_input():
+        initializer = getattr(session, "initialize", None)
+        if callable(initializer):
+            await initializer()
+        snapshot = _resolve_agent(session, agent_id)
+        if snapshot is None:
+            return None
+        return await session.send_agent_input(
+            snapshot.agent_id,
+            req.prompt,
+            interrupt=req.interrupt,
+        )
+
     try:
         ok = await run_session_operation(
             request.app.state,
             session,
-            lambda: session.send_agent_input(agent_id, req.prompt, interrupt=req.interrupt),
+            _send_input,
         )
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if ok is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ok:
         raise HTTPException(status_code=400, detail=f"Could not send input to agent {agent_id}")
     return {"status": "ok"}
@@ -227,14 +361,31 @@ async def wait_agent(req: WaitAgentRequest, request: Request) -> AgentInfo:
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    async def _resolve_and_wait():
+        initializer = getattr(session, "initialize", None)
+        if callable(initializer):
+            await initializer()
+        resolved_ids: list[str] = []
+        for selector in agent_ids:
+            snapshot = _resolve_agent(session, selector)
+            if snapshot is None:
+                return selector, None
+            resolved_ids.append(snapshot.agent_id)
+        target: str | list[str] = (
+            resolved_ids if isinstance(req.agent_id, list) else resolved_ids[0]
+        )
+        return None, await session.wait_agent(target, timeout_ms=req.timeout_ms)
+
     try:
-        snapshot = await run_session_operation(
+        missing_selector, snapshot = await run_session_operation(
             request.app.state,
             session,
-            lambda: session.wait_agent(req.agent_id, timeout_ms=req.timeout_ms),
+            _resolve_and_wait,
         )
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if missing_selector is not None:
+        raise HTTPException(status_code=404, detail=f"Agent {missing_selector} not found")
     if not snapshot:
         raise HTTPException(status_code=408, detail="Agent wait timed out")
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS schedules (
     tags TEXT NOT NULL DEFAULT '[]',
     timeout INTEGER,
     model_profile TEXT,
-    extra TEXT NOT NULL DEFAULT '{}'
+    extra TEXT NOT NULL DEFAULT '{}',
+    claimed_by TEXT,
+    claimed_until TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schedule_runs (
@@ -63,13 +65,17 @@ CREATE INDEX IF NOT EXISTS idx_schedules_pending
     WHERE status = 'active' AND enabled = 1;
 """
 
-_MIGRATIONS: list[str] = []
+_MIGRATIONS: list[str] = [
+    "ALTER TABLE schedules ADD COLUMN claimed_by TEXT",
+    "ALTER TABLE schedules ADD COLUMN claimed_until TEXT",
+]
 
 
 def _get_conn(db_path: Path) -> sqlite3.Connection:
     """Open (or create) the SQLite database and ensure the schema exists."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_SCHEMA)
@@ -134,11 +140,32 @@ class ScheduleStore:
         """Insert or update a :class:`ScheduleJob` row."""
         conn = self._conn_or_create()
         conn.execute(
-            """INSERT OR REPLACE INTO schedules
+            """INSERT INTO schedules
                (id, name, prompt, schedule, schedule_type, cwd, enabled, status,
                 last_run, next_run, run_count, max_runs, created_at, session_id,
                 description, tags, timeout, model_profile, extra)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 prompt = excluded.prompt,
+                 schedule = excluded.schedule,
+                 schedule_type = excluded.schedule_type,
+                 cwd = excluded.cwd,
+                 enabled = excluded.enabled,
+                 status = excluded.status,
+                 last_run = excluded.last_run,
+                 next_run = excluded.next_run,
+                 run_count = excluded.run_count,
+                 max_runs = excluded.max_runs,
+                 created_at = excluded.created_at,
+                 session_id = excluded.session_id,
+                 description = excluded.description,
+                 tags = excluded.tags,
+                 timeout = excluded.timeout,
+                 model_profile = excluded.model_profile,
+                 extra = excluded.extra,
+                 claimed_by = NULL,
+                 claimed_until = NULL""",
             (
                 job.id,
                 job.name,
@@ -173,6 +200,24 @@ class ScheduleStore:
             return None
         cols = [d[0] for d in conn.execute("SELECT * FROM schedules LIMIT 0").description]
         return _row_to_schedule(row, cols)
+
+    def resolve_schedule(self, selector: str) -> dict[str, Any] | None:
+        """Resolve an exact job ID or one unambiguous ID prefix."""
+        value = str(selector or "").strip()
+        if not value:
+            return None
+        exact = self.get_schedule(value)
+        if exact is not None:
+            return exact
+        conn = self._conn_or_create()
+        rows = conn.execute(
+            "SELECT * FROM schedules WHERE id LIKE ? ORDER BY created_at DESC LIMIT 2",
+            (f"{value}%",),
+        ).fetchall()
+        if len(rows) != 1:
+            return None
+        cols = [d[0] for d in conn.execute("SELECT * FROM schedules LIMIT 0").description]
+        return _row_to_schedule(rows[0], cols)
 
     def list_schedules(
         self,
@@ -213,6 +258,130 @@ class ScheduleStore:
         # Delete runs first (defensive — FK ON DELETE CASCADE should handle it)
         conn.execute("DELETE FROM schedule_runs WHERE job_id = ?", (job_id,))
         conn.execute("DELETE FROM schedules WHERE id = ?", (job_id,))
+        conn.commit()
+
+    def claim_due_schedules(
+        self,
+        owner: str,
+        *,
+        now_iso: str | None = None,
+        limit: int = 1,
+        lease_seconds: int = 660,
+    ) -> list[dict[str, Any]]:
+        """Atomically lease due jobs to one scheduler instance.
+
+        The lease is stored in SQLite so multiple CrabCode processes can share
+        the default schedule database without executing the same occurrence.
+        """
+        conn = self._conn_or_create()
+        now = now_iso or datetime.now(timezone.utc).isoformat()
+        lease_until = (
+            datetime.fromisoformat(now) + timedelta(seconds=max(1, lease_seconds))
+        ).isoformat()
+        safe_limit = max(1, int(limit))
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """SELECT * FROM schedules
+                   WHERE status = 'active'
+                     AND enabled = 1
+                     AND next_run IS NOT NULL
+                     AND next_run <= ?
+                     AND (max_runs IS NULL OR run_count < max_runs)
+                     AND (claimed_until IS NULL OR claimed_until <= ?)
+                   ORDER BY next_run ASC
+                   LIMIT ?""",
+                (now, now, safe_limit),
+            ).fetchall()
+            cols = [
+                d[0]
+                for d in conn.execute("SELECT * FROM schedules LIMIT 0").description
+            ]
+            claimed: list[dict[str, Any]] = []
+            for row in rows:
+                data = _row_to_schedule(row, cols)
+                changed = conn.execute(
+                    """UPDATE schedules
+                       SET claimed_by = ?, claimed_until = ?
+                       WHERE id = ?
+                         AND status = 'active'
+                         AND enabled = 1
+                         AND next_run IS NOT NULL
+                         AND next_run <= ?
+                         AND (claimed_until IS NULL OR claimed_until <= ?)""",
+                    (owner, lease_until, data["id"], now, now),
+                ).rowcount
+                if changed:
+                    data["claimed_by"] = owner
+                    data["claimed_until"] = lease_until
+                    claimed.append(data)
+            conn.commit()
+            return claimed
+        except BaseException:
+            conn.rollback()
+            raise
+
+    def release_claim(self, job_id: str, owner: str) -> None:
+        """Release a lease only when it is still owned by *owner*."""
+        conn = self._conn_or_create()
+        conn.execute(
+            """UPDATE schedules
+               SET claimed_by = NULL, claimed_until = NULL
+               WHERE id = ? AND claimed_by = ?""",
+            (job_id, owner),
+        )
+        conn.commit()
+
+    def claim_schedule(
+        self,
+        job_id: str,
+        owner: str,
+        *,
+        lease_seconds: int,
+    ) -> bool:
+        """Lease one active job regardless of whether its next run is due."""
+        conn = self._conn_or_create()
+        now = datetime.now(timezone.utc)
+        changed = conn.execute(
+            """UPDATE schedules
+               SET claimed_by = ?, claimed_until = ?
+               WHERE id = ?
+                 AND status = 'active'
+                 AND enabled = 1
+                 AND (claimed_until IS NULL OR claimed_until <= ?)""",
+            (
+                owner,
+                (now + timedelta(seconds=max(1, lease_seconds))).isoformat(),
+                job_id,
+                now.isoformat(),
+            ),
+        ).rowcount
+        conn.commit()
+        return bool(changed)
+
+    def renew_claim(self, job_id: str, owner: str, lease_seconds: int) -> bool:
+        """Extend an existing lease for a bounded execution."""
+        conn = self._conn_or_create()
+        claimed_until = (
+            datetime.now(timezone.utc) + timedelta(seconds=max(1, lease_seconds))
+        ).isoformat()
+        changed = conn.execute(
+            """UPDATE schedules
+               SET claimed_until = ?
+               WHERE id = ? AND claimed_by = ?""",
+            (claimed_until, job_id, owner),
+        ).rowcount
+        conn.commit()
+        return bool(changed)
+
+    def release_all_claims(self, owner: str) -> None:
+        conn = self._conn_or_create()
+        conn.execute(
+            """UPDATE schedules
+               SET claimed_by = NULL, claimed_until = NULL
+               WHERE claimed_by = ?""",
+            (owner,),
+        )
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -336,14 +505,48 @@ class ScheduleStore:
         cols = [d[0] for d in conn.execute("SELECT * FROM schedules LIMIT 0").description]
         return [_row_to_schedule(r, cols) for r in rows]
 
-    def get_stale_running_runs(self) -> list[dict[str, Any]]:
+    def get_next_wakeup(self, now_iso: str | None = None) -> str | None:
+        """Return when a runnable job next needs polling.
+
+        A live lease delays the wakeup until it expires; otherwise ``next_run``
+        is used.  This avoids both 30-second jitter for near-future jobs and a
+        busy loop around jobs currently owned by another process.
+        """
+        conn = self._conn_or_create()
+        now = now_iso or datetime.now(timezone.utc).isoformat()
+        rows = conn.execute(
+            """SELECT next_run, claimed_until FROM schedules
+               WHERE status = 'active'
+                 AND enabled = 1
+                 AND next_run IS NOT NULL
+                 AND (max_runs IS NULL OR run_count < max_runs)"""
+        ).fetchall()
+        candidates = [
+            claimed_until
+            if claimed_until is not None and claimed_until > now
+            else next_run
+            for next_run, claimed_until in rows
+        ]
+        return min(candidates) if candidates else None
+
+    def get_stale_running_runs(self, now_iso: str | None = None) -> list[dict[str, Any]]:
         """Return runs that are still marked as ``running`` (orphaned after a crash).
 
         These should be transitioned to ``failed`` on startup.
         """
         conn = self._conn_or_create()
+        now = now_iso or datetime.now(timezone.utc).isoformat()
         rows = conn.execute(
-            "SELECT * FROM schedule_runs WHERE status = 'running'"
+            """SELECT schedule_runs.*
+               FROM schedule_runs
+               LEFT JOIN schedules ON schedules.id = schedule_runs.job_id
+               WHERE schedule_runs.status = 'running'
+                 AND (
+                   schedules.id IS NULL
+                   OR schedules.claimed_until IS NULL
+                   OR schedules.claimed_until <= ?
+                 )""",
+            (now,),
         ).fetchall()
         cols = [d[0] for d in conn.execute("SELECT * FROM schedule_runs LIMIT 0").description]
         return [_row_to_run(r, cols) for r in rows]

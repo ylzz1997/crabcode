@@ -11,7 +11,9 @@
  */
 
 import * as vscode from "vscode";
-import type { CrabCodeConnection } from "./connection";
+import * as os from "os";
+import * as path from "path";
+import type { CrabCodeConnection, SessionLaunchOverrides } from "./connection";
 import {
   buildChoiceResponseCommand,
   buildPermissionResponseCommand,
@@ -21,36 +23,48 @@ import {
 import type {
   AgentOutputPayload,
   AgentStatePayload,
+  AgentInfo,
+  AgentTranscriptResponse,
+  BackgroundTaskInfo,
+  ChoiceResponsePayload,
   ChoiceRequestPayload,
+  CompactPayload,
   EventPayload,
   FileChangePayload,
   ImageAttachment,
+  LogsResponse,
+  PermissionResponsePayload,
   PermissionRequestPayload,
   PeerMessagePayload,
+  PeerInfo,
   PlanReadyPayload,
+  ScheduleRunPayload,
+  ScheduleCreateRequest,
+  ScheduleJobInfo,
+  ScheduleRunInfo,
+  SessionMessagePayload,
+  SessionHistoryPayload,
+  SessionRuntimeStatus,
+  SnapshotPayload,
   StreamModePayload,
   SteeringAppliedPayload,
+  TaskUpdatePayload,
+  TeamMessagePayload,
+  TeamMessageInfo,
+  TeamBridgeInfo,
+  CrossTeamMessageInfo,
+  TeamStatePayload,
+  TeamStatusInfo,
+  TeamTaskInfo,
   ToolResultPayload,
   ToolUsePayload,
   TurnCompletePayload,
+  RevertPayload,
 } from "./client/types";
 
 interface GatewayModelInfo {
   name: string;
   description?: string;
-}
-
-interface SessionRuntimeStatus {
-  session_id: string;
-  message_count?: number;
-  model?: string;
-  provider?: string;
-  mode?: string;
-  reasoning_effort?: string | null;
-  ultra_mode?: boolean;
-  context_used_tokens?: number;
-  context_window_tokens?: number;
-  context_used_percent?: number;
 }
 
 function uniqNonEmpty(values: Array<string | null | undefined>): string[] {
@@ -64,6 +78,28 @@ function uniqNonEmpty(values: Array<string | null | undefined>): string[] {
     result.push(trimmed);
   }
   return result;
+}
+
+function normalizeSessionLaunchOverrides(value: unknown): SessionLaunchOverrides | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const result: SessionLaunchOverrides = {};
+  for (const key of ["model", "provider", "base_url", "api_format", "model_profile"] as const) {
+    const item = source[key];
+    if (typeof item === "string" && item.length > 0) result[key] = item;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function resolveLocalPath(value: string, baseDirectory?: string): string {
+  const expanded = value === "~"
+    ? os.homedir()
+    : (value.startsWith("~/") || value.startsWith("~\\"))
+      ? path.join(os.homedir(), value.slice(2))
+      : value;
+  return path.isAbsolute(expanded)
+    ? path.normalize(expanded)
+    : path.resolve(baseDirectory ?? process.cwd(), expanded);
 }
 
 function formatTokenCount(tokens: number): string {
@@ -179,6 +215,9 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   images?: ImageAttachment[];
+  parentId?: string | null;
+  origin?: string | null;
+  usage?: Record<string, unknown> | null;
 }
 
 export interface ToolCard {
@@ -272,6 +311,7 @@ interface SessionState {
   permissionCards: Map<string, PermissionCard>;
   planCards: Map<string, PlanCard>;
   activeThinkingId: string | null;
+  activeOperationId: string | null;
   isBusy: boolean;
   contextUsage: ContextUsageStatus | null;
   batchDenied: boolean;
@@ -289,6 +329,7 @@ function createEmptySessionState(): SessionState {
     permissionCards: new Map(),
     planCards: new Map(),
     activeThinkingId: null,
+    activeOperationId: null,
     isBusy: false,
     contextUsage: null,
     batchDenied: false,
@@ -314,6 +355,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private lastNonEmptyModels: string[] = [];
   private webviewReady = false;
   private pendingWebviewMessages: any[] = [];
+  private logFollowAbort: AbortController | null = null;
+  private shellTerminal: vscode.Terminal | null = null;
+  private shellTerminalCwd: string | null = null;
   private pendingEditReview: PendingEditReviewSummary | null = null;
   private readonly pendingEditActionEmitter = new vscode.EventEmitter<PendingEditActionMessage>();
   public readonly onPendingEditAction = this.pendingEditActionEmitter.event;
@@ -409,7 +453,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "setModel":
           if (typeof msg.name === "string" && msg.name.length > 0) {
-            this.connection.sendSwitchModel(msg.name);
+            this.connection.sendSwitchModel(
+              msg.name,
+              this.displayedSessionId ?? this.connection.sessionId ?? undefined,
+            );
             void vscode.workspace
               .getConfiguration("crabcode")
               .update("chatModelDefault", msg.name, vscode.ConfigurationTarget.Global);
@@ -421,7 +468,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             void vscode.workspace
               .getConfiguration("crabcode")
               .update("permissionMode", mode, vscode.ConfigurationTarget.Global);
-            this.connection.sendSetPermissionMode(mode);
+            this.connection.sendSetPermissionMode(
+              mode,
+              this.displayedSessionId ?? this.connection.sessionId ?? undefined,
+            );
           }
           break;
         case "pickFiles":
@@ -451,10 +501,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.respondToPlan(msg.id, msg.action);
           break;
         case "interrupt": {
-          const result = this.connection.sendInterrupt();
+          const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+          const operationId = sessionId
+            ? this.getSessionState(sessionId).activeOperationId ?? undefined
+            : undefined;
+          const result = this.connection.sendInterrupt(sessionId, operationId);
           this.postMessage({ type: "interruptResult", result });
           if (result === "sent") {
-            this.scheduleInterruptRetry();
+            this.scheduleInterruptRetry(sessionId!, operationId);
           } else if (result === "disconnected") {
             this.setBusy(false);
           }
@@ -476,10 +530,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "compact":
           void this.triggerCompact(msg.customInstructions);
           break;
+        case "invokeSkill":
+          if (typeof msg.name === "string") {
+            void this.invokeSkill(msg.name, typeof msg.userInput === "string" ? msg.userInput : "");
+          }
+          break;
         case "newSession": {
           const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
           this.displayedSessionId = null; // will be set by server.connected
-          this.connection.sendNewSession(cwd);
+          this.connection.sendNewSession(
+            cwd,
+            normalizeSessionLaunchOverrides(msg.options),
+          );
           this.postMessage({ type: "history", items: [] });
           this.postMessage({ type: "busyState", busy: false });
           this.postMessage({ type: "contextUsage", usage: null });
@@ -491,19 +553,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "resumeSession":
           if (typeof msg.sessionId === "string") {
-            void this.resumeSession(msg.sessionId);
+            void this.resumeSession(
+              msg.sessionId,
+              normalizeSessionLaunchOverrides(msg.options),
+            );
           }
           break;
         case "openSettings":
           void vscode.commands.executeCommand("workbench.action.openSettings", "crabcode");
           break;
         case "clearMessages":
-          if (this.displayedSessionId) {
-            const state = this.getSessionState(this.displayedSessionId);
-            state.history = [];
-            state.messages = [];
-          }
-          this.postMessage({ type: "history", items: [] });
+          void this.clearSessionHistory();
           break;
         case "webviewError":
           this.outputChannel?.appendLine(`[CrabCode][WebviewError] ${msg.message}`);
@@ -511,6 +571,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "localMessage":
           this.addMessage(msg.role as ChatMessageRole, msg.text);
+          break;
+        case "runShellCommand":
+          if (typeof msg.command === "string") this.runShellCommand(msg.command);
           break;
         case "fetchStatus": {
           void this.fetchAndShowStatus();
@@ -538,8 +601,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "archiveSession":
           if (typeof msg.sessionId === "string") void this.archiveSession(msg.sessionId);
           break;
+        case "pruneSessions":
+          void this.pruneSessions(
+            typeof msg.days === "number" ? msg.days : 30,
+            msg.deleteFiles === true,
+          );
+          break;
         case "exportSession":
-          void this.exportSession(msg.format === "json" ? "json" : "md");
+          void this.exportSession(
+            msg.format === "json" ? "json" : "md",
+            typeof msg.path === "string" ? msg.path : undefined,
+            typeof msg.sessionId === "string" ? msg.sessionId : undefined,
+          );
+          break;
+        case "fetchModel":
+          void this.fetchAndShowModel();
           break;
         case "fetchStats":
           void this.fetchStats();
@@ -562,11 +638,227 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "fetchAgents":
           void this.fetchAgents();
           break;
+        case "attachImagePaths":
+          if (Array.isArray(msg.paths)) {
+            void this.attachImagePaths(msg.paths.filter((item: unknown): item is string => typeof item === "string"));
+          }
+          break;
+        case "fetchAgent":
+          if (typeof msg.agentId === "string") void this.fetchAgent(msg.agentId);
+          break;
+        case "fetchAgentLog":
+          if (typeof msg.agentId === "string") void this.fetchAgentLog(msg.agentId, typeof msg.lines === "number" ? msg.lines : 200);
+          break;
+        case "sendAgentInput":
+          if (typeof msg.agentId === "string" && typeof msg.prompt === "string") {
+            void this.sendAgentInput(msg.agentId, msg.prompt, msg.interrupt === true);
+          }
+          break;
+        case "waitAgent":
+          if (
+            typeof msg.agentId === "string"
+            || (Array.isArray(msg.agentIds) && msg.agentIds.every((item: unknown) => typeof item === "string"))
+          ) {
+            void this.waitAgent(
+              Array.isArray(msg.agentIds) ? msg.agentIds : msg.agentId,
+              typeof msg.timeoutMs === "number" ? msg.timeoutMs : null,
+            );
+          }
+          break;
+        case "cancelAgent":
+          if (typeof msg.agentId === "string") void this.cancelAgent(msg.agentId);
+          break;
+        case "spawnAgent":
+          if (typeof msg.prompt === "string") {
+            void this.spawnAgent(
+              msg.prompt,
+              msg.subagentType,
+              msg.name,
+              msg.modelProfile,
+              msg.callback !== false,
+            );
+          }
+          break;
+        case "fetchGoal":
+          void this.fetchGoal();
+          break;
+        case "manageGoal":
+          if (typeof msg.action === "string") {
+            void this.manageGoal(msg.action, typeof msg.objective === "string" ? msg.objective : null, typeof msg.tokenBudget === "number" ? msg.tokenBudget : null, msg.budgetWasSet === true);
+          }
+          break;
+        case "fetchTasks":
+          void this.fetchTasks();
+          break;
+        case "fetchTask":
+          if (typeof msg.taskId === "string") void this.fetchTask(msg.taskId);
+          break;
+        case "fetchTaskOutput":
+          if (typeof msg.taskId === "string") {
+            void this.fetchTaskOutput(msg.taskId, typeof msg.lines === "number" ? msg.lines : 200);
+          }
+          break;
+        case "stopTask":
+          if (typeof msg.taskId === "string") void this.stopTask(msg.taskId);
+          break;
+        case "fetchSchedules":
+          void this.fetchSchedules({
+            status: typeof msg.status === "string" ? msg.status : undefined,
+            scheduleType: typeof msg.scheduleType === "string" ? msg.scheduleType : undefined,
+            enabled: typeof msg.enabled === "boolean" ? msg.enabled : undefined,
+            limit: typeof msg.limit === "number" ? msg.limit : undefined,
+          });
+          break;
+        case "fetchSchedule":
+          if (typeof msg.jobId === "string") void this.fetchSchedule(msg.jobId);
+          break;
+        case "fetchScheduleRuns":
+          if (typeof msg.jobId === "string") {
+            void this.fetchScheduleRuns(
+              msg.jobId,
+              typeof msg.status === "string" ? msg.status : undefined,
+              typeof msg.limit === "number" ? msg.limit : undefined,
+            );
+          }
+          break;
+        case "createSchedule":
+          if (msg.request && typeof msg.request === "object") {
+            void this.createSchedule(msg.request as ScheduleCreateRequest);
+          }
+          break;
+        case "mutateSchedule":
+          if (
+            (msg.action === "pause" || msg.action === "resume" || msg.action === "run" || msg.action === "cancel")
+            && typeof msg.jobId === "string"
+          ) {
+            void this.mutateSchedule(msg.action, msg.jobId);
+          }
+          break;
+        case "fetchPeers":
+          void this.fetchPeers();
+          break;
+        case "sendPeerMessage":
+          if (typeof msg.to === "string" && typeof msg.text === "string") void this.sendPeerMessage(msg.to, msg.text);
+          break;
+        case "fetchTeams":
+          void this.fetchTeams();
+          break;
+        case "fetchTeamStatus":
+          if (typeof msg.teamId === "string") void this.fetchTeamStatus(msg.teamId);
+          break;
+        case "fetchTeamMessages":
+          if (typeof msg.teamId === "string") {
+            void this.fetchTeamMessages(
+              msg.teamId,
+              typeof msg.agentId === "string" ? msg.agentId : undefined,
+              msg.unread === true,
+            );
+          }
+          break;
+        case "fetchTeamTasks":
+          if (typeof msg.teamId === "string") void this.fetchTeamTasks(msg.teamId);
+          break;
+        case "createTeam":
+          if (typeof msg.name === "string") void this.createTeam(msg.name, typeof msg.maxTeammates === "number" ? msg.maxTeammates : null);
+          break;
+        case "spawnTeamMember":
+          if (typeof msg.teamId === "string" && typeof msg.prompt === "string") {
+            void this.spawnTeamMember(msg.teamId, msg.prompt, msg.role, msg.name, msg.modelProfile);
+          }
+          break;
+        case "removeTeamMember":
+          if (typeof msg.teamId === "string" && typeof msg.agentId === "string") {
+            void this.removeTeamMember(msg.teamId, msg.agentId);
+          }
+          break;
+        case "sendTeamMessage":
+          if (typeof msg.teamId === "string" && typeof msg.to === "string" && typeof msg.text === "string") {
+            void this.sendTeamMessage(msg.teamId, msg.to, msg.text, msg.fromAgent);
+          }
+          break;
+        case "broadcastTeamMessage":
+          if (typeof msg.teamId === "string" && typeof msg.text === "string") {
+            void this.broadcastTeamMessage(msg.teamId, msg.text, msg.fromAgent);
+          }
+          break;
+        case "markTeamMessagesRead":
+          if (typeof msg.teamId === "string" && typeof msg.agentId === "string") {
+            void this.markTeamMessagesRead(
+              msg.teamId,
+              msg.agentId,
+              Array.isArray(msg.messageIds) ? msg.messageIds : undefined,
+            );
+          }
+          break;
+        case "addTeamTask":
+          if (typeof msg.teamId === "string" && typeof msg.description === "string") {
+            void this.addTeamTask(msg.teamId, msg.description);
+          }
+          break;
+        case "claimTeamTask":
+          if (typeof msg.teamId === "string" && typeof msg.taskId === "string") {
+            void this.claimTeamTask(msg.teamId, msg.taskId, msg.agentId);
+          }
+          break;
+        case "completeTeamTask":
+          if (typeof msg.teamId === "string" && typeof msg.taskId === "string") {
+            void this.completeTeamTask(msg.teamId, msg.taskId, typeof msg.result === "string" ? msg.result : "", msg.agentId);
+          }
+          break;
+        case "failTeamTask":
+          if (typeof msg.teamId === "string" && typeof msg.taskId === "string") {
+            void this.failTeamTask(
+              msg.teamId,
+              msg.taskId,
+              typeof msg.reason === "string" ? msg.reason : "",
+              msg.agentId,
+            );
+          }
+          break;
+        case "getTeamBridge":
+          if (typeof msg.teamA === "string" && typeof msg.teamB === "string") {
+            void this.getTeamBridge(msg.teamA, msg.teamB);
+          }
+          break;
+        case "registerTeamBridge":
+          if (typeof msg.teamA === "string" && typeof msg.teamB === "string") {
+            void this.registerTeamBridge(msg.teamA, msg.teamB, msg.policy);
+          }
+          break;
+        case "sendCrossTeamMessage":
+          if (
+            typeof msg.fromTeam === "string"
+            && typeof msg.toTeam === "string"
+            && typeof msg.text === "string"
+          ) {
+            void this.sendCrossTeamMessage(
+              msg.fromTeam,
+              msg.toTeam,
+              msg.text,
+              msg.fromAgent,
+              msg.toAgent,
+            );
+          }
+          break;
+        case "shutdownTeam":
+          if (typeof msg.teamId === "string") void this.shutdownTeam(msg.teamId);
+          break;
         case "fetchPlanStatus":
           void this.fetchPlanStatus();
           break;
         case "fetchLogs":
-          void this.fetchLogs(typeof msg.lines === "number" ? msg.lines : 100);
+          void this.fetchLogs(
+            typeof msg.lines === "number" ? msg.lines : 100,
+            typeof msg.name === "string" ? msg.name : null,
+            typeof msg.tail === "number" ? msg.tail : null,
+            msg.clear === true,
+          );
+          break;
+        case "followLogs":
+          if (typeof msg.name === "string") void this.followLogs(msg.name);
+          break;
+        case "stopLogFollow":
+          this.stopLogFollow();
           break;
       }
     });
@@ -610,12 +902,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         context_window_tokens?: number;
         context_used_percent?: number;
       };
-      if (!data.context_used_tokens && !data.context_window_tokens) return;
       if (this.displayedSessionId !== sessionId) return;
       const state = this.getSessionState(sessionId);
       const used = Math.max(0, Math.trunc(data.context_used_tokens ?? 0));
       const window = Math.max(0, Math.trunc(data.context_window_tokens ?? 0));
-      if (!used && !window) return;
+      if (!used && !window) {
+        state.contextUsage = null;
+        this.postMessage({ type: "contextUsage", usage: null });
+        return;
+      }
       const usedPercent = Math.min(100, Math.max(0, data.context_used_percent ?? (window ? used / window * 100 : 0)));
       const remainingPercent = Math.max(0, 100 - usedPercent);
       const remainingTokens = Math.max(0, window - used);
@@ -675,10 +970,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const model = [status.provider, status.model].filter(Boolean).join("/") || "未配置";
     const effort = status.reasoning_effort || "auto";
     const ultra = status.ultra_mode ? "开启" : "关闭";
+    const permission = status.permission_mode || "default";
     const lines = [
-      `**会话 ID：** \`${status.session_id || sessionId}\``,
+      `**CrabCode：** v${status.version || "unknown"} · **会话 ID：** \`${status.session_id || sessionId}\``,
       `**模型：** ${model} · **模式：** ${status.mode || "agent"}`,
       `**Effort：** ${effort} · **Ultra mode：** ${ultra}`,
+      `**工具权限：** ${permission}`,
     ];
     const used = Math.max(0, Math.trunc(status.context_used_tokens ?? 0));
     const window = Math.max(0, Math.trunc(status.context_window_tokens ?? 0));
@@ -697,7 +994,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (cachedUsage?.cacheDetail) {
       lines.push(`**提示缓存：** ${cachedUsage.cacheDetail}`);
     }
-    lines.push(`**消息数：** ${status.message_count ?? 0}`);
+    const tools = status.tool_count == null ? "未加载" : status.tool_count.toLocaleString();
+    lines.push(
+      `**消息数：** ${status.message_count ?? 0} · **压缩次数：** ${status.compact_count ?? 0} · **自动压缩：** ${status.auto_compact_enabled === false ? "关闭" : "开启"}`,
+      `**配置：** think=${status.thinking_enabled ? "on" : "off"} · max_tokens=${status.max_tokens ?? 0} · tools=${tools}`,
+    );
+    if ((status.agent_total ?? 0) > 0) {
+      lines.push(
+        `**Agents：** total=${status.agent_total} · active=${status.agent_active ?? 0} · failed=${status.agent_failed ?? 0} · callbacks=${status.agent_pending_callbacks ?? 0} · max_concurrency=${status.agent_max_concurrency ?? 0}`,
+      );
+    }
+    if ((status.monitor_total ?? 0) > 0) {
+      lines.push(
+        `**Monitors：** total=${status.monitor_total} · active=${status.monitor_active ?? 0} · failed=${status.monitor_failed ?? 0}`,
+      );
+    }
+    if (status.search_index) {
+      const search = status.search_index;
+      const details: string[] = [];
+      if (search.chunks != null) details.push(`${search.chunks} chunks`);
+      if (search.files != null) details.push(`${search.files} files`);
+      if (search.done != null && search.total != null) {
+        details.push(`${search.done}/${search.total}`);
+      }
+      lines.push(`**语义搜索：** ${search.state}${details.length > 0 ? `（${details.join("，")}）` : ""}`);
+    }
+    if (status.cwd) lines.push(`**工作目录：** \`${status.cwd}\``);
     this.addSessionSystemMessage(sessionId, lines.join("\n"));
   }
 
@@ -841,16 +1163,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cfg = vscode.workspace.getConfiguration("crabcode");
     const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
     const password = cfg.get<string>("password", "");
-    const sessionId = this.connection.sessionId;
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
     if (!sessionId) return;
     try {
       const url = new URL(wsUrl);
       url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-      url.pathname = "/compact";
+      url.pathname = "/session/compact";
       url.search = "";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (password) headers.Authorization = `Bearer ${password}`;
-      await fetch(url.toString(), {
+      const response = await fetch(url.toString(), {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -858,8 +1180,66 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           custom_instructions: customInstructions?.trim() || null,
         }),
       });
+      if (!response.ok) {
+        throw new Error(`compact failed: ${response.status}`);
+      }
+      const data = (await response.json()) as { status?: string };
+      if (data.status === "not_compacted") {
+        this.addSessionSystemMessage(sessionId, "历史不足，或压缩检查点生成失败。");
+        return;
+      }
+      await this.fetchAndApplySessionHistory(sessionId);
     } catch {
-      // ignore
+      this.addSessionSystemMessage(sessionId, "压缩对话失败。");
+    }
+  }
+
+  private async clearSessionHistory(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/session/clear"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`clear failed: ${response.status}`);
+      await this.fetchAndApplySessionHistory(sessionId);
+      this.addSessionSystemMessage(sessionId, "对话历史已清除。");
+    } catch {
+      this.addSessionSystemMessage(sessionId, "清除对话历史失败。");
+    }
+  }
+
+  private async invokeSkill(name: string, userInput: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/skills/expand"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name, user_input: userInput, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`skill expansion failed: ${response.status}`);
+      const data = (await response.json()) as { prompt: string };
+      const displayText = `/${name}${userInput ? ` ${userInput}` : ""}`;
+      this.sendExpandedPrompt(displayText, data.prompt);
+    } catch {
+      this.addSessionSystemMessage(sessionId, `Skill /${name} 展开失败。`);
+    }
+  }
+
+  private sendExpandedPrompt(displayText: string, prompt: string): void {
+    this.ensureSessionIfNeeded();
+    if (this.isBusy) {
+      this.queueSteeringMessageOnState(this.currentState, displayText);
+      this.connection.steer(prompt, {
+        sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
+      });
+    } else {
+      this.addMessage("user", displayText);
+      this.setBusy(true);
+      this.sendForegroundMessage(prompt);
     }
   }
 
@@ -872,6 +1252,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       url.protocol = url.protocol === "wss:" ? "https:" : "http:";
       url.pathname = "/skills";
       url.search = "";
+      const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+      if (sessionId) url.searchParams.set("session_id", sessionId);
       const headers: Record<string, string> = {};
       if (password) headers.Authorization = `Bearer ${password}`;
       const response = await fetch(url.toString(), { headers });
@@ -917,7 +1299,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async resumeSession(sessionId: string): Promise<void> {
+  private async resolveSessionId(selector: string): Promise<string | null> {
+    try {
+      const url = new URL(this._gatewayUrl("/session/resolve"));
+      url.searchParams.set("selector", selector);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) return null;
+      const data = await response.json() as { session_id?: string };
+      return typeof data.session_id === "string" && data.session_id ? data.session_id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async resumeSession(
+    selector: string,
+    overrides?: SessionLaunchOverrides,
+  ): Promise<void> {
+    const sessionId = await this.resolveSessionId(selector);
+    if (!sessionId) {
+      this.addMessage("system", `找不到会话，或短 ID 不唯一：\`${selector}\``);
+      return;
+    }
     // Immediately update displayed session before processing
     this.displayedSessionId = sessionId;
 
@@ -940,8 +1343,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // Rendering cached state does not make it the WebSocket's active session.
     // Always synchronize server ownership when the selected conversation is
     // different, otherwise permission and plan commands can target the old one.
-    if (this.connection.sessionId !== sessionId) {
-      this.connection.sendRaw(JSON.stringify({ type: "resume_session", session_id: sessionId }));
+    const hasOverrides = Boolean(overrides && Object.keys(overrides).length > 0);
+    if (this.connection.sessionId !== sessionId || hasOverrides) {
+      this.connection.sendResumeSession(
+        hasOverrides ? selector : sessionId,
+        overrides,
+      );
     }
 
     this.sendCurrentSessionInfo();
@@ -965,6 +1372,192 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return h;
   }
 
+  private async gatewayError(response: Response): Promise<string> {
+    const fallback = response.statusText || `HTTP ${response.status}`;
+    try {
+      const payload = await response.json() as { detail?: unknown };
+      return typeof payload.detail === "string" && payload.detail ? payload.detail : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private formatScheduleTime(value: string | null | undefined): string {
+    if (!value) return "未安排";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  }
+
+  private scheduleSessionId(): string | null {
+    return this.displayedSessionId ?? this.connection.sessionId;
+  }
+
+  private async fetchSchedules(options: {
+    status?: string;
+    scheduleType?: string;
+    enabled?: boolean;
+    limit?: number;
+  } = {}): Promise<void> {
+    const sessionId = this.scheduleSessionId();
+    if (!sessionId) {
+      this.addMessage("system", "暂无活跃会话。");
+      return;
+    }
+    try {
+      const url = new URL(this._gatewayUrl("/schedule/list"));
+      url.searchParams.set("session_id", sessionId);
+      if (options.status) url.searchParams.set("status", options.status);
+      if (options.scheduleType) url.searchParams.set("schedule_type", options.scheduleType);
+      if (options.enabled !== undefined) url.searchParams.set("enabled", String(options.enabled));
+      url.searchParams.set("limit", String(Math.max(1, Math.min(1000, Math.trunc(options.limit ?? 100)))));
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const jobs = await response.json() as ScheduleJobInfo[];
+      if (!jobs.length) {
+        this.addSessionSystemMessage(sessionId, "暂无定时任务。");
+        return;
+      }
+      const lines = ["## 定时任务", ""];
+      for (const job of jobs) {
+        const count = job.max_runs == null ? String(job.run_count ?? 0) : `${job.run_count ?? 0}/${job.max_runs}`;
+        lines.push(
+          `- \`${job.id.slice(0, 8)}\` **${job.name}** · ${job.status} · ` +
+          `${job.schedule_type} \`${job.schedule}\` · runs ${count} · next ${this.formatScheduleTime(job.next_run)}`,
+        );
+      }
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取定时任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchSchedule(jobId: string): Promise<void> {
+    const sessionId = this.scheduleSessionId();
+    if (!sessionId) {
+      this.addMessage("system", "暂无活跃会话。");
+      return;
+    }
+    try {
+      const url = new URL(this._gatewayUrl(`/schedule/${encodeURIComponent(jobId)}`));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const job = await response.json() as ScheduleJobInfo;
+      const count = job.max_runs == null ? String(job.run_count ?? 0) : `${job.run_count ?? 0}/${job.max_runs}`;
+      const lines = [
+        `## 定时任务 \`${job.id.slice(0, 8)}\``,
+        `**名称：** ${job.name}`,
+        `**状态：** ${job.status}（${job.enabled === false ? "停用" : "启用"}）`,
+        `**计划：** ${job.schedule_type} \`${job.schedule}\``,
+        `**下次执行：** ${this.formatScheduleTime(job.next_run)}`,
+        `**执行次数：** ${count}`,
+        `**工作目录：** \`${job.cwd ?? ""}\``,
+      ];
+      if (job.description) lines.push(`**说明：** ${job.description}`);
+      if (job.tags?.length) lines.push(`**标签：** ${job.tags.join(", ")}`);
+      if (job.model_profile) lines.push(`**模型配置：** ${job.model_profile}`);
+      if (job.session_id) lines.push(`**复用会话：** \`${job.session_id}\``);
+      if (job.extra && Object.keys(job.extra).length > 0) {
+        lines.push(`**扩展数据：** \`${JSON.stringify(job.extra)}\``);
+      }
+      lines.push("", "**提示词：**", "```", job.prompt, "```");
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取定时任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchScheduleRuns(jobId: string, status?: string, limit = 50): Promise<void> {
+    const sessionId = this.scheduleSessionId();
+    if (!sessionId) {
+      this.addMessage("system", "暂无活跃会话。");
+      return;
+    }
+    try {
+      const url = new URL(this._gatewayUrl(`/schedule/${encodeURIComponent(jobId)}/runs`));
+      url.searchParams.set("session_id", sessionId);
+      url.searchParams.set("limit", String(Math.max(1, Math.min(1000, Math.trunc(limit)))));
+      if (status) url.searchParams.set("status", status);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const runs = await response.json() as ScheduleRunInfo[];
+      if (!runs.length) {
+        this.addSessionSystemMessage(sessionId, `定时任务 \`${jobId.slice(0, 8)}\` 暂无执行历史。`);
+        return;
+      }
+      const lines = [`## 定时任务执行历史 \`${jobId.slice(0, 8)}\``, ""];
+      for (const run of runs) {
+        const detail = run.error_message || run.result_summary || "";
+        lines.push(
+          `- \`${run.id.slice(0, 8)}\` · ${run.status} · ` +
+          `${this.formatScheduleTime(run.started_at ?? run.created_at)} · ` +
+          `${run.duration_seconds == null ? "" : `${run.duration_seconds.toFixed(1)}s`} ` +
+          `${detail}`.trim(),
+        );
+      }
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取执行历史失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async createSchedule(request: ScheduleCreateRequest): Promise<void> {
+    const sessionId = this.scheduleSessionId();
+    if (!sessionId) {
+      this.addMessage("system", "暂无活跃会话。");
+      return;
+    }
+    try {
+      const response = await fetch(this._gatewayUrl("/schedule/create"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ ...request, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const job = await response.json() as ScheduleJobInfo;
+      this.addSessionSystemMessage(
+        sessionId,
+        `已创建定时任务 **${job.name}**（\`${job.id.slice(0, 8)}\`），下次执行：${this.formatScheduleTime(job.next_run)}。`,
+      );
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `创建定时任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async mutateSchedule(
+    action: "pause" | "resume" | "run" | "cancel",
+    jobId: string,
+  ): Promise<void> {
+    const sessionId = this.scheduleSessionId();
+    if (!sessionId) {
+      this.addMessage("system", "暂无活跃会话。");
+      return;
+    }
+    if (action === "cancel") {
+      const confirmed = await vscode.window.showWarningMessage(
+        `将永久删除定时任务 ${jobId} 及其执行历史。`,
+        { modal: true },
+        "删除",
+      );
+      if (confirmed !== "删除") return;
+    }
+    const endpoint = action === "run" ? "trigger" : action;
+    try {
+      const response = await fetch(this._gatewayUrl(`/schedule/${endpoint}`), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const data = await response.json().catch(() => ({})) as ScheduleJobInfo & { started?: boolean; cancelled?: boolean };
+      const verb = action === "pause" ? "已暂停" : action === "resume" ? "已恢复" : action === "run" ? "已触发" : "已删除";
+      this.addSessionSystemMessage(sessionId, `${verb}定时任务 \`${data.id?.slice(0, 8) || jobId.slice(0, 8)}\`。`);
+      if (action !== "cancel") void this.fetchSchedule(jobId);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `定时任务操作失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private async fetchRecentSessions(limit: number): Promise<void> {
     try {
       const url = new URL(this._gatewayUrl("/session/recent"));
@@ -973,6 +1566,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) return;
       const sessions = (await response.json()) as Array<{
         session_id: string; message_count?: number; model?: string; created_at?: string; title?: string;
+        cwd?: string; tokens_used?: number; preview?: string;
       }>;
       const sessionList = sessions.map((s) => ({
         session_id: s.session_id,
@@ -980,6 +1574,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         model: s.model,
         created_at: s.created_at,
         title: s.title ?? s.session_id.slice(0, 12),
+        cwd: s.cwd,
+        tokens_used: s.tokens_used,
+        preview: s.preview,
         status: this.busySessions.has(s.session_id) ? "running" : "done",
       }));
       this.postMessage({ type: "sessionList", sessions: sessionList });
@@ -996,6 +1593,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) return;
       const sessions = (await response.json()) as Array<{
         session_id: string; message_count?: number; model?: string; created_at?: string; title?: string;
+        cwd?: string; tokens_used?: number; preview?: string;
       }>;
       const sessionList = sessions.map((s) => ({
         session_id: s.session_id,
@@ -1003,6 +1601,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         model: s.model,
         created_at: s.created_at,
         title: s.title ?? s.session_id.slice(0, 12),
+        cwd: s.cwd,
+        tokens_used: s.tokens_used,
+        preview: s.preview,
         status: this.busySessions.has(s.session_id) ? "running" : "done",
       }));
       this.postMessage({ type: "sessionList", sessions: sessionList });
@@ -1020,12 +1621,78 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.addMessage("system", `归档失败：${response.statusText}`);
         return;
       }
-      this.addMessage("system", `会话 \`${sessionId.slice(0, 8)}\` 已归档。`);
-    } catch { /* ignore */ }
+      const data = await response.json() as { session_id?: string };
+      const archivedId = data.session_id || sessionId;
+      const archivedCurrent = this.displayedSessionId === archivedId
+        || this.connection.sessionId === archivedId;
+      this.sessionStates.delete(archivedId);
+      this.busySessions.delete(archivedId);
+      if (archivedCurrent) {
+        this.displayedSessionId = null;
+        this.postMessage({ type: "history", items: [] });
+        this.postMessage({ type: "busyState", busy: false });
+        this.postMessage({ type: "contextUsage", usage: null });
+        this.postMessage({ type: "steeringQueue", messages: [] });
+        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+        this.connection.sendNewSession(cwd);
+        void vscode.window.showInformationMessage(
+          `CrabCode：会话 ${archivedId.slice(0, 8)} 已归档，已创建新会话。`,
+        );
+      } else {
+        this.addMessage("system", `会话 \`${archivedId.slice(0, 8)}\` 已归档。`);
+      }
+      void this.fetchAndSendSessions();
+    } catch (error) {
+      this.addMessage("system", `归档失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
-  private async exportSession(format: "md" | "json"): Promise<void> {
-    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+  private async pruneSessions(days: number, deleteFiles: boolean): Promise<void> {
+    const normalizedDays = Math.max(0, Math.trunc(days));
+    const action = deleteFiles ? "归档并永久清理文件" : "归档";
+    const confirmed = await vscode.window.showWarningMessage(
+      `将${action} ${normalizedDays} 天前的非活动会话。`,
+      { modal: true },
+      "继续",
+    );
+    if (confirmed !== "继续") return;
+
+    try {
+      const response = await fetch(this._gatewayUrl("/session/prune"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          days: normalizedDays,
+          delete_files: deleteFiles,
+        }),
+      });
+      if (!response.ok) throw new Error(`prune failed: ${response.status}`);
+      const result = await response.json() as {
+        archived?: number;
+        purged?: number;
+        failed?: string[];
+      };
+      const parts = [
+        `已归档 ${result.archived ?? 0} 个会话`,
+        `已清理 ${result.purged ?? 0} 个会话文件`,
+      ];
+      if (result.failed?.length) parts.push(`${result.failed.length} 个清理失败`);
+      this.addMessage("system", `${parts.join("，")}。`);
+      void this.fetchAndSendSessions();
+    } catch (error) {
+      this.addMessage(
+        "system",
+        `清理会话失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async exportSession(
+    format: "md" | "json",
+    requestedPath?: string,
+    requestedSessionId?: string,
+  ): Promise<void> {
+    const sessionId = requestedSessionId?.trim() || this.displayedSessionId || this.connection.sessionId;
     if (!sessionId) { this.addMessage("system", "暂无活跃会话。"); return; }
     try {
       const response = await fetch(this._gatewayUrl("/session/export"), {
@@ -1033,17 +1700,60 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, format }),
       });
-      if (!response.ok) { this.addMessage("system", `导出失败：${response.statusText}`); return; }
+      if (!response.ok) {
+        this.addMessage("system", `导出失败：${await this.gatewayError(response)}`);
+        return;
+      }
       const content = await response.text();
       const ext = format === "json" ? "json" : "md";
-      const filename = `session-${sessionId.slice(0, 8)}.${ext}`;
-      const uri = vscode.Uri.joinPath(
-        vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file("/tmp"),
-        filename,
-      );
+      const safeId = sessionId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8) || "export";
+      const filename = `session-${safeId}.${ext}`;
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const target = requestedPath?.trim();
+      const targetPath = target
+        ? resolveLocalPath(target, workspaceRoot)
+        : path.join(workspaceRoot ?? "/tmp", filename);
+      const uri = vscode.Uri.file(targetPath);
       await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf-8"));
       this.addMessage("system", `会话已导出：\`${uri.fsPath}\``);
-    } catch { /* ignore */ }
+    } catch (error) {
+      this.addMessage("system", `导出失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchAndShowModel(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) {
+      this.addMessage("system", "暂无活跃会话。");
+      return;
+    }
+    try {
+      const status = await this.fetchSessionRuntimeStatus(sessionId);
+      if (!status) throw new Error("无法读取会话状态");
+      const url = new URL(this._gatewayUrl("/config/models"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`读取模型列表失败：${response.status}`);
+      const models = await response.json() as Array<{ name: string; description?: string }>;
+      const activeProfile = status.model_profile || this.connection.modelName || "";
+      const activeModel = [status.provider, status.model].filter(Boolean).join("/") || "未配置";
+      const lines = [
+        `**当前配置：** ${activeProfile || "默认"}`,
+        `**Provider/Model：** ${activeModel}`,
+      ];
+      if (models.length > 0) {
+        lines.push("", "**可用模型：**");
+        for (const model of models) {
+          const marker = model.name === activeProfile ? " ← 当前" : "";
+          lines.push(`- \`${model.name}\`${marker}${model.description ? ` · ${model.description}` : ""}`);
+        }
+      } else {
+        lines.push("", "（网关没有返回已命名模型）");
+      }
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取模型失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async fetchStats(): Promise<void> {
@@ -1118,7 +1828,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ session_id: sessionId, checkpoint_id: checkpointId }),
       });
       if (!response.ok) { this.addMessage("system", `回滚失败：${response.statusText}`); return; }
-      this.addMessage("system", `对话已回滚到检查点 \`${checkpointId.slice(0, 8)}\`（文件未还原）。`);
+      await this.fetchAndApplySessionHistory(sessionId);
+      this.addSessionSystemMessage(sessionId, `对话已回滚到检查点 \`${checkpointId.slice(0, 8)}\`（文件未还原）。`);
       void this.fetchAndSendSessions();
     } catch { /* ignore */ }
   }
@@ -1133,12 +1844,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ session_id: sessionId, checkpoint_id: checkpointId }),
       });
       if (!response.ok) { this.addMessage("system", `还原失败：${response.statusText}`); return; }
-      this.addMessage("system", `对话和文件已还原到检查点 \`${checkpointId.slice(0, 8)}\`。`);
+      await this.fetchAndApplySessionHistory(sessionId);
+      this.addSessionSystemMessage(sessionId, `对话和文件已还原到检查点 \`${checkpointId.slice(0, 8)}\`。`);
     } catch { /* ignore */ }
   }
 
   private async undoLastCheckpoint(): Promise<void> {
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
     try {
       const response = await fetch(this._gatewayUrl("/snapshot/undo"), {
         method: "POST",
@@ -1146,23 +1859,775 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ session_id: sessionId }),
       });
       if (!response.ok) { this.addMessage("system", `撤销失败：${response.statusText}`); return; }
-      const data = (await response.json()) as { checkpoint_id: string };
-      this.addMessage("system", `已撤销到检查点 \`${data.checkpoint_id.slice(0, 8)}\`。`);
+      const data = (await response.json()) as { checkpoint_id: string; files_restored?: string[]; warning?: string | null };
+      await this.fetchAndApplySessionHistory(sessionId);
+      const fileText = data.files_restored?.length ? `，恢复 ${data.files_restored.length} 个文件` : "";
+      const warning = data.warning ? `\n\n${data.warning}` : "";
+      this.addMessage("system", `已撤销到检查点 \`${data.checkpoint_id.slice(0, 8)}\`${fileText}。${warning}`);
     } catch { /* ignore */ }
   }
 
   private async fetchAgents(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
     try {
-      const response = await fetch(this._gatewayUrl("/agent/list"), { headers: this._gatewayHeaders() });
+      const url = new URL(this._gatewayUrl("/agent/list"));
+      if (sessionId) url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) return;
       const agents = (await response.json()) as Array<{
         agent_id: string; title: string; status: string; subagent_type: string;
       }>;
-      if (agents.length === 0) { this.addMessage("system", "无托管 Agent。"); return; }
+      if (agents.length === 0) { this.addSessionSystemMessage(sessionId ?? "", "无托管 Agent。"); return; }
       const lines = ["## Agents", ""];
       agents.forEach((a) => lines.push(`- \`${a.agent_id.slice(0, 8)}\`  **${a.title}**  [${a.subagent_type}]  ${a.status}`));
-      this.addMessage("system", lines.join("\n"));
-    } catch { /* ignore */ }
+      this.addSessionSystemMessage(sessionId ?? "", lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId ?? "", `读取 Agents 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchAgent(agentId: string): Promise<void> {
+    try {
+      const url = new URL(this._gatewayUrl(`/agent/${encodeURIComponent(agentId)}`));
+      const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+      if (sessionId) url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`agent lookup failed: ${response.status}`);
+      const agent = await response.json() as AgentInfo;
+      const lines = [
+        `## Agent \`${agent.agent_id.slice(0, 8)}\``,
+        "",
+        `**标题：** ${agent.title}`,
+        `**状态：** ${agent.status} · **类型：** ${agent.subagent_type}`,
+        `**模型：** ${agent.model_profile || agent.model || "默认"} · **深度：** ${agent.depth ?? 0}`,
+        `**回调：** ${agent.callback_enabled ? (agent.callback_state || "enabled") : "disabled"}`,
+      ];
+      if (agent.usage && Object.keys(agent.usage).length > 0) {
+        lines.push(`**Usage：** \`${JSON.stringify(agent.usage)}\``);
+      }
+      if (agent.final_result) lines.push("", "**结果：**", agent.final_result);
+      if (agent.error) lines.push("", `**错误：** ${agent.error}`);
+      if (agent.transcript_path) lines.push("", `**Transcript：** \`${agent.transcript_path}\``);
+      this.addSessionSystemMessage(sessionId ?? this.connection.sessionId ?? "", lines.join("\n"));
+    } catch (error) {
+      this.addMessage("system", `读取 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchAgentLog(agentId: string, lines: number): Promise<void> {
+    try {
+      const url = new URL(this._gatewayUrl(`/agent/${encodeURIComponent(agentId)}/transcript`));
+      const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+      if (sessionId) url.searchParams.set("session_id", sessionId);
+      url.searchParams.set("lines", String(Math.max(1, Math.min(10_000, Math.trunc(lines)))));
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`agent transcript failed: ${response.status}`);
+      const data = await response.json() as AgentTranscriptResponse;
+      const body = data.lines?.length ? data.lines.join("\n") : "（无 transcript）";
+      this.addSessionSystemMessage(
+        sessionId ?? "",
+        `## Agent Log \`${data.agent_id.slice(0, 8)}\`${data.truncated ? "（已截断）" : ""}\n\n\`\`\`\n${body}\n\`\`\``,
+      );
+    } catch (error) {
+      this.addMessage("system", `读取 Agent transcript 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async sendAgentInput(agentId: string, prompt: string, interrupt = false): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl(`/agent/${encodeURIComponent(agentId)}/input`), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, interrupt, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`send input failed: ${response.status}`);
+      this.addSessionSystemMessage(sessionId, `已向 Agent \`${agentId.slice(0, 8)}\` 发送输入。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `发送 Agent 输入失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async waitAgent(agentIds: string | string[], timeoutMs: number | null): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    const selectors = Array.isArray(agentIds) ? agentIds : [agentIds];
+    try {
+      const response = await fetch(this._gatewayUrl("/agent/wait"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: Array.isArray(agentIds) ? selectors : selectors[0],
+          timeout_ms: timeoutMs,
+          session_id: sessionId,
+        }),
+      });
+      if (!response.ok) throw new Error(`wait failed: ${response.status}`);
+      const agent = await response.json() as AgentInfo;
+      this.addSessionSystemMessage(
+        sessionId,
+        `Agent \`${agent.agent_id.slice(0, 8)}\` 已结束：**${agent.status}**${agent.final_result ? `\n\n${agent.final_result}` : ""}${agent.error ? `\n\n错误：${agent.error}` : ""}`,
+      );
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `等待 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async cancelAgent(agentId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl(`/agent/${encodeURIComponent(agentId)}/cancel`));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), {
+        method: "POST",
+        headers: this._gatewayHeaders(),
+      });
+      if (!response.ok) throw new Error(`cancel failed: ${response.status}`);
+      this.addSessionSystemMessage(sessionId, `已请求取消 Agent \`${agentId.slice(0, 8)}\`。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `取消 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async spawnAgent(
+    prompt: string,
+    subagentType?: string,
+    name?: string,
+    modelProfile?: string,
+    callback = true,
+  ): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/agent/spawn"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          subagent_type: subagentType || "generalPurpose",
+          name: name || null,
+          model_profile: modelProfile || null,
+          callback,
+          session_id: sessionId,
+        }),
+      });
+      if (!response.ok) throw new Error(`spawn failed: ${response.status}`);
+      const agent = await response.json() as AgentInfo;
+      this.addSessionSystemMessage(sessionId, `已启动 Agent \`${agent.agent_id.slice(0, 8)}\`：${agent.title}`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `启动 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async attachImagePaths(rawPaths: string[]): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!rawPaths.length) return;
+    const images: ImageAttachment[] = [];
+    const maxBytes = 20 * 1024 * 1024;
+    const imageExts: Record<string, string> = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      webp: "image/webp",
+    };
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const errors: string[] = [];
+    for (const rawPath of rawPaths) {
+      const trimmed = rawPath.trim();
+      if (!trimmed) continue;
+      const filePath = resolveLocalPath(trimmed, workspaceRoot);
+      const uri = vscode.Uri.file(filePath);
+      try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        if ((stat.type & vscode.FileType.File) === 0) {
+          errors.push(`${trimmed} 不是文件`);
+          continue;
+        }
+        if (stat.size > maxBytes) {
+          errors.push(`${trimmed} 超过 20MB`);
+          continue;
+        }
+        const base = path.basename(filePath);
+        const ext = path.extname(base).slice(1).toLowerCase();
+        const mediaType = imageExts[ext];
+        if (!mediaType) {
+          errors.push(`${trimmed} 不是支持的图片格式`);
+          continue;
+        }
+        const data = await vscode.workspace.fs.readFile(uri);
+        images.push({ media_type: mediaType, data: Buffer.from(data).toString("base64") });
+      } catch (error) {
+        errors.push(`${trimmed}：${error instanceof Error ? error.message : "无法读取"}`);
+      }
+    }
+    if (images.length > 0) {
+      this.postMessage({ type: "addAttachments", images, textSnippets: [] });
+    }
+    if (errors.length > 0) {
+      this.addSessionSystemMessage(sessionId ?? "", `添加图片时跳过：\n${errors.map((item) => `- ${item}`).join("\n")}`);
+    }
+    if (images.length > 0) {
+      this.addSessionSystemMessage(sessionId ?? "", `已添加 ${images.length} 张图片到下一条消息。`);
+    }
+  }
+
+  private runShellCommand(rawCommand: string): void {
+    const command = rawCommand.trim();
+    if (!command) {
+      this.addMessage("system", "用法：! <cmd>");
+      return;
+    }
+
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const activeFolder = activeUri
+      ? vscode.workspace.getWorkspaceFolder(activeUri)
+      : undefined;
+    const workspaceFolder = activeFolder ?? vscode.workspace.workspaceFolders?.[0];
+    const cwd = workspaceFolder?.uri.fsPath ?? process.cwd();
+    const terminalIsLive = this.shellTerminal !== null
+      && vscode.window.terminals.includes(this.shellTerminal);
+
+    let terminal = this.shellTerminal;
+    if (!terminalIsLive || this.shellTerminalCwd !== cwd || terminal === null) {
+      terminal = vscode.window.createTerminal({
+        name: "CrabCode Shell",
+        cwd,
+      });
+      this.shellTerminal = terminal;
+      this.shellTerminalCwd = cwd;
+    }
+
+    terminal.show(false);
+    terminal.sendText(command, true);
+    this.outputChannel?.appendLine(`[CrabCode][Shell][${cwd}] ${command}`);
+    this.addMessage("system", `已在终端运行：${command}`);
+  }
+
+  private async fetchGoal(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl("/config/goal"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`goal lookup failed: ${response.status}`);
+      const data = await response.json() as { goal?: {
+        objective: string; status: string; token_budget?: number | null; tokens_used?: number;
+      } | null };
+      if (!data.goal) {
+        this.addSessionSystemMessage(sessionId, "当前没有设置 Goal。");
+        return;
+      }
+      const goal = data.goal;
+      const budget = goal.token_budget == null
+        ? "无预算"
+        : `${(goal.tokens_used ?? 0).toLocaleString()} / ${goal.token_budget.toLocaleString()}`;
+      this.addSessionSystemMessage(sessionId, `## Goal\n\n${goal.objective}\n\n**状态：** ${goal.status} · **Tokens：** ${budget}`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取 Goal 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async manageGoal(
+    action: string,
+    objective: string | null,
+    tokenBudget: number | null,
+    budgetWasSet: boolean,
+  ): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const body: Record<string, unknown> = { action, session_id: sessionId };
+      if (objective !== null) body.objective = objective;
+      if (budgetWasSet) body.token_budget = tokenBudget;
+      const response = await fetch(this._gatewayUrl("/config/goal"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(`goal update failed: ${response.status}`);
+      await this.fetchGoal();
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `更新 Goal 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchTasks(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl("/tasks"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`task list failed: ${response.status}`);
+      const tasks = await response.json() as BackgroundTaskInfo[];
+      if (tasks.length === 0) {
+        this.addSessionSystemMessage(sessionId, "没有后台任务。");
+        return;
+      }
+      const lines = ["## 后台任务", ""];
+      tasks.forEach((task) => {
+        lines.push(`- \`${task.task_id.slice(0, 8)}\` · **${task.status || "unknown"}** · ${task.task_type || "task"} · ${task.description || ""}`);
+      });
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取后台任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchTask(taskId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl(`/tasks/${encodeURIComponent(taskId)}`));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`task lookup failed: ${response.status}`);
+      const task = await response.json() as BackgroundTaskInfo;
+      const lines = [
+        `## Task \`${task.task_id}\``,
+        "",
+        `**状态：** ${task.status || "unknown"}`,
+        `**类型：** ${task.task_type || "task"} · **来源：** ${task.source || "unknown"}`,
+        `**描述：** ${task.description || "（无）"}`,
+      ];
+      if (task.agent_id) lines.push(`**Agent：** \`${task.agent_id}\``);
+      if (task.output_file) lines.push(`**输出：** \`${task.output_file}\``);
+      if (task.error) lines.push(`**错误：** ${task.error}`);
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchTaskOutput(taskId: string, lines = 200): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl(`/tasks/${encodeURIComponent(taskId)}/output`));
+      url.searchParams.set("session_id", sessionId);
+      url.searchParams.set("lines", String(Math.max(1, Math.min(10_000, Math.trunc(lines)))));
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`task output failed: ${response.status}`);
+      const data = await response.json() as { task_id?: string; path?: string | null; lines?: string[]; truncated?: boolean };
+      const body = data.lines?.length ? data.lines.join("\n") : "（无输出）";
+      this.addSessionSystemMessage(
+        sessionId,
+        `## Task Output \`${data.task_id || taskId}\`${data.truncated ? "（已截断）" : ""}\n\n\`\`\`\n${body}\n\`\`\`${data.path ? `\n\n路径：\`${data.path}\`` : ""}`,
+      );
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取任务输出失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async stopTask(taskId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/tasks/stop"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: taskId, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`task stop failed: ${response.status}`);
+      this.addSessionSystemMessage(sessionId, `已请求停止后台任务 \`${taskId.slice(0, 8)}\`。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `停止后台任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchPeers(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl("/peer/list"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`peer list failed: ${response.status}`);
+      const peers = await response.json() as PeerInfo[];
+      if (peers.length === 0) {
+        this.addSessionSystemMessage(sessionId, "没有可消息联系的其他会话。");
+        return;
+      }
+      const lines = ["## CrabCode 会话 Peers", ""];
+      peers.forEach((peer) => lines.push(`- **${peer.name}** · \`${peer.session_id.slice(0, 8)}\` · ${peer.permission_class || "prompting"} · ${peer.cwd}`));
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取 Peers 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async sendPeerMessage(to: string, text: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/peer/send"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ to, text, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`peer send failed: ${response.status}`);
+      const delivery = await response.json() as { status: string; detail?: string };
+      this.addSessionSystemMessage(sessionId, `Peer 消息 ${delivery.status}${delivery.detail ? `：${delivery.detail}` : ""}。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `发送 Peer 消息失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchTeams(): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl("/team/list"));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`team list failed: ${response.status}`);
+      const teams = await response.json() as string[];
+      this.addSessionSystemMessage(sessionId, teams.length ? `## Teams\n\n${teams.map((id) => `- \`${id}\``).join("\n")}` : "没有活动 Team。");
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取 Team 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchTeamStatus(teamId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl(`/team/status/${encodeURIComponent(teamId)}`));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`team status failed: ${response.status}`);
+      const status = await response.json() as TeamStatusInfo;
+      const lines = [`## Team: ${status.team_id}`, "", `**状态：** ${status.state}`, `**Teammates：** ${status.teammate_count ?? 0}/${status.max_teammates ?? 0}`];
+      (status.teammates ?? []).forEach((member) => lines.push(`- ${member.name || member.agent_id.slice(0, 8)} · ${member.role} · ${member.state}`));
+      const tasks = status.tasks;
+      if (tasks) lines.push("", `**Tasks：** ${tasks.total ?? 0}（pending ${tasks.pending ?? 0} · claimed ${tasks.claimed ?? 0} · done ${tasks.completed ?? 0} · failed ${tasks.failed ?? 0}）`);
+      this.addSessionSystemMessage(sessionId, lines.join("\n"));
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取 Team 状态失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchTeamMessages(
+    teamId: string,
+    agentId?: string,
+    unread = false,
+  ): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl(`/team/${encodeURIComponent(teamId)}/messages`));
+      url.searchParams.set("session_id", sessionId);
+      if (agentId) url.searchParams.set("agent_id", agentId);
+      if (unread) url.searchParams.set("unread", "true");
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`team messages failed: ${response.status}`);
+      const messages = await response.json() as TeamMessageInfo[];
+      const body = messages.length
+        ? messages.slice(-50).map((message) => `- \`${(message.from_agent || "").slice(0, 8)} → ${(message.to_agent || "").slice(0, 8)}\`: ${message.text || ""}`).join("\n")
+        : "（无消息）";
+      this.addSessionSystemMessage(
+        sessionId,
+        `## Team Messages: ${teamId}${agentId ? ` · ${agentId.slice(0, 8)}` : ""}${unread ? " · unread" : ""}\n\n${body}`,
+      );
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async fetchTeamTasks(teamId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl(`/team/${encodeURIComponent(teamId)}/tasks`));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(`team tasks failed: ${response.status}`);
+      const tasks = await response.json() as TeamTaskInfo[];
+      const body = tasks.length
+        ? tasks.map((task) => `- \`${task.id.slice(0, 8)}\` · **${task.status}** · ${task.description || ""}${task.assignee ? ` · ${task.assignee.slice(0, 8)}` : ""}`).join("\n")
+        : "（无任务）";
+      this.addSessionSystemMessage(sessionId, `## Team Tasks: ${teamId}\n\n${body}`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async createTeam(name: string, maxTeammates: number | null): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/create"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name, max_teammates: maxTeammates, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`team create failed: ${response.status}`);
+      const data = await response.json() as { team_id: string };
+      this.addSessionSystemMessage(sessionId, `Team \`${data.team_id}\` 已创建。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `创建 Team 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async spawnTeamMember(
+    teamId: string,
+    prompt: string,
+    role?: string,
+    name?: string,
+    modelProfile?: string,
+  ): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/spawn"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team_id: teamId,
+          prompt,
+          role: role || "worker",
+          name: name || null,
+          model_profile: modelProfile || null,
+          session_id: sessionId,
+        }),
+      });
+      if (!response.ok) throw new Error(`team spawn failed: ${response.status}`);
+      const data = await response.json() as { team_id: string; agent_id: string };
+      this.addSessionSystemMessage(sessionId, `Team \`${data.team_id}\` 已添加 teammate \`${data.agent_id.slice(0, 8)}\`。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `添加 Team teammate 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async removeTeamMember(teamId: string, agentId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/remove"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, agent_id: agentId, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      this.addSessionSystemMessage(sessionId, `Team ${teamId} 已移除 teammate ${agentId.slice(0, 8)}。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `移除 Team teammate 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async sendTeamMessage(teamId: string, to: string, text: string, fromAgent?: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/message"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, to, text, from_agent: fromAgent || "", session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`team message failed: ${response.status}`);
+      const data = await response.json() as { message_id?: string };
+      this.addSessionSystemMessage(sessionId, `已向 Team \`${teamId}\` 的 \`${to.slice(0, 8)}\` 发送消息${data.message_id ? `（${data.message_id.slice(0, 8)}）` : ""}。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `发送 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async broadcastTeamMessage(teamId: string, text: string, fromAgent?: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/broadcast"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, text, from_agent: fromAgent || "", session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`team broadcast failed: ${response.status}`);
+      const data = await response.json() as { recipient_count?: number };
+      this.addSessionSystemMessage(sessionId, `Team \`${teamId}\` 广播已发送给 ${data.recipient_count ?? 0} 个成员。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `Team 广播失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async markTeamMessagesRead(
+    teamId: string,
+    agentId: string,
+    messageIds?: string[],
+  ): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/messages/read"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team_id: teamId,
+          agent_id: agentId,
+          message_ids: messageIds,
+          session_id: sessionId,
+        }),
+      });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const data = await response.json() as { marked_read?: number };
+      this.addSessionSystemMessage(sessionId, `已将 Team ${teamId} 的 ${data.marked_read ?? 0} 条消息标记为已读。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `标记 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async addTeamTask(teamId: string, description: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/task/add"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, description, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`team task add failed: ${response.status}`);
+      const data = await response.json() as { task_id: string };
+      this.addSessionSystemMessage(sessionId, `Team 任务已添加：\`${data.task_id.slice(0, 8)}\`。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `添加 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async claimTeamTask(teamId: string, taskId: string, agentId?: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/task/claim"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, task_id: taskId, agent_id: agentId || "", session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`team task claim failed: ${response.status}`);
+      this.addSessionSystemMessage(sessionId, `Team 任务 \`${taskId.slice(0, 8)}\` 已认领。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `认领 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async completeTeamTask(teamId: string, taskId: string, result: string, agentId?: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/task/complete"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, task_id: taskId, result, agent_id: agentId || "", session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`team task complete failed: ${response.status}`);
+      this.addSessionSystemMessage(sessionId, `Team 任务 \`${taskId.slice(0, 8)}\` 已完成。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `完成 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async failTeamTask(teamId: string, taskId: string, reason: string, agentId?: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/task/fail"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, task_id: taskId, reason, agent_id: agentId || "", session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      this.addSessionSystemMessage(sessionId, `Team 任务 ${taskId.slice(0, 8)} 已标记失败。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `标记 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async getTeamBridge(teamA: string, teamB: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const url = new URL(this._gatewayUrl(`/team/${encodeURIComponent(teamA)}/bridge/${encodeURIComponent(teamB)}`));
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const bridge = await response.json() as TeamBridgeInfo;
+      this.addSessionSystemMessage(sessionId, `Team Bridge \`${bridge.team_a}\` ↔ \`${bridge.team_b}\`：**${bridge.policy}**。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `读取 Team Bridge 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async registerTeamBridge(
+    teamA: string,
+    teamB: string,
+    policy: string = "allow_tagged",
+  ): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    if (policy !== "allow_all" && policy !== "allow_tagged" && policy !== "deny") {
+      this.addSessionSystemMessage(sessionId, "Bridge policy 必须是 allow_all、allow_tagged 或 deny。");
+      return;
+    }
+    try {
+      const response = await fetch(this._gatewayUrl("/team/bridge"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_a: teamA, team_b: teamB, policy, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const bridge = await response.json() as TeamBridgeInfo;
+      this.addSessionSystemMessage(sessionId, `Team Bridge 已设置：\`${bridge.team_a}\` ↔ \`${bridge.team_b}\` = **${bridge.policy}**。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `设置 Team Bridge 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async sendCrossTeamMessage(
+    fromTeam: string,
+    toTeam: string,
+    text: string,
+    fromAgent?: string,
+    toAgent?: string,
+  ): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/cross-message"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from_team: fromTeam,
+          to_team: toTeam,
+          from_agent: fromAgent || "",
+          to_agent: toAgent || "",
+          text,
+          session_id: sessionId,
+        }),
+      });
+      if (!response.ok) throw new Error(await this.gatewayError(response));
+      const message = await response.json() as CrossTeamMessageInfo;
+      this.addSessionSystemMessage(sessionId, `跨 Team 消息已发送：\`${message.id.slice(0, 8)}\`。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `发送跨 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async shutdownTeam(teamId: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    try {
+      const response = await fetch(this._gatewayUrl("/team/shutdown"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: teamId, session_id: sessionId }),
+      });
+      if (!response.ok) throw new Error(`team shutdown failed: ${response.status}`);
+      this.addSessionSystemMessage(sessionId, `Team \`${teamId}\` 已关闭。`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId, `关闭 Team 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async fetchPlanStatus(): Promise<void> {
@@ -1183,19 +2648,72 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } catch { /* ignore */ }
   }
 
-  private async fetchLogs(lines: number): Promise<void> {
+  private async fetchLogs(lines: number, name: string | null = null, tail: number | null = null, clear = false): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
     try {
       const url = new URL(this._gatewayUrl("/logs"));
-      url.searchParams.set("lines", String(lines));
+      if (sessionId) url.searchParams.set("session_id", sessionId);
+      if (name) url.searchParams.set("name", name);
+      url.searchParams.set("lines", String(tail ?? lines));
+      if (clear) url.searchParams.set("clear", "true");
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
-      if (!response.ok) return;
-      const data = (await response.json()) as { lines: string[]; note?: string };
-      if (data.note) { this.addMessage("system", data.note); return; }
-      const content = data.lines.length > 0
-        ? "```\n" + data.lines.join("\n") + "\n```"
-        : "（无日志）";
-      this.addMessage("system", "## 后台日志\n\n" + content);
-    } catch { /* ignore */ }
+      if (!response.ok) throw new Error(`logs request failed: ${response.status}`);
+      const data = await response.json() as LogsResponse;
+      if (!name) {
+        const entries = data.logs ?? [];
+        const body = entries.length
+          ? entries.map((entry) => `- **${entry.name}** · \`${entry.path}\`${entry.state ? ` · ${entry.state}` : ""}`).join("\n")
+          : "（无日志）";
+        this.addSessionSystemMessage(sessionId ?? "", "## 后台日志\n\n" + body);
+        return;
+      }
+      const content = data.lines?.length ? "```\n" + data.lines.join("\n") + "\n```" : "（无日志）";
+      this.addSessionSystemMessage(sessionId ?? "", `## Log: ${name}${data.truncated ? "（已截断）" : ""}\n\n${content}${clear ? "\n\n已清空。" : ""}`);
+    } catch (error) {
+      this.addSessionSystemMessage(sessionId ?? "", `读取日志失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private stopLogFollow(): void {
+    this.logFollowAbort?.abort();
+    this.logFollowAbort = null;
+  }
+
+  private async followLogs(name: string): Promise<void> {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sessionId) return;
+    this.stopLogFollow();
+    const controller = new AbortController();
+    this.logFollowAbort = controller;
+    try {
+      const url = new URL(this._gatewayUrl("/logs/follow"));
+      url.searchParams.set("name", name);
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url.toString(), { headers: this._gatewayHeaders(), signal: controller.signal });
+      if (!response.ok || !response.body) throw new Error(`log follow failed: ${response.status}`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      this.addSessionSystemMessage(sessionId, `开始跟踪日志 \`${name}\`。再次执行 \`/logs --stop\` 停止。`);
+      while (!controller.signal.aborted) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find((item) => item.startsWith("data:"));
+          if (!line) continue;
+          let text = line.slice(5).trim();
+          try { text = JSON.parse(text) as string; } catch { /* raw SSE data */ }
+          if (text) this.addSessionSystemMessage(sessionId, `\`\`\`\n${text}\n\`\`\``);
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) this.addSessionSystemMessage(sessionId, `日志跟踪失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (this.logFollowAbort === controller) this.logFollowAbort = null;
+    }
   }
 
   private async resolveModelsFromSettingsOrGateway(): Promise<string[]> {
@@ -1213,6 +2731,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       url.protocol = url.protocol === "wss:" ? "https:" : "http:";
       url.pathname = "/config/models";
       url.search = "";
+      const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+      if (sessionId) url.searchParams.set("session_id", sessionId);
 
       const headers: Record<string, string> = {};
       if (password) {
@@ -1247,9 +2767,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (models.length > 0) {
       const pick =
         defaultModel && models.includes(defaultModel) ? defaultModel : models[0];
-      this.connection.sendSwitchModel(pick);
+      this.connection.sendSwitchModel(
+        pick,
+        this.connection.sessionId ?? undefined,
+      );
     }
-    this.connection.sendSetPermissionMode(mode);
+    this.connection.sendSetPermissionMode(
+      mode,
+      this.connection.sessionId ?? undefined,
+    );
     void this.pushChatOptions();
   }
 
@@ -1428,11 +2954,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.ensureSessionIfNeeded();
     if (this.isBusy) {
       this.queueSteeringMessageOnState(this.currentState, text);
-      this.connection.steer(text);
+      this.connection.steer(text, {
+        sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
+      });
     } else {
       this.addMessage("user", text);
       this.setBusy(true);
-      this.connection.send(text);
+      this.sendForegroundMessage(text);
     }
     this.reveal();
   }
@@ -1454,11 +2982,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.ensureSessionIfNeeded();
     if (this.isBusy) {
       this.queueSteeringMessageOnState(this.currentState, text, images);
-      this.connection.steer(text, { images });
+      this.connection.steer(text, {
+        sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
+        images,
+      });
     } else {
       this.addMessage("user", text, images);
       this.setBusy(true);
-      this.connection.send(text, { images });
+      this.sendForegroundMessage(text, images);
+    }
+  }
+
+  private sendForegroundMessage(text: string, images?: ImageAttachment[]): void {
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId ?? undefined;
+    const operationId = this.connection.send(text, { sessionId, images });
+    if (sessionId) {
+      const state = this.getSessionState(sessionId);
+      state.activeOperationId = operationId;
+      this.busySessions.add(sessionId);
     }
   }
 
@@ -1467,20 +3008,60 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.connection.ensureSession(cwd);
   }
 
+  /** Whether an event can own the displayed foreground busy state. */
+  private isForegroundOperationEvent(payload: EventPayload): boolean {
+    if (payload.command_error) return false;
+    if (payload.operation_scope === "background" || payload.operation_scope === "plan") {
+      return false;
+    }
+    return payload.operation_scope === "foreground" || !!payload.operation_id;
+  }
+
+  /** Reject a terminal event that belongs to an older operation. */
+  private terminalBelongsToState(payload: EventPayload, state: SessionState): boolean {
+    if (payload.type !== "turn_complete") return false;
+    if (payload.operation_scope === "background") return false;
+    if (payload.reason === "history_restore") return false;
+    return !(
+      state.activeOperationId
+      && payload.operation_id
+      && state.activeOperationId !== payload.operation_id
+    );
+  }
+
   private handleServerEvent(payload: EventPayload): void {
-    const eventSessionId = (payload as any).session_id as string | undefined;
+    // History carries a session_id, but it is a replay snapshot rather than a
+    // live turn event. Handle it before the generic session-event routing so a
+    // reconnect/resume cannot accidentally treat it as a stream event.
+    if (payload.type === "session_history") {
+      const history = payload as SessionHistoryPayload;
+      const sessionId = history.session_id || this.displayedSessionId || this.connection.sessionId;
+      if (sessionId) this.handleSessionHistory(history, sessionId);
+      return;
+    }
+    const eventSessionId = payload.session_id;
     const isSessionEvent = !!eventSessionId;
 
     if (isSessionEvent) {
-      // Track busy state per-session for session list status dots
-      if (payload.type === "turn_complete" || payload.type === "error") {
-        this.busySessions.delete(eventSessionId!);
-      } else if (payload.type === "stream_text" || payload.type === "thinking" || payload.type === "tool_use") {
-        this.busySessions.add(eventSessionId!);
-      }
-
       // Ensure we have a state object for this session
       const targetState = this.getSessionState(eventSessionId!);
+      if (
+        this.isForegroundOperationEvent(payload)
+        && payload.operation_id
+        && payload.type !== "turn_complete"
+      ) {
+        targetState.activeOperationId = payload.operation_id;
+      }
+      // Track busy state per-session for session list status dots.  A terminal
+      // from an older operation must not clear a newer operation.
+      if (this.terminalBelongsToState(payload, targetState)) {
+        this.busySessions.delete(eventSessionId!);
+      } else if (
+        this.isForegroundOperationEvent(payload)
+        && (payload.type === "stream_text" || payload.type === "thinking" || payload.type === "tool_use")
+      ) {
+        this.busySessions.add(eventSessionId!);
+      }
       // Only update webview if this is the displayed session
       // Once displayedSessionId is set, reject events from other sessions
       const isDisplayed = this.displayedSessionId ? (eventSessionId === this.displayedSessionId) : false;
@@ -1490,7 +3071,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    // Session-agnostic events (server.connected, server.heartbeat, session_history)
+    // Session-agnostic events (server.connected, server.heartbeat)
     switch (payload.type) {
       case "server.connected": {
         const connSid = this.connection.sessionId;
@@ -1518,15 +3099,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.sendCurrentSessionInfo();
         break;
       }
+      case "error": {
+        // WebSocket command validation errors are session-agnostic when the
+        // command could not be resolved to a target.  Keep them visible in
+        // the current panel, but do not clear a foreground turn: recoverable
+        // Core errors and command failures are not turn boundaries.
+        const sessionId = payload.session_id ?? this.displayedSessionId ?? this.connection.sessionId;
+        if (sessionId) {
+          this.routeEventToState(payload, this.getSessionState(sessionId), sessionId === this.displayedSessionId);
+        } else {
+          this.addMessage("system", `CrabCode：${payload.message}`);
+        }
+        break;
+      }
       case "mode_change":
         this.currentState.mode = (payload as { mode: string }).mode === "plan" ? "plan" : "agent";
         this.postMessage({ type: "modeChange", mode: this.currentState.mode });
         break;
       case "plan_ready":
         this.handlePlanReadyOnState(this.currentState, (payload as PlanReadyPayload).plan, true);
-        break;
-      case "session_history":
-        this.handleSessionHistory(payload as unknown as { messages: Array<{ id: string; role: string; text: string }> });
         break;
     }
   }
@@ -1563,6 +3154,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "tool_result":
         this.handleToolResultOnState(state, payload as ToolResultPayload, updateWebview);
         break;
+      case "permission_response": {
+        const response = payload as PermissionResponsePayload;
+        const card = state.permissionCards.get(response.tool_use_id);
+        if (card) {
+          card.allowed = response.allowed;
+          if (updateWebview) this.postMessage({ type: "permissionResolved", card });
+        }
+        break;
+      }
+      case "choice_response": {
+        const response = payload as ChoiceResponsePayload;
+        const card = state.choiceCards.get(response.tool_use_id);
+        if (card) {
+          card.selected = response.selected;
+          card.pendingSelected = response.selected;
+          card.cancelled = response.cancelled ?? false;
+          card.completed = true;
+          if (updateWebview) this.postMessage({ type: "choiceResolved", card });
+        }
+        break;
+      }
       case "permission_request":
         this.handlePermissionRequestOnState(state, payload as PermissionRequestPayload, updateWebview);
         break;
@@ -1576,6 +3188,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         state.mode = (payload as { mode: string }).mode === "plan" ? "plan" : "agent";
         if (updateWebview) this.postMessage({ type: "modeChange", mode: state.mode });
         break;
+      case "compact": {
+        const compact = payload as CompactPayload;
+        const counts = compact.messages_before || compact.messages_after
+          ? `（${compact.messages_before} → ${compact.messages_after} 条消息）`
+          : "";
+        this.addMessageOnState(
+          state,
+          "system",
+          `对话已压缩${counts}${compact.summary ? `\n\n${compact.summary}` : ""}`,
+          updateWebview,
+        );
+        break;
+      }
       case "peer_message": {
         const peer = payload as PeerMessagePayload;
         this.addMessageOnState(
@@ -1586,21 +3211,106 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         );
         break;
       }
+      case "team_message": {
+        const team = payload as TeamMessagePayload;
+        this.addMessageOnState(
+          state,
+          "system",
+          `  [Team ${team.team_id.slice(0, 8)}] ${team.from_agent.slice(0, 8)} → ${team.to_agent.slice(0, 8)}: ${team.text}`,
+          updateWebview,
+        );
+        break;
+      }
+      case "team_state": {
+        const team = payload as TeamStatePayload;
+        this.addMessageOnState(
+          state,
+          "system",
+          `  [Team ${team.team_id.slice(0, 8)}] ${team.agent_id.slice(0, 8)} ${team.old_state} → ${team.new_state}`,
+          updateWebview,
+        );
+        break;
+      }
+      case "task_update": {
+        const task = payload as TaskUpdatePayload;
+        const detail = task.description ? `：${task.description}` : "";
+        this.addMessageOnState(
+          state,
+          "system",
+          `  [Team ${task.team_id.slice(0, 8)}] task ${task.task_id.slice(0, 8)} ${task.status}${detail}`,
+          updateWebview,
+        );
+        break;
+      }
+      case "schedule_run": {
+        const schedule = payload as ScheduleRunPayload;
+        const detail = schedule.error_message || schedule.result_summary || schedule.status;
+        this.addMessageOnState(
+          state,
+          "system",
+          `定时任务 \`${schedule.job_id.slice(0, 8)}\`：${schedule.status}，${detail}`,
+          updateWebview,
+        );
+        break;
+      }
+      case "snapshot": {
+        const snapshot = payload as SnapshotPayload;
+        const files = snapshot.files?.length ? `：${snapshot.files.join(", ")}` : "";
+        this.addMessageOnState(
+          state,
+          "system",
+          `已创建文件快照 \`${snapshot.snapshot_id.slice(0, 8)}\`${files}`,
+          updateWebview,
+        );
+        break;
+      }
+      case "revert": {
+        const revert = payload as RevertPayload;
+        const files = revert.files_restored?.length ? `：${revert.files_restored.join(", ")}` : "";
+        this.addMessageOnState(
+          state,
+          "system",
+          `已恢复文件快照 \`${revert.snapshot_id.slice(0, 8)}\`${files}`,
+          updateWebview,
+        );
+        break;
+      }
       case "file_change":
         this.handleFileChangeOnState(state, payload as FileChangePayload, updateWebview);
         break;
       case "error":
-        state.isBusy = false;
         this.addMessageOnState(state, "system", `CrabCode：${payload.message}`, updateWebview);
-        if (updateWebview) this.postMessage({ type: "busyState", busy: false });
+        if (payload.command_error && payload.command === "steer_message") {
+          state.pendingSteeringMessages.shift();
+          if (updateWebview) {
+            this.postMessage({
+              type: "steeringQueue",
+              messages: state.pendingSteeringMessages,
+            });
+          }
+        }
+        if (
+          payload.command_error
+          && payload.command === "send_message"
+          && payload.error_type !== "operation_conflict"
+          && payload.operation_id
+          && state.activeOperationId === payload.operation_id
+        ) {
+          state.activeOperationId = null;
+          state.isBusy = false;
+          if (payload.session_id) this.busySessions.delete(payload.session_id);
+          if (updateWebview) this.postMessage({ type: "busyState", busy: false });
+        }
         break;
       case "turn_complete": {
-        this.finalizeThinkingOnState(state, updateWebview);
         const usage = buildContextUsageStatus(payload as TurnCompletePayload);
         if (usage) {
           state.contextUsage = usage;
           if (updateWebview) this.postMessage({ type: "contextUsage", usage });
         }
+        if (!this.terminalBelongsToState(payload, state)) break;
+        this.finalizeThinkingOnState(state, updateWebview);
+        state.activeOperationId = null;
         state.isBusy = false;
         state.batchDenied = false;
         if (updateWebview) {
@@ -1612,9 +3322,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private handleSessionHistory(payload: { messages: Array<{ id: string; role: string; text: string }> }): void {
-    if (!this.displayedSessionId) return;
-    const sessionId = this.displayedSessionId;
+  private async fetchAndApplySessionHistory(sessionId: string): Promise<void> {
+    const url = new URL(this._gatewayUrl("/session/messages"));
+    url.searchParams.set("session_id", sessionId);
+    const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
+    if (!response.ok) {
+      throw new Error(`session history failed: ${response.status}`);
+    }
+    const data: unknown = await response.json();
+    if (!Array.isArray(data)) {
+      throw new Error("session history response was not an array");
+    }
+    this.handleSessionHistory(
+      {
+        type: "session_history",
+        session_id: sessionId,
+        messages: data as SessionMessagePayload[],
+      },
+      sessionId,
+    );
+  }
+
+  /** Rebuild the renderable history from Core's structured message projection. */
+  private handleSessionHistory(payload: SessionHistoryPayload, sessionId = payload.session_id): void {
+    if (!sessionId) return;
     const state = this.getSessionState(sessionId);
     state.history = [];
     state.messages = [];
@@ -1624,21 +3355,143 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     state.permissionCards.clear();
     state.planCards.clear();
     state.activeThinkingId = null;
-    for (const msg of payload.messages ?? []) {
-      const role = (msg.role === "user" || msg.role === "assistant" || msg.role === "system")
-        ? msg.role as ChatMessageRole
-        : "system";
-      const chatMsg: ChatMessage = {
-        id: msg.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        role,
-        text: msg.text,
-        timestamp: Date.now(),
+    state.contextUsage = null;
+
+    const updateWebview = this.displayedSessionId === sessionId;
+    const fallbackId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timestampFor = (message: SessionMessagePayload): number => {
+      const parsed = typeof message.timestamp === "string" ? Date.parse(message.timestamp) : NaN;
+      return Number.isFinite(parsed) ? parsed : Date.now();
+    };
+    const roleFor = (value: unknown): ChatMessageRole => (
+      value === "user" || value === "assistant" || value === "system"
+        ? value
+        : "system"
+    );
+    const asRecord = (value: unknown): Record<string, unknown> => (
+      value && typeof value === "object" ? value as Record<string, unknown> : {}
+    );
+    const asInput = (value: unknown): Record<string, unknown> => asRecord(value);
+
+    for (const message of payload.messages ?? []) {
+      const msg = message as SessionMessagePayload;
+      const role = roleFor(msg.role);
+      const baseId = typeof msg.uuid === "string" && msg.uuid ? msg.uuid : fallbackId();
+      const timestamp = timestampFor(msg);
+      const parentId = msg.parent_uuid ?? null;
+      const origin = msg.origin ?? null;
+      const usage = msg.usage ?? null;
+      const content = msg.content;
+      const blocks: Record<string, unknown>[] = typeof content === "string"
+        ? [{ type: "text", text: content }]
+        : Array.isArray(content) ? content.map(asRecord) : [];
+      let pendingText = "";
+      let pendingImages: ImageAttachment[] = [];
+      let segment = 0;
+
+      const flushText = (): void => {
+        if (!pendingText && pendingImages.length === 0) return;
+        const chatMsg: ChatMessage = {
+          id: segment === 0 ? baseId : `${baseId}:part-${segment}`,
+          role,
+          text: pendingText,
+          timestamp,
+          images: pendingImages.length > 0 ? pendingImages : undefined,
+          parentId,
+          origin,
+          usage,
+        };
+        state.messages.push(chatMsg);
+        state.history.push({ kind: "message", message: chatMsg });
+        pendingText = "";
+        pendingImages = [];
+        segment += 1;
       };
-      state.messages.push(chatMsg);
-      state.history.push({ kind: "message", message: chatMsg });
+
+      for (let index = 0; index < blocks.length; index += 1) {
+        const block = blocks[index];
+        const type = typeof block.type === "string" ? block.type : "";
+        if (type === "text") {
+          if (typeof block.text === "string") pendingText += block.text;
+          continue;
+        }
+        if (type === "image") {
+          const source = asRecord(block.source);
+          if (typeof source.data === "string" && source.data) {
+            pendingImages.push({
+              media_type: typeof source.media_type === "string" ? source.media_type : "image/png",
+              data: source.data,
+            });
+          }
+          continue;
+        }
+        if (type === "thinking") {
+          flushText();
+          const text = typeof block.thinking === "string" ? block.thinking : "";
+          if (!text) continue;
+          const card: ThinkingCard = {
+            id: `${baseId}:thinking-${index}`,
+            text,
+            collapsed: true,
+          };
+          state.thinkingCards.set(card.id, card);
+          state.history.push({ kind: "thinking", card });
+          continue;
+        }
+        if (type === "tool_use") {
+          flushText();
+          const toolId = typeof block.id === "string" && block.id ? block.id : `${baseId}:tool-${index}`;
+          const existing = state.toolCards.get(toolId);
+          if (existing) continue;
+          const card: ToolCard = {
+            id: toolId,
+            toolName: typeof block.name === "string" ? block.name : "tool",
+            input: asInput(block.input),
+            result: null,
+            isError: false,
+            collapsed: false,
+          };
+          state.toolCards.set(toolId, card);
+          state.history.push({ kind: "tool", card });
+          continue;
+        }
+        if (type === "tool_result") {
+          flushText();
+          const toolId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
+          if (!toolId) continue;
+          const result = typeof block.content === "string" ? block.content : String(block.content ?? "");
+          const isError = block.is_error === true;
+          let card = state.toolCards.get(toolId);
+          if (!card) {
+            card = {
+              id: toolId,
+              toolName: "tool",
+              input: {},
+              result: null,
+              isError: false,
+              collapsed: false,
+            };
+            state.toolCards.set(toolId, card);
+            state.history.push({ kind: "tool", card });
+          }
+          card.result = result;
+          card.isError = isError;
+          card.collapsed = !isError;
+          continue;
+        }
+        // Signatures and future block types carry no standalone UI surface.
+      }
+      flushText();
     }
-    this.postMessage({ type: "history", items: state.history });
-    // Fetch context usage via HTTP — the server may not send turn_complete for disk-restored sessions
+
+    state.isBusy = this.busySessions.has(sessionId);
+    if (updateWebview) {
+      this.postMessage({ type: "history", items: state.history });
+      this.postMessage({ type: "busyState", busy: state.isBusy });
+      this.postMessage({ type: "contextUsage", usage: state.contextUsage });
+    }
+    // The server may not emit turn_complete when the projection came from
+    // disk, so retrieve the persisted context counters as a second step.
     void this.fetchAndApplyContextUsage(sessionId);
   }
 
@@ -1689,20 +3542,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: "busyState", busy });
   }
 
-  private scheduleInterruptRetry(): void {
+  private scheduleInterruptRetry(sessionId: string, operationId?: string): void {
     this.clearInterruptRetry();
     this.interruptRetryTimer = setTimeout(() => {
-      if (!this.isBusy) return;
-      const result = this.connection.sendInterrupt();
+      const state = this.getSessionState(sessionId);
+      const stillOwnsOperation = (): boolean => (
+        operationId === undefined || state.activeOperationId === operationId
+      );
+      if (!state.isBusy || !stillOwnsOperation()) {
+        return;
+      }
+      const result = this.connection.sendInterrupt(sessionId, operationId);
       if (result === "sent") {
         this.interruptRetryTimer = setTimeout(() => {
-          if (this.isBusy) {
-            this.setBusy(false);
-            this.postMessage({ type: "interruptResult", result: "timeout" });
+          if (state.isBusy && stillOwnsOperation()) {
+            state.isBusy = false;
+            if (operationId === undefined || state.activeOperationId === operationId) {
+              state.activeOperationId = null;
+            }
+            this.busySessions.delete(sessionId);
+            if (this.displayedSessionId === sessionId) {
+              this.postMessage({ type: "busyState", busy: false });
+              this.postMessage({ type: "interruptResult", result: "timeout" });
+            }
           }
         }, 5000);
       } else {
-        this.setBusy(false);
+        state.isBusy = false;
+        if (operationId === undefined || state.activeOperationId === operationId) {
+          state.activeOperationId = null;
+        }
+        this.busySessions.delete(sessionId);
+        if (this.displayedSessionId === sessionId) {
+          this.postMessage({ type: "busyState", busy: false });
+        }
       }
     }, 3000);
   }
@@ -1745,8 +3618,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const text = `  agent ${shortId} · ${payload.status} · ${payload.title}\n`;
     this.finalizeThinkingOnState(state, updateWebview);
     this.appendAssistantTextOnState(state, text, updateWebview);
-    state.isBusy = payload.status !== "completed" && payload.status !== "failed" && payload.status !== "cancelled";
-    if (updateWebview) this.postMessage({ type: "busyState", busy: state.isBusy });
+    const terminal = payload.status === "completed"
+      || payload.status === "failed"
+      || payload.status === "cancelled";
+    // A managed-agent terminal is not the parent turn boundary, and detached
+    // background agents must never lock or unlock the foreground composer.
+    if (!terminal && payload.operation_scope !== "background") {
+      state.isBusy = true;
+      if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+    }
   }
 
   private handleAgentOutput(payload: AgentOutputPayload): void {
@@ -1758,12 +3638,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "text":
         this.finalizeThinkingOnState(state, updateWebview);
         this.appendAssistantTextOnState(state, payload.text, updateWebview);
-        state.isBusy = true;
-        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        if (payload.operation_scope !== "background") {
+          state.isBusy = true;
+          if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        }
         break;
       case "thinking":
-        state.isBusy = true;
-        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        if (payload.operation_scope !== "background") {
+          state.isBusy = true;
+          if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        }
         break;
       default:
         break;
@@ -1845,6 +3729,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       card.allowed = false;
       const cmd = buildPermissionResponseCommand(card.id, false, {
         agentId: card.agentId ?? undefined,
+        sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
       });
       this.connection.sendRaw(serializeCommand(cmd));
       if (updateWebview) this.postMessage({ type: "permissionResolved", card });
@@ -1866,6 +3751,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cmd = buildChoiceResponseCommand(id, selected, {
       cancelled,
       agentId: card.agentId ?? undefined,
+      sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
     });
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "choiceResolved", card });
@@ -1909,6 +3795,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       alwaysAllow,
       feedback,
       agentId: card.agentId ?? undefined,
+      sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
     });
     this.connection.sendRaw(serializeCommand(cmd));
     this.postMessage({ type: "permissionResolved", card });
@@ -1925,6 +3812,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           otherCard.allowed = false;
           const otherCmd = buildPermissionResponseCommand(otherId, false, {
             agentId: otherCard.agentId ?? undefined,
+            sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
           });
           this.connection.sendRaw(serializeCommand(otherCmd));
           this.postMessage({ type: "permissionResolved", card: otherCard });
@@ -4332,6 +6220,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function formatSessionMeta(session) {
       const parts = [];
       if (session.message_count != null) parts.push(session.message_count + ' 条消息');
+      if (session.tokens_used != null && session.tokens_used > 0) parts.push(session.tokens_used.toLocaleString() + ' tokens');
+      if (session.model) parts.push(session.model);
+      if (session.cwd) {
+        const cwdParts = String(session.cwd).split(/[\\/]/).filter(Boolean);
+        if (cwdParts.length > 0) parts.push(cwdParts[cwdParts.length - 1]);
+      }
       if (session.created_at) {
         try {
           const d = new Date(session.created_at);
@@ -5662,6 +7556,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { name: '/agent',         desc: '切换到 Agent 模式 / 查看 Agent', badge: '' },
       { name: '/plan-status',   desc: '显示当前计划状态',             badge: '' },
       { name: '/agents',        desc: '列出托管的 Agent',             badge: '' },
+      { name: '/agent-log',     desc: '查看 Agent transcript',         badge: '' },
+      { name: '/agent-send',    desc: '向 Agent 追加输入',              badge: '' },
+      { name: '/wait',          desc: '等待 Agent 完成',                badge: '' },
+      { name: '/cancel-agent',  desc: '取消 Agent',                    badge: '' },
+      { name: '/spawn-agent',   desc: '启动后台 Agent（支持类型/名称/模型）', badge: '' },
+      { name: '/goal',          desc: '设置或管理持久 Goal',             badge: '' },
+      { name: '/tasks',         desc: '列出、查看、停止后台任务',          badge: '' },
+      { name: '/peers',         desc: '列出其他 CrabCode 会话',          badge: '' },
+      { name: '/peer-send',     desc: '向其他会话发送消息',              badge: '' },
       { name: '/status',        desc: '显示会话状态',                 badge: '' },
       { name: '/effort',        desc: '查看/设置推理强度',             badge: '' },
       { name: '/ultra',         desc: '切换/设置 Ultra mode',         badge: '' },
@@ -5673,7 +7576,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { name: '/recent',        desc: '列出最近的会话',               badge: '' },
       { name: '/search',        desc: '搜索会话',                     badge: '' },
       { name: '/archive',       desc: '归档会话',                     badge: '' },
-      { name: '/export',        desc: '导出会话 (md/json)',           badge: '' },
+      { name: '/prune',         desc: '归档/清理过期会话',             badge: '' },
+      { name: '/export',        desc: '导出会话 (md/json，可指定路径)',     badge: '' },
       { name: '/stats',         desc: '使用统计',                     badge: '' },
       { name: '/checkpoint',    desc: '创建检查点（含文件快照）',      badge: '' },
       { name: '/checkpoints',   desc: '列出检查点',                   badge: '' },
@@ -5682,7 +7586,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { name: '/undo',          desc: '撤销最后一个检查点',           badge: '' },
       { name: '/resume',        desc: '恢复会话',                     badge: '' },
       { name: '/logs',          desc: '显示后台日志',                 badge: '' },
-      { name: '/team',          desc: '团队管理',                     badge: '' },
+      { name: '/team',          desc: '团队管理（创建/协作/任务板）',       badge: '' },
+      { name: '/schedule',      desc: '定时任务管理（创建/执行/历史）',       badge: '' },
+      { name: '/image',         desc: '附加图片到下一条消息',             badge: '' },
     ];
 
     const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -5710,6 +7616,48 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return currentModelList.map(function(m) {
           return { name: m, desc: m };
         });
+      },
+      '/tasks': function() {
+        return [
+          { name: 'list', desc: '列出后台任务' },
+          { name: 'show', desc: '查看任务详情' },
+          { name: 'output', desc: '查看任务输出' },
+          { name: 'stop', desc: '停止后台任务' },
+        ];
+      },
+      '/team': function() {
+        return [
+          { name: 'list', desc: '列出 Team' },
+          { name: 'create', desc: '创建 Team' },
+          { name: 'status', desc: '查看 Team 状态' },
+          { name: 'messages', desc: '查看 Team 消息' },
+          { name: 'tasks', desc: '查看 Team 任务板' },
+          { name: 'spawn', desc: '添加 teammate' },
+          { name: 'remove', desc: '移除 teammate' },
+          { name: 'message', desc: '发送 Team 消息' },
+          { name: 'broadcast', desc: '广播 Team 消息' },
+          { name: 'mark-read', desc: '标记 Team 消息已读' },
+          { name: 'task-add', desc: '添加 Team 任务' },
+          { name: 'task-claim', desc: '认领 Team 任务' },
+          { name: 'task-complete', desc: '完成 Team 任务' },
+          { name: 'task-fail', desc: '将 Team 任务标记失败' },
+          { name: 'bridge', desc: '设置跨 Team Bridge' },
+          { name: 'bridge-status', desc: '查看跨 Team Bridge' },
+          { name: 'cross-message', desc: '发送跨 Team 消息' },
+          { name: 'shutdown', desc: '关闭 Team' },
+        ];
+      },
+      '/schedule': function() {
+        return [
+          { name: 'list', desc: '列出定时任务' },
+          { name: 'show', desc: '查看定时任务详情' },
+          { name: 'runs', desc: '查看定时任务执行历史' },
+          { name: 'create', desc: '创建定时任务' },
+          { name: 'pause', desc: '暂停定时任务' },
+          { name: 'resume', desc: '恢复定时任务' },
+          { name: 'run', desc: '立即执行定时任务' },
+          { name: 'cancel', desc: '删除定时任务' },
+        ];
       },
     };
 
@@ -5901,12 +7849,63 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ type: 'localMessage', role: 'system', text: text });
     }
 
+    function shellTokens(raw) {
+      const tokens = [];
+      const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\S+)/g;
+      let match;
+      while ((match = pattern.exec(raw || '')) !== null) {
+        tokens.push(match[1] !== undefined ? match[1].replace(/\\"/g, '"') : (match[2] !== undefined ? match[2] : match[3]));
+      }
+      return tokens;
+    }
+
+    function parseSessionLaunchArgs(raw, requireSelector) {
+      const tokens = shellTokens(raw);
+      const options = {};
+      const positionals = [];
+      const optionNames = {
+        '--model': 'model', '-m': 'model',
+        '--provider': 'provider',
+        '--base-url': 'base_url',
+        '--api-format': 'api_format',
+        '--model-profile': 'model_profile', '-M': 'model_profile',
+      };
+      for (let i = 0; i < tokens.length; i += 1) {
+        const token = tokens[i];
+        let key = token;
+        let value = null;
+        const equal = token.indexOf('=');
+        if (equal > 0) {
+          key = token.slice(0, equal);
+          value = token.slice(equal + 1);
+        }
+        const field = optionNames[key];
+        if (field) {
+          if (value === null) value = tokens[++i];
+          if (!value) return { error: '选项 ' + key + ' 需要一个值。' };
+          options[field] = value;
+        } else if (token.charAt(0) === '-') {
+          return { error: '未知选项：' + token };
+        } else {
+          positionals.push(token);
+        }
+      }
+      if (requireSelector && positionals.length !== 1) {
+        return { error: '用法：/resume <session-id> [--model MODEL] [--provider PROVIDER] [--base-url URL] [--api-format FORMAT] [--model-profile PROFILE]' };
+      }
+      if (!requireSelector && positionals.length > 0) {
+        return { error: '用法：/new [--model MODEL] [--provider PROVIDER] [--base-url URL] [--api-format FORMAT] [--model-profile PROFILE]' };
+      }
+      return { selector: positionals[0] || null, options: options };
+    }
+
     const DIRECT_COMMANDS = {
       '/help': function() {
         const bt = String.fromCharCode(96);
         const lines = BUILTIN_COMMANDS.map(function(c) {
           return '- ' + bt + c.name + bt + ' — ' + c.desc;
         });
+        lines.push('- ' + bt + '! <cmd>' + bt + ' — 在当前工作区终端运行命令');
         if (slashSkills.length > 0) {
           lines.push('');
           lines.push('**Skills**');
@@ -5918,15 +7917,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return true;
       },
       '/model': function(args) {
-        if (args) vscode.postMessage({ type: 'setModel', name: args });
-        return !!args;
+        if (args) {
+          vscode.postMessage({ type: 'setModel', name: args });
+        } else {
+          vscode.postMessage({ type: 'fetchModel' });
+        }
+        return true;
       },
       '/compact': function(args) {
         vscode.postMessage({ type: 'compact', customInstructions: args || '' });
         return true;
       },
-      '/new': function() {
-        vscode.postMessage({ type: 'newSession' });
+      '/new': function(args) {
+        const parsed = parseSessionLaunchArgs(args, false);
+        if (parsed.error) { addLocalSystemMessage(parsed.error); return true; }
+        vscode.postMessage({ type: 'newSession', options: parsed.options });
         return true;
       },
       '/clear': function() {
@@ -5963,7 +7968,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         updateModeButton('plan');
         return true;
       },
-      '/agent': function() {
+      '/agent': function(args) {
+        if (args) {
+          vscode.postMessage({ type: 'fetchAgent', agentId: args.split(/\s+/)[0] });
+          return true;
+        }
         vscode.postMessage({ type: 'switchMode', mode: 'agent' });
         updateModeButton('agent');
         return true;
@@ -5987,9 +7996,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         vscode.postMessage({ type: 'archiveSession', sessionId: args });
         return true;
       },
+      '/prune': function(args) {
+        const tokens = shellTokens(args);
+        let days = 30;
+        let deleteFiles = false;
+        for (let i = 0; i < tokens.length; i += 1) {
+          const token = tokens[i];
+          if (token === '--delete-files' || token === '--purge') {
+            deleteFiles = true;
+          } else if (token === '--days' && tokens[i + 1]) {
+            days = parseInt(tokens[++i], 10);
+          } else if (token.indexOf('--days=') === 0) {
+            days = parseInt(token.slice(7), 10);
+          } else if (/^\d+$/.test(token)) {
+            days = parseInt(token, 10);
+          } else {
+            addLocalSystemMessage('用法：/prune [days] [--delete-files]');
+            return true;
+          }
+        }
+        if (!Number.isFinite(days) || days < 0) {
+          addLocalSystemMessage('days 必须是非负整数');
+          return true;
+        }
+        vscode.postMessage({ type: 'pruneSessions', days: days, deleteFiles: deleteFiles });
+        return true;
+      },
       '/export': function(args) {
-        const fmt = (args === 'json') ? 'json' : 'md';
-        vscode.postMessage({ type: 'exportSession', format: fmt });
+        const tokens = shellTokens(args);
+        let fmt = 'md';
+        let sessionId = null;
+        const positional = [];
+        for (let i = 0; i < tokens.length; i += 1) {
+          const token = tokens[i];
+          if (token === '--session' || token === '--id') {
+            sessionId = tokens[++i] || null;
+            if (!sessionId) { addLocalSystemMessage('用法：/export [md|json] [path] [--session ID]'); return true; }
+          } else if (token.indexOf('--session=') === 0 || token.indexOf('--id=') === 0) {
+            sessionId = token.slice(token.indexOf('=') + 1) || null;
+            if (!sessionId) { addLocalSystemMessage('用法：/export [md|json] [path] [--session ID]'); return true; }
+          } else if (token === 'json') fmt = 'json';
+          else if (token === 'md' || token === 'markdown') fmt = 'md';
+          else positional.push(token);
+        }
+        if (positional.length > 1) {
+          addLocalSystemMessage('用法：/export [md|json] [path] [--session ID]');
+          return true;
+        }
+        vscode.postMessage({ type: 'exportSession', format: fmt, path: positional[0] || undefined, sessionId: sessionId || undefined });
         return true;
       },
       '/stats': function() {
@@ -6020,11 +8074,446 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
       '/resume': function(args) {
         if (!args) { vscode.postMessage({ type: 'fetchSessions' }); return true; }
-        vscode.postMessage({ type: 'resumeSession', sessionId: args });
+        const parsed = parseSessionLaunchArgs(args, true);
+        if (parsed.error) { addLocalSystemMessage(parsed.error); return true; }
+        vscode.postMessage({ type: 'resumeSession', sessionId: parsed.selector, options: parsed.options });
         return true;
       },
       '/agents': function() {
         vscode.postMessage({ type: 'fetchAgents' });
+        return true;
+      },
+      '/agent-log': function(args) {
+        const tokens = shellTokens(args);
+        if (!tokens[0]) { addLocalSystemMessage('用法：/agent-log <agent-id> [lines]'); return true; }
+        vscode.postMessage({ type: 'fetchAgentLog', agentId: tokens[0], lines: parseInt(tokens[1] || '200', 10) || 200 });
+        return true;
+      },
+      '/agent-send': function(args) {
+        const tokens = shellTokens(args);
+        let interrupt = false;
+        for (let i = tokens.length - 1; i >= 0; i -= 1) {
+          if (tokens[i] === '--interrupt') { interrupt = true; tokens.splice(i, 1); }
+        }
+        if (tokens.length < 2) { addLocalSystemMessage('用法：/agent-send <agent-id> [--interrupt] <prompt>'); return true; }
+        vscode.postMessage({ type: 'sendAgentInput', agentId: tokens[0], prompt: tokens.slice(1).join(' '), interrupt: interrupt });
+        return true;
+      },
+      '/wait': function(args) {
+        const tokens = shellTokens(args);
+        if (!tokens[0]) { addLocalSystemMessage('用法：/wait <agent-id> [agent-id ...] [--timeout MS]'); return true; }
+        let timeout = null;
+        const ids = [];
+        for (let i = 0; i < tokens.length; i += 1) {
+          const token = tokens[i];
+          if (token === '--timeout') {
+            timeout = parseInt(tokens[++i] || '', 10);
+          } else if (token.indexOf('--timeout=') === 0) {
+            timeout = parseInt(token.slice(10), 10);
+          } else {
+            ids.push.apply(ids, token.split(',').filter(Boolean));
+          }
+        }
+        // Preserve the historical /wait <id> <timeout-ms> form.
+        if (ids.length === 2 && timeout === null && /^[0-9]+$/.test(ids[1])) {
+          timeout = parseInt(ids.pop(), 10);
+        }
+        if (!ids.length || (timeout !== null && (!Number.isFinite(timeout) || timeout < 0))) {
+          addLocalSystemMessage('用法：/wait <agent-id> [agent-id ...] [--timeout MS]');
+          return true;
+        }
+        vscode.postMessage({ type: 'waitAgent', agentIds: ids, agentId: ids.length === 1 ? ids[0] : undefined, timeoutMs: timeout });
+        return true;
+      },
+      '/cancel-agent': function(args) {
+        if (!args) { addLocalSystemMessage('用法：/cancel-agent <agent-id>'); return true; }
+        vscode.postMessage({ type: 'cancelAgent', agentId: args.split(/\s+/)[0] });
+        return true;
+      },
+      '/spawn-agent': function(args) {
+        const tokens = shellTokens(args);
+        let subagentType = 'generalPurpose';
+        let name = null;
+        let modelProfile = null;
+        let callback = true;
+        const prompt = [];
+        for (let i = 0; i < tokens.length; i += 1) {
+          const token = tokens[i];
+          let key = token;
+          let value = null;
+          const equal = token.indexOf('=');
+          if (equal > 0) {
+            key = token.slice(0, equal);
+            value = token.slice(equal + 1);
+          }
+          if (key === '--type' || key === '--subagent-type') {
+            value = value === null ? tokens[++i] : value;
+            if (!value) { addLocalSystemMessage('用法：/spawn-agent [--type TYPE] [--name NAME] [--model PROFILE] <prompt>'); return true; }
+            subagentType = value;
+          } else if (key === '--name') {
+            value = value === null ? tokens[++i] : value;
+            if (!value) { addLocalSystemMessage('用法：/spawn-agent [--type TYPE] [--name NAME] [--model PROFILE] <prompt>'); return true; }
+            name = value;
+          } else if (key === '--model' || key === '--model-profile') {
+            value = value === null ? tokens[++i] : value;
+            if (!value) { addLocalSystemMessage('用法：/spawn-agent [--type TYPE] [--name NAME] [--model PROFILE] <prompt>'); return true; }
+            modelProfile = value;
+          } else if (key === '--callback') {
+            value = value === null ? tokens[++i] : value;
+            if (value !== 'true' && value !== 'false') { addLocalSystemMessage('callback 必须是 true 或 false'); return true; }
+            callback = value === 'true';
+          } else if (token === '--no-callback') {
+            callback = false;
+          } else if (token.charAt(0) === '-') {
+            addLocalSystemMessage('未知选项：' + token + '。用法：/spawn-agent [--type TYPE] [--name NAME] [--model PROFILE] <prompt>');
+            return true;
+          } else {
+            prompt.push(token);
+          }
+        }
+        if (!prompt.length) { addLocalSystemMessage('用法：/spawn-agent [--type TYPE] [--name NAME] [--model PROFILE] [--callback true|false] <prompt>'); return true; }
+        vscode.postMessage({ type: 'spawnAgent', prompt: prompt.join(' '), subagentType: subagentType, name: name, modelProfile: modelProfile, callback: callback });
+        return true;
+      },
+      '/goal': function(args) {
+        const tokens = shellTokens(args);
+        if (!tokens.length || ['show', 'status', 'view'].indexOf(tokens[0].toLowerCase()) >= 0) {
+          vscode.postMessage({ type: 'fetchGoal' });
+          return true;
+        }
+        let action = tokens[0].toLowerCase();
+        if (['pause', 'resume', 'complete', 'blocked', 'clear'].indexOf(action) >= 0) {
+          if (tokens.length !== 1) addLocalSystemMessage('用法：/goal ' + action);
+          else vscode.postMessage({ type: 'manageGoal', action: action === 'pause' ? 'pause' : action, objective: null, budgetWasSet: false });
+          return true;
+        }
+        if (action !== 'set' && action !== 'edit') {
+          tokens.unshift(action);
+          action = 'set';
+        } else {
+          tokens.shift();
+        }
+        let budgetWasSet = false;
+        let tokenBudget = null;
+        const objective = [];
+        for (let i = 0; i < tokens.length; i += 1) {
+          const token = tokens[i];
+          if (token === '--no-budget') { budgetWasSet = true; tokenBudget = null; continue; }
+          if (token === '--budget' && tokens[i + 1]) {
+            budgetWasSet = true;
+            tokenBudget = parseInt(tokens[++i], 10);
+            continue;
+          }
+          if (token.indexOf('--budget=') === 0) {
+            budgetWasSet = true;
+            tokenBudget = parseInt(token.slice(9), 10);
+            continue;
+          }
+          objective.push(token);
+        }
+        if (!objective.length || (budgetWasSet && (!Number.isFinite(tokenBudget) || tokenBudget <= 0) && tokenBudget !== null)) {
+          addLocalSystemMessage('用法：/goal [set|edit] [--budget N|--no-budget] <objective>');
+          return true;
+        }
+        vscode.postMessage({ type: 'manageGoal', action: action, objective: objective.join(' '), tokenBudget: tokenBudget, budgetWasSet: budgetWasSet });
+        return true;
+      },
+      '/tasks': function(args) {
+        const tokens = shellTokens(args);
+        const sub = (tokens.shift() || 'list').toLowerCase();
+        if (sub === 'list') {
+          vscode.postMessage({ type: 'fetchTasks' });
+        } else if (sub === 'show' || sub === 'get') {
+          if (!tokens[0]) addLocalSystemMessage('用法：/tasks show <task-id>');
+          else vscode.postMessage({ type: 'fetchTask', taskId: tokens[0] });
+        } else if (sub === 'output' || sub === 'log') {
+          if (!tokens[0]) addLocalSystemMessage('用法：/tasks output <task-id> [lines]');
+          else {
+            const outputLines = tokens[1] ? parseInt(tokens[1], 10) : 200;
+            if (!Number.isFinite(outputLines) || outputLines < 1) addLocalSystemMessage('lines 必须是正整数');
+            else vscode.postMessage({ type: 'fetchTaskOutput', taskId: tokens[0], lines: outputLines });
+          }
+        } else if (sub === 'stop') {
+          if (!tokens[0]) addLocalSystemMessage('用法：/tasks stop <task-id>');
+          else vscode.postMessage({ type: 'stopTask', taskId: tokens[0] });
+        } else {
+          addLocalSystemMessage('用法：/tasks [list|show|output|stop] <task-id>');
+        }
+        return true;
+      },
+      '/peers': function() {
+        vscode.postMessage({ type: 'fetchPeers' });
+        return true;
+      },
+      '/peer-send': function(args) {
+        const tokens = shellTokens(args);
+        if (tokens.length < 2) { addLocalSystemMessage('用法：/peer-send <session|name> <text>'); return true; }
+        vscode.postMessage({ type: 'sendPeerMessage', to: tokens[0], text: tokens.slice(1).join(' ') });
+        return true;
+      },
+      '/team': function(args) {
+        const tokens = shellTokens(args);
+        const sub = (tokens.shift() || 'list').toLowerCase();
+        if (sub === 'list') { vscode.postMessage({ type: 'fetchTeams' }); return true; }
+        if (sub === 'create') {
+          const name = tokens.shift();
+          if (!name) { addLocalSystemMessage('用法：/team create <name> [max-teammates]'); return true; }
+          const max = tokens.shift();
+          const maxTeammates = max ? parseInt(max, 10) : null;
+          if (max && (!Number.isFinite(maxTeammates) || maxTeammates < 1)) { addLocalSystemMessage('max-teammates 必须是正整数'); return true; }
+          vscode.postMessage({ type: 'createTeam', name: name, maxTeammates: maxTeammates });
+          return true;
+        }
+        const teamId = tokens.shift();
+        if (!teamId) { addLocalSystemMessage('用法：/team [list|create|status|messages|tasks|spawn|remove|message|broadcast|mark-read|task-add|task-claim|task-complete|task-fail|bridge|bridge-status|cross-message|shutdown] <team-id>'); return true; }
+        if (sub === 'status') {
+          vscode.postMessage({ type: 'fetchTeamStatus', teamId: teamId });
+        } else if (sub === 'messages') {
+          let agentId = null;
+          let unread = false;
+          for (let i = 0; i < tokens.length; i += 1) {
+            if (tokens[i] === '--unread') unread = true;
+            else if (tokens[i] === '--agent' || tokens[i] === '--agent-id') agentId = tokens[++i] || null;
+            else if (tokens[i].indexOf('--agent=') === 0) agentId = tokens[i].slice(8);
+            else { addLocalSystemMessage('用法：/team messages <team-id> [--agent ID] [--unread]'); return true; }
+          }
+          vscode.postMessage({ type: 'fetchTeamMessages', teamId: teamId, agentId: agentId, unread: unread });
+        } else if (sub === 'tasks') {
+          vscode.postMessage({ type: 'fetchTeamTasks', teamId: teamId });
+        } else if (sub === 'remove') {
+          const agentId = tokens.shift();
+          if (!agentId || tokens.length) addLocalSystemMessage('用法：/team remove <team-id> <agent-id>');
+          else vscode.postMessage({ type: 'removeTeamMember', teamId: teamId, agentId: agentId });
+        } else if (sub === 'shutdown') {
+          vscode.postMessage({ type: 'shutdownTeam', teamId: teamId });
+        } else if (sub === 'spawn') {
+          let role = 'worker';
+          let name = null;
+          let modelProfile = null;
+          const prompt = [];
+          for (let i = 0; i < tokens.length; i += 1) {
+            const token = tokens[i];
+            let key = token;
+            let value = null;
+            const equal = token.indexOf('=');
+            if (equal > 0) { key = token.slice(0, equal); value = token.slice(equal + 1); }
+            if (key === '--role') {
+              value = value === null ? tokens[++i] : value;
+              if (!value) { addLocalSystemMessage('用法：/team spawn <team-id> [--role ROLE] [--name NAME] [--model PROFILE] <prompt>'); return true; }
+              role = value;
+            } else if (key === '--name') {
+              value = value === null ? tokens[++i] : value;
+              if (!value) { addLocalSystemMessage('用法：/team spawn <team-id> [--role ROLE] [--name NAME] [--model PROFILE] <prompt>'); return true; }
+              name = value;
+            } else if (key === '--model' || key === '--model-profile') {
+              value = value === null ? tokens[++i] : value;
+              if (!value) { addLocalSystemMessage('用法：/team spawn <team-id> [--role ROLE] [--name NAME] [--model PROFILE] <prompt>'); return true; }
+              modelProfile = value;
+            } else if (token.charAt(0) === '-') {
+              addLocalSystemMessage('未知选项：' + token); return true;
+            } else {
+              prompt.push(token);
+            }
+          }
+          if (!prompt.length) { addLocalSystemMessage('用法：/team spawn <team-id> [--role ROLE] [--name NAME] [--model PROFILE] <prompt>'); return true; }
+          if (['lead', 'worker', 'researcher', 'reviewer'].indexOf(role) < 0) { addLocalSystemMessage('role 必须是 lead、worker、researcher 或 reviewer'); return true; }
+          vscode.postMessage({ type: 'spawnTeamMember', teamId: teamId, prompt: prompt.join(' '), role: role, name: name, modelProfile: modelProfile });
+        } else if (sub === 'message') {
+          const to = tokens.shift();
+          const text = tokens.join(' ');
+          if (!to || !text) addLocalSystemMessage('用法：/team message <team-id> <agent-id> <text>');
+          else vscode.postMessage({ type: 'sendTeamMessage', teamId: teamId, to: to, text: text });
+        } else if (sub === 'broadcast') {
+          const text = tokens.join(' ');
+          if (!text) addLocalSystemMessage('用法：/team broadcast <team-id> <text>');
+          else vscode.postMessage({ type: 'broadcastTeamMessage', teamId: teamId, text: text });
+        } else if (sub === 'mark-read') {
+          const agentId = tokens.shift();
+          if (!agentId) addLocalSystemMessage('用法：/team mark-read <team-id> <agent-id> [message-id ...]');
+          else vscode.postMessage({ type: 'markTeamMessagesRead', teamId: teamId, agentId: agentId, messageIds: tokens.length ? tokens : undefined });
+        } else if (sub === 'task-add') {
+          const description = tokens.join(' ');
+          if (!description) addLocalSystemMessage('用法：/team task-add <team-id> <description>');
+          else vscode.postMessage({ type: 'addTeamTask', teamId: teamId, description: description });
+        } else if (sub === 'task-claim') {
+          const taskId = tokens.shift();
+          if (!taskId || tokens.length > 1) addLocalSystemMessage('用法：/team task-claim <team-id> <task-id> [agent-id]');
+          else vscode.postMessage({ type: 'claimTeamTask', teamId: teamId, taskId: taskId, agentId: tokens[0] || '' });
+        } else if (sub === 'task-complete') {
+          const taskId = tokens.shift();
+          let agentId = '';
+          if (tokens[0] === '--agent' || tokens[0] === '--agent-id') {
+            tokens.shift();
+            agentId = tokens.shift() || '';
+          }
+          const result = tokens.join(' ');
+          if (!taskId) addLocalSystemMessage('用法：/team task-complete <team-id> <task-id> [--agent ID] [result]');
+          else vscode.postMessage({ type: 'completeTeamTask', teamId: teamId, taskId: taskId, result: result, agentId: agentId });
+        } else if (sub === 'task-fail') {
+          const taskId = tokens.shift();
+          let agentId = '';
+          if (tokens[0] === '--agent' || tokens[0] === '--agent-id') {
+            tokens.shift();
+            agentId = tokens.shift() || '';
+          }
+          const reason = tokens.join(' ');
+          if (!taskId) addLocalSystemMessage('用法：/team task-fail <team-id> <task-id> [--agent ID] [reason]');
+          else vscode.postMessage({ type: 'failTeamTask', teamId: teamId, taskId: taskId, reason: reason, agentId: agentId });
+        } else if (sub === 'bridge' || sub === 'bridge-status') {
+          const otherTeam = tokens.shift();
+          if (!otherTeam || (sub === 'bridge' && tokens.length > 1)) {
+            addLocalSystemMessage('用法：/team bridge <team-a> <team-b> [allow_all|allow_tagged|deny]');
+          } else if (sub === 'bridge-status' && tokens.length) {
+            addLocalSystemMessage('用法：/team bridge-status <team-a> <team-b>');
+          } else if (sub === 'bridge') {
+            const policy = tokens[0] || 'allow_tagged';
+            vscode.postMessage({ type: 'registerTeamBridge', teamA: teamId, teamB: otherTeam, policy: policy });
+          } else {
+            vscode.postMessage({ type: 'getTeamBridge', teamA: teamId, teamB: otherTeam });
+          }
+        } else if (sub === 'cross-message') {
+          const toTeam = tokens.shift();
+          let fromAgent = '';
+          let toAgent = '';
+          const textParts = [];
+          for (let i = 0; i < tokens.length; i += 1) {
+            const token = tokens[i];
+            if (token === '--from-agent' || token === '--from') fromAgent = tokens[++i] || '';
+            else if (token === '--to-agent' || token === '--to') toAgent = tokens[++i] || '';
+            else textParts.push(token);
+          }
+          if (!toTeam || !textParts.length) addLocalSystemMessage('用法：/team cross-message <from-team> <to-team> [--from-agent ID] [--to-agent ID] <text>');
+          else vscode.postMessage({ type: 'sendCrossTeamMessage', fromTeam: teamId, toTeam: toTeam, fromAgent: fromAgent, toAgent: toAgent, text: textParts.join(' ') });
+        } else {
+          addLocalSystemMessage('用法：/team [list|create|status|messages|tasks|spawn|remove|message|broadcast|mark-read|task-add|task-claim|task-complete|task-fail|bridge|bridge-status|cross-message|shutdown] <team-id>');
+        }
+        return true;
+      },
+      '/schedule': function(args) {
+        const tokens = shellTokens(args);
+        const sub = (tokens.shift() || 'list').toLowerCase();
+        if (sub === 'list') {
+          let status = null;
+          let scheduleType = null;
+          let enabled = null;
+          let limit = 100;
+          for (let i = 0; i < tokens.length; i += 1) {
+            const token = tokens[i];
+            let key = token;
+            let value = null;
+            const equal = token.indexOf('=');
+            if (equal > 0) { key = token.slice(0, equal); value = token.slice(equal + 1); }
+            if (key === '--status') { value = value === null ? tokens[++i] : value; status = value || null; }
+            else if (key === '--type' || key === '--schedule-type') { value = value === null ? tokens[++i] : value; scheduleType = value || null; }
+            else if (key === '--enabled') {
+              value = value === null ? tokens[++i] : value;
+              if (value !== 'true' && value !== 'false') { addLocalSystemMessage('enabled 必须是 true 或 false'); return true; }
+              enabled = value === 'true';
+            } else if (key === '--limit') {
+              value = value === null ? tokens[++i] : value;
+              limit = parseInt(value || '', 10);
+              if (!Number.isFinite(limit) || limit < 1) { addLocalSystemMessage('limit 必须是正整数'); return true; }
+            } else {
+              addLocalSystemMessage('用法：/schedule list [--status STATUS] [--type cron|interval|once] [--enabled true|false] [--limit N]');
+              return true;
+            }
+            if (value === null || value === '') { addLocalSystemMessage('选项 ' + key + ' 需要一个值'); return true; }
+          }
+          vscode.postMessage({ type: 'fetchSchedules', status: status || undefined, scheduleType: scheduleType || undefined, enabled: enabled === null ? undefined : enabled, limit: limit });
+          return true;
+        }
+        if (sub === 'show' || sub === 'status') {
+          if (tokens.length !== 1) { addLocalSystemMessage('用法：/schedule show <job-id>'); return true; }
+          vscode.postMessage({ type: 'fetchSchedule', jobId: tokens[0] });
+          return true;
+        }
+        if (sub === 'runs' || sub === 'history') {
+          const jobId = tokens.shift();
+          if (!jobId) { addLocalSystemMessage('用法：/schedule runs <job-id> [--status STATUS] [--limit N]'); return true; }
+          let status = null;
+          let limit = 50;
+          for (let i = 0; i < tokens.length; i += 1) {
+            const token = tokens[i];
+            let key = token;
+            let value = null;
+            const equal = token.indexOf('=');
+            if (equal > 0) { key = token.slice(0, equal); value = token.slice(equal + 1); }
+            if (key === '--status') { value = value === null ? tokens[++i] : value; status = value || null; }
+            else if (key === '--limit') {
+              value = value === null ? tokens[++i] : value;
+              limit = parseInt(value || '', 10);
+              if (!Number.isFinite(limit) || limit < 1) { addLocalSystemMessage('limit 必须是正整数'); return true; }
+            } else { addLocalSystemMessage('用法：/schedule runs <job-id> [--status STATUS] [--limit N]'); return true; }
+            if (value === null || value === '') { addLocalSystemMessage('选项 ' + key + ' 需要一个值'); return true; }
+          }
+          vscode.postMessage({ type: 'fetchScheduleRuns', jobId: jobId, status: status || undefined, limit: limit });
+          return true;
+        }
+        if (sub === 'pause' || sub === 'resume' || sub === 'run' || sub === 'cancel') {
+          if (tokens.length !== 1) { addLocalSystemMessage('用法：/schedule ' + sub + ' <job-id>'); return true; }
+          vscode.postMessage({ type: 'mutateSchedule', action: sub, jobId: tokens[0] });
+          return true;
+        }
+        if (sub === 'create') {
+          const positionals = [];
+          const request = { tags: [], enabled: true, extra: {} };
+          let promptMode = false;
+          for (let i = 0; i < tokens.length; i += 1) {
+            const token = tokens[i];
+            if (token === '--') { promptMode = true; continue; }
+            if (promptMode) { positionals.push(token); continue; }
+            let key = token;
+            let value = null;
+            const equal = token.indexOf('=');
+            if (equal > 0) { key = token.slice(0, equal); value = token.slice(equal + 1); }
+            if (key === '--disabled') {
+              if (value !== null) { addLocalSystemMessage('--disabled 不接受值'); return true; }
+              request.enabled = false;
+            } else if (key === '--max-runs' || key === '--timeout' || key === '--model' || key === '--model-profile' || key === '--cwd' || key === '--description' || key === '--tag' || key === '--enabled' || key === '--next-run' || key === '--job-session' || key === '--run-session' || key === '--extra') {
+              value = value === null ? tokens[++i] : value;
+              if (!value) { addLocalSystemMessage('选项 ' + key + ' 需要一个值'); return true; }
+              if (key === '--max-runs' || key === '--timeout') {
+                const numeric = parseInt(value, 10);
+                if (!Number.isFinite(numeric) || numeric < 1) { addLocalSystemMessage(key + ' 必须是正整数'); return true; }
+                request[key === '--max-runs' ? 'max_runs' : 'timeout'] = numeric;
+              } else if (key === '--enabled') {
+                if (value !== 'true' && value !== 'false') { addLocalSystemMessage('enabled 必须是 true 或 false'); return true; }
+                request.enabled = value === 'true';
+              } else if (key === '--next-run') request.next_run = value;
+              else if (key === '--job-session' || key === '--run-session') request.job_session_id = value;
+              else if (key === '--extra') {
+                try {
+                  const parsed = JSON.parse(value);
+                  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('object required');
+                  Object.assign(request.extra, parsed);
+                } catch (_) {
+                  addLocalSystemMessage('--extra 必须是 JSON 对象');
+                  return true;
+                }
+              } else if (key === '--model' || key === '--model-profile') request.model_profile = value;
+              else if (key === '--cwd') request.cwd = value;
+              else if (key === '--description') request.description = value;
+              else request.tags.push(value);
+            } else if (token.charAt(0) === '-' && token !== '-') {
+              addLocalSystemMessage('未知选项：' + token); return true;
+            } else positionals.push(token);
+          }
+          if (positionals.length < 4) {
+            addLocalSystemMessage('用法：/schedule create [选项] <name> <cron|interval|once> <schedule> <prompt>');
+            return true;
+          }
+          const kind = positionals[1];
+          if (kind !== 'cron' && kind !== 'interval' && kind !== 'once') {
+            addLocalSystemMessage('schedule_type 必须是 cron、interval 或 once'); return true;
+          }
+          request.name = positionals[0];
+          request.schedule_type = kind;
+          request.schedule = positionals[2];
+          request.prompt = positionals.slice(3).join(' ');
+          vscode.postMessage({ type: 'createSchedule', request: request });
+          return true;
+        }
+        addLocalSystemMessage('用法：/schedule [list|show|runs|create|pause|resume|run|cancel] ...');
         return true;
       },
       '/plan-status': function() {
@@ -6032,8 +8521,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return true;
       },
       '/logs': function(args) {
-        const lines = parseInt(args, 10) || 100;
-        vscode.postMessage({ type: 'fetchLogs', lines: lines });
+        const tokens = shellTokens(args);
+        let tail = 100;
+        let name = null;
+        let clear = false;
+        let follow = false;
+        for (let i = 0; i < tokens.length; i += 1) {
+          const token = tokens[i];
+          if (token === '-f' || token === '--follow') { follow = true; continue; }
+          if (token === '--stop') { vscode.postMessage({ type: 'stopLogFollow' }); return true; }
+          if (token === '--clear') { clear = true; continue; }
+          if (token === '--tail' && tokens[i + 1]) { tail = parseInt(tokens[++i], 10) || 100; continue; }
+          if (token.indexOf('--tail=') === 0) { tail = parseInt(token.slice(7), 10) || 100; continue; }
+          if (token.charAt(0) !== '-' && !name) name = token;
+        }
+        if (follow) {
+          if (!name) addLocalSystemMessage('用法：/logs -f <name>');
+          else vscode.postMessage({ type: 'followLogs', name: name });
+        } else {
+          if (clear && !name) { addLocalSystemMessage('用法：/logs --clear <name>'); return true; }
+          vscode.postMessage({ type: 'fetchLogs', lines: tail, tail: tail, name: name, clear: clear });
+        }
+        return true;
+      },
+      '/image': function(args) {
+        const paths = shellTokens(args);
+        if (!paths.length) { addLocalSystemMessage('用法：/image <path> [path2 ...]'); return true; }
+        vscode.postMessage({ type: 'attachImagePaths', paths: paths });
         return true;
       },
     };
@@ -6048,6 +8562,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       text = (text + extra).trim();
       if (!text && pendingImages.length === 0 && pendingTextFiles.length === 0) return;
 
+      if ((text === '!' || text.startsWith('! ')) && pendingImages.length === 0 && pendingTextFiles.length === 0) {
+        const command = text.slice(1).trim();
+        if (!command) addLocalSystemMessage('用法：! <cmd>');
+        else vscode.postMessage({ type: 'runShellCommand', command: command });
+        input.value = '';
+        pendingImages.length = 0;
+        pendingTextFiles.length = 0;
+        renderAttachmentBar();
+        closeSlashPopup();
+        return;
+      }
+
       // Intercept slash commands before sending to model
       if (text.startsWith('/') && pendingImages.length === 0 && pendingTextFiles.length === 0) {
         const spaceIdx = text.indexOf(' ');
@@ -6055,6 +8581,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const args = spaceIdx < 0 ? '' : text.slice(spaceIdx + 1).trim();
         const handler = DIRECT_COMMANDS[cmd];
         if (handler && handler(args)) {
+          input.value = '';
+          pendingImages.length = 0;
+          pendingTextFiles.length = 0;
+          renderAttachmentBar();
+          closeSlashPopup();
+          return;
+        }
+        const skillName = cmd.startsWith('/') ? cmd.slice(1) : '';
+        if (skillName && slashSkills.some(function(skill) { return skill.name === skillName; })) {
+          vscode.postMessage({ type: 'invokeSkill', name: skillName, userInput: args });
           input.value = '';
           pendingImages.length = 0;
           pendingTextFiles.length = 0;

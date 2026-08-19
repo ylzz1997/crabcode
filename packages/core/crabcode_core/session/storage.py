@@ -845,6 +845,24 @@ class SessionStorage:
             self._written_uuids.add(message.uuid)
         return projection_id
 
+    def append_clear_boundary(self, *, messages_before: int) -> str:
+        """Durably replace the active conversation projection with an empty one.
+
+        Ordinary transcript messages remain available to audit/export readers,
+        while future session resumes start from an empty active context.
+        """
+        clear_id = str(uuid.uuid4())
+        self._append_transcript_line(
+            {
+                "type": "clear_boundary",
+                "clear_id": clear_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "messages_before": max(0, int(messages_before)),
+            }
+        )
+        self._written_uuids.clear()
+        return clear_id
+
     def persist_archive_marker(self) -> None:
         """Persist terminal external and inline archive tombstones."""
         entry = {
@@ -973,6 +991,15 @@ class SessionStorage:
                     boundary_seen = True
                     if is_compaction:
                         self.compact_count += 1
+                    continue
+
+                if entry.get("type") == "clear_boundary":
+                    active_messages = []
+                    active_seen = set()
+                    boundary_seen = True
+                    self.last_context_used_tokens = 0
+                    self.last_context_window_tokens = 0
+                    self.compact_count = 0
                     continue
 
                 if entry.get("type") == "checkpoint":

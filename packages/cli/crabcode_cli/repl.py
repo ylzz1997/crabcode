@@ -59,6 +59,7 @@ from crabcode_core.types.event import (
     PermissionResponseEvent,
     PeerMessageEvent,
     PlanReadyEvent,
+    ScheduleRunEvent,
     StreamModeEvent,
     StreamTextEvent,
     SteeringAppliedEvent,
@@ -163,7 +164,30 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/agent-send": [],
     "/wait": [],
     "/cancel-agent": [],
-    "/team": ["list", "status", "messages", "shutdown"],
+    "/team": [
+        "list",
+        "create",
+        "status",
+        "messages",
+        "tasks",
+        "spawn",
+        "message",
+        "broadcast",
+        "task-add",
+        "task-claim",
+        "task-complete",
+        "shutdown",
+    ],
+    "/schedule": [
+        "list",
+        "show",
+        "runs",
+        "create",
+        "pause",
+        "resume",
+        "run",
+        "cancel",
+    ],
     "/status": [],
     "/effort": list(REASONING_EFFORT_LEVELS),
     "/ultra": ["true", "false"],
@@ -327,7 +351,8 @@ class _CrabCodeCompleter(Completer):
             "/agent-send": "send input to an agent",
             "/wait": "wait for an agent",
             "/cancel-agent": "cancel an agent",
-            "/team": "team management (list/status/messages/shutdown)",
+            "/team": "team lifecycle, messaging, and task-board management",
+            "/schedule": "scheduled task lifecycle and execution history",
             "/status": "show session status",
             "/effort": "show/set reasoning effort",
             "/ultra": "toggle/set ultra mode",
@@ -1659,6 +1684,15 @@ async def _consume_background_events(
                     f"task {event.task_id[:8]} {event.status}[/]"
                 )
             )
+        elif isinstance(event, ScheduleRunEvent):
+            status_style = "green" if event.status == "success" else "red"
+            detail = event.error_message or event.result_summary or event.status
+            await render(
+                lambda: console.print(
+                    f"  [dim cyan][schedule:{event.job_id[:8]}] "
+                    f"[{status_style}]{event.status}[/] {safe_utf8_str(detail)}[/]"
+                )
+            )
         elif isinstance(event, TurnCompleteEvent):
             await render(lambda: _render_context_usage(event))
             permission_batch["denied"] = False
@@ -2265,6 +2299,16 @@ async def run_repl(
                             f"{f' by {event.assignee[:8]}' if event.assignee else ''}[/]"
                         )
 
+                    elif isinstance(event, ScheduleRunEvent):
+                        await _stop_spinner_with_thinking()
+                        _finish_stream_line()
+                        status_style = "green" if event.status == "success" else "red"
+                        detail = event.error_message or event.result_summary or event.status
+                        console.print(
+                            f"\n  [dim cyan][schedule:{event.job_id[:8]}] "
+                            f"[{status_style}]{event.status}[/] {safe_utf8_str(detail)}[/]"
+                        )
+
                     elif isinstance(event, PlanReadyEvent):
                         await _stop_spinner_with_thinking()
                         _finish_stream_line()
@@ -2528,9 +2572,22 @@ async def _handle_command(
             "[bold]/wait <id>[/] — wait for a managed agent\n"
             "[bold]/cancel-agent <id>[/] — cancel a managed agent\n"
             "[bold]/team list[/] — list active teams\n"
+            "[bold]/team create <name> [max][/] — create a team\n"
             "[bold]/team status <id>[/] — show team status\n"
             "[bold]/team messages <id>[/] — show team messages\n"
+            "[bold]/team tasks <id>[/] — show the team task board\n"
+            "[bold]/team spawn <id> [options] <prompt>[/] — add a teammate\n"
+            "[bold]/team message <id> <agent> <text>[/] — message a teammate\n"
+            "[bold]/team broadcast <id> <text>[/] — message all teammates\n"
+            "[bold]/team task-add <id> <description>[/] — add a team task\n"
+            "[bold]/team task-claim <id> <task> [agent][/] — claim a task\n"
+            "[bold]/team task-complete <id> <task> [result][/] — complete a task\n"
             "[bold]/team shutdown <id>[/] — shut down a team\n"
+            "[bold]/schedule list [filters][/] — list scheduled tasks\n"
+            "[bold]/schedule show <id>[/] — show a scheduled task\n"
+            "[bold]/schedule runs <id> [filters][/] — show execution history\n"
+            "[bold]/schedule create [options] <name> <type> <schedule> <prompt>[/] — create a task\n"
+            "[bold]/schedule pause|resume|run|cancel <id>[/] — manage a task\n"
             "[bold]/status[/] — show session status (model, effort, ultra, context, compactions)\n"
             "[bold]/effort [none|minimal|low|medium|high|xhigh|max][/] — show/set reasoning effort\n"
             "[bold]/ultra [true|false][/] — toggle or explicitly set ultra mode\n"
@@ -3228,11 +3285,20 @@ async def _handle_command(
         return True
 
     if cmd == "/team":
+        import shlex
+
         await session.initialize()
         team_mgr = getattr(session, "_team_manager", None)
-        sub = arg.strip().split(None, 1)
-        subcmd = sub[0] if sub else "list"
-        subarg = sub[1].strip() if len(sub) > 1 else ""
+        try:
+            tokens = shlex.split(arg)
+        except ValueError as exc:
+            console.print(f"[bold red]Invalid team command:[/] {exc}")
+            return True
+        subcmd = tokens.pop(0).lower() if tokens else "list"
+        usage = (
+            "/team [list|create|status|messages|tasks|spawn|message|broadcast|"
+            "task-add|task-claim|task-complete|shutdown] [args]"
+        )
 
         if subcmd == "list":
             teams = team_mgr.list_teams() if team_mgr else []
@@ -3246,16 +3312,40 @@ async def _handle_command(
                     console.print(f"  [cyan]{tid}[/] · {count} teammates · {state}")
             return True
 
+        if team_mgr is None:
+            console.print("[dim]Team manager not initialized.[/]")
+            return True
+
+        if subcmd == "create":
+            if not tokens or len(tokens) > 2:
+                console.print("[dim]Usage: /team create <name> [max-teammates][/]")
+                return True
+            max_teammates = None
+            if len(tokens) == 2:
+                try:
+                    max_teammates = int(tokens[1])
+                except ValueError:
+                    console.print("[bold red]max-teammates must be a positive integer.[/]")
+                    return True
+            try:
+                team_id = await team_mgr.create_team(
+                    tokens[0],
+                    max_teammates=max_teammates,
+                )
+            except (RuntimeError, ValueError) as exc:
+                console.print(f"[bold red]{safe_utf8_str(str(exc))}[/]")
+                return True
+            console.print(f"[green]Created team '{team_id}'.[/]")
+            return True
+
         if subcmd == "status":
-            if not subarg:
+            if len(tokens) != 1:
                 console.print("[dim]Usage: /team status <team-id>[/]")
                 return True
-            if not team_mgr:
-                console.print("[dim]Team manager not initialized.[/]")
-                return True
-            status = team_mgr.get_team_status(subarg)
+            team_id = tokens[0]
+            status = team_mgr.get_team_status(team_id)
             if not status:
-                console.print(f"[bold red]Team '{subarg}' not found.[/]")
+                console.print(f"[bold red]Team '{team_id}' not found.[/]")
                 return True
             lines = [
                 f"Team: {status['team_id']}  State: {status['state']}",
@@ -3272,58 +3362,596 @@ async def _handle_command(
             )
             console.print(Panel(
                 "\n".join(lines),
-                title=f"[bold]Team: {subarg}[/]",
+                title=f"[bold]Team: {team_id}[/]",
                 border_style="blue",
                 expand=False,
             ))
             return True
 
         if subcmd == "messages":
-            if not subarg:
+            if len(tokens) != 1:
                 console.print("[dim]Usage: /team messages <team-id>[/]")
                 return True
-            if not team_mgr:
-                console.print("[dim]Team manager not initialized.[/]")
-                return True
+            team_id = tokens[0]
             # Show recent messages for all teammates
-            status = team_mgr.get_team_status(subarg)
+            status = team_mgr.get_team_status(team_id)
             if not status:
-                console.print(f"[bold red]Team '{subarg}' not found.[/]")
+                console.print(f"[bold red]Team '{team_id}' not found.[/]")
                 return True
-            all_msgs: list[str] = []
+            messages_by_id: dict[str, Any] = {}
             for t in status["teammates"]:
                 aid = t["agent_id"]
-                msgs = team_mgr.get_all_messages(subarg, aid)
-                for m in msgs[-20:]:
-                    direction = f"{m.from_agent[:8]} → {m.to_agent[:8]}"
-                    read_flag = "" if m.read else " [dim](unread)[/]"
-                    all_msgs.append(f"  {direction}: {m.text[:100]}{read_flag}")
+                for message in team_mgr.get_all_messages(team_id, aid):
+                    messages_by_id.setdefault(message.id, message)
+            messages = sorted(
+                messages_by_id.values(),
+                key=lambda item: item.timestamp,
+            )[-50:]
+            all_msgs: list[str] = []
+            for message in messages:
+                direction = f"{message.from_agent[:8]} -> {message.to_agent[:8]}"
+                read_flag = "" if message.read else " (unread)"
+                all_msgs.append(f"  {direction}: {message.text[:100]}{read_flag}")
             if not all_msgs:
                 console.print("[dim]No messages.[/]")
             else:
                 console.print(Panel(
-                    "\n".join(all_msgs),
-                    title=f"[bold]Messages: {subarg}[/]",
+                    Text("\n".join(all_msgs), style="dim"),
+                    title=f"[bold]Messages: {team_id}[/]",
                     border_style="blue",
                     expand=False,
                 ))
             return True
 
-        if subcmd == "shutdown":
-            if not subarg:
-                console.print("[dim]Usage: /team shutdown <team-id>[/]")
+        if subcmd == "tasks":
+            if len(tokens) != 1:
+                console.print("[dim]Usage: /team tasks <team-id>[/]")
                 return True
-            if not team_mgr:
-                console.print("[dim]Team manager not initialized.[/]")
+            team_id = tokens[0]
+            if not team_mgr.get_team_status(team_id):
+                console.print(f"[bold red]Team '{team_id}' not found.[/]")
                 return True
-            ok = await team_mgr.shutdown_team(subarg)
-            if ok:
-                console.print(f"[green]Team '{subarg}' shut down.[/]")
-            else:
-                console.print(f"[bold red]Team '{subarg}' not found.[/]")
+            tasks = team_mgr.list_tasks(team_id)
+            if not tasks:
+                console.print("[dim]No team tasks.[/]")
+                return True
+            from rich.table import Table
+
+            table = Table(title=f"Team Tasks: {team_id}", border_style="blue", expand=False)
+            table.add_column("ID", style="cyan", width=10)
+            table.add_column("Status", style="dim", width=10)
+            table.add_column("Assignee", style="dim", width=10)
+            table.add_column("Description")
+            for task in tasks:
+                status = getattr(task.status, "value", str(task.status))
+                table.add_row(
+                    task.id[:8],
+                    status,
+                    (task.assignee or "")[:8],
+                    task.description[:80],
+                )
+            console.print(table)
             return True
 
-        console.print("[dim]Usage: /team [list|status|messages|shutdown] [args][/]")
+        if subcmd == "spawn":
+            if len(tokens) < 2:
+                console.print(
+                    "[dim]Usage: /team spawn <team-id> "
+                    "[--role ROLE] [--name NAME] [--model PROFILE] <prompt>[/]"
+                )
+                return True
+            team_id = tokens.pop(0)
+            role_value = "worker"
+            teammate_name = None
+            model_profile = None
+            prompt_parts: list[str] = []
+            index = 0
+            while index < len(tokens):
+                token = tokens[index]
+                option, separator, inline_value = token.partition("=")
+                if option in {"--role", "--name", "--model", "--model-profile"}:
+                    if separator:
+                        value = inline_value
+                    elif index + 1 < len(tokens):
+                        index += 1
+                        value = tokens[index]
+                    else:
+                        console.print(f"[bold red]Missing value for {option}.[/]")
+                        return True
+                    if not value:
+                        console.print(f"[bold red]Missing value for {option}.[/]")
+                        return True
+                    if option == "--role":
+                        role_value = value
+                    elif option == "--name":
+                        teammate_name = value
+                    else:
+                        model_profile = value
+                elif token.startswith("-"):
+                    console.print(f"[bold red]Unknown option: {token}[/]")
+                    return True
+                else:
+                    prompt_parts.append(token)
+                index += 1
+            if not prompt_parts:
+                console.print("[dim]A teammate prompt is required.[/]")
+                return True
+            from crabcode_core.team.models import TeammateRole
+
+            try:
+                agent_id = await team_mgr.add_teammate(
+                    team_id,
+                    role=TeammateRole(role_value),
+                    prompt=" ".join(prompt_parts),
+                    name=teammate_name,
+                    model_profile=model_profile,
+                )
+            except (RuntimeError, ValueError) as exc:
+                console.print(f"[bold red]{safe_utf8_str(str(exc))}[/]")
+                return True
+            console.print(f"[green]Added teammate {agent_id[:8]} to '{team_id}'.[/]")
+            return True
+
+        if subcmd == "message":
+            if len(tokens) < 3:
+                console.print("[dim]Usage: /team message <team-id> <agent-id> <text>[/]")
+                return True
+            team_id, agent_id = tokens[:2]
+            message = await team_mgr.send_message(
+                team_id,
+                "",
+                agent_id,
+                " ".join(tokens[2:]),
+            )
+            if message is None:
+                console.print("[bold red]Team message delivery failed.[/]")
+            else:
+                console.print(f"[green]Sent team message {message.id[:8]}.[/]")
+            return True
+
+        if subcmd == "broadcast":
+            if len(tokens) < 2:
+                console.print("[dim]Usage: /team broadcast <team-id> <text>[/]")
+                return True
+            team_id = tokens[0]
+            messages = await team_mgr.broadcast(team_id, "", " ".join(tokens[1:]))
+            console.print(f"[green]Broadcast to {len(messages)} teammate(s).[/]")
+            return True
+
+        if subcmd == "task-add":
+            if len(tokens) < 2:
+                console.print("[dim]Usage: /team task-add <team-id> <description>[/]")
+                return True
+            try:
+                task_id = await team_mgr.add_task(tokens[0], " ".join(tokens[1:]))
+            except (RuntimeError, ValueError) as exc:
+                console.print(f"[bold red]{safe_utf8_str(str(exc))}[/]")
+                return True
+            console.print(f"[green]Added team task {task_id[:8]}.[/]")
+            return True
+
+        if subcmd == "task-claim":
+            if len(tokens) not in {2, 3}:
+                console.print("[dim]Usage: /team task-claim <team-id> <task-id> [agent-id][/]")
+                return True
+            claimed = await team_mgr.claim_task(
+                tokens[0],
+                tokens[1],
+                tokens[2] if len(tokens) == 3 else "",
+            )
+            if claimed:
+                console.print(f"[green]Claimed team task {tokens[1][:8]}.[/]")
+            else:
+                console.print("[bold red]Task not found or already claimed.[/]")
+            return True
+
+        if subcmd == "task-complete":
+            if len(tokens) < 2:
+                console.print(
+                    "[dim]Usage: /team task-complete <team-id> <task-id> "
+                    "[--agent ID] [result][/]"
+                )
+                return True
+            team_id, task_id = tokens[:2]
+            rest = tokens[2:]
+            agent_id = None
+            result_parts: list[str] = []
+            index = 0
+            while index < len(rest):
+                token = rest[index]
+                option, separator, inline_value = token.partition("=")
+                if option in {"--agent", "--agent-id"}:
+                    if separator:
+                        agent_id = inline_value
+                    elif index + 1 < len(rest):
+                        index += 1
+                        agent_id = rest[index]
+                    else:
+                        console.print(f"[bold red]Missing value for {option}.[/]")
+                        return True
+                elif token.startswith("-"):
+                    console.print(f"[bold red]Unknown option: {token}[/]")
+                    return True
+                else:
+                    result_parts.append(token)
+                index += 1
+            completed = await team_mgr.complete_task(
+                team_id,
+                task_id,
+                " ".join(result_parts),
+                agent_id,
+            )
+            if completed:
+                console.print(f"[green]Completed team task {task_id[:8]}.[/]")
+            else:
+                console.print("[bold red]Task not found or not in claimed state.[/]")
+            return True
+
+        if subcmd == "shutdown":
+            if len(tokens) != 1:
+                console.print("[dim]Usage: /team shutdown <team-id>[/]")
+                return True
+            team_id = tokens[0]
+            ok = await team_mgr.shutdown_team(team_id)
+            if ok:
+                console.print(f"[green]Team '{team_id}' shut down.[/]")
+            else:
+                console.print(f"[bold red]Team '{team_id}' not found.[/]")
+            return True
+
+        console.print(f"[dim]Usage: {usage}[/]")
+        return True
+
+    if cmd == "/schedule":
+        import shlex
+
+        from crabcode_core.tools.schedule import (
+            _format_job_brief,
+            _format_job_detail,
+            _format_run_brief,
+            _model_dict,
+        )
+
+        await session.initialize()
+        manager = getattr(session, "_schedule_manager", None)
+        if manager is None:
+            console.print("[bold red]Schedule manager is unavailable.[/]")
+            return True
+        try:
+            tokens = shlex.split(arg)
+        except ValueError as exc:
+            console.print(f"[bold red]Invalid schedule command:[/] {exc}")
+            return True
+
+        subcmd = tokens.pop(0).lower() if tokens else "list"
+        usage = (
+            "/schedule [list|show|runs|create|pause|resume|run|cancel] [args]"
+        )
+
+        def option_value(
+            values: list[str],
+            index: int,
+            token: str,
+        ) -> tuple[str, int]:
+            _, separator, inline = token.partition("=")
+            if separator:
+                if not inline:
+                    raise ValueError(f"Missing value for {token.partition('=')[0]}")
+                return inline, index
+            if index + 1 >= len(values):
+                raise ValueError(f"Missing value for {token}")
+            return values[index + 1], index + 1
+
+        if subcmd == "list":
+            status = None
+            schedule_type = None
+            enabled = None
+            limit = 100
+            index = 0
+            try:
+                while index < len(tokens):
+                    token = tokens[index]
+                    option = token.partition("=")[0]
+                    if option == "--status":
+                        status, index = option_value(tokens, index, token)
+                    elif option in {"--type", "--schedule-type"}:
+                        schedule_type, index = option_value(tokens, index, token)
+                        if schedule_type not in {"cron", "interval", "once"}:
+                            raise ValueError("schedule type must be cron, interval, or once")
+                    elif option == "--enabled":
+                        raw_enabled, index = option_value(tokens, index, token)
+                        if raw_enabled.lower() not in {"true", "false"}:
+                            raise ValueError("enabled must be true or false")
+                        enabled = raw_enabled.lower() == "true"
+                    elif option == "--limit":
+                        raw_limit, index = option_value(tokens, index, token)
+                        limit = int(raw_limit)
+                        if limit <= 0:
+                            raise ValueError("limit must be greater than zero")
+                    else:
+                        raise ValueError(f"Unknown option: {token}")
+                    index += 1
+            except (TypeError, ValueError) as exc:
+                console.print(f"[bold red]{safe_utf8_str(str(exc))}[/]")
+                console.print(
+                    "[dim]Usage: /schedule list [--status STATUS] "
+                    "[--type cron|interval|once] [--enabled true|false] "
+                    "[--limit N][/]"
+                )
+                return True
+
+            try:
+                jobs = manager.list_jobs(
+                    status=status,
+                    schedule_type=schedule_type,
+                    enabled=enabled,
+                    limit=limit,
+                )
+            except Exception as exc:
+                console.print(f"[bold red]Failed to list schedules:[/] {safe_utf8_str(str(exc))}")
+                return True
+            if not jobs:
+                console.print("[dim]No scheduled tasks found.[/]")
+                return True
+            lines = [_format_job_brief(_model_dict(job)) for job in jobs]
+            console.print(
+                Panel(
+                    Text("\n".join(lines)),
+                    title=f"[bold]Scheduled Tasks ({len(jobs)})[/]",
+                    border_style="blue",
+                    expand=False,
+                )
+            )
+            return True
+
+        if subcmd in {"show", "status"}:
+            if len(tokens) != 1:
+                console.print("[dim]Usage: /schedule show <job-id>[/]")
+                return True
+            try:
+                job = manager.get_job(tokens[0])
+            except Exception as exc:
+                console.print(f"[bold red]Failed to read schedule:[/] {safe_utf8_str(str(exc))}")
+                return True
+            if job is None:
+                console.print("[bold red]Scheduled task not found or ID is ambiguous.[/]")
+                return True
+            data = _model_dict(job)
+            console.print(
+                Panel(
+                    Text(_format_job_detail(data)),
+                    title=f"[bold]Schedule {str(data.get('id', ''))[:8]}[/]",
+                    border_style="cyan",
+                    expand=False,
+                )
+            )
+            return True
+
+        if subcmd in {"runs", "history"}:
+            if not tokens:
+                console.print(
+                    "[dim]Usage: /schedule runs <job-id> "
+                    "[--status STATUS] [--limit N][/]"
+                )
+                return True
+            job_id = tokens.pop(0)
+            status = None
+            limit = 50
+            index = 0
+            try:
+                while index < len(tokens):
+                    token = tokens[index]
+                    option = token.partition("=")[0]
+                    if option == "--status":
+                        status, index = option_value(tokens, index, token)
+                    elif option == "--limit":
+                        raw_limit, index = option_value(tokens, index, token)
+                        limit = int(raw_limit)
+                        if limit <= 0:
+                            raise ValueError("limit must be greater than zero")
+                    else:
+                        raise ValueError(f"Unknown option: {token}")
+                    index += 1
+            except (TypeError, ValueError) as exc:
+                console.print(f"[bold red]{safe_utf8_str(str(exc))}[/]")
+                console.print(
+                    "[dim]Usage: /schedule runs <job-id> "
+                    "[--status STATUS] [--limit N][/]"
+                )
+                return True
+            try:
+                job = manager.get_job(job_id)
+                runs = (
+                    manager.list_runs(job_id, status=status, limit=limit)
+                    if job is not None
+                    else []
+                )
+            except Exception as exc:
+                console.print(f"[bold red]Failed to read schedule runs:[/] {safe_utf8_str(str(exc))}")
+                return True
+            if job is None:
+                console.print("[bold red]Scheduled task not found or ID is ambiguous.[/]")
+                return True
+            if not runs:
+                console.print("[dim]No execution history found.[/]")
+                return True
+            lines = [_format_run_brief(_model_dict(run)) for run in runs]
+            console.print(
+                Panel(
+                    Text("\n".join(lines)),
+                    title=f"[bold]Schedule Runs ({len(runs)})[/]",
+                    border_style="blue",
+                    expand=False,
+                )
+            )
+            return True
+
+        if subcmd == "create":
+            positionals: list[str] = []
+            tags: list[str] = []
+            cwd = None
+            enabled = True
+            max_runs = None
+            next_run = None
+            description = ""
+            timeout = None
+            model_profile = None
+            job_session_id = None
+            extra: dict[str, Any] = {}
+            index = 0
+            try:
+                while index < len(tokens):
+                    token = tokens[index]
+                    if token == "--":
+                        positionals.extend(tokens[index + 1 :])
+                        break
+                    option = token.partition("=")[0]
+                    if option == "--disabled":
+                        if "=" in token:
+                            raise ValueError("--disabled does not accept a value")
+                        enabled = False
+                        index += 1
+                        continue
+                    if option in {
+                        "--cwd",
+                        "--enabled",
+                        "--max-runs",
+                        "--next-run",
+                        "--description",
+                        "--tag",
+                        "--timeout",
+                        "--model",
+                        "--model-profile",
+                        "--job-session",
+                        "--run-session",
+                        "--extra",
+                    }:
+                        value, index = option_value(tokens, index, token)
+                        if option == "--cwd":
+                            cwd = value
+                        elif option == "--enabled":
+                            if value.lower() not in {"true", "false"}:
+                                raise ValueError("enabled must be true or false")
+                            enabled = value.lower() == "true"
+                        elif option == "--max-runs":
+                            max_runs = int(value)
+                            if max_runs <= 0:
+                                raise ValueError("max-runs must be greater than zero")
+                        elif option == "--next-run":
+                            next_run = value
+                        elif option == "--description":
+                            description = value
+                        elif option == "--tag":
+                            tags.append(value)
+                        elif option == "--timeout":
+                            timeout = int(value)
+                            if timeout <= 0:
+                                raise ValueError("timeout must be greater than zero")
+                        elif option in {"--model", "--model-profile"}:
+                            model_profile = value
+                        elif option in {"--job-session", "--run-session"}:
+                            job_session_id = value
+                        else:
+                            parsed_extra = json.loads(value)
+                            if not isinstance(parsed_extra, dict):
+                                raise ValueError("extra must be a JSON object")
+                            extra.update(parsed_extra)
+                    elif token.startswith("-"):
+                        raise ValueError(f"Unknown option: {token}")
+                    else:
+                        positionals.append(token)
+                    index += 1
+            except (TypeError, ValueError) as exc:
+                console.print(f"[bold red]{safe_utf8_str(str(exc))}[/]")
+                console.print(
+                    "[dim]Usage: /schedule create [options] <name> "
+                    "<cron|interval|once> <schedule> <prompt>[/]"
+                )
+                return True
+
+            if len(positionals) < 4:
+                console.print(
+                    "[dim]Usage: /schedule create [options] <name> "
+                    "<cron|interval|once> <schedule> <prompt>[/]"
+                )
+                return True
+            name, schedule_type, schedule_value = positionals[:3]
+            if schedule_type not in {"cron", "interval", "once"}:
+                console.print("[bold red]Schedule type must be cron, interval, or once.[/]")
+                return True
+            prompt = " ".join(positionals[3:])
+            try:
+                job = manager.create_job(
+                    name=name,
+                    prompt=prompt,
+                    schedule=schedule_value,
+                    schedule_type=schedule_type,
+                    cwd=cwd,
+                    enabled=enabled,
+                    max_runs=max_runs,
+                    next_run=next_run,
+                    description=description,
+                    tags=tags,
+                    timeout=timeout,
+                    model_profile=model_profile,
+                    session_id=job_session_id,
+                    extra=extra,
+                )
+            except Exception as exc:
+                console.print(f"[bold red]Failed to create schedule:[/] {safe_utf8_str(str(exc))}")
+                return True
+            data = _model_dict(job)
+            console.print(
+                Panel(
+                    Text(_format_job_detail(data)),
+                    title="[bold]Scheduled Task Created[/]",
+                    border_style="green",
+                    expand=False,
+                )
+            )
+            return True
+
+        lifecycle_aliases = {
+            "trigger": "run",
+            "delete": "cancel",
+        }
+        action = lifecycle_aliases.get(subcmd, subcmd)
+        if action in {"pause", "resume", "run", "cancel"}:
+            if len(tokens) != 1:
+                console.print(f"[dim]Usage: /schedule {subcmd} <job-id>[/]")
+                return True
+            job_id = tokens[0]
+            try:
+                if action == "pause":
+                    job = manager.pause_job(job_id)
+                    if job is None:
+                        raise LookupError("Scheduled task not found or ID is ambiguous")
+                    data = _model_dict(job)
+                    console.print(f"[green]Scheduled task paused:[/] {data['name']} ({data['status']})")
+                elif action == "resume":
+                    job = manager.resume_job(job_id)
+                    if job is None:
+                        raise LookupError("Scheduled task not found or ID is ambiguous")
+                    data = _model_dict(job)
+                    console.print(f"[green]Scheduled task resumed:[/] {data['name']} ({data['status']})")
+                elif action == "run":
+                    started = await manager.trigger_job(job_id)
+                    if not started:
+                        raise RuntimeError(
+                            "Scheduled task is missing, inactive, or already running"
+                        )
+                    console.print(f"[green]Scheduled task started:[/] {job_id[:8]}")
+                else:
+                    job = manager.get_job(job_id)
+                    if job is None or not manager.cancel_job(job_id):
+                        raise LookupError("Scheduled task not found or ID is ambiguous")
+                    data = _model_dict(job)
+                    console.print(f"[yellow]Scheduled task deleted:[/] {data['name']}")
+            except Exception as exc:
+                console.print(f"[bold red]{safe_utf8_str(str(exc))}[/]")
+            return True
+
+        console.print(f"[dim]Usage: {usage}[/]")
         return True
 
     if cmd == "/new":
@@ -3344,8 +3972,8 @@ async def _handle_command(
         return True
 
     if cmd == "/clear":
-        session.messages.clear()
-        console.print("[dim]Conversation cleared.[/]")
+        cleared = await session.clear_history()
+        console.print(f"[dim]Conversation cleared ({cleared} message(s)).[/]")
         return True
 
     if cmd == "/sessions":

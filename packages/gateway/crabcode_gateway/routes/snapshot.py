@@ -20,18 +20,53 @@ async def _list_checkpoints(session: Any) -> list[dict[str, Any]]:
     return session.list_checkpoints()
 
 
-async def _revert(session: Any, checkpoint_id: str) -> dict[str, Any]:
-    return session.revert(checkpoint_id)
+def _resolve_checkpoint_id(checkpoints: list[dict[str, Any]], selector: str) -> str | None:
+    """Resolve a full ID, unique prefix, or one-based checkpoint index."""
+    value = selector.strip()
+    if not value:
+        return None
+    try:
+        index = int(value) - 1
+    except ValueError:
+        index = -1
+    if 0 <= index < len(checkpoints):
+        return str(checkpoints[index].get("id") or "") or None
+    exact = [str(cp.get("id") or "") for cp in checkpoints if cp.get("id") == value]
+    if exact:
+        return exact[0]
+    matches = [str(cp.get("id") or "") for cp in checkpoints if str(cp.get("id") or "").startswith(value)]
+    return matches[0] if len(matches) == 1 else None
 
 
-async def _rollback(session: Any, checkpoint_id: str) -> bool:
-    return bool(session.rollback(checkpoint_id))
+async def _resolve_and_revert(
+    session: Any,
+    selector: str,
+) -> tuple[str, dict[str, Any]] | None:
+    checkpoint_id = _resolve_checkpoint_id(session.list_checkpoints(), selector)
+    if checkpoint_id is None:
+        return None
+    return checkpoint_id, session.revert(checkpoint_id)
 
 
-async def _rollback_with_count(session: Any, checkpoint_id: str) -> tuple[bool, int]:
-    """Commit rollback and capture its response count under the same lease."""
+async def _resolve_and_rollback(
+    session: Any,
+    selector: str,
+) -> tuple[str, bool, int] | None:
+    checkpoint_id = _resolve_checkpoint_id(session.list_checkpoints(), selector)
+    if checkpoint_id is None:
+        return None
     ok = bool(session.rollback(checkpoint_id))
-    return ok, len(getattr(session, "messages", ()))
+    return checkpoint_id, ok, len(getattr(session, "messages", ()))
+
+
+async def _undo_latest(session: Any) -> tuple[str, dict[str, Any]] | None:
+    checkpoints = session.list_checkpoints()
+    if not checkpoints:
+        return None
+    checkpoint_id = str(checkpoints[0].get("id") or "")
+    if not checkpoint_id:
+        return None
+    return checkpoint_id, session.revert(checkpoint_id)
 
 
 def _get_session(request: Request, session_id: str):
@@ -86,13 +121,16 @@ async def revert_checkpoint(req: RevertRequest, request: Request) -> dict[str, A
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
-        result = await run_session_operation(
+        resolved = await run_session_operation(
             request.app.state,
             session,
-            lambda: _revert(session, req.checkpoint_id),
+            lambda: _resolve_and_revert(session, req.checkpoint_id),
         )
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="Checkpoint not found or prefix is ambiguous")
+    _checkpoint_id, result = resolved
     if not result.get("success"):
         raise HTTPException(status_code=400, detail="Revert failed or checkpoint not found")
     return result
@@ -105,13 +143,16 @@ async def rollback_checkpoint(req: RevertRequest, request: Request) -> dict[str,
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
-        ok, message_count = await run_session_operation(
+        resolved = await run_session_operation(
             request.app.state,
             session,
-            lambda: _rollback_with_count(session, req.checkpoint_id),
+            lambda: _resolve_and_rollback(session, req.checkpoint_id),
         )
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="Checkpoint not found or prefix is ambiguous")
+    _checkpoint_id, ok, message_count = resolved
     if not ok:
         raise HTTPException(status_code=400, detail="Rollback failed or checkpoint not found")
     return {"success": True, "messages_count": message_count}
@@ -119,7 +160,7 @@ async def rollback_checkpoint(req: RevertRequest, request: Request) -> dict[str,
 
 @router.post("/undo")
 async def undo_last_checkpoint(request: Request) -> dict[str, Any]:
-    """Revert the most recent checkpoint (rollback conversation only)."""
+    """Revert files and conversation to the most recent checkpoint."""
     try:
         body = await request.json()
     except (ValueError, TypeError) as exc:
@@ -145,25 +186,16 @@ async def undo_last_checkpoint(request: Request) -> dict[str, Any]:
     session = sessions[sid]
 
     try:
-        checkpoints = await run_session_operation(
+        resolved = await run_session_operation(
             request.app.state,
             session,
-            lambda: _list_checkpoints(session),
+            lambda: _undo_latest(session),
         )
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if not checkpoints:
+    if resolved is None:
         raise HTTPException(status_code=400, detail="No checkpoints to undo")
-
-    latest = checkpoints[0]
-    try:
-        ok, message_count = await run_session_operation(
-            request.app.state,
-            session,
-            lambda: _rollback_with_count(session, latest["id"]),
-        )
-    except SessionOperationRejected as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if not ok:
+    checkpoint_id, result = resolved
+    if not result.get("success"):
         raise HTTPException(status_code=400, detail="Undo failed")
-    return {"success": True, "checkpoint_id": latest["id"], "messages_count": message_count}
+    return {"checkpoint_id": checkpoint_id, **result}

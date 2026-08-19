@@ -33,6 +33,9 @@ PY_TO_TS: dict[str, str] = {
     "bool": "boolean",
     "Any": "unknown",
     "dict[str, Any]": "Record<string, unknown>",
+    # Imported type aliases do not have a class definition in schemas.py, so
+    # keep the wire-level literal union explicit in the generated client.
+    "ReasoningEffort": '"none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"',
 }
 
 
@@ -165,8 +168,21 @@ def extract_models(source: str) -> tuple[list[ModelInfo], list[str]]:
                 default_ts: str | None = None
 
                 if stmt.value is not None:
-                    optional = True
-                    default_ts = _default_to_ts(stmt.value)
+                    # ``Field(...)`` can carry validation metadata without
+                    # supplying a Pydantic default.  Such a field remains
+                    # required on the wire; only ``default=`` or
+                    # ``default_factory=`` makes it optional.
+                    is_metadata_only_field = False
+                    if isinstance(stmt.value, ast.Call):
+                        func = getattr(stmt.value, "func", None)
+                        if isinstance(func, ast.Name) and func.id == "Field":
+                            is_metadata_only_field = not any(
+                                kw.arg in {"default", "default_factory"}
+                                for kw in stmt.value.keywords
+                            )
+                    if not is_metadata_only_field:
+                        optional = True
+                        default_ts = _default_to_ts(stmt.value)
 
                 # Also optional if type includes `| null`
                 if "| null" in ts_type:
@@ -341,22 +357,35 @@ def generate_ts(models: list[ModelInfo], event_payload_variants: list[str]) -> s
 
     if payload_models:
         out += _section_comment("EventPayload tagged union")
+        # EventBus adds these fields after serializing the Pydantic payload.
+        # They are intentionally kept out of the individual schemas because
+        # the server.connected handshake and heartbeat do not carry a session.
+        out += "/** Metadata attached by the Gateway EventBus to routed events. */\n"
+        out += "export interface EventEnvelope {\n"
+        out += "  session_id?: string;\n"
+        out += "  operation_id?: string;\n"
+        out += '  operation_scope?: "foreground" | "plan" | "background";\n'
+        out += "  command?: string;\n"
+        out += "  command_error?: boolean;\n"
+        out += "}\n\n"
         for m in payload_models:
             out += _emit_interface(m)
 
     # ── Tagged union type ──
     if event_payload_variants:
         out += _section_comment("Tagged union")
-        variants = " |\n  ".join(event_payload_variants)
-        out += f"export type EventPayload =\n  | {variants};\n"
+        variants = " |\n    ".join(event_payload_variants)
+        out += "export type EventPayload =\n"
+        out += "  EventEnvelope & (\n"
+        out += f"    {variants}\n"
+        out += "  );\n"
 
     # ── Discriminator helper ──
     if event_payload_variants:
         out += _section_comment("Type discriminator helper")
         out += "export type EventPayloadType = EventPayload[\"type\"];\n"
 
-    out += "\n"
-    return out
+    return out.rstrip() + "\n"
 
 
 def _emit_interface(m: ModelInfo) -> str:
@@ -366,12 +395,29 @@ def _emit_interface(m: ModelInfo) -> str:
         parts += _doc_comment(m.docstring)
     parts += f"export interface {m.name} {{\n"
 
+    # EventBus appends routing metadata after serializing the Core payload.
+    # Keep it on the concrete interface as well as EventEnvelope so handlers
+    # that receive one payload variant (rather than EventPayload) can target
+    # the originating session and operation.
+    if m.is_payload:
+        declared_names = {field.name for field in m.fields}
+        if "session_id" not in declared_names:
+            parts += "  session_id?: string;\n"
+        if "operation_id" not in declared_names:
+            parts += "  operation_id?: string;\n"
+        if "operation_scope" not in declared_names:
+            parts += '  operation_scope?: "foreground" | "plan" | "background";\n'
+
     # Sort: required fields first, then optional
     required = [f for f in m.fields if not f.optional]
     optional = [f for f in m.fields if f.optional]
 
     for f in required + optional:
-        opt_marker = "?" if f.optional else ""
+        # Pydantic applies the Literal default at runtime, but `type` is the
+        # discriminator on the wire and must remain required for TypeScript's
+        # tagged-union narrowing to work.
+        is_required_discriminator = m.is_payload and f.name == "type"
+        opt_marker = "?" if f.optional and not is_required_discriminator else ""
         parts += f"  {f.name}{opt_marker}: {f.ts_type};\n"
 
     parts += "}\n\n"

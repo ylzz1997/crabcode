@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import stat
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from crabcode_core.config.manager import ConfigManager
 from crabcode_core.skills.loader import load_skills
@@ -14,9 +21,13 @@ from crabcode_gateway.schemas import (
     GoalRequest,
     GoalState,
     ModelInfo,
+    SetPermissionModeRequest,
     SetReasoningEffortRequest,
     SetUltraModeRequest,
+    SkillExpandRequest,
+    SkillExpansion,
     SkillInfo,
+    LogsResponse,
     SwitchModeRequest,
     SwitchModelRequest,
     ToolInfo,
@@ -42,6 +53,11 @@ async def _set_reasoning_effort(session: Any, effort: str) -> bool:
 async def _set_ultra_mode(session: Any, enabled: bool | None) -> bool:
     await session.initialize()
     return bool(session.set_ultra_mode(enabled))
+
+
+async def _set_permission_mode(session: Any, mode: str) -> bool:
+    await session.initialize()
+    return bool(session.set_client_permission_mode(mode))
 
 
 async def _manage_goal(session: Any, req: GoalRequest) -> dict[str, Any] | None:
@@ -213,6 +229,25 @@ async def set_ultra_mode(req: SetUltraModeRequest, request: Request):
     return {"status": "ok", "ultra_mode": enabled}
 
 
+@router.post("/config/permission-mode")
+async def set_permission_mode(req: SetPermissionModeRequest, request: Request):
+    """Set the per-client tool permission override for a session."""
+    session = _get_session(request, req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        ok = await run_session_operation(
+            request.app.state,
+            session,
+            lambda: _set_permission_mode(session, req.mode),
+        )
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Invalid permission mode '{req.mode}'")
+    return {"status": "ok", "permission_mode": getattr(session, "client_permission_mode", req.mode)}
+
+
 @router.get("/config/goal", response_model=GoalState)
 async def get_goal(request: Request, session_id: str | None = None) -> GoalState:
     """Return the current session goal."""
@@ -293,6 +328,34 @@ async def list_skills(
     return [SkillInfo(name=s.name, description=s.description or "") for s in skills]
 
 
+@router.post("/skills/expand", response_model=SkillExpansion)
+async def expand_skill(req: SkillExpandRequest, request: Request) -> SkillExpansion:
+    """Expand a slash-invoked skill deterministically, matching the CLI."""
+    async with get_session_lock(request.app.state):
+        session = _get_session(request, req.session_id)
+        if req.session_id is not None and session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        skills = list(getattr(session, "skills", ())) if session else []
+        cwd = getattr(session, "cwd", None) if session else None
+
+    if not skills:
+        import os
+
+        skills = load_skills(cwd or os.getcwd())
+    skill = next((item for item in skills if item.name == req.name), None)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill {req.name} not found")
+
+    prompt = skill.content
+    user_input = req.user_input.strip()
+    if user_input:
+        if "$USER_INPUT" in prompt:
+            prompt = prompt.replace("$USER_INPUT", user_input)
+        else:
+            prompt = f"{prompt}\n\nUser input: {user_input}"
+    return SkillExpansion(name=skill.name, prompt=prompt)
+
+
 @router.post("/context")
 async def push_context(req: ContextPushRequest, request: Request):
     """Push workspace context from a client (e.g. VSCode extension).
@@ -354,28 +417,206 @@ async def plan_status(request: Request):
     }
 
 
-@router.get("/logs")
-async def get_logs(lines: int = 100, request: Request = None):
-    """Return recent gateway log lines."""
-    import logging
+def _logs_cwd(request: Request, session_id: str | None) -> Path:
+    sessions = getattr(request.app.state, "sessions", {})
+    sid = getattr(request.app.state, "default_session_id", None) if session_id is None else session_id
+    session = sessions.get(sid) if sid else None
+    if (
+        session is not None
+        and sid not in getattr(request.app.state, "closing_sessions", set())
+        and not getattr(request.app.state, "gateway_closing", False)
+    ):
+        return Path(getattr(session, "cwd", os.getcwd())).resolve()
+    if session_id is not None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return Path(os.getcwd()).resolve()
 
-    for h in logging.getLogger().handlers:
-        if hasattr(h, "buffer") or hasattr(h, "stream"):
-            break
 
-    # Try to read from crabcode log file if available
-    import os
-    log_candidates = [
-        os.path.expanduser("~/.crabcode/gateway.log"),
-        "/tmp/crabcode-gateway.log",
-    ]
-    for path in log_candidates:
-        if os.path.exists(path):
+def _discover_logs(cwd: Path) -> dict[str, Path]:
+    """Read the shared log index used by core and background tools."""
+    result: dict[str, Path] = {}
+    lexical_root = cwd / ".crabcode" / "logs"
+    try:
+        logs_root = lexical_root.resolve()
+        # A repository-controlled symlink must not turn the log index into a
+        # capability for files outside the dedicated project log directory.
+        root_is_safe = logs_root == lexical_root.absolute()
+    except OSError:
+        logs_root = lexical_root
+        root_is_safe = False
+
+    raw: Any = {}
+    if root_is_safe:
+        index_path = logs_root / "index.json"
+        try:
+            with _open_regular_log(index_path, os.O_RDONLY) as handle:
+                raw = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+    if isinstance(raw, dict):
+        for name, value in raw.items():
+            if not (
+                isinstance(name, str)
+                and 0 < len(name) <= 64
+                and all(char.isalnum() or char in "._-" for char in name)
+                and isinstance(value, str)
+            ):
+                continue
+            candidate = Path(value).expanduser()
+            if not candidate.is_absolute():
+                candidate = logs_root / candidate
             try:
-                with open(path) as f:
-                    all_lines = f.readlines()
-                return {"lines": [line.rstrip() for line in all_lines[-lines:]]}
-            except Exception:
-                pass
+                resolved = candidate.resolve(strict=True)
+                if resolved.parent != logs_root or candidate.is_symlink():
+                    continue
+                with _open_regular_log(resolved, os.O_RDONLY):
+                    pass
+            except OSError:
+                continue
+            result[name] = resolved
+    # Keep compatibility with older search versions that wrote this path
+    # without registering it in the shared index.
+    legacy = cwd / ".crabcode" / "search" / "background.log"
+    safe_legacy = _known_log_path(legacy)
+    if safe_legacy is not None:
+        result.setdefault("search", safe_legacy)
+    # Gateway startup logs are useful even before a CoreSession exists.
+    for candidate in (Path.home() / ".crabcode" / "gateway.log", Path("/tmp/crabcode-gateway.log")):
+        safe_candidate = _known_log_path(candidate)
+        if safe_candidate is not None:
+            result.setdefault("gateway", safe_candidate)
+    return result
 
-    return {"lines": [], "note": "No log file found. Logs are written to stderr."}
+
+def _open_regular_log(path: Path, flags: int):
+    """Open one regular, single-link log without following a final symlink."""
+    open_flags = flags | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, open_flags)
+    try:
+        file_stat = os.fstat(fd)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+            raise OSError("Log path is not a single-link regular file")
+        mode = "r" if flags == os.O_RDONLY else "w"
+        return os.fdopen(fd, mode, encoding="utf-8", errors="replace")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _known_log_path(path: Path) -> Path | None:
+    """Validate a fixed, application-owned log location."""
+    try:
+        if path.is_symlink():
+            return None
+        resolved = path.resolve(strict=True)
+        with _open_regular_log(resolved, os.O_RDONLY):
+            pass
+        return resolved
+    except OSError:
+        return None
+
+
+def _tail_log(path: Path, count: int) -> tuple[list[str], bool]:
+    try:
+        with _open_regular_log(path, os.O_RDONLY) as handle:
+            all_lines = handle.read().splitlines()
+    except OSError:
+        return [], False
+    return all_lines[-count:], len(all_lines) > count
+
+
+def _clear_log(path: Path) -> None:
+    # Open without O_TRUNC, validate the descriptor, then truncate that exact
+    # inode.  This avoids truncating a swapped symlink before validation.
+    with _open_regular_log(path, os.O_WRONLY) as handle:
+        os.ftruncate(handle.fileno(), 0)
+
+
+@router.get("/logs", response_model=LogsResponse)
+async def get_logs(
+    request: Request,
+    lines: int = 100,
+    tail: int | None = None,
+    name: str | None = None,
+    clear: bool = False,
+    session_id: str | None = None,
+) -> LogsResponse:
+    """List logs or read/clear a named log, matching the CLI surface."""
+    cwd = _logs_cwd(request, session_id)
+    logs = _discover_logs(cwd)
+    if not name:
+        if clear:
+            raise HTTPException(status_code=400, detail="name is required when clear=true")
+        entries = []
+        for key, path in sorted(logs.items()):
+            try:
+                updated = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+            except OSError:
+                updated = None
+            state = None
+            if key == "search":
+                status_path = cwd / ".crabcode" / "search" / "background-status.json"
+                try:
+                    raw_status = json.loads(status_path.read_text(encoding="utf-8"))
+                    state = raw_status.get("state") if isinstance(raw_status, dict) else None
+                except (OSError, json.JSONDecodeError):
+                    pass
+            entries.append({"name": key, "path": str(path), "updated_at": updated, "state": state})
+        return LogsResponse(logs=entries)
+
+    path = logs.get(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Unknown log: {name}")
+    if clear:
+        try:
+            _clear_log(path)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to clear log: {exc}") from exc
+    count = max(1, min(10_000, int(tail if tail is not None else lines)))
+    body, truncated = _tail_log(path, count)
+    return LogsResponse(
+        name=name,
+        path=str(path),
+        lines=body,
+        truncated=truncated,
+        note="Log is empty" if not body else None,
+    )
+
+
+@router.get("/logs/follow")
+async def follow_log(
+    request: Request,
+    name: str,
+    session_id: str | None = None,
+) -> StreamingResponse:
+    """Stream appended lines from a named log as server-sent events."""
+    cwd = _logs_cwd(request, session_id)
+    path = _discover_logs(cwd).get(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Unknown log: {name}")
+
+    async def _generate():
+        try:
+            with _open_regular_log(path, os.O_RDONLY) as handle:
+                position = os.fstat(handle.fileno()).st_size
+        except OSError:
+            position = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                with _open_regular_log(path, os.O_RDONLY) as handle:
+                    current_size = os.fstat(handle.fileno()).st_size
+                    if current_size < position:
+                        # The file was cleared or rotated while following it.
+                        position = 0
+                    handle.seek(position)
+                    chunk = handle.readlines()
+                    position = handle.tell()
+            except OSError:
+                chunk = []
+            for line in chunk:
+                yield f"data: {json.dumps(line.rstrip(chr(10)), ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")

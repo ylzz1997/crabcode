@@ -94,6 +94,44 @@ def operation_is_registered(
     return owner is not None
 
 
+def get_operation_task(
+    app_state: Any,
+    session_id: str,
+    operation_id: str,
+    *,
+    operation_scope: str | None = None,
+) -> asyncio.Task[Any] | None:
+    """Return the live task owning an operation, if it matches the scope.
+
+    The operation map also contains short-lived opaque claims while an
+    interrupt is publishing its terminal event.  Those claims intentionally
+    do not resolve to a task: a control request must never attach to an
+    operation whose owner has already been cancelled.  Callers that need a
+    race-free answer should hold ``get_session_lock`` while invoking this
+    helper.
+    """
+    ensure_task_state(app_state)
+    operations: dict[tuple[str, str], Any] = getattr(
+        app_state,
+        _OPERATION_TASKS_ATTR,
+    )
+    key = (session_id, operation_id)
+    owner = operations.get(key)
+    if not isinstance(owner, asyncio.Task):
+        return None
+    if owner.done():
+        if operations.get(key) is owner:
+            operations.pop(key, None)
+        return None
+    if operation_scope is not None and getattr(
+        owner,
+        "_crabcode_operation_scope",
+        None,
+    ) != operation_scope:
+        return None
+    return owner
+
+
 def claim_operation(
     app_state: Any,
     session_id: str,

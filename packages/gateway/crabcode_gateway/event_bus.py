@@ -47,11 +47,10 @@ def _event_priority(data: str | None) -> int:
         return _LIFECYCLE_CONTROL_EVENT
     if event_type in {"permission_request", "choice_request"}:
         return _INTERACTIVE_CONTROL_EVENT
-    if event_type == "turn_complete" or (
-        event_type == "error"
-        and payload.get("operation_scope") == "foreground"
-        and payload.get("agent_id") is None
-    ):
+    # Only an explicit turn boundary is terminal.  Recoverable foreground
+    # errors can be followed by retries or a later TurnCompleteEvent; treating
+    # them as terminal here could evict the actual boundary from a full queue.
+    if event_type == "turn_complete":
         return _TERMINAL_CONTROL_EVENT
     return _ORDINARY_EVENT
 
@@ -592,7 +591,9 @@ class EventBus:
         ws: Any,
         session_id: str | None = None,
         *,
-        session_id_getter: Callable[[], str | None] | None = None,
+        session_id_getter: (
+            Callable[[], str | set[str] | frozenset[str] | None] | None
+        ) = None,
         subscriber: _Subscriber | None = None,
     ) -> None:
         """Push events to a WebSocket connection.
@@ -617,17 +618,27 @@ class EventBus:
                 if isinstance(data, str):
                     if session_id is None and session_id_getter is not None:
                         # Global subscriptions are useful while a connection
-                        # switches sessions, but never expose another session's
-                        # payload to the client.
+                        # switches sessions.  Only sessions explicitly selected
+                        # by this connection are forwarded; a single active id
+                        # would drop events from an already-started background
+                        # operation as soon as the UI switches conversations.
                         try:
-                            active_id = session_id_getter()
+                            selected = session_id_getter()
                             payload = json.loads(data)
                         except (TypeError, json.JSONDecodeError):
-                            active_id = None
+                            selected = None
                             payload = {}
+                        if isinstance(selected, str):
+                            selected_ids = {selected} if selected else set()
+                        elif isinstance(selected, (set, frozenset)):
+                            selected_ids = {
+                                value for value in selected if isinstance(value, str) and value
+                            }
+                        else:
+                            selected_ids = set()
                         event_session_id = payload.get("session_id")
-                        if not active_id or (
-                            event_session_id and event_session_id != active_id
+                        if not selected_ids or (
+                            event_session_id and event_session_id not in selected_ids
                         ):
                             continue
                     await ws.send_text(data)

@@ -6,10 +6,15 @@ These tools allow the agent to manage time-based scheduled tasks
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
-from crabcode_core.schedule.models import JobStatus, ScheduleType
+from crabcode_core.schedule.models import ScheduleType
+from crabcode_core.schedule.timing import (
+    compute_next_run,
+    next_cron_run,
+    parse_interval,
+    parse_iso_timestamp,
+)
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 
@@ -67,7 +72,6 @@ def _format_run_brief(run: dict[str, Any]) -> str:
     short_id = run_id[:8] if len(run_id) > 8 else run_id
     status = run.get("status", "?")
     started = run.get("started_at")
-    finished = run.get("finished_at")
     duration = run.get("duration_seconds")
     started_str = started[:19] if started else "—"
     dur_str = f"{duration:.1f}s" if duration is not None else "—"
@@ -78,6 +82,10 @@ def _format_run_brief(run: dict[str, Any]) -> str:
     return f"  [{short_id}] {status} | started={started_str} | duration={dur_str}{sum_str}{err_str}"
 
 
+def _model_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else value.model_dump(mode="json")
+
+
 def _compute_next_run(schedule: str, schedule_type: str) -> str | None:
     """Best-effort computation of the next run timestamp.
 
@@ -86,40 +94,10 @@ def _compute_next_run(schedule: str, schedule_type: str) -> str | None:
     For 'interval', we add the interval to now.
     For 'cron', we return None (requires a real cron parser).
     """
-    now = datetime.now(timezone.utc)
-
-    if schedule_type == "once":
-        # Relative offset: +30m, +2h, +1d, +90s, +60 (plain seconds)
-        if schedule.startswith("+"):
-            offset_str = schedule[1:]
-            try:
-                from datetime import timedelta
-
-                seconds = _parse_interval(offset_str)
-                next_dt = now + timedelta(seconds=seconds)
-                return next_dt.isoformat()
-            except (ValueError, TypeError):
-                return None
-
-        # Absolute ISO timestamp
-        try:
-            datetime.fromisoformat(schedule)
-            return schedule
-        except (ValueError, TypeError):
-            return None
-
-    if schedule_type == "interval":
-        try:
-            seconds = _parse_interval(schedule)
-            from datetime import timedelta
-
-            next_dt = now + timedelta(seconds=seconds)
-            return next_dt.isoformat()
-        except (ValueError, TypeError):
-            return None
-
-    # cron — needs a proper parser, return None
-    return None
+    try:
+        return compute_next_run(schedule, ScheduleType(schedule_type))
+    except (ValueError, TypeError):
+        return None
 
 
 def _parse_interval(schedule: str) -> int:
@@ -128,30 +106,7 @@ def _parse_interval(schedule: str) -> int:
     Supports: s (seconds), m (minutes), h (hours), d (days).
     Also accepts plain integer strings (interpreted as seconds).
     """
-    schedule = schedule.strip()
-
-    # Plain integer
-    try:
-        return int(schedule)
-    except ValueError:
-        pass
-
-    if not schedule:
-        raise ValueError("Empty interval")
-
-    unit = schedule[-1].lower()
-    value_str = schedule[:-1]
-
-    try:
-        value = int(value_str)
-    except ValueError:
-        raise ValueError(f"Invalid interval value: {value_str}")
-
-    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    if unit not in multipliers:
-        raise ValueError(f"Unknown interval unit: {unit}")
-
-    return value * multipliers[unit]
+    return parse_interval(schedule)
 
 
 # ---------------------------------------------------------------------------
@@ -201,13 +156,27 @@ class ScheduleCreateTool(Tool):
                 "type": "string",
                 "description": "Working directory for execution (default: current session cwd).",
             },
+            "enabled": {
+                "type": "boolean",
+                "description": "Whether the task is active immediately (default: true).",
+                "default": True,
+            },
             "max_runs": {
                 "type": "integer",
                 "description": "Maximum number of executions (default: unlimited).",
             },
+            "next_run": {
+                "type": "string",
+                "description": "Optional ISO timestamp override for the next execution.",
+            },
             "description": {
                 "type": "string",
                 "description": "Optional longer description of the job.",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional tags used to classify the job.",
             },
             "timeout": {
                 "type": "integer",
@@ -216,6 +185,14 @@ class ScheduleCreateTool(Tool):
             "model_profile": {
                 "type": "string",
                 "description": "Model profile to use for this job's agent.",
+            },
+            "session_id": {
+                "type": "string",
+                "description": "Optional session to reuse for each execution.",
+            },
+            "extra": {
+                "type": "object",
+                "description": "Optional extension metadata stored with the job.",
             },
         },
         "required": ["name", "prompt", "schedule", "schedule_type"],
@@ -239,7 +216,10 @@ class ScheduleCreateTool(Tool):
             "- schedule (required): The schedule definition (format depends on schedule_type).\n"
             "- schedule_type (required): One of 'cron', 'interval', or 'once'.\n"
             "- cwd (optional): Working directory (defaults to current session cwd).\n"
-            "- max_runs (optional): Maximum number of times the task should run.\n\n"
+            "- enabled (optional): Whether the task starts active (default: true).\n"
+            "- max_runs (optional): Maximum number of times the task should run.\n"
+            "- next_run (optional): Explicit ISO timestamp override for the next run.\n"
+            "- session_id (optional): Session to reuse for each execution.\n\n"
             "Use this tool when you need to set up recurring or delayed tasks, "
             "such as periodic checks, scheduled builds, or reminders."
         )
@@ -274,11 +254,27 @@ class ScheduleCreateTool(Tool):
                     return f"Invalid relative offset for once schedule: {e}"
             else:
                 try:
-                    ts = datetime.fromisoformat(schedule_value)
-                    if ts.tzinfo is None:
-                        return "once schedule must include timezone info (e.g. '2025-03-01T09:00:00Z') or use relative offset (e.g. '+30m')"
+                    parse_iso_timestamp(schedule_value)
                 except (ValueError, TypeError) as e:
                     return f"Invalid ISO timestamp for once schedule: {e}"
+
+        if schedule_type == "cron":
+            try:
+                next_cron_run(tool_input["schedule"])
+            except (ValueError, TypeError) as e:
+                return f"Invalid cron expression: {e}"
+
+        next_run = tool_input.get("next_run")
+        if next_run:
+            try:
+                parse_iso_timestamp(next_run)
+            except (ValueError, TypeError) as e:
+                return f"Invalid next_run timestamp: {e}"
+
+        if tool_input.get("session_id") is not None and not str(tool_input["session_id"]).strip():
+            return "session_id must not be blank"
+        if tool_input.get("extra") is not None and not isinstance(tool_input["extra"], dict):
+            return "extra must be an object"
 
         return None
 
@@ -311,11 +307,15 @@ class ScheduleCreateTool(Tool):
                 schedule=schedule,
                 schedule_type=ScheduleType(schedule_type),
                 cwd=cwd,
+                enabled=bool(tool_input.get("enabled", True)),
                 max_runs=max_runs,
-                next_run=next_run,
+                next_run=tool_input.get("next_run") or next_run,
                 description=tool_input.get("description", ""),
+                tags=list(tool_input.get("tags") or []),
                 timeout=tool_input.get("timeout"),
                 model_profile=tool_input.get("model_profile"),
+                session_id=tool_input.get("session_id"),
+                extra=dict(tool_input.get("extra") or {}),
             )
         except Exception as exc:
             return ToolResult(
@@ -323,7 +323,7 @@ class ScheduleCreateTool(Tool):
                 is_error=True,
             )
 
-        job_dict = job if isinstance(job, dict) else job.model_dump()
+        job_dict = _model_dict(job)
         detail = _format_job_detail(job_dict)
         return ToolResult(
             data=job_dict,
@@ -400,7 +400,7 @@ class ScheduleListTool(Tool):
 
         # Normalize to dicts
         job_dicts = [
-            j if isinstance(j, dict) else j.model_dump()
+            _model_dict(j)
             for j in jobs
         ]
 
@@ -487,7 +487,7 @@ class ScheduleCancelTool(Tool):
                 is_error=True,
             )
 
-        job_dict = job if isinstance(job, dict) else job.model_dump()
+        job_dict = _model_dict(job)
         job_name = job_dict.get("name", "(unnamed)")
 
         try:
@@ -577,7 +577,7 @@ class ScheduleStatusTool(Tool):
                 is_error=True,
             )
 
-        job_dict = job if isinstance(job, dict) else job.model_dump()
+        job_dict = _model_dict(job)
 
         # Fetch recent runs
         try:
@@ -593,7 +593,7 @@ class ScheduleStatusTool(Tool):
 
         # Normalize runs to dicts
         run_dicts = [
-            r if isinstance(r, dict) else r.model_dump()
+            _model_dict(r)
             for r in runs
         ]
 
@@ -609,4 +609,75 @@ class ScheduleStatusTool(Tool):
         return ToolResult(
             data={"job": job_dict, "runs": run_dicts},
             result_for_model="\n".join(lines),
+        )
+
+
+class SchedulePauseTool(Tool):
+    name = "SchedulePause"
+    description = "Pause an active scheduled task without deleting its history."
+    is_read_only = False
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {"job_id": {"type": "string", "minLength": 1}},
+        "required": ["job_id"],
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.schedule_manager
+        if manager is None:
+            return ToolResult(result_for_model="Error: schedule manager unavailable", is_error=True)
+        job = manager.pause_job(tool_input.get("job_id", ""))
+        if job is None:
+            return ToolResult(result_for_model="Error: scheduled task not found or ID is ambiguous", is_error=True)
+        data = _model_dict(job)
+        return ToolResult(data=data, result_for_model=f"Scheduled task status: {data['status']}")
+
+
+class ScheduleResumeTool(Tool):
+    name = "ScheduleResume"
+    description = "Resume a paused or failed scheduled task."
+    is_read_only = False
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {"job_id": {"type": "string", "minLength": 1}},
+        "required": ["job_id"],
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.schedule_manager
+        if manager is None:
+            return ToolResult(result_for_model="Error: schedule manager unavailable", is_error=True)
+        job = manager.resume_job(tool_input.get("job_id", ""))
+        if job is None:
+            return ToolResult(result_for_model="Error: scheduled task not found or ID is ambiguous", is_error=True)
+        data = _model_dict(job)
+        return ToolResult(data=data, result_for_model=f"Scheduled task status: {data['status']}")
+
+
+class ScheduleRunTool(Tool):
+    name = "ScheduleRun"
+    description = "Trigger a scheduled task immediately."
+    is_read_only = False
+    is_concurrency_safe = True
+    input_schema = {
+        "type": "object",
+        "properties": {"job_id": {"type": "string", "minLength": 1}},
+        "required": ["job_id"],
+    }
+
+    async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        manager = context.schedule_manager
+        if manager is None:
+            return ToolResult(result_for_model="Error: schedule manager unavailable", is_error=True)
+        started = await manager.trigger_job(tool_input.get("job_id", ""))
+        if not started:
+            return ToolResult(
+                result_for_model="Error: scheduled task is missing, inactive, or already running",
+                is_error=True,
+            )
+        return ToolResult(
+            data={"job_id": tool_input["job_id"], "started": True},
+            result_for_model="Scheduled task started.",
         )

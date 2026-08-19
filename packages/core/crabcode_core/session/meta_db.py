@@ -299,6 +299,33 @@ class SessionMetaStore:
         cols = [d[0] for d in conn.execute("SELECT * FROM session_meta LIMIT 0").description]
         return [dict(zip(cols, r)) for r in rows]
 
+    def find_active_by_prefix(
+        self,
+        prefix: str,
+        *,
+        limit: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Find active sessions whose IDs start with *prefix*.
+
+        Selector resolution only needs to distinguish no match, one match,
+        and ambiguity.  Querying by ``substr`` avoids treating ``%`` or ``_``
+        in an untrusted selector as SQL wildcard characters and, unlike
+        ``list_recent()``, does not silently miss older sessions.
+        """
+        value = str(prefix or "")
+        if not value:
+            return []
+        bounded_limit = max(1, min(100, int(limit)))
+        conn = self._conn_or_create()
+        rows = conn.execute(
+            "SELECT * FROM session_meta "
+            "WHERE is_archived = 0 AND substr(id, 1, ?) = ? "
+            "ORDER BY updated_at DESC, id DESC LIMIT ?",
+            (len(value), value, bounded_limit),
+        ).fetchall()
+        cols = [d[0] for d in conn.execute("SELECT * FROM session_meta LIMIT 0").description]
+        return [dict(zip(cols, row)) for row in rows]
+
     def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search sessions by title or first_user_message."""
         conn = self._conn_or_create()
@@ -339,7 +366,12 @@ class SessionMetaStore:
         )
         conn.commit()
 
-    def auto_archive(self, days: int = 30) -> int:
+    def auto_archive(
+        self,
+        days: int = 30,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> int:
         """Archive sessions not updated in the last *days* days. Returns count archived."""
         conn = self._conn_or_create()
         cutoff = int(datetime.now(timezone.utc).timestamp()) - days * 86400
@@ -348,6 +380,9 @@ class SessionMetaStore:
             "WHERE is_archived = 0 AND updated_at < ?",
             (cutoff,),
         ).fetchall()
+        excluded = exclude_ids or set()
+        if excluded:
+            candidates = [row for row in candidates if str(row[0]) not in excluded]
         archived_ids: list[str] = []
         for session_id, cwd in candidates:
             try:
@@ -375,12 +410,20 @@ class SessionMetaStore:
         conn.commit()
         return len(archived_ids)
 
-    def purge_archived(self, *, delete_rows: bool = True) -> list[dict[str, Any]]:
+    def purge_archived(
+        self,
+        *,
+        delete_rows: bool = True,
+        exclude_ids: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Prepare archived rows for purge and optionally delete their index rows."""
         conn = self._conn_or_create()
         rows = conn.execute(
             "SELECT id, cwd FROM session_meta WHERE is_archived = 1"
         ).fetchall()
+        excluded = exclude_ids or set()
+        if excluded:
+            rows = [row for row in rows if str(row[0]) not in excluded]
         purgeable: list[tuple[str, str]] = []
         for session_id, cwd in rows:
             try:

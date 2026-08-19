@@ -8,11 +8,16 @@
  */
 
 import type {
+  InterruptRequest,
+  NewSessionRequest,
+  ResumeSessionRequest,
   SendMessageRequest,
   PermissionResponseRequest,
   ChoiceResponseRequest,
   ContextPushRequest,
   ImageAttachment,
+  SetReasoningEffortRequest,
+  SetUltraModeRequest,
 } from "./types";
 
 // ── Command envelope types ────────────────────────────────────────
@@ -22,6 +27,7 @@ export interface SendMessageCommand {
   text: string;
   max_turns: number;
   session_id: string | null;
+  operation_id?: string;
   images?: ImageAttachment[];
 }
 
@@ -30,6 +36,7 @@ export interface SteerMessageCommand {
   type: "steer_message";
   text: string;
   session_id: string | null;
+  operation_id?: string;
   images?: ImageAttachment[];
 }
 
@@ -40,6 +47,7 @@ export interface PermissionResponseCommand {
   always_allow: boolean;
   agent_id: string | null;
   feedback: string | null;
+  session_id: string | null;
 }
 
 export interface ChoiceResponseCommand {
@@ -48,6 +56,7 @@ export interface ChoiceResponseCommand {
   selected: string[];
   cancelled: boolean;
   agent_id: string | null;
+  session_id: string | null;
 }
 
 export interface PushContextCommand {
@@ -64,6 +73,37 @@ export interface PushContextCommand {
 export interface SwitchModelCommand {
   type: "switch_model";
   name: string;
+  session_id: string | null;
+}
+
+export interface NewSessionCommand extends NewSessionRequest {
+  type: "new_session";
+}
+
+export interface ResumeSessionCommand extends ResumeSessionRequest {
+  type: "resume_session";
+}
+
+export interface InterruptCommand extends InterruptRequest {
+  type: "interrupt";
+}
+
+export interface SwitchModeCommand {
+  type: "switch_mode";
+  mode: "agent" | "plan";
+  session_id: string | null;
+}
+
+export interface SetReasoningEffortCommand {
+  type: "set_reasoning_effort";
+  effort: SetReasoningEffortRequest["effort"];
+  session_id: string | null;
+}
+
+export interface SetUltraModeCommand {
+  type: "set_ultra_mode";
+  enabled: boolean | null;
+  session_id: string | null;
 }
 
 export type PermissionMode = "default" | "ask" | "run_everything" | "ai_review";
@@ -71,12 +111,14 @@ export type PermissionMode = "default" | "ask" | "run_everything" | "ai_review";
 export interface SetPermissionModeCommand {
   type: "set_permission_mode";
   mode: PermissionMode;
+  session_id: string | null;
 }
 
 export interface PlanActionCommand {
   type: "plan_action";
   action: "execute" | "revise" | "cancel";
   session_id: string | null;
+  operation_id?: string;
   plan?: Record<string, unknown>;
 }
 
@@ -84,10 +126,16 @@ export interface PlanActionCommand {
 export type WsCommand =
   | SendMessageCommand
   | SteerMessageCommand
+  | NewSessionCommand
+  | ResumeSessionCommand
+  | InterruptCommand
   | PermissionResponseCommand
   | ChoiceResponseCommand
   | PushContextCommand
   | SwitchModelCommand
+  | SwitchModeCommand
+  | SetReasoningEffortCommand
+  | SetUltraModeCommand
   | SetPermissionModeCommand
   | PlanActionCommand;
 
@@ -98,7 +146,12 @@ export type WsCommand =
  */
 export function buildSendMessageCommand(
   text: string,
-  options: { maxTurns?: number; sessionId?: string; images?: ImageAttachment[] } = {},
+  options: {
+    maxTurns?: number;
+    sessionId?: string;
+    operationId?: string;
+    images?: ImageAttachment[];
+  } = {},
 ): SendMessageCommand {
   const cmd: SendMessageCommand = {
     type: "send_message",
@@ -106,6 +159,7 @@ export function buildSendMessageCommand(
     max_turns: options.maxTurns ?? 0,
     session_id: options.sessionId ?? null,
   };
+  if (options.operationId) cmd.operation_id = options.operationId;
   if (options.images && options.images.length > 0) {
     cmd.images = options.images;
   }
@@ -115,13 +169,14 @@ export function buildSendMessageCommand(
 /** Build a message that steers an already-running foreground turn. */
 export function buildSteerMessageCommand(
   text: string,
-  options: { sessionId?: string; images?: ImageAttachment[] } = {},
+  options: { sessionId?: string; operationId?: string; images?: ImageAttachment[] } = {},
 ): SteerMessageCommand {
   const cmd: SteerMessageCommand = {
     type: "steer_message",
     text,
     session_id: options.sessionId ?? null,
   };
+  if (options.operationId) cmd.operation_id = options.operationId;
   if (options.images && options.images.length > 0) {
     cmd.images = options.images;
   }
@@ -134,7 +189,12 @@ export function buildSteerMessageCommand(
 export function buildPermissionResponseCommand(
   toolUseId: string,
   allowed: boolean,
-  options: { alwaysAllow?: boolean; agentId?: string; feedback?: string } = {},
+  options: {
+    alwaysAllow?: boolean;
+    agentId?: string;
+    feedback?: string;
+    sessionId?: string;
+  } = {},
 ): PermissionResponseCommand {
   return {
     type: "permission_response",
@@ -143,6 +203,7 @@ export function buildPermissionResponseCommand(
     always_allow: options.alwaysAllow ?? false,
     agent_id: options.agentId ?? null,
     feedback: options.feedback ?? null,
+    session_id: options.sessionId ?? null,
   };
 }
 
@@ -152,7 +213,7 @@ export function buildPermissionResponseCommand(
 export function buildChoiceResponseCommand(
   toolUseId: string,
   selected: string[],
-  options: { cancelled?: boolean; agentId?: string } = {},
+  options: { cancelled?: boolean; agentId?: string; sessionId?: string } = {},
 ): ChoiceResponseCommand {
   return {
     type: "choice_response",
@@ -160,6 +221,7 @@ export function buildChoiceResponseCommand(
     selected,
     cancelled: options.cancelled ?? false,
     agent_id: options.agentId ?? null,
+    session_id: options.sessionId ?? null,
   };
 }
 
@@ -188,26 +250,82 @@ export function serializeCommand(cmd: WsCommand): string {
   return JSON.stringify(cmd);
 }
 
-export function buildSwitchModelCommand(name: string): SwitchModelCommand {
-  return { type: "switch_model", name };
+export function buildSwitchModelCommand(
+  name: string,
+  sessionId?: string,
+): SwitchModelCommand {
+  return { type: "switch_model", name, session_id: sessionId ?? null };
 }
 
 export function buildSetPermissionModeCommand(
   mode: PermissionMode,
+  sessionId?: string,
 ): SetPermissionModeCommand {
-  return { type: "set_permission_mode", mode };
+  return { type: "set_permission_mode", mode, session_id: sessionId ?? null };
+}
+
+export function buildNewSessionCommand(
+  cwd?: string | null,
+  overrides: Omit<NewSessionRequest, "cwd"> = {},
+): NewSessionCommand {
+  return { type: "new_session", cwd: cwd ?? null, ...overrides };
+}
+
+export function buildResumeSessionCommand(
+  sessionId: string,
+  overrides: Omit<ResumeSessionRequest, "session_id"> = {},
+): ResumeSessionCommand {
+  return { type: "resume_session", session_id: sessionId, ...overrides };
+}
+
+export function buildInterruptCommand(
+  sessionId: string,
+  operationId?: string,
+): InterruptCommand {
+  return {
+    type: "interrupt",
+    session_id: sessionId,
+    operation_id: operationId ?? null,
+  };
+}
+
+export function buildSwitchModeCommand(
+  mode: SwitchModeCommand["mode"],
+  sessionId?: string,
+): SwitchModeCommand {
+  return { type: "switch_mode", mode, session_id: sessionId ?? null };
+}
+
+export function buildSetReasoningEffortCommand(
+  effort: SetReasoningEffortCommand["effort"],
+  sessionId?: string,
+): SetReasoningEffortCommand {
+  return {
+    type: "set_reasoning_effort",
+    effort,
+    session_id: sessionId ?? null,
+  };
+}
+
+export function buildSetUltraModeCommand(
+  enabled: boolean | null = null,
+  sessionId?: string,
+): SetUltraModeCommand {
+  return { type: "set_ultra_mode", enabled, session_id: sessionId ?? null };
 }
 
 export function buildPlanActionCommand(
   action: PlanActionCommand["action"],
   plan?: Record<string, unknown>,
   sessionId?: string,
+  operationId?: string,
 ): PlanActionCommand {
   const cmd: PlanActionCommand = {
     type: "plan_action",
     action,
     session_id: sessionId ?? null,
   };
+  if (operationId) cmd.operation_id = operationId;
   if (plan) cmd.plan = plan;
   return cmd;
 }

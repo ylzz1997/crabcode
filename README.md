@@ -140,15 +140,26 @@ crabcode gateway --password secret
 | Endpoint | Method | Description |
 | ---------- | -------- | ------------- |
 | `/health` | GET | Health check |
-| `/session/new` | POST | Create a new session |
+| `/session/new` | POST | Create a session; accepts `cwd` plus optional `model`, `provider`, `base_url`, `api_format`, and `model_profile` overrides |
 | `/session/send` | POST | Send a message (starts query loop, events via SSE) |
 | `/session/interrupt` | POST | Interrupt current turn |
 | `/session/compact` | POST | Trigger manual compaction |
-| `/session/list` | GET | List active sessions |
-| `/session/resume` | POST | Resume a session |
+| `/session/clear` | POST | Clear the active context and persist the clear boundary |
+| `/session/messages` | GET | Read the structured active message projection |
+| `/session/list` | GET | List persisted sessions for the current project |
+| `/session/recent` | GET | List recent sessions across projects |
+| `/session/search` | POST | Search sessions by title or message |
+| `/session/resolve` | GET | Resolve a full ID, unique prefix, or current-project index |
+| `/session/resume` | POST | Resume by full ID, unique prefix, or index, with the same optional API overrides for a cold session |
+| `/session/status` | GET | Read model, mode, effort, and context-window status |
+| `/session/archive` | POST | Archive a loaded or persisted session |
+| `/session/prune` | POST | Archive stale inactive sessions and optionally purge artifacts |
+| `/session/export` | POST | Export Markdown or JSON by ID, prefix, or index |
+| `/session/stats` | GET | Read global, project, and per-model usage statistics |
 | `/agent/spawn` | POST | Spawn a sub-agent |
 | `/agent/{id}` | GET | Get agent status |
 | `/agent/list` | GET | List all agents |
+| `/agent/{id}/transcript` | GET | Read an agent transcript/log tail |
 | `/agent/{id}/cancel` | POST | Cancel an agent |
 | `/agent/{id}/input` | POST | Send input to an agent |
 | `/agent/wait` | POST | Wait for agent(s) to complete |
@@ -157,19 +168,47 @@ crabcode gateway --password secret
 | `/config/models` | GET | List available models |
 | `/config/switch-model` | POST | Switch model |
 | `/config/switch-mode` | POST | Switch agent/plan mode |
+| `/config/reasoning-effort` | POST | Set reasoning effort |
+| `/config/ultra-mode` | POST | Toggle or set ultra mode |
+| `/config/permission-mode` | POST | Set the client tool-permission override |
 | `/config/goal` | GET/POST | View or manage the session goal |
+| `/config/plan-status` | GET | Read current plan execution status |
 | `/tools` | GET | List available tools (including MCP) |
+| `/skills` | GET | List available skills |
+| `/skills/expand` | POST | Expand a skill invocation with user input |
 | `/context` | POST | Push workspace context (active file, selection, cursor) |
+| `/context/{session_id}` | GET | Read the latest client workspace context |
+| `/logs` | GET | List, tail, or clear background logs |
+| `/logs/follow` | GET | Follow a background log as SSE |
+| `/tasks`, `/tasks/{id}` | GET | List background tasks or read one task |
+| `/tasks/{id}/output` | GET | Read persisted background-task output |
+| `/tasks/stop` | POST | Stop a background task |
+| `/schedule`, `/schedule/{id}` | GET | List scheduled jobs or read one job by ID/unique prefix |
+| `/schedule/{id}/runs` | GET | Read persisted execution history for a scheduled job |
+| `/schedule/create` | POST | Create a cron, interval, or one-shot job; supports enabled state, next-run override, reusable execution session, tags, and extra metadata |
+| `/schedule/pause`, `/schedule/resume` | POST | Pause or resume a scheduled job |
+| `/schedule/trigger`, `/schedule/cancel` | POST | Run a job immediately or permanently delete it |
+| `/peer/list`, `/peer/send` | GET/POST | List messageable sessions or send a peer message |
+| `/team/list`, `/team/{id}/*` | GET | Read teams, status, messages, and task boards |
+| `/team/create`, `/team/spawn`, `/team/shutdown` | POST | Manage the team lifecycle |
+| `/team/message`, `/team/broadcast` | POST | Send teammate messages |
+| `/team/remove`, `/team/messages/read` | POST | Remove a teammate or mark its messages read |
+| `/team/task/*` | POST | Add, claim, complete, or fail team tasks |
+| `/team/bridge`, `/team/{a}/bridge/{b}` | POST/GET | Register or inspect a cross-team bridge policy |
+| `/team/cross-message` | POST | Send a policy-checked cross-team message |
 | `/snapshot/checkpoint` | POST | Create checkpoint with file snapshot |
 | `/snapshot/list` | GET | List checkpoints for a session |
 | `/snapshot/revert` | POST | Revert files + conversation to a checkpoint |
 | `/snapshot/rollback` | POST | Rollback conversation only (no file restore) |
+| `/snapshot/undo` | POST | Revert the latest checkpoint |
 | `/event` | GET (SSE) | Real-time event stream with 10s heartbeat |
 | `/ws` | WebSocket | Bidirectional channel (preferred for VSCode) |
 
-**WebSocket `/ws`** supports incoming commands (`send_message`, `permission_response`, `choice_response`, `push_context`) and outgoing event payloads — a single connection handles all interaction, making it ideal for VSCode extensions.
+**WebSocket `/ws`** supports the complete interactive command path: session lifecycle (`new_session`, `resume_session`), messages and steering, interrupt, permission/choice responses, workspace context, model/mode/permission changes, and plan actions. `new_session` and `resume_session` accept the same five API override fields as the HTTP lifecycle endpoints. Overrides are rejected for an already-loaded resume target so one client cannot silently replace another client's runtime. A connection remains subscribed to every session it explicitly selects, so background events from an earlier session remain visible after the active UI switches to another one; unrelated sessions are still filtered out. Foreground and plan commands carry an `operation_id`: steering and interrupt should send that ID to avoid targeting a newer turn. Command-validation failures use a typed, non-terminal error envelope, while every admitted operation finishes with exactly one `turn_complete` event. A complete client must also consume structured session history and the session-tagged `agent_state`, `agent_output`, `team_message`, `team_state`, `task_update`, `schedule_run`, `compact`, permission/choice response, file-change, snapshot, and revert events. Schedule CRUD uses the HTTP endpoints above; clients do not need to poll for execution completion.
 
-**gRPC** service is available when `--grpc-port` is set, with streaming `SendMessage` and `SubscribeEvents` RPCs. See `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto` for the full service definition.
+Direct `! <cmd>` execution is intentionally a trusted-client feature: the CLI runs it in its local process and the VSCode extension sends it to a local integrated terminal. It is not exposed as a Gateway endpoint because doing so would create a permission-bypassing remote shell. Crab Desktop should keep the same boundary and execute this command only in its local host process.
+
+**gRPC** service is available when `--grpc-port` is set, with streaming conversation/event RPCs plus the typed agent, permission, choice, model, and mode RPCs defined in `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto`. HTTP + WebSocket is the complete client surface and should be used by Crab Desktop.
 
 ### ACP (Agent Client Protocol) Support
 
@@ -819,9 +858,22 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 | `/wait <id>` | Wait for one agent to finish and print its summary |
 | `/cancel-agent <id>` | Cancel a running agent |
 | `/team list` | List active agent teams |
+| `/team create <name> [max]` | Create a team |
 | `/team status <team_id>` | Show team status table |
 | `/team messages <team_id>` | Show team message history |
+| `/team tasks <team_id>` | Show the shared task board |
+| `/team spawn <team_id> [options] <prompt>` | Add a teammate |
+| `/team message <team_id> <agent_id> <text>` | Send a teammate message |
+| `/team broadcast <team_id> <text>` | Broadcast to teammates |
+| `/team task-add <team_id> <description>` | Add a task |
+| `/team task-claim <team_id> <task_id> [agent_id]` | Claim a task |
+| `/team task-complete <team_id> <task_id> [result]` | Complete a task |
 | `/team shutdown <team_id>` | Shut down a team |
+| `/schedule list` | List scheduled jobs |
+| `/schedule show <job_id>` | Show scheduled job details |
+| `/schedule runs <job_id>` | Show scheduled-job run history |
+| `/schedule create <name> <type> <schedule> <prompt>` | Create a cron/interval/once job |
+| `/schedule pause\|resume\|run\|cancel <job_id>` | Manage scheduled-job lifecycle |
 | `/new` | Start a fresh session (clear in-memory conversation history) |
 | `/compact` | Manually compact conversation history to save context |
 | `/clear` | Clear current in-memory conversation messages |
@@ -1253,8 +1305,16 @@ The recovery helper can normalize stale `busy`/`cancelling` teammate states in a
 | Command | Description |
 | --------- | ------------- |
 | `/team list` | List active teams |
+| `/team create <name> [max]` | Create a team |
 | `/team status <team_id>` | Show team status table |
 | `/team messages <team_id>` | Show team message history |
+| `/team tasks <team_id>` | Show the shared task board |
+| `/team spawn <team_id> [options] <prompt>` | Add a teammate |
+| `/team message <team_id> <agent_id> <text>` | Send a teammate message |
+| `/team broadcast <team_id> <text>` | Broadcast to teammates |
+| `/team task-add <team_id> <description>` | Add a task |
+| `/team task-claim <team_id> <task_id> [agent_id]` | Claim a task |
+| `/team task-complete <team_id> <task_id> [result]` | Complete a task |
 | `/team shutdown <team_id>` | Shut down a team |
 
 ### Multi-model example

@@ -14,21 +14,109 @@ export interface ImageAttachment {
   data: string;
 }
 
+/** Observable state for the optional semantic-search indexer. */
+export interface SearchIndexStatus {
+  state: string;
+  chunks?: number | null;
+  files?: number | null;
+  done?: number | null;
+  total?: number | null;
+}
+
+/** Complete, non-secret runtime status shared by CLI-style clients. */
+export interface SessionRuntimeStatus {
+  session_id: string;
+  version?: string;
+  cwd?: string;
+  initialized?: boolean;
+  message_count?: number;
+  model?: string;
+  model_profile?: string | null;
+  provider?: string;
+  mode?: "agent" | "plan";
+  reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
+  ultra_mode?: boolean;
+  permission_mode?: string;
+  context_used_tokens?: number;
+  context_window_tokens?: number;
+  context_remaining_tokens?: number;
+  context_used_percent?: number;
+  compact_count?: number;
+  auto_compact_enabled?: boolean;
+  thinking_enabled?: boolean;
+  max_tokens?: number;
+  tool_count?: number | null;
+  agent_total?: number;
+  agent_active?: number;
+  agent_failed?: number;
+  agent_pending_callbacks?: number;
+  agent_max_concurrency?: number;
+  monitor_total?: number;
+  monitor_active?: number;
+  monitor_failed?: number;
+  search_index?: SearchIndexStatus | null;
+}
+
+export interface GoalState {
+  goal?: GoalInfo | null;
+}
+
+export interface SkillExpansion {
+  name: string;
+  prompt: string;
+}
+
+export interface TeamTaskSummary {
+  total?: number;
+  pending?: number;
+  claimed?: number;
+  completed?: number;
+  failed?: number;
+}
+
+/** Complete persisted message shape used when replaying a session. */
+export interface SessionMessagePayload {
+  uuid: string;
+  role: "user" | "assistant" | "system";
+  content: string | Record<string, unknown>[];
+  timestamp: string;
+  parent_uuid?: string | null;
+  is_compact_summary?: boolean;
+  origin?: string | null;
+  usage?: Record<string, unknown> | null;
+  tool_use_result?: string | null;
+  source_tool_assistant_uuid?: string | null;
+  reply_to_uuid?: string | null;
+  api_error?: string | null;
+  request_id?: string | null;
+}
+
 
 // ── Request types ────────────────────────────────────────────────────
 export interface SendMessageRequest {
   text: string;
   max_turns?: number;
   session_id?: string | null;
+  operation_id?: string | null;
   images?: ImageAttachment[];
 }
 
 export interface NewSessionRequest {
   cwd?: string | null;
+  model?: string | null;
+  provider?: string | null;
+  base_url?: string | null;
+  api_format?: string | null;
+  model_profile?: string | null;
 }
 
 export interface ResumeSessionRequest {
   session_id: string;
+  model?: string | null;
+  provider?: string | null;
+  base_url?: string | null;
+  api_format?: string | null;
+  model_profile?: string | null;
 }
 
 export interface CompactRequest {
@@ -36,8 +124,13 @@ export interface CompactRequest {
   custom_instructions?: string | null;
 }
 
+export interface ClearSessionRequest {
+  session_id: string;
+}
+
 export interface InterruptRequest {
   session_id: string;
+  operation_id?: string | null;
 }
 
 export interface PermissionResponseRequest {
@@ -46,6 +139,7 @@ export interface PermissionResponseRequest {
   always_allow?: boolean;
   agent_id?: string | null;
   feedback?: string | null;
+  session_id?: string | null;
 }
 
 export interface ChoiceResponseRequest {
@@ -53,6 +147,7 @@ export interface ChoiceResponseRequest {
   selected: string[];
   cancelled?: boolean;
   agent_id?: string | null;
+  session_id?: string | null;
 }
 
 export interface SpawnAgentRequest {
@@ -60,24 +155,186 @@ export interface SpawnAgentRequest {
   subagent_type?: string;
   name?: string | null;
   model_profile?: string | null;
+  callback?: boolean;
+  session_id?: string | null;
 }
 
 export interface AgentInputRequest {
   prompt: string;
   interrupt?: boolean;
+  session_id?: string | null;
 }
 
 export interface WaitAgentRequest {
   agent_id: string | string[];
   timeout_ms?: number | null;
+  session_id?: string | null;
 }
 
 export interface SwitchModelRequest {
   name: string;
+  session_id?: string | null;
 }
 
 export interface SwitchModeRequest {
   mode: "agent" | "plan";
+  session_id?: string | null;
+}
+
+export interface SetReasoningEffortRequest {
+  effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  session_id?: string | null;
+}
+
+export interface SetUltraModeRequest {
+  enabled?: boolean | null;
+  session_id?: string | null;
+}
+
+/** Client-side tool permission override used by chat surfaces. */
+export interface SetPermissionModeRequest {
+  mode: "default" | "ask" | "run_everything" | "ai_review";
+  session_id?: string | null;
+}
+
+export interface GoalRequest {
+  action?: "set" | "edit" | "pause" | "resume" | "complete" | "blocked" | "clear";
+  objective?: string | null;
+  token_budget?: number | null;
+  session_id?: string | null;
+}
+
+export interface SkillExpandRequest {
+  name: string;
+  user_input?: string;
+  session_id?: string | null;
+}
+
+export interface TaskStopRequest {
+  task_id: string;
+  session_id?: string | null;
+}
+
+export interface ScheduleCreateRequest {
+  name: string;
+  prompt: string;
+  schedule: string;
+  schedule_type: "cron" | "interval" | "once";
+  cwd?: string | null;
+  enabled?: boolean;
+  max_runs?: number | null;
+  next_run?: string | null;
+  description?: string;
+  tags?: string[];
+  timeout?: number | null;
+  model_profile?: string | null;
+  job_session_id?: string | null;
+  extra?: Record<string, unknown>;
+  session_id?: string | null;
+}
+
+export interface ScheduleJobRequest {
+  job_id: string;
+  session_id?: string | null;
+}
+
+export interface PeerSendRequest {
+  to: string;
+  text: string;
+  session_id?: string | null;
+}
+
+export interface TeamCreateRequest {
+  name: string;
+  max_teammates?: number | null;
+  session_id?: string | null;
+}
+
+export interface TeamSpawnRequest {
+  team_id: string;
+  prompt: string;
+  role?: "lead" | "worker" | "researcher" | "reviewer";
+  name?: string | null;
+  model_profile?: string | null;
+  session_id?: string | null;
+}
+
+export interface TeamMessageRequest {
+  team_id: string;
+  to: string;
+  text: string;
+  from_agent?: string;
+  session_id?: string | null;
+}
+
+export interface TeamBroadcastRequest {
+  team_id: string;
+  text: string;
+  from_agent?: string;
+  session_id?: string | null;
+}
+
+export interface TeamTaskAddRequest {
+  team_id: string;
+  description: string;
+  session_id?: string | null;
+}
+
+export interface TeamTaskClaimRequest {
+  team_id: string;
+  task_id: string;
+  agent_id?: string;
+  session_id?: string | null;
+}
+
+export interface TeamTaskCompleteRequest {
+  team_id: string;
+  task_id: string;
+  result?: string;
+  agent_id?: string;
+  session_id?: string | null;
+}
+
+export interface TeamTaskFailRequest {
+  team_id: string;
+  task_id: string;
+  reason?: string;
+  agent_id?: string;
+  session_id?: string | null;
+}
+
+export interface TeamRemoveRequest {
+  team_id: string;
+  agent_id: string;
+  session_id?: string | null;
+}
+
+export interface TeamMessagesReadRequest {
+  team_id: string;
+  agent_id: string;
+  message_ids?: string[] | null;
+  session_id?: string | null;
+}
+
+export interface TeamBridgeRequest {
+  team_a: string;
+  team_b: string;
+  policy?: "allow_all" | "allow_tagged" | "deny";
+  session_id?: string | null;
+}
+
+export interface TeamCrossMessageRequest {
+  from_team: string;
+  to_team: string;
+  text: string;
+  from_agent?: string;
+  to_agent?: string;
+  session_id?: string | null;
+}
+
+export interface TeamShutdownRequest {
+  team_id: string;
+  session_id?: string | null;
 }
 
 /**
@@ -117,6 +374,11 @@ export interface ArchiveSessionRequest {
   session_id: string;
 }
 
+export interface PruneSessionsRequest {
+  days?: number;
+  delete_files?: boolean;
+}
+
 export interface ExportSessionRequest {
   session_id: string;
   format?: "md" | "json";
@@ -131,6 +393,19 @@ export interface SessionInfo {
   provider?: string;
   created_at?: string;
   title?: string;
+  cwd?: string;
+  tokens_used?: number;
+  preview?: string;
+}
+
+export interface GoalInfo {
+  objective: string;
+  status: "active" | "paused" | "complete" | "blocked";
+  created_at: string;
+  updated_at: string;
+  token_budget?: number | null;
+  tokens_used?: number;
+  completed_at?: string | null;
 }
 
 export interface AgentInfo {
@@ -140,10 +415,22 @@ export interface AgentInfo {
   status: string;
   model: string;
   created_at: string;
+  session_id?: string;
   parent_agent_id?: string | null;
+  parent_tool_use_id?: string | null;
+  model_profile?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string;
   usage?: Record<string, unknown>;
   final_result?: string;
   error?: string;
+  depth?: number;
+  transcript_path?: string | null;
+  callback_enabled?: boolean;
+  callback_state?: string;
+  callback_message_id?: string | null;
+  callback_epoch?: number;
 }
 
 export interface ToolInfo {
@@ -158,6 +445,174 @@ export interface SkillInfo {
   description?: string;
 }
 
+export interface MonitorInfo {
+  task_id: string;
+  session_id?: string;
+  description?: string;
+  task_type?: string;
+  source?: string;
+  status?: string;
+  output_file?: string | null;
+  timeout_ms?: number;
+  persistent?: boolean;
+  tool_use_id?: string | null;
+  created_at?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string;
+  sequence?: number;
+  error?: string;
+  exit_code?: number | null;
+}
+
+export interface BackgroundTaskInfo {
+  task_id: string;
+  session_id?: string;
+  description?: string;
+  task_type?: string;
+  source?: string;
+  status?: string;
+  output_file?: string | null;
+  created_at?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string;
+  error?: string;
+  exit_code?: number | null;
+  agent_id?: string | null;
+}
+
+export interface ScheduleJobInfo {
+  id: string;
+  name: string;
+  prompt: string;
+  schedule: string;
+  schedule_type: "cron" | "interval" | "once";
+  status: string;
+  created_at: string;
+  cwd?: string | null;
+  enabled?: boolean;
+  last_run?: string | null;
+  next_run?: string | null;
+  run_count?: number;
+  max_runs?: number | null;
+  session_id?: string | null;
+  description?: string;
+  tags?: string[];
+  timeout?: number | null;
+  model_profile?: string | null;
+  extra?: Record<string, unknown>;
+}
+
+export interface ScheduleRunInfo {
+  id: string;
+  job_id: string;
+  status: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_seconds?: number | null;
+  session_id?: string | null;
+  exit_code?: number | null;
+  error_message?: string | null;
+  result_summary?: string;
+  tokens_used?: number;
+}
+
+export interface PeerInfo {
+  session_id: string;
+  name: string;
+  cwd: string;
+  pid: number;
+  version?: number;
+  socket_path?: string;
+  permission_class?: "prompting" | "bypass";
+  started_at?: string;
+}
+
+export interface PeerDeliveryInfo {
+  status: "delivered" | "held" | "refused" | "failed";
+  message_id?: string;
+  detail?: string;
+}
+
+export interface TeamTeammateInfo {
+  agent_id: string;
+  role: string;
+  state: string;
+  name?: string | null;
+  model_profile?: string | null;
+}
+
+export interface TeamTaskInfo {
+  id: string;
+  status: string;
+  description?: string;
+  assignee?: string | null;
+  result?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TeamStatusInfo {
+  team_id: string;
+  state: string;
+  teammates?: TeamTeammateInfo[];
+  teammate_count?: number;
+  max_teammates?: number;
+  tasks?: TeamTaskSummary;
+}
+
+export interface TeamMessageInfo {
+  id: string;
+  from_agent?: string;
+  to_agent?: string;
+  text?: string;
+  timestamp?: string;
+  read?: boolean;
+  msg_type?: string;
+}
+
+export interface TeamBridgeInfo {
+  team_a: string;
+  team_b: string;
+  policy: "allow_all" | "allow_tagged" | "deny";
+}
+
+export interface CrossTeamMessageInfo {
+  id: string;
+  from_team: string;
+  to_team: string;
+  text: string;
+  bridge_policy: "allow_all" | "allow_tagged" | "deny";
+  from_agent?: string;
+  to_agent?: string;
+  timestamp?: string;
+}
+
+export interface LogInfo {
+  name: string;
+  path: string;
+  updated_at?: string | null;
+  state?: string | null;
+}
+
+export interface LogsResponse {
+  logs?: LogInfo[];
+  lines?: string[];
+  name?: string | null;
+  path?: string | null;
+  truncated?: boolean;
+  note?: string | null;
+}
+
+export interface AgentTranscriptResponse {
+  agent_id: string;
+  path?: string | null;
+  lines?: string[];
+  truncated?: boolean;
+}
+
 export interface ModelInfo {
   name: string;
   description?: string;
@@ -170,29 +625,50 @@ export interface HealthResponse {
 
 
 // ── EventPayload tagged union ────────────────────────────────────────
+/** Metadata attached by the Gateway EventBus to routed events. */
+export interface EventEnvelope {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  command?: string;
+  command_error?: boolean;
+}
+
 export interface StreamTextPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   text: string;
-  type?: "stream_text";
+  type: "stream_text";
 }
 
 export interface ThinkingPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   text: string;
-  type?: "thinking";
+  type: "thinking";
 }
 
 export interface ToolUsePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   tool_name: string;
   tool_input: Record<string, unknown>;
   tool_use_id: string;
-  type?: "tool_use";
+  type: "tool_use";
   agent_id?: string | null;
 }
 
 export interface ToolResultPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   tool_use_id: string;
   tool_name: string;
   result: string;
-  type?: "tool_result";
+  type: "tool_result";
   is_error?: boolean;
   result_for_display?: string | null;
   tool_input?: Record<string, unknown>;
@@ -200,10 +676,13 @@ export interface ToolResultPayload {
 }
 
 export interface PermissionRequestPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   tool_name: string;
   tool_input: Record<string, unknown>;
   tool_use_id: string;
-  type?: "permission_request";
+  type: "permission_request";
   reason?: string | null;
   permission_key?: string | null;
   agent_id?: string | null;
@@ -211,34 +690,46 @@ export interface PermissionRequestPayload {
 }
 
 export interface PermissionResponsePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   tool_use_id: string;
   allowed: boolean;
-  type?: "permission_response";
+  type: "permission_response";
   always_allow?: boolean;
   agent_id?: string | null;
   feedback?: string | null;
 }
 
 export interface ChoiceRequestPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   tool_use_id: string;
   question: string;
   options: string[];
-  type?: "choice_request";
+  type: "choice_request";
   multiple?: boolean;
   agent_id?: string | null;
 }
 
 export interface ChoiceResponsePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   tool_use_id: string;
   selected: string[];
-  type?: "choice_response";
+  type: "choice_response";
   cancelled?: boolean;
   agent_id?: string | null;
 }
 
 export interface CompactPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   summary: string;
-  type?: "compact";
+  type: "compact";
   messages_before?: number;
   messages_after?: number;
   trigger?: string;
@@ -246,14 +737,23 @@ export interface CompactPayload {
 }
 
 export interface ErrorPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   message: string;
-  type?: "error";
+  type: "error";
   recoverable?: boolean;
   error_type?: string;
+  agent_id?: string | null;
+  command?: string | null;
+  command_error?: boolean;
 }
 
 export interface TurnCompletePayload {
-  type?: "turn_complete";
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  type: "turn_complete";
   reason?: string;
   turn_count?: number;
   usage?: Record<string, unknown>;
@@ -264,81 +764,126 @@ export interface TurnCompletePayload {
 }
 
 export interface StreamModePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   mode: string;
-  type?: "stream_mode";
+  type: "stream_mode";
   agent_id?: string | null;
 }
 
 export interface SteeringAppliedPayload {
-  type?: "steering_applied";
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  type: "steering_applied";
   count?: number;
 }
 
 export interface AgentStatePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   agent_id: string;
   status: string;
   subagent_type: string;
   title: string;
-  type?: "agent_state";
+  type: "agent_state";
   parent_agent_id?: string | null;
   message?: string;
   usage?: Record<string, unknown>;
 }
 
 export interface AgentOutputPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   agent_id: string;
   stream: string;
   text: string;
-  type?: "agent_output";
+  type: "agent_output";
   tool_name?: string | null;
 }
 
 export interface ModeChangePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   mode: string;
-  type?: "mode_change";
+  type: "mode_change";
   reason?: string;
 }
 
 export interface PlanReadyPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   plan: Record<string, unknown>;
-  type?: "plan_ready";
+  type: "plan_ready";
 }
 
 export interface PeerMessagePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   message_id: string;
   from_session_id: string;
   from_name: string;
   from_cwd: string;
   text: string;
-  type?: "peer_message";
+  type: "peer_message";
 }
 
 export interface TeamMessagePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   team_id: string;
   from_agent: string;
   to_agent: string;
   text: string;
-  type?: "team_message";
+  type: "team_message";
   msg_type?: string;
   message_id?: string;
 }
 
 export interface TeamStatePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   team_id: string;
   agent_id: string;
   old_state: string;
   new_state: string;
-  type?: "team_state";
+  type: "team_state";
   role?: string;
 }
 
 export interface TaskUpdatePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   team_id: string;
   task_id: string;
   status: string;
-  type?: "task_update";
+  type: "task_update";
   assignee?: string | null;
   description?: string;
+}
+
+/** A scheduled job execution result delivered to connected clients. */
+export interface ScheduleRunPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  job_id: string;
+  run_id: string;
+  status: string;
+  type: "schedule_run";
+  duration_seconds?: number;
+  error_message?: string;
+  result_summary?: string;
+  next_run?: string | null;
 }
 
 /**
@@ -348,70 +893,91 @@ export interface TaskUpdatePayload {
  * refresh its editor view, show diffs, etc.
  */
 export interface FileChangePayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   path: string;
   action: "create" | "modify" | "delete";
-  type?: "file_change";
+  type: "file_change";
   diff?: string | null;
 }
 
 export interface SnapshotPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   snapshot_id: string;
   tool_name: string;
-  type?: "snapshot";
+  type: "snapshot";
   files?: string[];
 }
 
 export interface RevertPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
   snapshot_id: string;
-  type?: "revert";
+  type: "revert";
   files_restored?: string[];
 }
 
 export interface ServerConnectedPayload {
-  type?: "server.connected";
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  type: "server.connected";
   properties?: Record<string, unknown>;
 }
 
 export interface ServerHeartbeatPayload {
-  type?: "server.heartbeat";
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  type: "server.heartbeat";
   properties?: Record<string, unknown>;
 }
 
 export interface SessionHistoryPayload {
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  session_id: string;
   type: "session_history";
-  messages: Array<{ id: string; role: string; text: string }>;
+  messages?: SessionMessagePayload[];
 }
 
 
 // ── Tagged union ─────────────────────────────────────────────────────
 export type EventPayload =
-  | StreamTextPayload |
-  ThinkingPayload |
-  ToolUsePayload |
-  ToolResultPayload |
-  PermissionRequestPayload |
-  PermissionResponsePayload |
-  ChoiceRequestPayload |
-  ChoiceResponsePayload |
-  CompactPayload |
-  ErrorPayload |
-  TurnCompletePayload |
-  StreamModePayload |
-  SteeringAppliedPayload |
-  AgentStatePayload |
-  AgentOutputPayload |
-  ModeChangePayload |
-  PlanReadyPayload |
-  PeerMessagePayload |
-  TeamMessagePayload |
-  TeamStatePayload |
-  TaskUpdatePayload |
-  FileChangePayload |
-  SnapshotPayload |
-  RevertPayload |
-  ServerConnectedPayload |
-  ServerHeartbeatPayload |
-  SessionHistoryPayload;
+  EventEnvelope & (
+    StreamTextPayload |
+    ThinkingPayload |
+    ToolUsePayload |
+    ToolResultPayload |
+    PermissionRequestPayload |
+    PermissionResponsePayload |
+    ChoiceRequestPayload |
+    ChoiceResponsePayload |
+    CompactPayload |
+    ErrorPayload |
+    TurnCompletePayload |
+    StreamModePayload |
+    SteeringAppliedPayload |
+    AgentStatePayload |
+    AgentOutputPayload |
+    ModeChangePayload |
+    PlanReadyPayload |
+    PeerMessagePayload |
+    TeamMessagePayload |
+    TeamStatePayload |
+    TaskUpdatePayload |
+    ScheduleRunPayload |
+    FileChangePayload |
+    SnapshotPayload |
+    RevertPayload |
+    ServerConnectedPayload |
+    ServerHeartbeatPayload |
+    SessionHistoryPayload
+  );
 
 // ── Type discriminator helper ────────────────────────────────────────
 export type EventPayloadType = EventPayload["type"];

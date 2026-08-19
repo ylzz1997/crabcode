@@ -8,8 +8,12 @@
 
 import WebSocket from "ws";
 import * as vscode from "vscode";
+import { randomUUID } from "crypto";
 
 import {
+  buildInterruptCommand,
+  buildNewSessionCommand,
+  buildResumeSessionCommand,
   buildSendMessageCommand,
   buildSteerMessageCommand,
   buildPushContextCommand,
@@ -28,6 +32,7 @@ import type {
   SessionInfo,
   ContextPushRequest,
   ImageAttachment,
+  NewSessionRequest,
 } from "./client/types";
 
 // ── Events emitted by the connection ──────────────────────────────
@@ -37,6 +42,9 @@ export interface ConnectionEvents {
   disconnected: void;
   message: EventPayload;
 }
+
+/** Per-session API overrides accepted by the Gateway session lifecycle. */
+export type SessionLaunchOverrides = Omit<NewSessionRequest, "cwd">;
 
 export type ConnectionEventName = keyof ConnectionEvents;
 
@@ -57,6 +65,7 @@ export class CrabCodeConnection implements vscode.Disposable {
   private reconnectAttempts = 0;
   private pendingSessionCommands: string[] = [];
   private sessionRequestPending = false;
+  private activeForegroundOperations = new Map<string, string>();
   private static readonly MAX_RECONNECT_ATTEMPTS = 10;
   private static readonly BASE_RECONNECT_DELAY = 1000; // 1s
   private static readonly MAX_RECONNECT_DELAY = 30000; // 30s
@@ -113,6 +122,7 @@ export class CrabCodeConnection implements vscode.Disposable {
         this._connected = true;
         this._sessionId = null;
         this.sessionRequestPending = false;
+        this.activeForegroundOperations.clear();
         this.reconnectAttempts = 0; // reset backoff on successful connect
         this.log(`ws open url=${url}`);
         this.fire("connected", {} as any);
@@ -137,6 +147,7 @@ export class CrabCodeConnection implements vscode.Disposable {
         this._connected = false;
         this._sessionId = null;
         this.sessionRequestPending = false;
+        this.activeForegroundOperations.clear();
         this.log(`ws close code=${code} reason=${reason.toString() || "(empty)"}`);
         this.fire("disconnected", undefined);
         // Code 4001 = server rejected (no session), don't reconnect
@@ -170,53 +181,85 @@ export class CrabCodeConnection implements vscode.Disposable {
       this.ws.close();
       this.ws = null;
     }
+    this.activeForegroundOperations.clear();
     this.listeners.clear();
   }
 
   // ── Sending commands ───────────────────────────────────────────
 
-  send(text: string, options?: { maxTurns?: number; sessionId?: string; images?: ImageAttachment[] }): void {
+  send(
+    text: string,
+    options?: {
+      maxTurns?: number;
+      sessionId?: string;
+      operationId?: string;
+      images?: ImageAttachment[];
+    },
+  ): string {
+    const sessionId = options?.sessionId ?? this._sessionId ?? undefined;
+    const operationId = options?.operationId ?? randomUUID();
     this.log(
-      `send_message requested session=${options?.sessionId ?? this._sessionId ?? "(none)"} ` +
+      `send_message requested session=${sessionId ?? "(none)"} operation=${operationId} ` +
       `images=${options?.images?.length ?? 0} chars=${text.length}`,
     );
     const cmd = buildSendMessageCommand(text, {
       maxTurns: options?.maxTurns,
-      sessionId: options?.sessionId ?? this._sessionId ?? undefined,
+      sessionId,
+      operationId,
       images: options?.images,
     });
+    if (sessionId) this.activeForegroundOperations.set(sessionId, operationId);
     this.sendCommand(cmd);
+    return operationId;
   }
 
   /** Queue guidance for the active turn instead of starting a competing turn. */
-  steer(text: string, options?: { sessionId?: string; images?: ImageAttachment[] }): void {
+  steer(
+    text: string,
+    options?: {
+      sessionId?: string;
+      operationId?: string;
+      images?: ImageAttachment[];
+    },
+  ): void {
+    const sessionId = options?.sessionId ?? this._sessionId ?? undefined;
+    const operationId = options?.operationId
+      ?? (sessionId ? this.activeForegroundOperations.get(sessionId) : undefined);
     this.log(
-      `steer_message requested session=${options?.sessionId ?? this._sessionId ?? "(none)"} ` +
+      `steer_message requested session=${sessionId ?? "(none)"} ` +
+      `operation=${operationId ?? "current"} ` +
       `images=${options?.images?.length ?? 0} chars=${text.length}`,
     );
     this.sendCommand(buildSteerMessageCommand(text, {
-      sessionId: options?.sessionId ?? this._sessionId ?? undefined,
+      sessionId,
+      operationId,
       images: options?.images,
     }));
   }
 
-  pushContext(context: Omit<ContextPushRequest, "session_id">): void {
+  pushContext(
+    context: Omit<ContextPushRequest, "session_id">,
+    sessionId = this._sessionId ?? undefined,
+  ): void {
     const full: ContextPushRequest = {
-      session_id: this._sessionId ?? "",
+      session_id: sessionId ?? "",
       ...context,
     };
     const cmd = buildPushContextCommand(full);
     this.sendCommand(cmd);
   }
 
-  sendSwitchModel(name: string): void {
+  sendSwitchModel(name: string, sessionId = this._sessionId ?? undefined): void {
     this._modelName = name;
-    const cmd = buildSwitchModelCommand(name);
+    const cmd = buildSwitchModelCommand(name, sessionId);
     this.sendCommand(cmd);
   }
 
-  sendSetPermissionMode(mode: PermissionMode): void {
-    const cmd = buildSetPermissionModeCommand(mode);
+  sendSetPermissionMode(
+    mode: PermissionMode,
+    sessionId = this._sessionId ?? undefined,
+  ): void {
+    const cmd = buildSetPermissionModeCommand(mode, sessionId);
     this.sendCommand(cmd);
   }
 
@@ -224,17 +267,25 @@ export class CrabCodeConnection implements vscode.Disposable {
     action: "execute" | "revise" | "cancel",
     plan?: Record<string, unknown>,
     sessionId?: string,
-  ): void {
+    operationId?: string,
+  ): string | null {
+    const targetSessionId = sessionId ?? this._sessionId ?? undefined;
+    const targetOperationId = operationId ?? (action === "execute" ? randomUUID() : undefined);
     const cmd = buildPlanActionCommand(
       action,
       plan,
-      sessionId ?? this._sessionId ?? undefined,
+      targetSessionId,
+      targetOperationId,
     );
     this.sendCommand(cmd);
+    return targetOperationId ?? null;
   }
 
-  sendInterrupt(): "sent" | "no_session" | "disconnected" {
-    if (!this._sessionId) {
+  sendInterrupt(
+    sessionId = this._sessionId,
+    operationId?: string,
+  ): "sent" | "no_session" | "disconnected" {
+    if (!sessionId) {
       this.log("interrupt skipped: no session");
       return "no_session";
     }
@@ -242,21 +293,23 @@ export class CrabCodeConnection implements vscode.Disposable {
       this.log("interrupt skipped: ws not open");
       return "disconnected";
     }
-    this.log(`interrupt session=${this._sessionId}`);
-    this.sendRaw(JSON.stringify({
-      type: "interrupt",
-      session_id: this._sessionId,
-    }));
+    const targetOperationId = operationId ?? this.activeForegroundOperations.get(sessionId);
+    this.log(`interrupt session=${sessionId} operation=${targetOperationId ?? "current"}`);
+    this.sendRaw(serializeCommand(buildInterruptCommand(sessionId, targetOperationId)));
     return "sent";
   }
 
-  sendNewSession(cwd: string | null): void {
+  sendNewSession(cwd: string | null, overrides?: SessionLaunchOverrides): void {
     this.sessionRequestPending = true;
-    this.log(`new_session requested cwd=${cwd ?? "(none)"}`);
-    this.sendRaw(JSON.stringify({
-      type: "new_session",
-      cwd,
-    }));
+    const hasOverrides = Boolean(overrides && Object.keys(overrides).length > 0);
+    this.log(`new_session requested cwd=${cwd ?? "(none)"}${hasOverrides ? " with API overrides" : ""}`);
+    this.sendRaw(serializeCommand(buildNewSessionCommand(cwd, overrides)));
+  }
+
+  sendResumeSession(sessionId: string, overrides?: SessionLaunchOverrides): void {
+    const hasOverrides = Boolean(overrides && Object.keys(overrides).length > 0);
+    this.log(`resume_session requested session=${sessionId}${hasOverrides ? " with API overrides" : ""}`);
+    this.sendRaw(serializeCommand(buildResumeSessionCommand(sessionId, overrides)));
   }
 
   ensureSession(cwd: string | null): void {
@@ -327,6 +380,18 @@ export class CrabCodeConnection implements vscode.Disposable {
   }
 
   private handleServerPayload(payload: EventPayload): void {
+    // The first stream event may be the first response to a command that was
+    // queued before the WebSocket session handshake.  Learn that operation id
+    // here so a steering/interrupt command can still bind to the right turn.
+    if (
+      payload.session_id
+      && payload.operation_id
+      && payload.operation_scope === "foreground"
+      && (payload.type !== "error" || !payload.command_error)
+      && payload.type !== "turn_complete"
+    ) {
+      this.activeForegroundOperations.set(payload.session_id, payload.operation_id);
+    }
     switch (payload.type) {
       case "server.connected":
         this._modelName = (payload.properties?.model as string) ?? null;
@@ -349,7 +414,35 @@ export class CrabCodeConnection implements vscode.Disposable {
         }
         break;
       case "turn_complete":
-        // Model name may be included in usage
+        if (payload.session_id && payload.operation_id) {
+          const active = this.activeForegroundOperations.get(payload.session_id);
+          if (active === payload.operation_id) {
+            this.activeForegroundOperations.delete(payload.session_id);
+          }
+        }
+        break;
+      case "error":
+        if (
+          this.sessionRequestPending
+          && (!payload.session_id || (payload.command_error && payload.command === "new_session"))
+        ) {
+          this.sessionRequestPending = false;
+        }
+        if (
+          payload.command_error
+          && payload.command === "send_message"
+          && payload.error_type !== "operation_conflict"
+          && payload.session_id
+          && payload.operation_id
+        ) {
+          const active = this.activeForegroundOperations.get(payload.session_id);
+          if (active === payload.operation_id) {
+            // This command never became an admitted foreground operation.
+            // Roll back the optimistic client association without treating a
+            // Core ErrorEvent as a terminal turn event.
+            this.activeForegroundOperations.delete(payload.session_id);
+          }
+        }
         break;
     }
   }
@@ -362,7 +455,7 @@ export class CrabCodeConnection implements vscode.Disposable {
       case "switch_model":
       case "set_permission_mode":
       case "plan_action":
-        return true;
+        return !cmd.session_id;
       default:
         return false;
     }

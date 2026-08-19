@@ -5,20 +5,25 @@ from __future__ import annotations
 import os
 import uuid
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
 from crabcode_gateway.schemas import (
     ArchiveSessionRequest,
+    ClearSessionRequest,
     CompactRequest,
     ExportSessionRequest,
     InterruptRequest,
     NewSessionRequest,
+    PruneSessionsRequest,
     ResumeSessionRequest,
     SearchSessionsRequest,
     SendMessageRequest,
     SessionInfo,
+    SessionRuntimeStatus,
+    SearchIndexStatus,
 )
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.session_registry import get_session_load_lock, get_session_lock
@@ -31,9 +36,44 @@ from crabcode_gateway.task_registry import (
     SessionOperationRejected,
     shielded_cleanup_session,
     track_task,
+    unmark_session_closing,
 )
 
 router = APIRouter(prefix="/session", tags=["session"])
+
+_SESSION_OVERRIDE_FIELDS = (
+    "model",
+    "provider",
+    "base_url",
+    "api_format",
+    "model_profile",
+)
+
+
+def _session_time(value: Any) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return str(value)
+    return str(value or "")
+
+
+def _session_info_from_row(row: dict[str, Any]) -> SessionInfo:
+    session_id = str(row.get("session_id") or row.get("id") or "")
+    return SessionInfo(
+        session_id=session_id,
+        message_count=int(row.get("message_count") or 0),
+        model=str(row.get("model") or ""),
+        provider=str(row.get("provider") or ""),
+        created_at=_session_time(
+            row.get("modified") or row.get("updated_at") or row.get("created_at")
+        ),
+        title=str(row.get("title") or ""),
+        cwd=str(row.get("cwd") or ""),
+        tokens_used=int(row.get("tokens_used") or 0),
+        preview=str(row.get("preview") or row.get("first_user_message") or ""),
+    )
 
 
 def _validate_session_id(session_id: str) -> None:
@@ -66,6 +106,68 @@ def _get_session(request: Request, session_id: str | None = None):
     return sessions[sid]
 
 
+def _resolve_session_selector(
+    selector: str,
+    cwd: str,
+    *,
+    loaded_sessions: dict[str, Any] | None = None,
+) -> tuple[str, str] | None:
+    """Resolve exact IDs, unique prefixes, or a local one-based index."""
+    from crabcode_core.session.meta_db import SessionMetaStore
+    from crabcode_core.session.storage import SessionStorage
+
+    value = str(selector or "").strip()
+    if not value:
+        return None
+
+    try:
+        local_rows = SessionStorage.list_sessions(cwd)
+    except Exception:
+        local_rows = []
+
+    local_ids = [
+        str(row.get("session_id") or "")
+        for row in local_rows
+        if row.get("session_id")
+    ]
+    if value in local_ids:
+        return value, cwd
+    local_matches = [session_id for session_id in local_ids if session_id.startswith(value)]
+    if len(local_matches) == 1:
+        return local_matches[0], cwd
+    if len(local_matches) > 1:
+        return None
+    try:
+        index = int(value) - 1
+    except ValueError:
+        index = -1
+    if 0 <= index < len(local_ids):
+        return local_ids[index], cwd
+
+    loaded = loaded_sessions or {}
+    if value in loaded:
+        session = loaded[value]
+        return value, str(getattr(session, "cwd", cwd))
+    loaded_matches = [session_id for session_id in loaded if session_id.startswith(value)]
+    if len(loaded_matches) == 1:
+        session_id = loaded_matches[0]
+        return session_id, str(getattr(loaded[session_id], "cwd", cwd))
+    if len(loaded_matches) > 1:
+        return None
+
+    store = SessionMetaStore()
+    try:
+        exact = store.get(value)
+        if exact and not exact.get("is_archived"):
+            return str(exact["id"]), str(exact.get("cwd") or cwd)
+        matches = store.find_active_by_prefix(value, limit=2)
+    finally:
+        store.close()
+    if len(matches) != 1:
+        return None
+    return str(matches[0]["id"]), str(matches[0].get("cwd") or cwd)
+
+
 def _attach_event_bus(session, event_bus: EventBus) -> None:
     async def _publish(event) -> None:
         await event_bus.publish_background(
@@ -77,19 +179,67 @@ def _attach_event_bus(session, event_bus: EventBus) -> None:
     session.set_background_event_sink(_publish)
 
 
+def _has_session_overrides(req: NewSessionRequest | ResumeSessionRequest) -> bool:
+    return any(getattr(req, field) is not None for field in _SESSION_OVERRIDE_FIELDS)
+
+
+def _build_session_settings(
+    req: NewSessionRequest | ResumeSessionRequest,
+    cwd: str,
+):
+    """Build caller overrides without shadowing the target project's config."""
+    from crabcode_core.config.manager import ConfigManager
+    from crabcode_core.types.config import CrabCodeSettings
+
+    explicit = CrabCodeSettings()
+    if req.model is not None:
+        explicit.api.model = req.model
+    if req.provider is not None:
+        explicit.api.provider = req.provider
+    if req.base_url is not None:
+        explicit.api.base_url = req.base_url
+    if req.api_format is not None:
+        explicit.api.format = req.api_format
+    if req.model_profile is not None:
+        configured = ConfigManager(cwd=cwd).load().models
+        if req.model_profile not in configured:
+            available = ", ".join(sorted(configured)) or "none"
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unknown model profile '{req.model_profile}'. "
+                    f"Available profiles: {available}"
+                ),
+            )
+        explicit.default_model = req.model_profile
+
+    settings = CrabCodeSettings()
+    settings._crabcode_explicit_settings = explicit
+    return settings
+
+
+def _session_model_provider(session) -> tuple[str, str]:
+    settings = getattr(session, "settings", None)
+    if settings is None:
+        return "", ""
+    api = settings.get_api_config() if hasattr(settings, "get_api_config") else None
+    return str(getattr(api, "model", None) or ""), str(
+        getattr(api, "provider", None) or ""
+    )
+
+
 @router.post("/new", response_model=SessionInfo)
 async def new_session(req: NewSessionRequest, request: Request) -> SessionInfo:
     """Create a new CrabCode session."""
     import os
     from crabcode_core.session import CoreSession
-    from crabcode_core.types.config import CrabCodeSettings
 
     if getattr(request.app.state, "gateway_closing", False):
         raise HTTPException(status_code=503, detail="Gateway is shutting down")
 
     cwd = req.cwd or os.getcwd()
 
-    settings = CrabCodeSettings()
+    settings = _build_session_settings(req, cwd)
     session = None
     registered_session_id: str | None = None
     cleanup_owns_registry = False
@@ -132,28 +282,47 @@ async def new_session(req: NewSessionRequest, request: Request) -> SessionInfo:
                 pass
         raise
 
+    model, provider = _session_model_provider(session)
     return SessionInfo(
         session_id=session.session_id,
         message_count=0,
-        model="",
-        provider="",
+        model=model,
+        provider=provider,
     )
 
 
 @router.post("/resume", response_model=SessionInfo)
 async def resume_session(req: ResumeSessionRequest, request: Request) -> SessionInfo:
-    """Resume an existing session by ID."""
+    """Resume a session selected by ID, unique prefix, or local index."""
     import os
     from crabcode_core.session import CoreSession
-    from crabcode_core.types.config import CrabCodeSettings
-
-    from crabcode_core.session.storage import SessionStorage
 
     if not req.session_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    _validate_session_id(req.session_id)
     if getattr(request.app.state, "gateway_closing", False):
         raise HTTPException(status_code=503, detail="Gateway is shutting down")
+
+    async with get_session_lock(request.app.state):
+        loaded = dict(request.app.state.sessions)
+        default_id = request.app.state.default_session_id
+        selector_cwd = os.getcwd()
+        if default_id and default_id in loaded:
+            selector_cwd = str(getattr(loaded[default_id], "cwd", selector_cwd))
+    try:
+        resolved = _resolve_session_selector(
+            req.session_id,
+            selector_cwd,
+            loaded_sessions=loaded,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if resolved is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or selector is ambiguous",
+        )
+    session_id, resolved_cwd = resolved
+    _validate_session_id(session_id)
 
     # Fast path for an already loaded session.  The registry lock is held only
     # for in-memory state; provider/LSP initialization happens below without
@@ -162,10 +331,15 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
         sessions: dict = request.app.state.sessions
         if getattr(request.app.state, "gateway_closing", False):
             raise HTTPException(status_code=503, detail="Gateway is shutting down")
-        if req.session_id in getattr(request.app.state, "closing_sessions", set()):
+        if session_id in getattr(request.app.state, "closing_sessions", set()):
             raise HTTPException(status_code=503, detail="Session is shutting down")
-        session = sessions.get(req.session_id)
+        session = sessions.get(session_id)
         if session is not None:
+            if _has_session_overrides(req):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cannot apply model overrides to an already loaded session",
+                )
             request.app.state.default_session_id = session.session_id
 
     if session is None:
@@ -177,23 +351,29 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
                 sessions = request.app.state.sessions
                 if getattr(request.app.state, "gateway_closing", False):
                     raise HTTPException(status_code=503, detail="Gateway is shutting down")
-                if req.session_id in getattr(request.app.state, "closing_sessions", set()):
+                if session_id in getattr(request.app.state, "closing_sessions", set()):
                     raise HTTPException(status_code=503, detail="Session is shutting down")
-                session = sessions.get(req.session_id)
+                session = sessions.get(session_id)
+                if session is not None and _has_session_overrides(req):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Cannot apply model overrides to an already loaded session",
+                    )
 
             if session is None:
-                resolved = SessionStorage.from_session_id(req.session_id)
-                cwd = resolved.cwd if resolved is not None else os.getcwd()
-                candidate = CoreSession(cwd=cwd, settings=CrabCodeSettings())
+                candidate = CoreSession(
+                    cwd=resolved_cwd,
+                    settings=_build_session_settings(req, resolved_cwd),
+                )
                 _attach_event_bus(candidate, request.app.state.event_bus)
                 try:
                     await candidate.initialize()
-                    ok = await candidate.resume(req.session_id)
+                    ok = await candidate.resume(session_id)
                 except BaseException:
                     try:
                         await shielded_cleanup_session(
                             request.app.state,
-                            req.session_id,
+                            session_id,
                             candidate,
                             owns_registry=False,
                         )
@@ -203,13 +383,13 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
                 if not ok:
                     await shielded_cleanup_session(
                         request.app.state,
-                        req.session_id,
+                        session_id,
                         candidate,
                         owns_registry=False,
                     )
                     raise HTTPException(
                         status_code=404,
-                        detail=f"Session {req.session_id} not found",
+                        detail=f"Session {session_id} not found",
                     )
 
                 # Reacquire the registry lock only for the atomic install.  A
@@ -220,12 +400,12 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
                 async with get_session_lock(request.app.state):
                     if (
                         getattr(request.app.state, "gateway_closing", False)
-                        or req.session_id in getattr(request.app.state, "closing_sessions", set())
+                        or session_id in getattr(request.app.state, "closing_sessions", set())
                     ):
                         discard_candidate = True
                         reject_candidate = True
                     else:
-                        existing = request.app.state.sessions.get(req.session_id)
+                        existing = request.app.state.sessions.get(session_id)
                         if existing is None:
                             request.app.state.event_bus.register_session(
                                 candidate.session_id,
@@ -245,7 +425,7 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
                     try:
                         await shielded_cleanup_session(
                             request.app.state,
-                            req.session_id,
+                            session_id,
                             candidate,
                             owns_registry=False,
                         )
@@ -269,11 +449,12 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
             raise HTTPException(status_code=503, detail="Session is changing")
         message_count = len(getattr(session, "messages", ()))
 
+    model, provider = _session_model_provider(session)
     return SessionInfo(
         session_id=session.session_id,
         message_count=message_count,
-        model="",
-        provider="",
+        model=model,
+        provider=provider,
     )
 
 
@@ -354,17 +535,64 @@ async def list_sessions(request: Request) -> list[SessionInfo]:
     except Exception:
         stored = []
 
-    result = []
-    for s in stored:
-        result.append(SessionInfo(
-            session_id=s["session_id"],
-            message_count=s.get("message_count", 0),
-            model=s.get("model", ""),
-            provider=s.get("provider", ""),
-            created_at=s.get("modified", ""),
-            title=s.get("title", ""),
-        ))
-    return result
+    return [_session_info_from_row({**s, "cwd": cwd}) for s in stored]
+
+
+@router.get("/resolve", response_model=SessionInfo)
+async def resolve_session(selector: str, request: Request) -> SessionInfo:
+    """Resolve a session ID, unique prefix, or local list index."""
+    from crabcode_core.session.meta_db import SessionMetaStore
+    from crabcode_core.session.storage import SessionStorage
+
+    async with get_session_lock(request.app.state):
+        loaded = dict(request.app.state.sessions)
+        default_id = request.app.state.default_session_id
+        cwd = os.getcwd()
+        if default_id and default_id in loaded:
+            cwd = str(getattr(loaded[default_id], "cwd", cwd))
+    try:
+        resolved = _resolve_session_selector(selector, cwd, loaded_sessions=loaded)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Session not found or selector is ambiguous")
+    session_id, resolved_cwd = resolved
+
+    session = loaded.get(session_id)
+    if session is not None:
+        current_name = getattr(session, "_current_model_name", None)
+        settings = getattr(session, "settings", None)
+        active_config = (
+            settings.get_api_config(current_name)
+            if settings is not None and hasattr(settings, "get_api_config")
+            else None
+        )
+        return SessionInfo(
+            session_id=session_id,
+            message_count=len(getattr(session, "messages", ())),
+            model=str(getattr(active_config, "model", "") or ""),
+            provider=str(getattr(active_config, "provider", "") or ""),
+            cwd=resolved_cwd,
+        )
+
+    store = SessionMetaStore()
+    try:
+        row = store.get(session_id)
+    finally:
+        store.close()
+    if row is not None:
+        return _session_info_from_row(row)
+    local = next(
+        (
+            item
+            for item in SessionStorage.list_sessions(resolved_cwd)
+            if item.get("session_id") == session_id
+        ),
+        None,
+    )
+    if local is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return _session_info_from_row({**local, "cwd": resolved_cwd})
 
 
 @router.post("/send")
@@ -381,10 +609,18 @@ async def send_message(req: SendMessageRequest, request: Request):
 
     async def _run():
         try:
-            from crabcode_core.types.event import ErrorEvent, TurnCompleteEvent
+            from crabcode_core.types.event import TurnCompleteEvent
 
             images = [img.model_dump() for img in req.images] if req.images else None
+            pending_terminal: TurnCompleteEvent | None = None
             async for event in session.send_message(req.text, max_turns=req.max_turns, images=images):
+                if isinstance(event, TurnCompleteEvent):
+                    # A steering message can extend the same Core generator
+                    # after query_loop produced a candidate terminal.  Publish
+                    # only the candidate that remains when the generator ends.
+                    pending_terminal = event
+                    continue
+                pending_terminal = None
                 await event_bus.publish(
                     session.session_id,
                     event,
@@ -392,12 +628,22 @@ async def send_message(req: SendMessageRequest, request: Request):
                     operation_id=operation_id,
                     operation_scope="foreground",
                 )
-                if isinstance(event, TurnCompleteEvent) or (
-                    isinstance(event, ErrorEvent) and event.agent_id is None
-                ):
-                    current = asyncio.current_task()
-                    if current is not None:
-                        setattr(current, "_crabcode_terminal_published", True)
+            if pending_terminal is None:
+                # A transport adapter may finish without Core's explicit
+                # terminal event (for example after yielding a recoverable
+                # error).  Synthesize one so HTTP/SSE and WebSocket clients
+                # share the same foreground lifecycle contract.
+                pending_terminal = TurnCompleteEvent(reason="error")
+            await event_bus.publish(
+                session.session_id,
+                pending_terminal,
+                source=session,
+                operation_id=operation_id,
+                operation_scope="foreground",
+            )
+            current = asyncio.current_task()
+            if current is not None:
+                setattr(current, "_crabcode_terminal_published", True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -405,6 +651,14 @@ async def send_message(req: SendMessageRequest, request: Request):
             await event_bus.publish(
                 session.session_id,
                 ErrorEvent(message=str(exc), recoverable=False, error_type="internal"),
+                source=session,
+                operation_id=operation_id,
+                operation_scope="foreground",
+            )
+            from crabcode_core.types.event import TurnCompleteEvent
+            await event_bus.publish(
+                session.session_id,
+                TurnCompleteEvent(reason="error"),
                 source=session,
                 operation_id=operation_id,
                 operation_scope="foreground",
@@ -473,6 +727,24 @@ async def compact_session(req: CompactRequest, request: Request):
     return {"status": "ok" if accepted else "not_compacted"}
 
 
+@router.post("/clear")
+async def clear_session(req: ClearSessionRequest, request: Request):
+    """Clear and durably persist the active conversation projection."""
+    session = _get_session(request, req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        cleared = await run_session_operation(
+            request.app.state,
+            session,
+            session.clear_history,
+        )
+    except SessionOperationRejected as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"status": "ok", "messages_cleared": cleared}
+
+
 @router.post("/interrupt")
 async def interrupt_session(req: InterruptRequest, request: Request):
     """Interrupt the current query loop."""
@@ -528,19 +800,22 @@ async def interrupt_session(req: InterruptRequest, request: Request):
     return {"status": "ok"}
 
 
-@router.get("/status")
-async def session_status(session_id: str | None = None, request: Request = None):
-    """Return status information for the active (or specified) session."""
+@router.get("/status", response_model=SessionRuntimeStatus)
+async def session_status(
+    request: Request,
+    session_id: str | None = None,
+) -> SessionRuntimeStatus:
+    """Return the complete non-secret runtime status for one session."""
     async with get_session_lock(request.app.state):
         session = _get_session(request, session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        used = getattr(session, "last_context_used_tokens", 0) or 0
-        window = getattr(session, "last_context_window_tokens", 0) or 0
-        message_count = len(getattr(session, "messages", ()))
+        messages = list(getattr(session, "messages", ()))
+        initialized = bool(getattr(session, "_initialized", False))
         current_name = getattr(session, "_current_model_name", None)
         settings = getattr(session, "settings", None)
+        active_config = None
         if settings is not None and hasattr(settings, "get_api_config"):
             active_config = settings.get_api_config(current_name)
             model = active_config.model or ""
@@ -553,51 +828,138 @@ async def session_status(session_id: str | None = None, request: Request = None)
         mode = getattr(session, "agent_mode", getattr(session, "mode", "agent"))
         reasoning_effort = getattr(session, "reasoning_effort", None)
         ultra_mode = bool(getattr(session, "ultra_mode", False))
+        permission_mode = getattr(session, "client_permission_mode", "default")
         sid = session.session_id
-    percent = round(used / window * 100, 1) if window else 0.0
-    return {
-        "session_id": sid,
-        "message_count": message_count,
-        "model": model,
-        "provider": provider,
-        "mode": mode,
-        "reasoning_effort": reasoning_effort,
-        "ultra_mode": ultra_mode,
-        "context_used_tokens": used,
-        "context_window_tokens": window,
-        "context_used_percent": percent,
-    }
+
+        enabled_tools = None
+        if initialized:
+            enabled_tools = sum(
+                1 for tool in getattr(session, "tools", ())
+                if bool(getattr(tool, "is_enabled", True))
+            )
+
+        try:
+            agents = list(session.list_agents())
+        except (AttributeError, RuntimeError):
+            agents = []
+        try:
+            monitors = list(session.list_monitor_tasks())
+        except (AttributeError, RuntimeError):
+            monitors = []
+
+        used = max(0, int(getattr(session, "last_context_used_tokens", 0) or 0))
+        window = max(0, int(getattr(session, "last_context_window_tokens", 0) or 0))
+        if not used and messages:
+            from crabcode_core.compact.compact import estimate_token_count
+
+            used = max(0, int(estimate_token_count(messages)))
+        if not window and settings is not None:
+            from crabcode_core.api.model_info import (
+                DEFAULT_CONTEXT_WINDOW,
+                lookup_context_window,
+            )
+
+            window = max(
+                0,
+                int(
+                    getattr(settings, "max_context_length", None)
+                    or getattr(active_config, "context_window", None)
+                    or lookup_context_window(getattr(active_config, "model", None))
+                    or DEFAULT_CONTEXT_WINDOW
+                ),
+            )
+
+        search_index = None
+        extra_tools = list(getattr(settings, "extra_tools", ()) or ())
+        if "crabcode_search.CodebaseSearchTool" in extra_tools:
+            try:
+                from crabcode_search.background import read_background_status
+
+                raw_search = read_background_status(getattr(session, "cwd", os.getcwd()))
+            except Exception:
+                raw_search = None
+            if isinstance(raw_search, dict):
+                def _optional_int(key: str) -> int | None:
+                    value = raw_search.get(key)
+                    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+                search_index = SearchIndexStatus(
+                    state=str(raw_search.get("state") or "unknown"),
+                    chunks=_optional_int("chunks"),
+                    files=_optional_int("files"),
+                    done=_optional_int("done"),
+                    total=_optional_int("total"),
+                )
+            else:
+                search_index = SearchIndexStatus(state="waiting")
+
+        agent_settings = getattr(settings, "agent", None)
+        result = SessionRuntimeStatus(
+            session_id=sid,
+            cwd=str(getattr(session, "cwd", "") or ""),
+            initialized=initialized,
+            message_count=len(messages),
+            model=model,
+            model_profile=current_name,
+            provider=provider,
+            mode=mode if mode in {"agent", "plan"} else "agent",
+            reasoning_effort=reasoning_effort,
+            ultra_mode=ultra_mode,
+            permission_mode=permission_mode,
+            context_used_tokens=used,
+            context_window_tokens=window,
+            context_remaining_tokens=max(0, window - used),
+            context_used_percent=round(used / window * 100, 1) if window else 0.0,
+            compact_count=max(0, int(getattr(session, "compact_count", 0) or 0)),
+            auto_compact_enabled=bool(
+                getattr(settings, "auto_compact_enabled", True)
+            ),
+            thinking_enabled=bool(getattr(active_config, "thinking_enabled", False)),
+            max_tokens=max(0, int(getattr(active_config, "max_tokens", 0) or 0)),
+            tool_count=enabled_tools,
+            agent_total=len(agents),
+            agent_active=sum(
+                1 for item in agents
+                if getattr(item, "status", "") in {"queued", "running"}
+            ),
+            agent_failed=sum(
+                1 for item in agents if getattr(item, "status", "") == "failed"
+            ),
+            agent_pending_callbacks=sum(
+                1 for item in agents
+                if bool(getattr(item, "callback_enabled", False))
+                and getattr(item, "callback_state", "") in {"pending", "injected"}
+            ),
+            agent_max_concurrency=max(
+                0,
+                int(getattr(agent_settings, "max_concurrency", 0) or 0),
+            ),
+            monitor_total=len(monitors),
+            monitor_active=sum(
+                1 for item in monitors if getattr(item, "status", "") == "running"
+            ),
+            monitor_failed=sum(
+                1 for item in monitors if getattr(item, "status", "") == "failed"
+            ),
+            search_index=search_index,
+        )
+    return result
 
 
 @router.get("/recent", response_model=list[SessionInfo])
 async def recent_sessions(limit: int = 10, request: Request = None):
     """List recently updated sessions across all projects."""
-    import os
-    from crabcode_core.session.storage import SessionStorage
-
-    async with get_session_lock(request.app.state):
-        sessions: dict = request.app.state.sessions
-        default_id = request.app.state.default_session_id
-        cwd = os.getcwd()
-        if default_id and default_id in sessions:
-            cwd = getattr(sessions[default_id], "cwd", cwd)
+    from crabcode_core.session.meta_db import SessionMetaStore
 
     try:
-        stored = SessionStorage.list_sessions(cwd)
-    except Exception:
-        stored = []
-
-    result = []
-    for s in stored[:limit]:
-        result.append(SessionInfo(
-            session_id=s["session_id"],
-            message_count=s.get("message_count", 0),
-            model=s.get("model", ""),
-            provider=s.get("provider", ""),
-            created_at=s.get("modified", ""),
-            title=s.get("title", ""),
-        ))
-    return result
+        store = SessionMetaStore()
+        try:
+            rows = store.list_recent(limit=max(1, min(200, limit)))
+        finally:
+            store.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return [_session_info_from_row(row) for row in rows]
 
 
 @router.post("/search", response_model=list[SessionInfo])
@@ -610,104 +972,245 @@ async def search_sessions(req: SearchSessionsRequest, request: Request):
     except Exception:
         rows = []
 
-    return [
-        SessionInfo(
-            session_id=r["id"],
-            message_count=r.get("message_count", 0),
-            model=r.get("model", ""),
-            provider=r.get("provider", ""),
-            created_at=str(r.get("created_at", "")),
-            title=r.get("title", ""),
-        )
-        for r in rows
-    ]
+    return [_session_info_from_row(row) for row in rows]
 
 
 @router.post("/archive")
 async def archive_session(req: ArchiveSessionRequest, request: Request):
-    """Archive a session so it no longer appears in the default list."""
-    # Serialize against disk-backed resume loads.  Otherwise archive could
-    # observe an id just before resume installs it and then allow the candidate
-    # to reappear after the archive operation returns.
+    """Archive a loaded or persisted session selected by ID/prefix/index."""
+    from crabcode_core.session.meta_db import SessionMetaStore
+    from crabcode_core.session.storage import SessionStorage
+
+    if not req.session_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = None
+    resolved_session_id = ""
     async with get_session_load_lock(request.app.state):
         async with get_session_lock(request.app.state):
-            if not req.session_id:
-                raise HTTPException(status_code=404, detail="Session not found")
             sessions: dict = request.app.state.sessions
-            session = sessions.get(req.session_id)
-            if session is None:
-                raise HTTPException(status_code=404, detail="Session not found")
-            try:
-                from crabcode_core.session.meta_db import SessionMetaStore
-                store = SessionMetaStore()
-                try:
-                    store.archive(req.session_id)
-                finally:
-                    store.close()
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+            loaded = dict(sessions)
+            default_id = request.app.state.default_session_id
+            cwd = os.getcwd()
+            if default_id and default_id in sessions:
+                cwd = str(getattr(sessions[default_id], "cwd", cwd))
 
-            # Fence the id before removing it.  Resume/send operations use this
-            # same lock and therefore cannot recreate or target the session
-            # while its detached tasks and CoreSession resources are drained.
-            mark_session_closing(request.app.state, req.session_id)
-            close_session_events = getattr(request.app.state.event_bus, "close_session", None)
-            if callable(close_session_events):
-                close_session_events(req.session_id, session)
-            session = sessions.pop(req.session_id, None)
-            request.app.state.client_contexts.pop(req.session_id, None)
-            if request.app.state.default_session_id == req.session_id:
+        try:
+            resolved = _resolve_session_selector(
+                req.session_id,
+                cwd,
+                loaded_sessions=loaded,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if resolved is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Session not found or selector is ambiguous",
+            )
+        resolved_session_id, resolved_cwd = resolved
+        _validate_session_id(resolved_session_id)
+
+        async with get_session_lock(request.app.state):
+            if resolved_session_id in getattr(
+                request.app.state,
+                "closing_sessions",
+                set(),
+            ):
+                raise HTTPException(status_code=503, detail="Session is shutting down")
+            session = request.app.state.sessions.get(resolved_session_id)
+            mark_session_closing(request.app.state, resolved_session_id)
+
+        archive_committed = False
+        try:
+            store = SessionMetaStore()
+            try:
+                row = store.get(resolved_session_id)
+                if row is not None:
+                    store.archive(resolved_session_id)
+                else:
+                    SessionStorage(
+                        resolved_cwd,
+                        resolved_session_id,
+                    ).persist_archive_marker()
+            finally:
+                store.close()
+            archive_committed = True
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if not archive_committed:
+                async with get_session_lock(request.app.state):
+                    unmark_session_closing(
+                        request.app.state,
+                        resolved_session_id,
+                    )
+
+        async with get_session_lock(request.app.state):
+            sessions = request.app.state.sessions
+            session = sessions.get(resolved_session_id)
+            if session is not None:
+                close_session_events = getattr(
+                    request.app.state.event_bus,
+                    "close_session",
+                    None,
+                )
+                if callable(close_session_events):
+                    close_session_events(resolved_session_id, session)
+                sessions.pop(resolved_session_id, None)
+            request.app.state.client_contexts.pop(resolved_session_id, None)
+            if request.app.state.default_session_id == resolved_session_id:
                 request.app.state.default_session_id = next(iter(sessions), None)
 
-    try:
-        await shielded_cleanup_session(request.app.state, req.session_id, session)
-    except Exception:
-        from crabcode_core.logging_utils import get_logger
-        get_logger(__name__).warning(
-            "Failed to close archived session %s",
-            req.session_id,
-            exc_info=True,
-        )
-    return {"status": "ok", "session_id": req.session_id}
+    if session is not None:
+        try:
+            await shielded_cleanup_session(
+                request.app.state,
+                resolved_session_id,
+                session,
+            )
+        except Exception:
+            from crabcode_core.logging_utils import get_logger
+            get_logger(__name__).warning(
+                "Failed to close archived session %s",
+                resolved_session_id,
+                exc_info=True,
+            )
+    else:
+        unmark_session_closing(request.app.state, resolved_session_id)
+    return {"status": "ok", "session_id": resolved_session_id}
+
+
+@router.post("/prune")
+async def prune_sessions(req: PruneSessionsRequest, request: Request):
+    """Archive stale inactive sessions and optionally purge their artifacts.
+
+    Loaded sessions are always excluded.  The load lock prevents a concurrent
+    resume from installing one of the selected sessions between discovery and
+    its durable archive/purge transition.
+    """
+    from crabcode_core.session.meta_db import SessionMetaStore
+    from crabcode_core.session.storage import purge_session_artifacts
+
+    if getattr(request.app.state, "gateway_closing", False):
+        raise HTTPException(status_code=503, detail="Gateway is shutting down")
+
+    async with get_session_load_lock(request.app.state):
+        async with get_session_lock(request.app.state):
+            if getattr(request.app.state, "gateway_closing", False):
+                raise HTTPException(status_code=503, detail="Gateway is shutting down")
+            loaded_ids = set(request.app.state.sessions)
+
+        store = SessionMetaStore()
+        try:
+            archived = store.auto_archive(
+                days=req.days,
+                exclude_ids=loaded_ids,
+            )
+            purged = 0
+            failed: list[str] = []
+            if req.delete_files:
+                candidates = store.purge_archived(
+                    delete_rows=False,
+                    exclude_ids=loaded_ids,
+                )
+                for entry in candidates:
+                    session_id = str(entry.get("id") or "")
+                    cwd = str(entry.get("cwd") or "")
+                    if not session_id:
+                        continue
+                    try:
+                        if cwd:
+                            purge_session_artifacts(cwd, session_id)
+                        store.delete(session_id)
+                        purged += 1
+                    except (OSError, ValueError):
+                        failed.append(session_id)
+        finally:
+            store.close()
+
+    return {
+        "archived": archived,
+        "purged": purged,
+        "failed": failed,
+        "skipped_loaded": len(loaded_ids),
+    }
 
 
 @router.post("/export")
 async def export_session(req: ExportSessionRequest, request: Request):
-    """Export a session transcript as Markdown or JSON."""
+    """Export a session selected by ID, unique prefix, or local index."""
     from crabcode_core.session.export import export_json, export_markdown
+    from crabcode_core.session.meta_db import SessionMetaStore
     from crabcode_core.session.storage import SessionStorage, get_transcript_path
 
     if not req.session_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    _validate_session_id(req.session_id)
 
     async with get_session_lock(request.app.state):
         sessions: dict = request.app.state.sessions
+        loaded = dict(sessions)
         default_id = request.app.state.default_session_id
-        active_session = _get_session(request, req.session_id)
-        cwd = os.getcwd()
-        default_cwd = cwd
+        selector_cwd = os.getcwd()
         if default_id and default_id in sessions:
-            default_cwd = getattr(sessions[default_id], "cwd", cwd)
+            selector_cwd = str(getattr(sessions[default_id], "cwd", selector_cwd))
+
+    try:
+        resolved_selector = _resolve_session_selector(
+            req.session_id,
+            selector_cwd,
+            loaded_sessions=loaded,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if resolved_selector is None:
+        # Archived sessions are omitted from normal selectors, but a caller
+        # holding the exact ID must still be able to export the retained audit
+        # transcript.  Prefixes and indexes intentionally remain active-only.
+        exact_id = req.session_id.strip()
+        try:
+            _validate_session_id(exact_id)
+        except HTTPException:
+            raise
+        store = SessionMetaStore()
+        try:
+            archived_row = store.get(exact_id)
+        finally:
+            store.close()
+        archived_cwd = (
+            str(archived_row.get("cwd") or selector_cwd)
+            if archived_row is not None and archived_row.get("is_archived")
+            else selector_cwd
+        )
+        transcript = get_transcript_path(archived_cwd, exact_id)
+        if not transcript.exists() or (
+            archived_row is not None and not archived_row.get("is_archived")
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Session not found or selector is ambiguous",
+            )
+        resolved_selector = (exact_id, archived_cwd)
+    session_id, cwd = resolved_selector
+    _validate_session_id(session_id)
+
+    async with get_session_lock(request.app.state):
+        active_session = _get_session(request, session_id)
         if active_session is not None:
-            cwd = getattr(active_session, "cwd", cwd)
-        else:
-            active_session = None
+            cwd = str(getattr(active_session, "cwd", cwd))
 
     if active_session is None:
         # Prefer the persisted project recorded in SQLite.  This matters when
         # the requested session belongs to another project than the active one.
-        resolved = SessionStorage.from_session_id(req.session_id)
-        if resolved is not None:
-            cwd = resolved.cwd
-        elif default_id:
-            cwd = default_cwd
+        resolved_storage = SessionStorage.from_session_id(session_id)
+        if resolved_storage is not None:
+            cwd = resolved_storage.cwd
 
         # SQLite may be unavailable while the JSONL transcript is still
         # present.  Check the local candidate before declaring the id missing.
         try:
-            transcript = get_transcript_path(cwd, req.session_id)
-            if resolved is None and not transcript.exists():
+            transcript = get_transcript_path(cwd, session_id)
+            if resolved_storage is None and not transcript.exists():
                 raise HTTPException(status_code=404, detail="Session not found")
         except HTTPException:
             raise
@@ -717,14 +1220,14 @@ async def export_session(req: ExportSessionRequest, request: Request):
     async def _render_export():
         if req.format == "json":
             return (
-                export_json(req.session_id, cwd),
+                export_json(session_id, cwd),
                 "application/json",
-                f"session-{req.session_id[:8]}.json",
+                f"session-{session_id[:8]}.json",
             )
         return (
-            export_markdown(req.session_id, cwd),
+            export_markdown(session_id, cwd),
             "text/markdown",
-            f"session-{req.session_id[:8]}.md",
+            f"session-{session_id[:8]}.md",
         )
 
     try:

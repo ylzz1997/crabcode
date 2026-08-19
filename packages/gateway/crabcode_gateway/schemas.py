@@ -6,9 +6,11 @@ for HTTP JSON and SSE transport.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from crabcode_core import VERSION
 from crabcode_core.types.config import ReasoningEffort
@@ -17,30 +19,77 @@ from crabcode_core.types.config import ReasoningEffort
 # ── Request schemas ──────────────────────────────────────────────
 
 
+MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+
 class ImageAttachment(BaseModel):
     media_type: str
     data: str
 
+    @field_validator("media_type")
+    @classmethod
+    def validate_media_type(cls, value: str) -> str:
+        media_type = value.strip()
+        if not media_type.lower().startswith("image/"):
+            raise ValueError("media_type must be an image MIME type")
+        return media_type
+
+    @field_validator("data")
+    @classmethod
+    def validate_data(cls, value: str) -> str:
+        # Reject obviously oversized input before decoding it. A base64
+        # string for N bytes is at most 4 * ceil(N / 3) characters.
+        max_encoded_chars = 4 * ((MAX_IMAGE_ATTACHMENT_BYTES + 2) // 3)
+        if len(value) > max_encoded_chars:
+            raise ValueError("image data exceeds the 20MB limit")
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("data must be valid base64") from exc
+        if len(decoded) > MAX_IMAGE_ATTACHMENT_BYTES:
+            raise ValueError("image data exceeds the 20MB limit")
+        return value
+
 
 class SendMessageRequest(BaseModel):
     text: str
-    max_turns: int = 0
+    max_turns: int = Field(default=0, ge=0, strict=True)
     session_id: str | None = None
     operation_id: str | None = Field(default=None, min_length=1)
     images: list[ImageAttachment] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def validate_content(self) -> "SendMessageRequest":
+        if not self.text.strip() and not self.images:
+            raise ValueError("text or at least one image is required")
+        return self
+
 
 class NewSessionRequest(BaseModel):
     cwd: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    base_url: str | None = None
+    api_format: str | None = None
+    model_profile: str | None = None
 
 
 class ResumeSessionRequest(BaseModel):
     session_id: str
+    model: str | None = None
+    provider: str | None = None
+    base_url: str | None = None
+    api_format: str | None = None
+    model_profile: str | None = None
 
 
 class CompactRequest(BaseModel):
     session_id: str
     custom_instructions: str | None = None
+
+
+class ClearSessionRequest(BaseModel):
+    session_id: str
 
 
 class InterruptRequest(BaseModel):
@@ -68,24 +117,46 @@ class ChoiceResponseRequest(BaseModel):
 
 
 class SpawnAgentRequest(BaseModel):
-    prompt: str
-    subagent_type: str = "generalPurpose"
+    prompt: str = Field(min_length=1)
+    subagent_type: str = Field(default="generalPurpose", min_length=1)
     name: str | None = None
     model_profile: str | None = None
     callback: bool = False
     session_id: str | None = None
 
+    @field_validator("prompt", "subagent_type")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
 
 class AgentInputRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(min_length=1)
     interrupt: bool = False
     session_id: str | None = None
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("prompt must not be blank")
+        return value
 
 
 class WaitAgentRequest(BaseModel):
     agent_id: str | list[str]
-    timeout_ms: int | None = None
+    timeout_ms: int | None = Field(default=None, ge=0, strict=True)
     session_id: str | None = None
+
+    @field_validator("agent_id")
+    @classmethod
+    def validate_agent_ids(cls, value: str | list[str]) -> str | list[str]:
+        values = [value] if isinstance(value, str) else value
+        if not values or any(not isinstance(item, str) or not item.strip() for item in values):
+            raise ValueError("agent_id must contain at least one non-blank ID")
+        return value
 
 
 class SwitchModelRequest(BaseModel):
@@ -109,6 +180,13 @@ class SetUltraModeRequest(BaseModel):
     session_id: str | None = None
 
 
+class SetPermissionModeRequest(BaseModel):
+    """Client-side tool permission override used by chat surfaces."""
+
+    mode: Literal["default", "ask", "run_everything", "ai_review"]
+    session_id: str | None = None
+
+
 class GoalRequest(BaseModel):
     action: Literal[
         "set", "edit", "pause", "resume", "complete", "blocked", "clear"
@@ -116,6 +194,272 @@ class GoalRequest(BaseModel):
     objective: str | None = None
     token_budget: int | None = Field(default=None, gt=0)
     session_id: str | None = None
+
+
+class SkillExpandRequest(BaseModel):
+    name: str
+    user_input: str = ""
+    session_id: str | None = None
+
+
+class TaskStopRequest(BaseModel):
+    task_id: str
+    session_id: str | None = None
+
+
+class ScheduleCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    schedule: str = Field(min_length=1)
+    schedule_type: Literal["cron", "interval", "once"]
+    cwd: str | None = None
+    enabled: bool = True
+    max_runs: int | None = Field(default=None, gt=0)
+    next_run: str | None = None
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    timeout: int | None = Field(default=None, gt=0)
+    model_profile: str | None = None
+    # The Gateway session that owns this request is ``session_id``. A job can
+    # independently reuse a session for its executions via ``job_session_id``.
+    job_session_id: str | None = Field(default=None, min_length=1)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = None
+
+    @field_validator("name", "prompt", "schedule")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+    @field_validator("job_session_id")
+    @classmethod
+    def validate_job_session_id(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("job_session_id must not be blank")
+        return value
+
+
+class ScheduleJobRequest(BaseModel):
+    job_id: str = Field(min_length=1)
+    session_id: str | None = None
+
+
+class PeerSendRequest(BaseModel):
+    to: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    session_id: str | None = None
+
+    @field_validator("to", "text")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    max_teammates: int | None = Field(default=None, gt=0)
+    session_id: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value
+
+
+class TeamSpawnRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    role: Literal["lead", "worker", "researcher", "reviewer"] = "worker"
+    name: str | None = None
+    model_profile: str | None = None
+    session_id: str | None = None
+
+    @field_validator("team_id", "prompt")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamMessageRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    to: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    from_agent: str = ""
+    session_id: str | None = None
+
+    @field_validator("team_id", "to", "text")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamBroadcastRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    from_agent: str = ""
+    session_id: str | None = None
+
+    @field_validator("team_id", "text")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamTaskAddRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    session_id: str | None = None
+
+    @field_validator("team_id", "description")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamTaskClaimRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    agent_id: str = ""
+    session_id: str | None = None
+
+    @field_validator("team_id", "task_id")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamTaskCompleteRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    result: str = ""
+    agent_id: str = ""
+    session_id: str | None = None
+
+    @field_validator("team_id", "task_id")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamTaskFailRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    reason: str = ""
+    agent_id: str = ""
+    session_id: str | None = None
+
+    @field_validator("team_id", "task_id")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamRemoveRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    session_id: str | None = None
+
+    @field_validator("team_id", "agent_id")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
+class TeamMessagesReadRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    message_ids: list[str] | None = None
+    session_id: str | None = None
+
+    @field_validator("team_id", "agent_id")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+    @field_validator("message_ids")
+    @classmethod
+    def validate_message_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and any(not item.strip() for item in value):
+            raise ValueError("message_ids must not contain blank IDs")
+        return value
+
+
+class TeamBridgeRequest(BaseModel):
+    team_a: str = Field(min_length=1)
+    team_b: str = Field(min_length=1)
+    policy: Literal["allow_all", "allow_tagged", "deny"] = "allow_tagged"
+    session_id: str | None = None
+
+    @field_validator("team_a", "team_b")
+    @classmethod
+    def validate_team_ids(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("team ID must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_distinct_teams(self) -> "TeamBridgeRequest":
+        if self.team_a == self.team_b:
+            raise ValueError("a bridge requires two distinct teams")
+        return self
+
+
+class TeamCrossMessageRequest(BaseModel):
+    from_team: str = Field(min_length=1)
+    to_team: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    from_agent: str = ""
+    to_agent: str = ""
+    session_id: str | None = None
+
+    @field_validator("from_team", "to_team", "text")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_distinct_teams(self) -> "TeamCrossMessageRequest":
+        if self.from_team == self.to_team:
+            raise ValueError("cross-team messages require two distinct teams")
+        return self
+
+
+class TeamShutdownRequest(BaseModel):
+    team_id: str = Field(min_length=1)
+    session_id: str | None = None
+
+    @field_validator("team_id")
+    @classmethod
+    def validate_team_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("team_id must not be blank")
+        return value
 
 
 class ContextPushRequest(BaseModel):
@@ -155,6 +499,11 @@ class ArchiveSessionRequest(BaseModel):
     session_id: str
 
 
+class PruneSessionsRequest(BaseModel):
+    days: int = Field(default=30, ge=0, le=36500)
+    delete_files: bool = False
+
+
 class ExportSessionRequest(BaseModel):
     session_id: str
     format: Literal["md", "json"] = "md"
@@ -170,6 +519,54 @@ class SessionInfo(BaseModel):
     provider: str = ""
     created_at: str = ""
     title: str = ""
+    cwd: str = ""
+    tokens_used: int = 0
+    preview: str = ""
+
+
+class SearchIndexStatus(BaseModel):
+    """Observable state for the optional semantic-search indexer."""
+
+    state: str
+    chunks: int | None = None
+    files: int | None = None
+    done: int | None = None
+    total: int | None = None
+
+
+class SessionRuntimeStatus(BaseModel):
+    """Complete, non-secret runtime status shared by CLI-style clients."""
+
+    version: str = VERSION
+    session_id: str
+    cwd: str = ""
+    initialized: bool = False
+    message_count: int = 0
+    model: str = ""
+    model_profile: str | None = None
+    provider: str = ""
+    mode: Literal["agent", "plan"] = "agent"
+    reasoning_effort: ReasoningEffort | None = None
+    ultra_mode: bool = False
+    permission_mode: str = "default"
+    context_used_tokens: int = 0
+    context_window_tokens: int = 0
+    context_remaining_tokens: int = 0
+    context_used_percent: float = 0.0
+    compact_count: int = 0
+    auto_compact_enabled: bool = True
+    thinking_enabled: bool = False
+    max_tokens: int = 0
+    tool_count: int | None = None
+    agent_total: int = 0
+    agent_active: int = 0
+    agent_failed: int = 0
+    agent_pending_callbacks: int = 0
+    agent_max_concurrency: int = 0
+    monitor_total: int = 0
+    monitor_active: int = 0
+    monitor_failed: int = 0
+    search_index: SearchIndexStatus | None = None
 
 
 class GoalInfo(BaseModel):
@@ -190,15 +587,20 @@ class AgentInfo(BaseModel):
     agent_id: str
     session_id: str = ""
     parent_agent_id: str | None = None
+    parent_tool_use_id: str | None = None
     title: str
     subagent_type: str
     status: str
     model: str
+    model_profile: str | None = None
     created_at: str
+    started_at: str | None = None
     finished_at: str | None = None
+    updated_at: str = ""
     usage: dict[str, Any] = Field(default_factory=dict)
     final_result: str = ""
     error: str = ""
+    depth: int = 0
     transcript_path: str | None = None
     callback_enabled: bool = False
     callback_state: str = "disabled"
@@ -216,6 +618,187 @@ class ToolInfo(BaseModel):
 class SkillInfo(BaseModel):
     name: str
     description: str = ""
+
+
+class SkillExpansion(BaseModel):
+    name: str
+    prompt: str
+
+
+class MonitorInfo(BaseModel):
+    task_id: str
+    session_id: str = ""
+    description: str = ""
+    task_type: str = "local_bash"
+    source: str = ""
+    status: str = ""
+    output_file: str | None = None
+    timeout_ms: int = 0
+    persistent: bool = False
+    tool_use_id: str | None = None
+    created_at: str = ""
+    started_at: str | None = None
+    finished_at: str | None = None
+    updated_at: str = ""
+    sequence: int = 0
+    error: str = ""
+    exit_code: int | None = None
+
+
+class BackgroundTaskInfo(BaseModel):
+    task_id: str
+    session_id: str = ""
+    description: str = ""
+    task_type: str = ""
+    source: str = ""
+    status: str = ""
+    output_file: str | None = None
+    created_at: str = ""
+    started_at: str | None = None
+    finished_at: str | None = None
+    updated_at: str = ""
+    error: str = ""
+    exit_code: int | None = None
+    agent_id: str | None = None
+
+
+class ScheduleJobInfo(BaseModel):
+    id: str
+    name: str
+    prompt: str
+    schedule: str
+    schedule_type: Literal["cron", "interval", "once"]
+    cwd: str | None = None
+    enabled: bool = True
+    status: str
+    last_run: str | None = None
+    next_run: str | None = None
+    run_count: int = 0
+    max_runs: int | None = None
+    created_at: str
+    session_id: str | None = None
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    timeout: int | None = None
+    model_profile: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScheduleRunInfo(BaseModel):
+    id: str
+    job_id: str
+    status: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_seconds: float | None = None
+    session_id: str | None = None
+    exit_code: int | None = None
+    error_message: str | None = None
+    result_summary: str = ""
+    tokens_used: int = 0
+    created_at: str
+
+
+class PeerInfo(BaseModel):
+    version: int = 1
+    session_id: str
+    name: str
+    cwd: str
+    pid: int
+    socket_path: str = ""
+    permission_class: Literal["prompting", "bypass"] = "prompting"
+    started_at: str = ""
+
+
+class PeerDeliveryInfo(BaseModel):
+    message_id: str = ""
+    status: Literal["delivered", "held", "refused", "failed"]
+    detail: str = ""
+
+
+class TeamTeammateInfo(BaseModel):
+    agent_id: str
+    name: str | None = None
+    role: str
+    state: str
+    model_profile: str | None = None
+
+
+class TeamTaskInfo(BaseModel):
+    id: str
+    description: str = ""
+    assignee: str | None = None
+    status: str
+    result: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class TeamTaskSummary(BaseModel):
+    total: int = 0
+    pending: int = 0
+    claimed: int = 0
+    completed: int = 0
+    failed: int = 0
+
+
+class TeamStatusInfo(BaseModel):
+    team_id: str
+    state: str
+    teammates: list[TeamTeammateInfo] = Field(default_factory=list)
+    teammate_count: int = 0
+    max_teammates: int = 0
+    tasks: TeamTaskSummary = Field(default_factory=TeamTaskSummary)
+
+
+class TeamMessageInfo(BaseModel):
+    id: str
+    from_agent: str = ""
+    to_agent: str = ""
+    text: str = ""
+    timestamp: str = ""
+    read: bool = False
+    msg_type: str = "text"
+
+
+class TeamBridgeInfo(BaseModel):
+    team_a: str
+    team_b: str
+    policy: Literal["allow_all", "allow_tagged", "deny"]
+
+
+class CrossTeamMessageInfo(BaseModel):
+    id: str
+    from_team: str
+    from_agent: str = ""
+    to_team: str
+    to_agent: str = ""
+    text: str
+    timestamp: str = ""
+    bridge_policy: Literal["allow_all", "allow_tagged", "deny"]
+
+
+class LogInfo(BaseModel):
+    name: str
+    path: str
+    updated_at: str | None = None
+    state: str | None = None
+
+
+class LogsResponse(BaseModel):
+    logs: list[LogInfo] = Field(default_factory=list)
+    lines: list[str] = Field(default_factory=list)
+    name: str | None = None
+    path: str | None = None
+    truncated: bool = False
+    note: str | None = None
+
+
+class AgentTranscriptResponse(BaseModel):
+    agent_id: str
+    path: str | None = None
+    lines: list[str] = Field(default_factory=list)
+    truncated: bool = False
 
 
 class ModelInfo(BaseModel):
@@ -314,6 +897,12 @@ class ErrorPayload(BaseModel):
     recoverable: bool = True
     error_type: str = ""
     agent_id: str | None = None
+    # Errors generated while admitting/validating a transport command are
+    # deliberately distinct from Core turn errors.  They may carry the
+    # command and target operation without claiming foreground terminal
+    # ownership.
+    command: str | None = None
+    command_error: bool = False
 
 
 class TurnCompletePayload(BaseModel):
@@ -405,6 +994,19 @@ class TaskUpdatePayload(BaseModel):
     description: str = ""
 
 
+class ScheduleRunPayload(BaseModel):
+    """A scheduled job execution result delivered to connected clients."""
+
+    type: Literal["schedule_run"] = "schedule_run"
+    job_id: str
+    run_id: str
+    status: str
+    duration_seconds: float = 0.0
+    error_message: str = ""
+    result_summary: str = ""
+    next_run: str | None = None
+
+
 class FileChangePayload(BaseModel):
     """File change notification for frontends (VSCode, etc.).
 
@@ -441,6 +1043,30 @@ class ServerHeartbeatPayload(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
+class SessionMessagePayload(BaseModel):
+    """Complete persisted message shape used when replaying a session."""
+
+    uuid: str
+    role: Literal["user", "assistant", "system"]
+    content: str | list[dict[str, Any]]
+    timestamp: str
+    parent_uuid: str | None = None
+    is_compact_summary: bool = False
+    origin: str | None = None
+    usage: dict[str, Any] | None = None
+    tool_use_result: str | None = None
+    source_tool_assistant_uuid: str | None = None
+    reply_to_uuid: str | None = None
+    api_error: str | None = None
+    request_id: str | None = None
+
+
+class SessionHistoryPayload(BaseModel):
+    type: Literal["session_history"] = "session_history"
+    session_id: str
+    messages: list[SessionMessagePayload] = Field(default_factory=list)
+
+
 EventPayload = Union[
     StreamTextPayload,
     ThinkingPayload,
@@ -463,11 +1089,13 @@ EventPayload = Union[
     TeamMessagePayload,
     TeamStatePayload,
     TaskUpdatePayload,
+    ScheduleRunPayload,
     FileChangePayload,
     SnapshotPayload,
     RevertPayload,
     ServerConnectedPayload,
     ServerHeartbeatPayload,
+    SessionHistoryPayload,
 ]
 
 
@@ -487,6 +1115,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
         PermissionResponseEvent,
         PeerMessageEvent,
         PlanReadyEvent,
+        ScheduleRunEvent,
         StreamModeEvent,
         SteeringAppliedEvent,
         StreamTextEvent,
@@ -635,6 +1264,16 @@ def core_event_to_payload(event: Any) -> EventPayload:
             status=event.status,
             assignee=event.assignee,
             description=event.description,
+        )
+    if isinstance(event, ScheduleRunEvent):
+        return ScheduleRunPayload(
+            job_id=event.job_id,
+            run_id=event.run_id,
+            status=event.status,
+            duration_seconds=event.duration_seconds,
+            error_message=event.error_message,
+            result_summary=event.result_summary,
+            next_run=event.next_run,
         )
     from crabcode_core.types.event import SnapshotEvent, RevertEvent
     if isinstance(event, SnapshotEvent):
