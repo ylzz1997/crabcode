@@ -5282,10 +5282,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       background: var(--surface-elevated);
     }
     .context-tooltip {
-      position: absolute;
-      right: -42px;
-      bottom: calc(100% + 8px);
-      min-width: 210px;
+      --ctx-arrow-left: 50%;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: max-content;
+      min-width: min(210px, calc(100vw - 16px));
+      max-width: calc(100vw - 16px);
       padding: 8px 10px;
       border-radius: 8px;
       border: 1px solid var(--vscode-editorWidget-border, var(--border));
@@ -5305,7 +5308,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .context-tooltip::after {
       content: '';
       position: absolute;
-      right: 49px;
+      left: var(--ctx-arrow-left);
       bottom: -5px;
       width: 9px;
       height: 9px;
@@ -5314,8 +5317,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border-bottom: 1px solid var(--vscode-editorWidget-border, var(--border));
       transform: rotate(45deg);
     }
-    .context-meter:hover .context-tooltip,
-    .context-meter:focus .context-tooltip {
+    .context-tooltip.visible {
       opacity: 1;
       visibility: visible;
       transform: translateY(0);
@@ -6020,7 +6022,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           </div>
           <div id="context-meter" class="context-meter" hidden tabindex="0" role="img" aria-label="背景信息窗口用量" aria-describedby="context-tooltip">
             <span class="ctx-ring" aria-hidden="true"></span>
-            <div id="context-tooltip" class="context-tooltip" role="tooltip"></div>
           </div>
         </div>
         <div class="composer-actions">
@@ -6051,6 +6052,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <input type="file" id="file-input-image" accept="image/*" multiple hidden />
   </div>
+  <div id="context-tooltip" class="context-tooltip" role="tooltip"></div>
   <div id="slash-popup" class="hidden" role="listbox" aria-label="命令列表">
     <div id="slash-popup-list" class="slash-popup-list"></div>
   </div>
@@ -7310,6 +7312,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!contextMeter) return;
       if (!usage) {
         contextMeter.hidden = true;
+        if (contextTooltip) contextTooltip.classList.remove('visible');
         return;
       }
 
@@ -7331,6 +7334,48 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           '<div class="context-tooltip-usage">' + escapeHtml(usageLine) + '</div>' +
           (detailLine ? '<div class="context-tooltip-detail">' + escapeHtml(detailLine) + '</div>' : '');
       }
+    }
+
+    function positionContextTooltip() {
+      if (!contextMeter || !contextTooltip || contextMeter.hidden) return;
+      const margin = 8;
+      const gap = 8;
+      const meterRect = contextMeter.getBoundingClientRect();
+      const cardRect = composerCard.getBoundingClientRect();
+      const tooltipRect = contextTooltip.getBoundingClientRect();
+      const maxLeft = Math.max(margin, window.innerWidth - tooltipRect.width - margin);
+      const preferredLeft = meterRect.left + meterRect.width / 2 - tooltipRect.width / 2;
+      const left = Math.min(Math.max(preferredLeft, margin), maxLeft);
+      const top = Math.max(margin, cardRect.top - tooltipRect.height - gap);
+      const arrowLeft = Math.min(
+        Math.max(meterRect.left + meterRect.width / 2 - left - 5, 10),
+        Math.max(10, tooltipRect.width - 19),
+      );
+      contextTooltip.style.left = left + 'px';
+      contextTooltip.style.top = top + 'px';
+      contextTooltip.style.setProperty('--ctx-arrow-left', arrowLeft + 'px');
+    }
+
+    function showContextTooltip() {
+      if (!contextTooltip || !contextMeter || contextMeter.hidden) return;
+      positionContextTooltip();
+      contextTooltip.classList.add('visible');
+    }
+
+    function hideContextTooltip() {
+      if (contextTooltip) contextTooltip.classList.remove('visible');
+    }
+
+    if (contextMeter) {
+      contextMeter.addEventListener('mouseenter', showContextTooltip);
+      contextMeter.addEventListener('mouseleave', hideContextTooltip);
+      contextMeter.addEventListener('focus', showContextTooltip);
+      contextMeter.addEventListener('blur', hideContextTooltip);
+      window.addEventListener('resize', function() {
+        if (contextTooltip && contextTooltip.classList.contains('visible')) {
+          positionContextTooltip();
+        }
+      });
     }
 
     function renderPendingEdits(summary) {
