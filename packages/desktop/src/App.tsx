@@ -84,6 +84,7 @@ import type {
   SessionViewState,
   SkillInfo,
   ToolInfo,
+  TurnDurationFormat,
   WorkspaceDirectoryListing,
 } from "./types";
 
@@ -186,6 +187,20 @@ function formatElapsed(ms: number): string {
   if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
   if (minutes > 0) return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
   return `${seconds}秒`;
+}
+
+export function formatTurnDuration(ms: number, format: TurnDurationFormat): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (format === "seconds") return `${totalSeconds}秒`;
+
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  return [
+    hours > 0 ? `${hours}时` : "",
+    minutes > 0 ? `${minutes}分` : "",
+    `${seconds}秒`,
+  ].filter(Boolean).join("");
 }
 
 function formatTokenCount(value: number): string {
@@ -1427,6 +1442,9 @@ function App() {
           onSavePythonPath={(pythonPath) => {
             commitSettings((current) => ({ ...current, python_path: pythonPath || null }));
           }}
+          onConversationChange={(changes) => {
+            commitSettings((current) => ({ ...current, ...changes }));
+          }}
           onThemeModeChange={(mode) => {
             commitSettings((current) => ({ ...current, theme_mode: mode }));
           }}
@@ -1843,6 +1861,8 @@ function App() {
                     key={item.id}
                     item={item}
                     now={runClock}
+                    showTurnDuration={settings.show_turn_duration}
+                    turnDurationFormat={settings.turn_duration_format}
                     onPermission={resolvePermission}
                     onToggleChoice={toggleChoice}
                     onSubmitChoice={submitChoice}
@@ -2906,9 +2926,11 @@ function EmptyWorkspace({
   );
 }
 
-function ChatItemView({ item, now, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
+function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
   item: ChatItem;
   now: number;
+  showTurnDuration: boolean;
+  turnDurationFormat: TurnDurationFormat;
   onPermission: (item: ChatItem, allowed: boolean, always?: boolean) => void;
   onToggleChoice: (item: ChatItem, option: string) => void;
   onSubmitChoice: (item: ChatItem) => void;
@@ -2917,6 +2939,11 @@ function ChatItemView({ item, now, onPermission, onToggleChoice, onSubmitChoice,
   const [collapsed, setCollapsed] = useState(item.collapsed ?? false);
   const durationMs = item.durationMs ?? (item.startedAt ? Math.max(0, now - item.startedAt) : null);
   const durationLabel = durationMs === null ? null : formatElapsed(durationMs);
+  if (item.kind === "turn_duration") {
+    if (!showTurnDuration || durationMs === null) return null;
+    const label = `已处理 ${formatTurnDuration(durationMs, turnDurationFormat)}`;
+    return <div className="turn-duration-divider" role="separator" aria-label={label}><span>{label}</span></div>;
+  }
   if (item.kind === "user") {
     return <article className="message user-message"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text ?? ""}</ReactMarkdown></article>;
   }

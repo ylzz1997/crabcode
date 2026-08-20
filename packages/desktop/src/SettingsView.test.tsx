@@ -68,6 +68,8 @@ const settings: DesktopSettings = {
   code_font_size: 12,
   diff_marker_style: "color",
   font_smoothing: true,
+  show_turn_duration: true,
+  turn_duration_format: "hms",
   dock_icon: "dark",
 };
 
@@ -131,6 +133,7 @@ describe("SettingsView", () => {
   const callbacks = () => ({
     onBack: vi.fn(),
     onSavePythonPath: vi.fn(),
+    onConversationChange: vi.fn(),
     onThemeModeChange: vi.fn(),
     onThemeProfileChange: vi.fn(),
     onAppearanceChange: vi.fn(),
@@ -189,6 +192,29 @@ describe("SettingsView", () => {
     act(() => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
 
     expect(handlers.onSavePythonPath).toHaveBeenCalledWith("/opt/python3");
+  });
+
+  it("controls turn duration visibility and format", () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="general"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="显示处理用时"]')!.click());
+    const seconds = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="处理用时格式"] button'))
+      .find((button) => button.textContent?.includes("仅秒数"))!;
+    act(() => seconds.click());
+
+    expect(handlers.onConversationChange).toHaveBeenNthCalledWith(1, { show_turn_duration: false });
+    expect(handlers.onConversationChange).toHaveBeenNthCalledWith(2, { turn_duration_format: "seconds" });
   });
 
   it("exposes connection actions but never offers to delete the local connection", () => {

@@ -6,6 +6,7 @@ import type {
   DockIconChoice,
   ThemeMode,
   ThemeProfile,
+  TurnDurationFormat,
   UiFontFamily,
 } from "./types";
 
@@ -67,6 +68,8 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   code_font_size: 12,
   diff_marker_style: "color",
   font_smoothing: true,
+  show_turn_duration: true,
+  turn_duration_format: "hms",
   dock_icon: "dark",
 };
 
@@ -146,6 +149,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     ? raw.theme_mode
     : raw.theme_mode === "system" ? "system" : legacy.auto_night_mode === false ? "light" : "system";
   const diffMarkerStyle: DiffMarkerStyle = raw.diff_marker_style === "symbols" ? "symbols" : "color";
+  const turnDurationFormat: TurnDurationFormat = raw.turn_duration_format === "seconds" ? "seconds" : "hms";
   return {
     ...raw,
     schema_version: 2,
@@ -157,6 +161,8 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     code_font_size: clampInteger(raw.code_font_size, 10, 18, 12),
     diff_marker_style: diffMarkerStyle,
     font_smoothing: raw.font_smoothing !== false,
+    show_turn_duration: raw.show_turn_duration !== false,
+    turn_duration_format: turnDurationFormat,
     dock_icon: dockIcon,
     connections: (raw.connections ?? []).map((connection) => ({
       ...connection,

@@ -544,6 +544,30 @@ svg {
   padding: 2px 0;
 }
 
+.turn-duration-divider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 22px 0;
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.turn-duration-divider::before,
+.turn-duration-divider::after {
+  height: 1px;
+  flex: 1;
+  background: var(--border-soft);
+  content: "";
+}
+
+.turn-duration-divider span {
+  flex: 0 0 auto;
+}
+
 .message p {
   margin: 0 0 10px;
 }
@@ -6670,6 +6694,14 @@ body {
   min-height: 68px;
 }
 
+.general-spaced-heading {
+  margin-top: 32px;
+}
+
+.general-options-group .settings-row+.settings-row {
+  border-top: 1px solid #20373a;
+}
+
 .settings-switch {
   width: 40px;
   height: 23px;
@@ -7168,6 +7200,11 @@ html[data-custom-foreground="true"] :is(
   background: #263d40;
   color: #f0f5f1;
   box-shadow: 0 1px 5px rgba(0, 0, 0, .2);
+}
+
+.settings-segmented button:disabled {
+  opacity: .38;
+  cursor: default;
 }
 
 .diff-line {

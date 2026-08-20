@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { collectFavoriteSessions, FavoritesView, ScheduleDeleteModal } from "./App";
+import { collectFavoriteSessions, FavoritesView, formatTurnDuration, ScheduleDeleteModal } from "./App";
 import type { ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
 
 const job: ScheduleJobInfo = {
@@ -80,6 +80,15 @@ describe("ScheduleDeleteModal", () => {
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"));
     expect(buttons).toHaveLength(2);
     expect(buttons.every((button) => button.disabled)).toBe(true);
+  });
+});
+
+describe("turn duration formatting", () => {
+  it("supports seconds and omits zero hours/minutes in hms mode", () => {
+    expect(formatTurnDuration(3_723_000, "seconds")).toBe("3723秒");
+    expect(formatTurnDuration(3_723_000, "hms")).toBe("1时2分3秒");
+    expect(formatTurnDuration(63_000, "hms")).toBe("1分3秒");
+    expect(formatTurnDuration(3_000, "hms")).toBe("3秒");
   });
 });
 

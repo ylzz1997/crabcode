@@ -33,6 +33,8 @@ export interface DesktopSettings {
   code_font_size: number;
   diff_marker_style: DiffMarkerStyle;
   font_smoothing: boolean;
+  show_turn_duration: boolean;
+  turn_duration_format: TurnDurationFormat;
   dock_icon: DockIconChoice;
 }
 
@@ -41,6 +43,7 @@ export type ThemeMode = "system" | "light" | "dark";
 export type UiFontFamily = "system" | "inter" | "serif";
 export type CodeFontFamily = "system-mono" | "menlo" | "monaco";
 export type DiffMarkerStyle = "color" | "symbols";
+export type TurnDurationFormat = "seconds" | "hms";
 
 export interface ThemeProfile {
   accent_color: string;
@@ -194,6 +197,7 @@ export type ChatItemKind =
   | "choice"
   | "plan"
   | "file_change"
+  | "turn_duration"
   | "system"
   | "error";
 

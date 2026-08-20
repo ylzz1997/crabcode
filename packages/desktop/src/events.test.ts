@@ -169,5 +169,23 @@ describe("Gateway event reducer", () => {
     expect(current.runStartedAt).toBeNull();
     expect(current.currentStep).toBeNull();
     expect(current.lastTurnUsage).toEqual({ input_tokens: 100, cache_read_tokens: 75 });
+    expect(current.items.at(-1)).toMatchObject({
+      kind: "turn_duration",
+      durationMs: expect.any(Number),
+    });
+  });
+
+  it("restores completed turn durations from message timestamps", () => {
+    const current = applyGatewayEvent(state(), {
+      type: "session_history",
+      messages: [
+        { uuid: "user-1", role: "user", timestamp: "2026-08-20T00:00:00.000Z", content: "开始" },
+        { uuid: "assistant-1", role: "assistant", timestamp: "2026-08-20T01:02:03.000Z", content: "完成" },
+      ],
+    });
+    expect(current.items.at(-1)).toMatchObject({
+      kind: "turn_duration",
+      durationMs: 3_723_000,
+    });
   });
 });

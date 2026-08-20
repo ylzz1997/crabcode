@@ -29,6 +29,7 @@ import type {
   ProjectPreset,
   ThemeMode,
   ThemeProfile,
+  TurnDurationFormat,
   UiFontFamily,
 } from "./types";
 
@@ -45,8 +46,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   {
     id: "general",
     title: "常规",
-    description: "运行环境与本地启动设置",
-    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式",
+    description: "运行环境与会话显示设置",
+    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式 会话 显示 处理用时 耗时 仅秒数 时分秒",
   },
   {
     id: "appearance",
@@ -152,6 +153,7 @@ interface SettingsViewProps {
   onSectionChange: (section: SettingsSectionId) => void;
   onBack: () => void;
   onSavePythonPath: (path: string) => void;
+  onConversationChange: (changes: ConversationSettingsUpdate) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onThemeProfileChange: (scheme: "light" | "dark", changes: Partial<ThemeProfile>) => void;
   onAppearanceChange: (changes: AppearanceSettingsUpdate) => void;
@@ -170,6 +172,11 @@ export type AppearanceSettingsUpdate = Partial<Pick<DesktopSettings,
   | "code_font_size"
   | "diff_marker_style"
   | "font_smoothing"
+>>;
+
+export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
+  | "show_turn_duration"
+  | "turn_duration_format"
 >>;
 
 interface ThemeColorRowProps {
@@ -297,6 +304,7 @@ export function SettingsView({
   onSectionChange,
   onBack,
   onSavePythonPath,
+  onConversationChange,
   onThemeModeChange,
   onThemeProfileChange,
   onAppearanceChange,
@@ -487,6 +495,46 @@ export function SettingsView({
                       <span className="settings-value">浏览器模式</span>
                     </div>
                   )}
+                </div>
+
+                <div className="settings-section-heading general-spaced-heading">
+                  <div><h2>会话</h2><p>控制对话完成后的状态信息。</p></div>
+                </div>
+                <div className="settings-group general-options-group">
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>显示处理用时</strong>
+                      <span>每轮工作结束后，在对话中显示本轮处理总时间。</span>
+                    </div>
+                    <button
+                      className={`settings-switch ${settings.show_turn_duration ? "on" : ""}`}
+                      type="button"
+                      role="switch"
+                      aria-checked={settings.show_turn_duration}
+                      aria-label="显示处理用时"
+                      onClick={() => onConversationChange({ show_turn_duration: !settings.show_turn_duration })}
+                    ><span /></button>
+                  </div>
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>用时格式</strong>
+                      <span>仅显示累计秒数，或按时、分、秒拆分显示。</span>
+                    </div>
+                    <div className="settings-segmented" aria-label="处理用时格式">
+                      {(["seconds", "hms"] as TurnDurationFormat[]).map((format) => (
+                        <button
+                          key={format}
+                          className={settings.turn_duration_format === format ? "active" : ""}
+                          type="button"
+                          aria-pressed={settings.turn_duration_format === format}
+                          disabled={!settings.show_turn_duration}
+                          onClick={() => onConversationChange({ turn_duration_format: format })}
+                        >
+                          {format === "seconds" ? "仅秒数" : "时分秒"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </section>
             )}

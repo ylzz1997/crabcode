@@ -9,9 +9,41 @@ function stringify(value: unknown): string {
   }
 }
 
+function timestampMs(value: unknown): number | null {
+  if (typeof value !== "string" || !value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function startsUserTurn(message: Record<string, unknown>): boolean {
+  if (message.role !== "user") return false;
+  if (typeof message.origin === "string" && message.origin) return false;
+  if (!Array.isArray(message.content)) return true;
+  return !message.content.some((block) => (
+    block !== null
+    && typeof block === "object"
+    && (block as Record<string, unknown>).type === "tool_result"
+  ));
+}
+
 function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
   const items: ChatItem[] = [];
   const tools = new Map<string, number>();
+  let turnStartedAt: number | null = null;
+  let turnCompletedAt: number | null = null;
+  let turnDurationId = "";
+
+  const finishTurn = () => {
+    if (turnStartedAt === null || turnCompletedAt === null) return;
+    items.push({
+      id: `${turnDurationId || crypto.randomUUID()}:turn-duration`,
+      kind: "turn_duration",
+      status: "complete",
+      startedAt: turnStartedAt,
+      completedAt: turnCompletedAt,
+      durationMs: Math.max(0, turnCompletedAt - turnStartedAt),
+    });
+  };
 
   for (const message of messages) {
     // Synthetic task callbacks are model input. Their user-facing result is
@@ -20,6 +52,16 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
     if (message.origin === "task-notification") continue;
 
     const baseId = String(message.uuid ?? crypto.randomUUID());
+    const messageTimestamp = timestampMs(message.timestamp);
+    if (startsUserTurn(message)) {
+      finishTurn();
+      turnStartedAt = messageTimestamp;
+      turnCompletedAt = null;
+      turnDurationId = "";
+    } else if (message.role === "assistant" && turnStartedAt !== null && messageTimestamp !== null) {
+      turnCompletedAt = messageTimestamp;
+      turnDurationId = baseId;
+    }
     const kind = message.role === "user"
       ? "user"
       : message.role === "assistant"
@@ -109,6 +151,8 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
     flushText();
   }
 
+  finishTurn();
+
   return items;
 }
 
@@ -182,6 +226,26 @@ function completeItem(item: ChatItem, now: number): ChatItem {
     completedAt: now,
     ...(durationMs === undefined ? {} : { durationMs }),
   };
+}
+
+function appendTurnDuration(
+  items: ChatItem[],
+  startedAt: number | null | undefined,
+  completedAt: number,
+  operationId?: string,
+): ChatItem[] {
+  if (startedAt === null || startedAt === undefined) return items;
+  return [
+    ...items,
+    {
+      id: `${operationId || crypto.randomUUID()}:turn-duration`,
+      kind: "turn_duration",
+      status: "complete",
+      startedAt,
+      completedAt,
+      durationMs: Math.max(0, completedAt - startedAt),
+    },
+  ];
 }
 
 export function applyGatewayEvent(
@@ -330,7 +394,7 @@ export function applyGatewayEvent(
         busy: false,
         runStartedAt: null,
         currentStep: null,
-        items: [
+        items: appendTurnDuration([
           ...completeRunning(state.items, now),
           {
             id: crypto.randomUUID(),
@@ -339,7 +403,7 @@ export function applyGatewayEvent(
             detail: event.plan ?? {},
             status: "pending",
           },
-        ],
+        ], state.runStartedAt, now, event.operation_id),
       };
     case "file_change":
       return {
@@ -403,7 +467,12 @@ export function applyGatewayEvent(
         runStartedAt: null,
         currentStep: null,
         lastTurnUsage: event.usage ?? state.lastTurnUsage ?? null,
-        items: completeRunning(state.items, now),
+        items: appendTurnDuration(
+          completeRunning(state.items, now),
+          state.runStartedAt,
+          now,
+          event.operation_id ?? state.operationId ?? undefined,
+        ),
         status: state.status && event.context_used_tokens !== undefined
           ? {
               ...state.status,

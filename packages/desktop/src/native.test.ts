@@ -54,6 +54,8 @@ describe("desktop settings migration", () => {
       code_font_size: 12,
       diff_marker_style: "color",
       font_smoothing: true,
+      show_turn_duration: true,
+      turn_duration_format: "hms",
     });
     expect(migrated.connections[0].projects[0]).toMatchObject({
       id: "/work/crab",
@@ -96,6 +98,8 @@ describe("desktop settings migration", () => {
       code_font_size: 2,
       diff_marker_style: "symbols",
       font_smoothing: false,
+      show_turn_duration: false,
+      turn_duration_format: "seconds",
       dock_icon: "light",
     } as DesktopSettings;
 
@@ -118,6 +122,8 @@ describe("desktop settings migration", () => {
       code_font_size: 10,
       diff_marker_style: "symbols",
       font_smoothing: false,
+      show_turn_duration: false,
+      turn_duration_format: "seconds",
     });
   });
 

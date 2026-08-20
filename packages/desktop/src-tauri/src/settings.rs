@@ -69,6 +69,8 @@ fn default_settings() -> Value {
         "code_font_size": 12,
         "diff_marker_style": "color",
         "font_smoothing": true,
+        "show_turn_duration": true,
+        "turn_duration_format": "hms",
         "dock_icon": "dark"
     })
 }
