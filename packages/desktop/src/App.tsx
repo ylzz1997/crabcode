@@ -58,6 +58,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { applyGatewayEvent } from "./events";
 import { GatewayApi, SessionChannel } from "./gateway";
+import { SettingsView, type SettingsSectionId } from "./SettingsView";
 import {
   deleteCredential,
   ensureLocalGateway,
@@ -272,11 +273,12 @@ function App() {
     dataUrl: string;
   }>>([]);
   const [pendingFolders, setPendingFolders] = useState<string[]>([]);
-  const [connectionModal, setConnectionModal] = useState(false);
   const [projectModal, setProjectModal] = useState<ProjectPreset | "new" | null>(null);
   const [referenceDirectoryModal, setReferenceDirectoryModal] = useState(false);
   const [goalModal, setGoalModal] = useState(false);
-  const [settingsModal, setSettingsModal] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("general");
+  const [connectionModal, setConnectionModal] = useState<"new" | string | null>(null);
   const [checkpointModal, setCheckpointModal] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const apiRef = useRef(new Map<string, GatewayApi>());
@@ -816,9 +818,60 @@ function App() {
     messageEndRef.current?.scrollIntoView({ block: "end" });
   }, [activeSession?.items.length, activeSession?.items.at(-1)?.text]);
 
+  useEffect(() => {
+    if (!settingsOpen || connectionModal !== null || projectModal !== null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [connectionModal, projectModal, settingsOpen]);
+
   const switchConnection = (connectionId: string) => {
     commitSettings((current) => ({ ...current, active_connection_id: connectionId }));
   };
+
+  const openSettings = () => {
+    setSettingsSection("general");
+    setSettingsOpen(true);
+  };
+
+  const deleteConnection = useCallback(async (id: string) => {
+    if (!settings) return;
+    const connection = settings.connections.find((item) => item.id === id);
+    if (!connection || id === "local") return;
+    if (!window.confirm(`删除 Gateway 连接“${connection.name}”？本地项目文件不会被删除。`)) return;
+
+    try {
+      if (connection.credential_ref) await deleteCredential(connection.credential_ref);
+      channelRef.current.forEach((channel, key) => {
+        if (!key.startsWith(`${id}:`)) return;
+        channel.dispose();
+        channelRef.current.delete(key);
+      });
+      apiRef.current.delete(id);
+      connectedRef.current.delete(id);
+      setSessions((current) => Object.fromEntries(
+        Object.entries(current).filter(([key]) => !key.startsWith(`${id}:`)),
+      ));
+      setActiveSessions((current) => {
+        const { [id]: _, ...rest } = current;
+        return rest;
+      });
+      setGateways((current) => {
+        const { [id]: _, ...rest } = current;
+        return rest;
+      });
+      commitSettings((current) => ({
+        ...current,
+        active_connection_id: current.active_connection_id === id ? "local" : current.active_connection_id,
+        connections: current.connections.filter((item) => item.id !== id),
+        connection_order: current.connection_order.filter((value) => value !== id),
+      }));
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  }, [commitSettings, settings]);
 
   const switchProject = (project: ProjectPreset) => {
     if (!activeConnection) return;
@@ -1228,7 +1281,28 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="gateway-tabs">
+      {settingsOpen ? (
+        <SettingsView
+          settings={settings}
+          gateways={gateways}
+          activeConnection={activeConnection}
+          activeProject={activeProject}
+          activeSection={settingsSection}
+          onSectionChange={setSettingsSection}
+          onBack={() => setSettingsOpen(false)}
+          onSavePythonPath={(pythonPath) => {
+            commitSettings((current) => ({ ...current, python_path: pythonPath || null }));
+          }}
+          onActivateConnection={switchConnection}
+          onNewConnection={() => setConnectionModal("new")}
+          onEditConnection={setConnectionModal}
+          onDeleteConnection={(id) => void deleteConnection(id)}
+          onNewProject={() => setProjectModal("new")}
+          onEditProject={setProjectModal}
+        />
+      ) : (
+      <>
+        <header className="gateway-tabs">
         <button
           className="icon-button sidebar-toggle"
           title={sidebarOpen ? "隐藏侧栏" : "显示侧栏"}
@@ -1272,13 +1346,10 @@ function App() {
             );
           })}
         </div>
-        <button className="icon-button" title="连接 Gateway" onClick={() => setConnectionModal(true)}>
+        <button className="icon-button" title="连接 Gateway" onClick={() => setConnectionModal("new")}>
           <Plus />
         </button>
-        <button className="icon-button" title="Desktop 设置" onClick={() => setSettingsModal(true)}>
-          <Settings />
-        </button>
-      </header>
+        </header>
 
       <div className={`workbench ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
         <aside
@@ -1318,7 +1389,7 @@ function App() {
             </div>
 
             {activeGateway?.status === "error" && (
-              <button className="connection-error" onClick={() => setConnectionModal(true)}>
+              <button className="connection-error" onClick={() => setConnectionModal("new")}>
                 <WifiOff />
                 <span>{activeGateway.error}</span>
               </button>
@@ -1493,6 +1564,13 @@ function App() {
                 </div>
               </div>
             </section>}
+
+            <div className="workspace-settings-footer">
+              <button className="workspace-settings-button" type="button" onClick={openSettings}>
+                <Settings />
+                <span>设置</span>
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -1530,7 +1608,7 @@ function App() {
               project={activeProject}
               gateway={activeGateway}
               onNew={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
-              onConnect={() => setConnectionModal(true)}
+              onConnect={() => setConnectionModal("new")}
             />
           ) : (
             <>
@@ -1725,15 +1803,18 @@ function App() {
           )}
         </main>
       </div>
+      </>
+      )}
 
       {connectionModal && (
         <ConnectionModal
           settings={settings}
           activeConnectionId={activeConnection?.id ?? ""}
-          onClose={() => setConnectionModal(false)}
+          initialEditingId={connectionModal === "new" ? null : connectionModal}
+          onClose={() => setConnectionModal(null)}
           onActivate={(id) => {
             switchConnection(id);
-            setConnectionModal(false);
+            setConnectionModal(null);
           }}
           onSave={async (connection, password) => {
             if (isInsecureRemoteUrl(connection.base_url) && !connection.allow_insecure_remote) {
@@ -1759,7 +1840,7 @@ function App() {
             });
             connectedRef.current.add(connection.id);
             await connectGateway(connection, settings.python_path);
-            setConnectionModal(false);
+            setConnectionModal(null);
           }}
         />
       )}
@@ -1827,31 +1908,6 @@ function App() {
           api={apiRef.current.get(activeConnection.id)!}
           sessionId={activeChannel.sessionId}
           onClose={() => setGoalModal(false)}
-        />
-      )}
-
-      {settingsModal && (
-        <SettingsModal
-          settings={settings}
-          onClose={() => setSettingsModal(false)}
-          onSave={(pythonPath) => {
-            commitSettings((current) => ({ ...current, python_path: pythonPath || null }));
-            setSettingsModal(false);
-          }}
-          onDelete={async (id) => {
-            const connection = settings.connections.find((item) => item.id === id);
-            if (!connection || id === "local") return;
-            channelRef.current.forEach((channel, key) => {
-              if (key.startsWith(`${id}:`)) channel.dispose();
-            });
-            if (connection.credential_ref) await deleteCredential(connection.credential_ref);
-            commitSettings((current) => ({
-              ...current,
-              active_connection_id: current.active_connection_id === id ? "local" : current.active_connection_id,
-              connections: current.connections.filter((item) => item.id !== id),
-              connection_order: current.connection_order.filter((value) => value !== id),
-            }));
-          }}
         />
       )}
 
@@ -2700,18 +2756,20 @@ function ChatItemView({ item, now, onPermission, onToggleChoice, onSubmitChoice,
   return null;
 }
 
-function ConnectionModal({ settings, activeConnectionId, onClose, onActivate, onSave }: {
+function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClose, onActivate, onSave }: {
   settings: DesktopSettings;
   activeConnectionId: string;
+  initialEditingId?: string | null;
   onClose: () => void;
   onActivate: (id: string) => void;
   onSave: (connection: ConnectionPreset, password: string) => Promise<void>;
 }) {
-  const [name, setName] = useState("");
-  const [baseUrl, setBaseUrl] = useState("https://");
+  const initialConnection = settings.connections.find((connection) => connection.id === initialEditingId) ?? null;
+  const [name, setName] = useState(initialConnection?.name ?? "");
+  const [baseUrl, setBaseUrl] = useState(initialConnection?.base_url ?? "https://");
   const [password, setPassword] = useState("");
-  const [allowInsecure, setAllowInsecure] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [allowInsecure, setAllowInsecure] = useState(initialConnection?.allow_insecure_remote ?? false);
+  const [editingId, setEditingId] = useState<string | null>(initialConnection?.id ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editingConnection = settings.connections.find((connection) => connection.id === editingId) ?? null;
@@ -3022,41 +3080,6 @@ function GoalModal({ api, sessionId, onClose }: {
         <button className="primary" disabled={loading || busy || !objective.trim()} onClick={() => void save()}>
           {busy ? <LoaderCircle className="spin" /> : <Target />}{hasGoal ? "更新目标" : "设置目标"}
         </button>
-      </div>
-    </Modal>
-  );
-}
-
-function SettingsModal({ settings, onClose, onSave, onDelete }: {
-  settings: DesktopSettings;
-  onClose: () => void;
-  onSave: (pythonPath: string) => void;
-  onDelete: (id: string) => Promise<void>;
-}) {
-  const [pythonPath, setPythonPath] = useState(settings.python_path ?? "");
-  return (
-    <Modal title="Desktop 设置" onClose={onClose}>
-      <div className="form-grid">
-        {isDesktopShell() ? (
-          <label><span>Python 路径</span><input value={pythonPath} onChange={(event) => setPythonPath(event.target.value)} placeholder="自动检测 python3 / python" /></label>
-        ) : (
-          <div className="runtime-note">浏览器版连接已经运行的 Gateway；本地自动安装、启动和系统凭据库仅在 Tauri 桌面版可用。</div>
-        )}
-      </div>
-      <div className="settings-connections">
-        <h3>已保存连接</h3>
-        {settings.connections.map((connection) => (
-          <div key={connection.id}>
-            <Server /><span><strong>{connection.name}</strong><small>{connection.base_url}</small></span>
-            {connection.id !== "local" && (
-              <button className="icon-button" title="删除连接" onClick={() => void onDelete(connection.id)}><Trash2 /></button>
-            )}
-          </div>
-        ))}
-      </div>
-      <div className="modal-actions">
-        <button onClick={onClose}>取消</button>
-        <button className="primary" onClick={() => onSave(pythonPath)}><Settings />保存</button>
       </div>
     </Modal>
   );
