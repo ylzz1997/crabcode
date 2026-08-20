@@ -5,6 +5,7 @@ import {
   Archive,
   Bot,
   Boxes,
+  Brain,
   Check,
   Code2,
   ChevronDown,
@@ -70,6 +71,7 @@ import type {
   GatewayEvent,
   GatewayViewState,
   ProjectPreset,
+  ReasoningEffort,
   ScheduleJobInfo,
   SessionInfo,
   SessionViewState,
@@ -169,16 +171,20 @@ function usageToken(value: Record<string, unknown> | null | undefined, key: stri
   return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
 }
 
-function cacheUsageLabel(usage: Record<string, unknown> | null | undefined): string | null {
+function cacheUsage(usage: Record<string, unknown> | null | undefined): {
+  hitRate: number;
+  readTokens: number;
+  writeTokens: number | null;
+} | null {
   if (!usage || !("cache_read_tokens" in usage || "cache_write_tokens" in usage)) return null;
   const cacheRead = usageToken(usage, "cache_read_tokens");
   const totalInput = usageToken(usage, "total_input_tokens") || usageToken(usage, "input_tokens");
   const hitRate = totalInput > 0 ? Math.min(100, cacheRead / totalInput * 100) : 0;
-  const parts = [`命中 ${hitRate.toFixed(1)}%`, `读取 ${formatTokenCount(cacheRead)}`];
-  if ("cache_write_tokens" in usage) {
-    parts.push(`写入 ${formatTokenCount(usageToken(usage, "cache_write_tokens"))}`);
-  }
-  return parts.join(" · ");
+  return {
+    hitRate,
+    readTokens: cacheRead,
+    writeTokens: "cache_write_tokens" in usage ? usageToken(usage, "cache_write_tokens") : null,
+  };
 }
 
 function normalizePermissionMode(value: string | undefined): PermissionMode {
@@ -597,7 +603,11 @@ function App() {
         if (
           event.type === "error"
           && event.command_error
-          && (event.command === "switch_model" || event.command === "set_permission_mode")
+          && (
+            event.command === "switch_model"
+            || event.command === "set_permission_mode"
+            || event.command === "set_reasoning_effort"
+          )
           && channel.sessionId
         ) {
           void updateSessionStatus(connection.id, key, channel.sessionId, true);
@@ -919,14 +929,23 @@ function App() {
     }
   };
 
-  const selectMode = (mode: "agent" | "plan") => {
-    activeChannel?.switchMode(mode);
-    if (activeSessionKey) {
+  const selectReasoningEffort = (effort: ReasoningEffort) => {
+    if (!activeChannel || !activeSessionKey) return;
+    try {
+      activeChannel.setReasoningEffort(effort);
       setSessions((current) => {
-        const value = current[activeSessionKey];
-        if (!value?.status) return current;
-        return { ...current, [activeSessionKey]: { ...value, status: { ...value.status, mode } } };
+        const session = current[activeSessionKey];
+        if (!session?.status) return current;
+        return {
+          ...current,
+          [activeSessionKey]: {
+            ...session,
+            status: { ...session.status, reasoning_effort: effort },
+          },
+        };
       });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -1505,16 +1524,11 @@ function App() {
                         disabled={!activeSession.connected}
                         onChange={selectModel}
                       />
-                      <div className="segmented-control" aria-label="运行模式">
-                        <button
-                          className={activeSession.status?.mode !== "plan" ? "active" : ""}
-                          onClick={() => selectMode("agent")}
-                        >Agent</button>
-                        <button
-                          className={activeSession.status?.mode === "plan" ? "active" : ""}
-                          onClick={() => selectMode("plan")}
-                        >Plan</button>
-                      </div>
+                      <ReasoningEffortPicker
+                        value={activeSession.status?.reasoning_effort}
+                        disabled={!activeSession.connected}
+                        onChange={selectReasoningEffort}
+                      />
                       <PermissionPicker
                         value={activePermissionMode}
                         disabled={!activeSession.connected}
@@ -1943,6 +1957,19 @@ const PERMISSION_OPTIONS: Array<{
   },
 ];
 
+const REASONING_EFFORT_OPTIONS: Array<{
+  value: ReasoningEffort;
+  label: string;
+}> = [
+  { value: "none", label: "关闭" },
+  { value: "minimal", label: "最低" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "xhigh", label: "极高" },
+  { value: "max", label: "最大" },
+];
+
 function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
     if (!open) return undefined;
@@ -2025,6 +2052,59 @@ function ModelPicker({
   );
 }
 
+function ReasoningEffortPicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string | null | undefined;
+  disabled: boolean;
+  onChange: (value: ReasoningEffort) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissMenu(open, close, ref);
+  const selected = REASONING_EFFORT_OPTIONS.find((option) => option.value === value);
+  return (
+    <div className="picker effort-picker" ref={ref}>
+      <button
+        type="button"
+        className="picker-trigger effort-picker-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        title="选择思考强度"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Brain />
+        <span className="picker-trigger-label">思考 {selected?.label ?? "自动"}</span>
+        <ChevronDown className={open ? "picker-chevron open" : "picker-chevron"} />
+      </button>
+      {open && (
+        <div className="picker-menu effort-picker-menu" role="menu" aria-label="思考强度">
+          <div className="picker-menu-heading"><span>思考强度</span><small>仅作用于当前会话</small></div>
+          <div className="effort-options">
+            {REASONING_EFFORT_OPTIONS.map((option) => (
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={option.value === value}
+                className={`effort-option ${option.value === value ? "selected" : ""}`}
+                key={option.value}
+                onClick={() => { onChange(option.value); setOpen(false); }}
+              >
+                <span>{option.label}</span>
+                {option.value === value && <Check className="picker-check" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PermissionPicker({
   value,
   disabled,
@@ -2098,7 +2178,7 @@ function ContextMeter({
   const percent = Math.min(100, Math.max(0, status.context_used_percent));
   const remaining = status.context_remaining_tokens ?? Math.max(0, status.context_window_tokens - status.context_used_tokens);
   const contextClass = percent >= 90 ? "danger" : percent >= 75 ? "warn" : "";
-  const cacheDetail = cacheUsageLabel(usage);
+  const cache = cacheUsage(usage);
   const searchDetail = status.search_index
     ? [
         status.search_index.state,
@@ -2129,7 +2209,9 @@ function ContextMeter({
           <div className="context-progress"><span style={{ width: `${percent}%` }} /></div>
           <div className="context-stat-row"><span>已用</span><strong>{formatTokenCount(status.context_used_tokens)} / {formatTokenCount(status.context_window_tokens)} tokens</strong></div>
           <div className="context-stat-row"><span>剩余</span><strong>{formatTokenCount(remaining)} tokens</strong></div>
-          {cacheDetail && <div className="context-stat-row"><span>提示缓存</span><strong>{cacheDetail}</strong></div>}
+          {cache && <div className="context-stat-row"><span>缓存命中率</span><strong>{cache.hitRate.toFixed(1)}%</strong></div>}
+          {cache && <div className="context-stat-row"><span>缓存读取</span><strong>{formatTokenCount(cache.readTokens)} tokens</strong></div>}
+          {cache?.writeTokens != null && <div className="context-stat-row"><span>缓存写入</span><strong>{formatTokenCount(cache.writeTokens)} tokens</strong></div>}
           <div className="context-stat-row"><span>模型</span><strong>{status.model_profile || [status.provider, status.model].filter(Boolean).join("/") || "未配置"}</strong></div>
           <div className="context-stat-row"><span>模式</span><strong>{status.mode === "plan" ? "Plan" : "Agent"}</strong></div>
           <div className="context-stat-row"><span>推理</span><strong>{status.reasoning_effort || "自动"}{status.ultra_mode ? " · Ultra" : ""}</strong></div>

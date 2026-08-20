@@ -4,6 +4,7 @@ import type {
   ConnectionPreset,
   GatewayEvent,
   GatewayModel,
+  ReasoningEffort,
   ScheduleJobInfo,
   SessionInfo,
   SessionStatus,
@@ -361,6 +362,10 @@ export class SessionChannel {
 
   switchMode(mode: "agent" | "plan"): void {
     this.sendRaw({ type: "switch_mode", mode, session_id: this.sessionId });
+  }
+
+  setReasoningEffort(effort: ReasoningEffort): void {
+    this.sendRaw({ type: "set_reasoning_effort", effort, session_id: this.sessionId });
   }
 
   setPermissionMode(mode: string): void {

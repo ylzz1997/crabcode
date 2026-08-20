@@ -923,31 +923,6 @@ button.primary:hover,
   background: var(--surface-hover);
 }
 
-.segmented-control {
-  height: 28px;
-  display: flex;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--panel);
-}
-
-.segmented-control button {
-  padding: 0 7px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.segmented-control button.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
-}
-
 .context-usage {
   color: var(--subtle);
   font-size: 11px;
@@ -4317,6 +4292,7 @@ body {
 
 .picker-trigger-icon svg,
 .permission-picker-trigger>svg:first-child,
+.effort-picker-trigger>svg:first-child,
 .permission-option-icon svg,
 .picker-option-icon svg {
   width: 15px;
@@ -4371,6 +4347,43 @@ body {
 .permission-picker-menu {
   left: 0;
   width: min(390px, calc(100vw - 44px));
+}
+
+.effort-picker-menu {
+  left: 0;
+  width: min(210px, calc(100vw - 44px));
+}
+
+.effort-options {
+  padding: 5px;
+}
+
+.effort-option {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #b7bbb4;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.effort-option:hover,
+.effort-option.selected {
+  background: rgba(255, 255, 255, .055);
+  color: #eff1ed;
+}
+
+.effort-option .picker-check {
+  flex: 0 0 15px;
 }
 
 .picker-menu-heading {

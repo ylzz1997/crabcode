@@ -54,6 +54,8 @@ export interface SessionInfo {
   preview: string;
 }
 
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface SessionStatus {
   session_id: string;
   version?: string;
@@ -64,7 +66,7 @@ export interface SessionStatus {
   model_profile?: string | null;
   provider: string;
   mode: "agent" | "plan";
-  reasoning_effort?: string | null;
+  reasoning_effort?: ReasoningEffort | null;
   ultra_mode?: boolean;
   permission_mode: string;
   context_used_tokens: number;
