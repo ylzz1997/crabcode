@@ -3,6 +3,7 @@ export interface ProjectPreset {
   path: string;
   name: string;
   directories: string[];
+  is_default?: boolean;
   last_session_id: string | null;
   favorite_session_ids?: string[];
 }

@@ -171,7 +171,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
         && connection.last_model_profile.trim().length > 0
         ? connection.last_model_profile
         : null,
-      projects: (connection.projects ?? []).map((project) => {
+      projects: (connection.projects ?? []).map((project, index) => {
         const legacyPath = typeof project.path === "string" ? project.path : "";
         const directories = Array.isArray(project.directories)
           ? project.directories.filter((path): path is string => typeof path === "string" && path.trim().length > 0)
@@ -181,6 +181,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
           id: project.id || legacyPath || crypto.randomUUID(),
           path: directories[0] || legacyPath || "",
           directories,
+          is_default: project.is_default === true || index === 0,
           last_session_id: project.last_session_id ?? null,
           favorite_session_ids: Array.isArray(project.favorite_session_ids)
             ? [...new Set(project.favorite_session_ids.filter((id): id is string => typeof id === "string" && id.length > 0))]

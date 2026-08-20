@@ -218,6 +218,7 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/context/{session_id}` | GET | 读取最新客户端工作区上下文 |
 | `/workspace/info` | GET | 读取启动目录、用户 Home 和允许浏览的根目录 |
 | `/workspace/directories` | GET | 列出允许的工作区根目录内的子目录 |
+| `/workspace/directories/create` | POST | 在允许的工作区根目录内创建一个目录 |
 | `/logs` | GET | 列出、读取尾部或清空后台日志 |
 | `/logs/follow` | GET | 通过 SSE 实时跟随后台日志 |
 | `/tasks`, `/tasks/{id}` | GET | 列出后台任务或读取单个任务；`scope=global` 可列出所有已加载会话中的任务 |

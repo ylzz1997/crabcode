@@ -61,6 +61,7 @@ describe("desktop settings migration", () => {
       id: "/work/crab",
       path: "/work/crab",
       directories: ["/work/crab"],
+      is_default: true,
       favorite_session_ids: [],
     });
     expect(migrated.connections[0].last_model_profile).toBeNull();

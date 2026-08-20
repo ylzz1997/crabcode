@@ -517,6 +517,10 @@ class ExportSessionRequest(BaseModel):
     format: Literal["md", "json"] = "md"
 
 
+class WorkspaceDirectoryCreateRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
 # ── Response / event schemas ─────────────────────────────────────
 
 

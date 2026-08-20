@@ -1,4 +1,4 @@
-"""Read-only workspace discovery endpoints for desktop clients."""
+"""Workspace discovery and scoped directory creation for desktop clients."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from crabcode_gateway.schemas import (
     WorkspaceDirectoryEntry,
+    WorkspaceDirectoryCreateRequest,
     WorkspaceDirectoryListing,
     WorkspaceInfo,
 )
@@ -42,6 +43,34 @@ def _resolve_directory(value: str, roots: tuple[Path, ...]) -> Path:
     if not resolved.is_dir():
         raise HTTPException(status_code=400, detail="path must be a directory")
     if not _is_within(resolved, roots):
+        raise HTTPException(status_code=403, detail="Directory is outside the allowed browse roots")
+    return resolved
+
+
+def _create_directory(value: str, roots: tuple[Path, ...]) -> Path:
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="path must be absolute")
+    if not candidate.name or candidate.name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="path must name a directory")
+    try:
+        parent = candidate.parent.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Parent directory not found") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="Unable to resolve parent directory") from exc
+    if not parent.is_dir() or not _is_within(parent, roots):
+        raise HTTPException(status_code=403, detail="Directory is outside the allowed browse roots")
+    try:
+        candidate.mkdir(exist_ok=True)
+        resolved = candidate.resolve(strict=True)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=400, detail="path exists and is not a directory") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Directory is not writable") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="Unable to create directory") from exc
+    if not resolved.is_dir() or not _is_within(resolved, roots):
         raise HTTPException(status_code=403, detail="Directory is outside the allowed browse roots")
     return resolved
 
@@ -120,4 +149,18 @@ async def list_directories(
         path=str(current),
         parent=parent_path,
         directories=directories,
+    )
+
+
+@router.post("/directories/create", response_model=WorkspaceDirectoryEntry)
+async def create_directory(
+    req: WorkspaceDirectoryCreateRequest,
+    request: Request,
+) -> WorkspaceDirectoryEntry:
+    created = _create_directory(req.path, _workspace_roots(request))
+    return WorkspaceDirectoryEntry(
+        name=created.name,
+        path=str(created),
+        hidden=created.name.startswith("."),
+        is_symlink=created.is_symlink(),
     )

@@ -24,11 +24,13 @@ import {
   Image as ImageIcon,
   ListTodo,
   LoaderCircle,
+  Lock,
   MessageSquarePlus,
   MoreHorizontal,
   Pause,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Play,
   Plus,
   Puzzle,
@@ -54,6 +56,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { applyGatewayEvent } from "./events";
@@ -157,8 +160,36 @@ function basename(path: string): string {
   return normalized.split(/[\\/]/).at(-1) || path;
 }
 
+function comparablePath(path: string): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "").replace(/\\/g, "/");
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+export function defaultProjectDirectory(home: string, name: string): string {
+  const directoryName = name
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/[. ]+$/, "")
+    .trim() || "新项目";
+  const separator = home.includes("\\") && !home.includes("/") ? "\\" : "/";
+  return `${home.replace(/[\\/]+$/, "")}${separator}${directoryName}`;
+}
+
+export function resolveDefaultProjectId(
+  projects: ProjectPreset[],
+  startupCwd?: string | null,
+): string | null {
+  const startupProject = startupCwd
+    ? projects.find((project) => comparablePath(project.path) === comparablePath(startupCwd))
+    : undefined;
+  return startupProject?.id
+    ?? projects.find((project) => project.is_default === true)?.id
+    ?? projects[0]?.id
+    ?? null;
+}
+
 function projectDirectoryTitle(project: ProjectPreset): string {
-  if (project.directories.length === 0) return "主目录";
+  if (project.directories.length === 0) return "需要设置项目主目录";
   if (project.directories.length === 1) return project.directories[0];
   return `${project.directories[0]} 等 ${project.directories.length} 个目录`;
 }
@@ -324,6 +355,7 @@ function App() {
   const [pluginLoading, setPluginLoading] = useState(false);
   const [scheduleAction, setScheduleAction] = useState<ScheduleActionState | null>(null);
   const [scheduleDeleteTarget, setScheduleDeleteTarget] = useState<ScheduleJobInfo | null>(null);
+  const [projectDeleteTarget, setProjectDeleteTarget] = useState<ProjectPreset | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [monitorError, setMonitorError] = useState<string | null>(null);
   const [pluginError, setPluginError] = useState<string | null>(null);
@@ -367,10 +399,13 @@ function App() {
   ) ?? activeConnection?.projects.find(
     (item) => item.path === activeConnection.last_project_path,
   ) ?? activeConnection?.projects[0] ?? null;
+  const defaultProjectId = activeConnection
+    ? resolveDefaultProjectId(activeConnection.projects, activeGateway?.workspace?.startup_cwd)
+    : null;
   const activeSessionKey = activeConnection ? activeSessions[activeConnection.id] : null;
   const activeSession = activeSessionKey ? sessions[activeSessionKey] : null;
   const activeChannel = activeSessionKey ? channelRef.current.get(activeSessionKey) : null;
-  const activeList = activeProject
+  const activeList = activeProject?.directories.length
     ? activeGateway?.sessionsByProject[activeProject.path] ?? []
     : [];
   // The HTTP session list is persisted metadata and can briefly lag behind
@@ -843,11 +878,12 @@ function App() {
       const projects = connection.projects.length > 0
         ? connection.projects
         : [{
-            id: crypto.randomUUID(),
-            path: workspace.startup_cwd,
-            name: basename(workspace.startup_cwd),
-            directories: [workspace.startup_cwd],
-            last_session_id: null,
+          id: crypto.randomUUID(),
+          path: workspace.startup_cwd,
+          name: basename(workspace.startup_cwd),
+          directories: [workspace.startup_cwd],
+          is_default: true,
+          last_session_id: null,
             favorite_session_ids: [],
           }];
       const sessionEntries = await Promise.all(
@@ -1088,17 +1124,51 @@ function App() {
 
   const switchProject = (project: ProjectPreset) => {
     if (!activeConnection) return;
+    if (project.directories.length === 0) {
+      setProjectModal(project);
+      return;
+    }
     setWorkspaceView("chat");
+    setSearch("");
     updateConnection(activeConnection.id, (connection) => ({
       ...connection,
       last_project_path: project.path,
       last_project_id: project.id,
     }));
+    void refreshProjectSessions(activeConnection.id, project.path).catch((error) => {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    });
     const lastId = project.last_session_id;
     if (lastId) {
       const info = activeGateway?.sessionsByProject[project.path]?.find((item) => item.session_id === lastId);
-      if (info) openSession(activeConnection, project, info);
+      if (info) {
+        openSession(activeConnection, project, info);
+        return;
+      }
     }
+    setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
+  };
+
+  const removeProject = (removing: ProjectPreset): boolean => {
+    if (!activeConnection) return false;
+    if (removing.id === defaultProjectId) {
+      setGlobalError("默认项目不能删除");
+      return false;
+    }
+    if (removing.id === activeProject?.id) {
+      setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
+    }
+    updateConnection(activeConnection.id, (connection) => {
+      const projects = connection.projects.filter((item) => item.id !== removing.id);
+      const next = projects[0] ?? null;
+      return {
+        ...connection,
+        projects,
+        last_project_path: connection.last_project_id === removing.id ? next?.path ?? null : connection.last_project_path,
+        last_project_id: connection.last_project_id === removing.id ? next?.id ?? null : connection.last_project_id,
+      };
+    });
+    return true;
   };
 
   const addImages = async (files: File[]) => {
@@ -1654,7 +1724,7 @@ function App() {
             <nav className="workspace-nav" aria-label="工作区">
               <button
                 className={`workspace-nav-item ${workspaceView === "chat" ? "active" : ""}`}
-                disabled={!activeConnection || !activeProject || activeGateway?.status !== "online"}
+                disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
                 onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
               >
                 <MessageSquarePlus />
@@ -1731,14 +1801,23 @@ function App() {
                           {activeProject?.id === project.id ? <FolderOpen /> : <Folder />}
                           <span>{project.name}</span>
                         </button>
-                        <button
-                          className="icon-button tiny project-edit"
-                          title={`编辑项目 ${project.name}`}
-                          aria-label={`编辑项目 ${project.name}`}
-                          onClick={() => setProjectModal(project)}
-                        >
-                          <Settings />
-                        </button>
+                        <ProjectActionsMenu
+                          projectName={project.name}
+                          newSessionDisabled={project.directories.length === 0 || activeGateway?.status !== "online"}
+                          deleteDisabled={project.id === defaultProjectId}
+                          onNewSession={() => {
+                            if (!activeConnection) return;
+                            setSearch("");
+                            updateConnection(activeConnection.id, (connection) => ({
+                              ...connection,
+                              last_project_path: project.path,
+                              last_project_id: project.id,
+                            }));
+                            openSession(activeConnection, project);
+                          }}
+                          onEdit={() => setProjectModal(project)}
+                          onDelete={() => setProjectDeleteTarget(project)}
+                        />
                       </div>
                     ))}
                   </div>
@@ -2169,6 +2248,8 @@ function App() {
           home={activeGateway.workspace.home}
           roots={activeGateway.workspace.browse_roots}
           project={projectModal === "new" ? null : projectModal}
+          projects={activeConnection.projects}
+          protectPrimaryDirectory={projectModal !== "new" && projectModal.id === defaultProjectId}
           onClose={() => setProjectModal(null)}
           onSave={(project) => {
             const previousProject = projectModal === "new" ? null : projectModal;
@@ -2186,22 +2267,10 @@ function App() {
             void refreshProjectSessions(activeConnection.id, project.path);
             setProjectModal(null);
           }}
-          onRemove={projectModal === "new" ? undefined : () => {
+          onRemove={projectModal === "new" || projectModal.id === defaultProjectId ? undefined : () => {
             const removing = projectModal;
-            if (removing.id === activeProject?.id) {
-              setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
-            }
-            updateConnection(activeConnection.id, (connection) => {
-              const projects = connection.projects.filter((item) => item.id !== removing.id);
-              const next = projects[0] ?? null;
-              return {
-                ...connection,
-                projects,
-                last_project_path: connection.last_project_id === removing.id ? next?.path ?? null : connection.last_project_path,
-                last_project_id: connection.last_project_id === removing.id ? next?.id ?? null : connection.last_project_id,
-              };
-            });
             setProjectModal(null);
+            setProjectDeleteTarget(removing);
           }}
         />
       )}
@@ -2257,6 +2326,16 @@ function App() {
             if (scheduleAction?.id !== scheduleDeleteTarget.id) setScheduleDeleteTarget(null);
           }}
           onConfirm={() => void confirmScheduleDelete()}
+        />
+      )}
+
+      {projectDeleteTarget && (
+        <ProjectDeleteModal
+          project={projectDeleteTarget}
+          onClose={() => setProjectDeleteTarget(null)}
+          onConfirm={() => {
+            if (removeProject(projectDeleteTarget)) setProjectDeleteTarget(null);
+          }}
         />
       )}
 
@@ -2742,6 +2821,120 @@ function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<H
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [close, open, ref]);
+}
+
+export function ProjectActionsMenu({
+  projectName,
+  newSessionDisabled = false,
+  deleteDisabled = false,
+  onNewSession,
+  onEdit,
+  onDelete,
+}: {
+  projectName: string;
+  newSessionDisabled?: boolean;
+  deleteDisabled?: boolean;
+  onNewSession: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 8, left: 8 });
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const placeMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const gap = 8;
+    const menuWidth = 208;
+    const menuHeight = 142;
+    const fitsRight = rect.right + gap + menuWidth <= window.innerWidth - viewportPadding;
+    setPosition({
+      top: Math.min(
+        Math.max(viewportPadding, rect.top - 7),
+        Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding),
+      ),
+      left: fitsRight
+        ? rect.right + gap
+        : Math.max(viewportPadding, rect.left - menuWidth - gap),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const onViewportChange = () => placeMenu();
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, placeMenu]);
+
+  const choose = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        className="icon-button tiny project-menu-trigger"
+        type="button"
+        title={`项目操作 ${projectName}`}
+        aria-label={`项目操作 ${projectName}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) placeMenu();
+          setOpen((value) => !value);
+        }}
+      >
+        <MoreHorizontal />
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="project-action-menu"
+          role="menu"
+          aria-label={`${projectName} 项目操作`}
+          style={position}
+        >
+          <button type="button" role="menuitem" disabled={newSessionDisabled} onClick={() => choose(onNewSession)}>
+            <MessageSquarePlus />
+            <span>新建会话</span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => choose(onEdit)}>
+            <Pencil />
+            <span>编辑项目</span>
+          </button>
+          <div className="project-action-separator" role="separator" />
+          <button className="danger" type="button" role="menuitem" disabled={deleteDisabled} onClick={() => choose(onDelete)}>
+            <Trash2 />
+            <span>{deleteDisabled ? "默认项目不可删除" : "删除项目"}</span>
+          </button>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 function ComposerAddMenu({
@@ -3455,31 +3648,75 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
   );
 }
 
-function ProjectModal({ api, home, roots, project, onClose, onSave, onRemove }: {
+export function ProjectModal({ api, home, roots, project, projects, protectPrimaryDirectory = false, onClose, onSave, onRemove }: {
   api: GatewayApi;
   home: string;
   roots: string[];
   project: ProjectPreset | null;
+  projects: ProjectPreset[];
+  protectPrimaryDirectory?: boolean;
   onClose: () => void;
   onSave: (project: ProjectPreset) => void;
   onRemove?: () => void;
 }) {
-  const [name, setName] = useState(project?.name ?? "");
-  const [directories, setDirectories] = useState(project?.directories ?? []);
-  const [choosingDirectory, setChoosingDirectory] = useState(false);
   const editing = project !== null;
-  const suggestedName = directories[0] ? basename(directories[0]) : "未命名项目";
-  const save = () => {
+  const [name, setName] = useState(project?.name ?? "");
+  const [directories, setDirectories] = useState(() => (
+    project?.directories.length
+      ? project.directories
+      : project?.path ? [project.path] : []
+  ));
+  const [choosingDirectory, setChoosingDirectory] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const suggestedName = directories[0] ? basename(directories[0]) : "新项目";
+  const protectedPrimaryDirectory = protectPrimaryDirectory
+    ? project?.directories[0] ?? project?.path ?? null
+    : null;
+
+  const save = async () => {
+    if (busy) return;
     const nextDirectories = [...new Set(directories)];
-    const path = nextDirectories[0] ?? home;
-    onSave({
-      id: project?.id ?? crypto.randomUUID(),
-      path,
-      name: name.trim() || suggestedName,
-      directories: nextDirectories,
-      last_session_id: project?.path === path ? project.last_session_id : null,
-      favorite_session_ids: project?.path === path ? project.favorite_session_ids ?? [] : [],
-    });
+    if (editing && nextDirectories.length === 0) {
+      setError("请为项目选择一个主目录");
+      return;
+    }
+    if (protectedPrimaryDirectory
+      && comparablePath(nextDirectories[0] ?? "") !== comparablePath(protectedPrimaryDirectory)) {
+      setError("默认项目的原始主目录不能移除");
+      return;
+    }
+    const shouldCreateDefaultDirectory = !editing && nextDirectories.length === 0;
+    const path = shouldCreateDefaultDirectory
+      ? defaultProjectDirectory(home, name)
+      : nextDirectories[0];
+    const duplicate = projects.find((item) => (
+      item.id !== project?.id && comparablePath(item.path) === comparablePath(path)
+    ));
+    if (duplicate) {
+      setError(`“${duplicate.name}”已经使用这个主目录，请选择其他目录`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const primaryPath = shouldCreateDefaultDirectory
+        ? (await api.createDirectory(path)).path
+        : path;
+      const savedDirectories = [primaryPath, ...nextDirectories.slice(1)];
+      onSave({
+        id: project?.id ?? crypto.randomUUID(),
+        path: primaryPath,
+        name: name.trim() || suggestedName,
+        directories: savedDirectories,
+        is_default: project?.is_default === true,
+        last_session_id: project?.path === primaryPath ? project.last_session_id : null,
+        favorite_session_ids: project?.path === primaryPath ? project.favorite_session_ids ?? [] : [],
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setBusy(false);
+    }
   };
   if (choosingDirectory) {
     return (
@@ -3492,6 +3729,7 @@ function ProjectModal({ api, home, roots, project, onClose, onSave, onRemove }: 
         onClose={() => setChoosingDirectory(false)}
         onSelect={(path) => {
           setDirectories((current) => current.includes(path) ? current : [...current, path]);
+          setError(null);
           setChoosingDirectory(false);
         }}
       />
@@ -3506,44 +3744,52 @@ function ProjectModal({ api, home, roots, project, onClose, onSave, onRemove }: 
               autoFocus
               value={name}
               onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && save()}
+              onKeyDown={(event) => event.key === "Enter" && void save()}
               placeholder="给项目起个名字"
+              disabled={busy}
             />
           </label>
           <section className="project-directories">
-            <h3>项目目录</h3>
+            <h3>{editing ? "项目目录" : "项目文件夹（可选）"}</h3>
             <div className={`project-directory-box ${directories.length === 0 ? "empty" : ""}`}>
-              {directories.map((path) => (
+              {directories.map((path, index) => {
+                const primaryDirectoryProtected = protectPrimaryDirectory && index === 0;
+                return (
                 <div className="project-directory-row" key={path} title={path}>
                   <Folder />
                   <span><strong>{basename(path)}</strong><small>{path}</small></span>
                   <button
                     className="icon-button small"
-                    title={`移除 ${basename(path)}`}
+                    title={primaryDirectoryProtected ? "默认项目的主目录不能移除" : `移除 ${basename(path)}`}
                     aria-label={`移除目录 ${path}`}
+                    disabled={busy || primaryDirectoryProtected}
                     onClick={() => setDirectories((current) => current.filter((item) => item !== path))}
                   >
-                    <X />
+                    {primaryDirectoryProtected ? <Lock /> : <X />}
                   </button>
                 </div>
-              ))}
-              <button className="project-add-directory" type="button" onClick={() => setChoosingDirectory(true)}>
+                );
+              })}
+              <button className="project-add-directory" type="button" disabled={busy} onClick={() => setChoosingDirectory(true)}>
                 <FolderInput />
-                <span>{directories.length === 0 ? "为项目加入工作目录" : "继续加入目录"}</span>
+                <span>{directories.length === 0 ? "选择项目文件夹" : "继续加入目录"}</span>
               </button>
             </div>
-            {directories.length === 0 && <p>暂不选择时，新会话会从用户主目录开始。</p>}
+            {directories.length === 0 && (
+              <p>{editing ? "每个项目都需要一个独立的主目录。" : "不选择时，将在用户主目录下自动创建同名文件夹。"}</p>
+            )}
           </section>
+          {error && <div className="form-error"><AlertTriangle />{error}</div>}
         </div>
         <div className={`modal-actions project-actions ${editing ? "editing" : ""}`}>
           {editing && onRemove && (
-            <button className="danger-button" type="button" onClick={() => {
-              if (window.confirm(`从列表中移除项目“${project.name}”？项目文件不会被删除。`)) onRemove();
-            }}>移除项目</button>
+            <button className="danger-button" type="button" onClick={onRemove}>移除项目</button>
           )}
           <span className="project-actions-spacer" />
-          <button type="button" onClick={onClose}>取消</button>
-          <button className="primary" type="button" onClick={save}>{editing ? "保存更改" : "创建项目"}</button>
+          <button type="button" disabled={busy} onClick={onClose}>取消</button>
+          <button className="primary" type="button" disabled={busy || (editing && directories.length === 0)} onClick={() => void save()}>
+            {busy && <LoaderCircle className="spin" />}{editing ? "保存更改" : "创建项目"}
+          </button>
         </div>
     </Modal>
   );
@@ -3740,6 +3986,30 @@ export function ScheduleDeleteModal({ job, busy, error, onClose, onConfirm }: {
         <button className="confirm-danger" type="button" disabled={busy} onClick={onConfirm}>
           {busy ? <LoaderCircle className="spin" /> : <Trash2 />}
           永久删除
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+export function ProjectDeleteModal({ project, onClose, onConfirm }: {
+  project: ProjectPreset;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal title="删除项目" onClose={onClose}>
+      <div className="confirm-dialog-copy">
+        <Trash2 />
+        <div>
+          <strong>从列表中删除“{project.name}”？</strong>
+          <p>只会移除项目配置，不会删除项目文件夹、文件或已有会话记录。</p>
+        </div>
+      </div>
+      <div className="modal-actions">
+        <button type="button" onClick={onClose}>取消</button>
+        <button className="confirm-danger" type="button" onClick={onConfirm}>
+          <Trash2 />删除项目
         </button>
       </div>
     </Modal>

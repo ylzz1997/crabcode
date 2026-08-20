@@ -225,6 +225,7 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/context/{session_id}` | GET | Read the latest client workspace context |
 | `/workspace/info` | GET | Read the startup directory, user home, and allowed browse roots |
 | `/workspace/directories` | GET | List subdirectories within the allowed browse roots |
+| `/workspace/directories/create` | POST | Create one directory within an allowed browse root |
 | `/logs` | GET | List, tail, or clear background logs |
 | `/logs/follow` | GET | Follow a background log as SSE |
 | `/tasks`, `/tasks/{id}` | GET | List background tasks or read one task; `scope=global` lists tasks across loaded sessions |

@@ -5,12 +5,18 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectFavoriteSessions,
+  defaultProjectDirectory,
   FavoritesView,
   formatTurnDuration,
+  ProjectActionsMenu,
+  ProjectDeleteModal,
+  ProjectModal,
+  resolveDefaultProjectId,
   resolveRememberedModel,
   ScheduleDeleteModal,
   ScheduledTasksView,
 } from "./App";
+import type { GatewayApi } from "./gateway";
 import type { BackgroundTaskInfo, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
 
 const job: ScheduleJobInfo = {
@@ -35,6 +41,12 @@ const job: ScheduleJobInfo = {
   extra: {},
   running: false,
 };
+
+function changeInput(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
 
 describe("ScheduleDeleteModal", () => {
   let container: HTMLDivElement;
@@ -87,6 +99,121 @@ describe("ScheduleDeleteModal", () => {
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"));
     expect(buttons).toHaveLength(2);
     expect(buttons.every((button) => button.disabled)).toBe(true);
+  });
+});
+
+describe("ProjectActionsMenu", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("shows the three requested project actions and invokes them", () => {
+    const onNewSession = vi.fn();
+    const onEdit = vi.fn();
+    const onDelete = vi.fn();
+    act(() => root.render(
+      <ProjectActionsMenu
+        projectName="CrabCode"
+        onNewSession={onNewSession}
+        onEdit={onEdit}
+        onDelete={onDelete}
+      />,
+    ));
+
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+    act(() => trigger.click());
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).map((button) => button.textContent))
+      .toEqual(["新建会话", "编辑项目", "删除项目"]);
+
+    act(() => document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[0].click());
+    expect(onNewSession).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    act(() => trigger.click());
+    act(() => document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1].click());
+    expect(onEdit).toHaveBeenCalledOnce();
+
+    act(() => trigger.click());
+    act(() => document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[2].click());
+    expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("closes with Escape and returns focus to the trigger", () => {
+    act(() => root.render(
+      <ProjectActionsMenu
+        projectName="CrabCode"
+        onNewSession={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    ));
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+    act(() => trigger.click());
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps the default project delete action disabled", () => {
+    const onDelete = vi.fn();
+    act(() => root.render(
+      <ProjectActionsMenu
+        projectName="Home"
+        deleteDisabled
+        onNewSession={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={onDelete}
+      />,
+    ));
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!.click());
+    const deleteAction = document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[2];
+    expect(deleteAction.disabled).toBe(true);
+    expect(deleteAction.textContent).toBe("默认项目不可删除");
+    act(() => deleteAction.click());
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProjectDeleteModal", () => {
+  it("uses an in-app confirmation and removes only after confirmation", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onConfirm = vi.fn();
+    act(() => root.render(
+      <ProjectDeleteModal
+        project={{
+          id: "trial",
+          name: "试试新项目",
+          path: "/Users/hyl/试试新项目",
+          directories: ["/Users/hyl/试试新项目"],
+          last_session_id: null,
+        }}
+        onClose={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    ));
+
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("从列表中删除“试试新项目”？");
+    const remove = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+      .find((button) => button.textContent?.includes("删除项目"))!;
+    act(() => remove.click());
+    expect(onConfirm).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
+    container.remove();
   });
 });
 
@@ -167,6 +294,204 @@ describe("automation deck tabs", () => {
     act(() => container.querySelector<HTMLButtonElement>(".monitor-open")!.click());
     expect(onOpenSession).toHaveBeenCalledWith(project, session);
 
+    act(() => root.unmount());
+    container.remove();
+  });
+});
+
+describe("project defaults", () => {
+  it("protects only the first startup project when legacy projects share its path", () => {
+    const projects = [
+      {
+        id: "home",
+        name: "hyl",
+        path: "/Users/hyl",
+        directories: ["/Users/hyl"],
+        last_session_id: null,
+      },
+      {
+        id: "trial",
+        name: "试试新项目",
+        path: "/Users/hyl",
+        directories: [],
+        is_default: true,
+        last_session_id: null,
+      },
+    ];
+
+    expect(resolveDefaultProjectId(projects, "/Users/hyl")).toBe("home");
+    expect(projects[1].id).not.toBe(resolveDefaultProjectId(projects, "/Users/hyl"));
+  });
+
+  it("derives a safe folder beneath the home directory", () => {
+    expect(defaultProjectDirectory("/Users/test", "试试新项目")).toBe("/Users/test/试试新项目");
+    expect(defaultProjectDirectory("/Users/test/", "a/b:c")).toBe("/Users/test/a-b-c");
+  });
+
+  it("creates and saves the suggested project directory", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const createDirectory = vi.fn().mockResolvedValue({
+      name: "试试新项目",
+      path: "/Users/test/试试新项目",
+      hidden: false,
+      is_symlink: false,
+    });
+    const onSave = vi.fn();
+    act(() => root.render(
+      <ProjectModal
+        api={{ createDirectory } as unknown as GatewayApi}
+        home="/Users/test"
+        roots={["/Users/test"]}
+        project={null}
+        projects={[]}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />,
+    ));
+
+    const name = container.querySelector<HTMLInputElement>(".project-name-field input")!;
+    act(() => changeInput(name, "试试新项目"));
+    expect(container.textContent).toContain("项目文件夹（可选）");
+    expect(container.textContent).toContain("不选择时，将在用户主目录下自动创建同名文件夹");
+    expect(container.textContent).not.toContain("/Users/test/试试新项目");
+    const create = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("创建项目"))!;
+    await act(async () => create.click());
+
+    expect(createDirectory).toHaveBeenCalledWith("/Users/test/试试新项目");
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      name: "试试新项目",
+      path: "/Users/test/试试新项目",
+      directories: ["/Users/test/试试新项目"],
+    }));
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("uses a selected folder instead of creating the default directory", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const createDirectory = vi.fn();
+    const directories = vi.fn().mockImplementation(async (path: string) => ({
+      path,
+      parent: path === "/Users/test" ? null : "/Users/test",
+      directories: path === "/Users/test" ? [{
+        name: "已有源码",
+        path: "/Users/test/已有源码",
+        hidden: false,
+        is_symlink: false,
+      }] : [],
+    }));
+    const onSave = vi.fn();
+    act(() => root.render(
+      <ProjectModal
+        api={{ createDirectory, directories } as unknown as GatewayApi}
+        home="/Users/test"
+        roots={["/Users/test"]}
+        project={null}
+        projects={[]}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />,
+    ));
+
+    act(() => changeInput(
+      container.querySelector<HTMLInputElement>(".project-name-field input")!,
+      "源码项目",
+    ));
+    const choose = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("选择项目文件夹"))!;
+    await act(async () => choose.click());
+    const source = Array.from(document.body.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("已有源码"))!;
+    await act(async () => source.click());
+    const use = Array.from(document.body.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("加入此目录"))!;
+    act(() => use.click());
+    const create = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("创建项目"))!;
+    await act(async () => create.click());
+
+    expect(createDirectory).not.toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      name: "源码项目",
+      path: "/Users/test/已有源码",
+      directories: ["/Users/test/已有源码"],
+    }));
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("protects only the original directory of the default project", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    act(() => root.render(
+      <ProjectModal
+        api={{} as GatewayApi}
+        home="/Users/test"
+        roots={["/Users/test"]}
+        project={{
+          id: "existing",
+          name: "已有项目",
+          path: "/Users/test/已有项目",
+          directories: ["/Users/test/已有项目", "/Users/test/附加目录"],
+          last_session_id: null,
+        }}
+        projects={[]}
+        protectPrimaryDirectory
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    ));
+
+    expect(container.textContent).toContain("项目目录");
+    expect(container.textContent).toContain("/Users/test/已有项目");
+    const removeButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-label^="移除目录"]'));
+    expect(removeButtons).toHaveLength(2);
+    expect(removeButtons[0].disabled).toBe(true);
+    expect(removeButtons[0].title).toBe("默认项目的主目录不能移除");
+    expect(removeButtons[1].disabled).toBe(false);
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("rejects a main directory already used by another project", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const createDirectory = vi.fn();
+    act(() => root.render(
+      <ProjectModal
+        api={{ createDirectory } as unknown as GatewayApi}
+        home="/Users/test"
+        roots={["/Users/test"]}
+        project={null}
+        projects={[{
+          id: "existing",
+          name: "已有项目",
+          path: "/Users/test/重复",
+          directories: ["/Users/test/重复"],
+          last_session_id: null,
+        }]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    ));
+
+    act(() => changeInput(
+      container.querySelector<HTMLInputElement>(".project-name-field input")!,
+      "重复",
+    ));
+    const create = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("创建项目"))!;
+    await act(async () => create.click());
+
+    expect(container.textContent).toContain("已有项目”已经使用这个主目录");
+    expect(createDirectory).not.toHaveBeenCalled();
     act(() => root.unmount());
     container.remove();
   });

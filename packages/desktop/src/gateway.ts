@@ -12,6 +12,7 @@ import type {
   SessionStatus,
   SkillInfo,
   ToolInfo,
+  WorkspaceDirectoryEntry,
   WorkspaceDirectoryListing,
   WorkspaceInfo,
 } from "./types";
@@ -96,6 +97,13 @@ export class GatewayApi {
   directories(path: string, includeHidden = false): Promise<WorkspaceDirectoryListing> {
     const query = new URLSearchParams({ path, include_hidden: String(includeHidden) });
     return this.request(`/workspace/directories?${query}`);
+  }
+
+  createDirectory(path: string): Promise<WorkspaceDirectoryEntry> {
+    return this.request("/workspace/directories/create", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
   }
 
   sessions(cwd: string): Promise<SessionInfo[]> {

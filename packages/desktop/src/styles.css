@@ -8225,3 +8225,112 @@ html[data-theme="light"] .dock-icon-choice>i {
     width: 100%;
   }
 }
+
+/* Project overflow menu */
+.project-item-row>.project-menu-trigger {
+  position: absolute;
+  right: 4px;
+  color: #879a94;
+  opacity: .48;
+}
+
+.project-item-row:hover>.project-menu-trigger,
+.project-item-row>.project-menu-trigger:focus-visible,
+.project-item-row>.project-menu-trigger[aria-expanded="true"] {
+  color: #e8efeb;
+  opacity: 1;
+}
+
+.project-action-menu {
+  position: fixed;
+  z-index: 90;
+  width: min(208px, calc(100vw - 16px));
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 14px;
+  background: rgba(24, 31, 30, .98);
+  box-shadow: 0 22px 64px rgba(0, 0, 0, .48), inset 0 1px rgba(255, 255, 255, .055);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+  backdrop-filter: blur(26px) saturate(135%);
+  animation: composer-menu-in 150ms ease-out both;
+}
+
+.project-action-menu>button {
+  width: 100%;
+  height: 39px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #d7ded9;
+  text-align: left;
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.project-action-menu>button:hover:not(:disabled),
+.project-action-menu>button:focus-visible {
+  background: rgba(255, 255, 255, .075);
+  color: #f4f7f5;
+}
+
+.project-action-menu>button:disabled {
+  opacity: .38;
+  cursor: default;
+}
+
+.project-action-menu>button svg {
+  width: 17px;
+  height: 17px;
+  color: #aebbb5;
+}
+
+.project-action-menu>button span {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 540;
+}
+
+.project-action-menu>button.danger,
+.project-action-menu>button.danger svg {
+  color: #ff8585;
+}
+
+.project-action-separator {
+  height: 1px;
+  margin: 5px 8px;
+  background: rgba(255, 255, 255, .11);
+}
+
+html[data-theme="light"] .project-action-menu {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 18px 52px rgba(43, 55, 50, .2), inset 0 1px rgba(255, 255, 255, .8);
+}
+
+html[data-theme="light"] .project-action-menu>button {
+  color: var(--text);
+}
+
+html[data-theme="light"] .project-action-menu>button svg {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .project-action-menu>button:hover:not(:disabled),
+html[data-theme="light"] .project-action-menu>button:focus-visible {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+html[data-theme="light"] .project-action-menu>button.danger,
+html[data-theme="light"] .project-action-menu>button.danger svg {
+  color: var(--red);
+}
+
+html[data-theme="light"] .project-action-separator {
+  background: var(--border-soft);
+}
