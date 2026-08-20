@@ -67,9 +67,12 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
       : message.role === "assistant"
         ? "assistant"
         : "system";
+    const messageTiming = messageTimestamp === null
+      ? {}
+      : { startedAt: messageTimestamp, completedAt: messageTimestamp, durationMs: 0 };
     const content = message.content;
     if (typeof content === "string") {
-      if (content) items.push({ id: baseId, kind, text: content, status: "complete" });
+      if (content) items.push({ id: baseId, kind, text: content, status: "complete", ...messageTiming });
       continue;
     }
     if (!Array.isArray(content)) continue;
@@ -83,6 +86,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
         kind,
         text,
         status: "complete",
+        ...messageTiming,
       });
       text = "";
       segment += 1;
@@ -105,6 +109,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
           text: block.thinking,
           status: "complete",
           collapsed: true,
+          ...messageTiming,
         });
         return;
       }
@@ -125,6 +130,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
           tool_use_id: toolUseId,
           status: "complete",
           collapsed: true,
+          ...(messageTimestamp === null ? {} : { startedAt: messageTimestamp }),
         });
         tools.set(toolUseId, toolIndex);
         return;
@@ -142,6 +148,12 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
             result,
             isError: block.is_error === true,
             status: "complete",
+            ...(messageTimestamp === null ? {} : {
+              completedAt: messageTimestamp,
+              durationMs: items[toolIndex].startedAt === undefined
+                ? 0
+                : Math.max(0, messageTimestamp - items[toolIndex].startedAt!),
+            }),
           };
         } else {
           tools.set(toolUseId, items.length);
@@ -156,6 +168,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
             tool_use_id: toolUseId,
             status: "complete",
             collapsed: true,
+            ...(messageTimestamp === null ? {} : { completedAt: messageTimestamp, durationMs: 0 }),
           });
         }
       }

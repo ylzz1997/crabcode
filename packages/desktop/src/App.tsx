@@ -64,6 +64,7 @@ import remarkMath from "remark-math";
 import { applyGatewayEvent } from "./events";
 import { GatewayApi, SessionChannel } from "./gateway";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
+import { TrajectoryView } from "./TrajectoryView";
 import { getToolPresentation, parseChecklistResult, type ToolField } from "./toolPresentation";
 import {
   deleteCredential,
@@ -98,6 +99,7 @@ import type {
 type GatewayMap = Record<string, GatewayViewState>;
 type SessionMap = Record<string, SessionViewState>;
 type WorkspaceView = "chat" | "scheduled" | "plugins" | "favorites";
+type ConversationView = "chat" | "trajectory";
 type AutomationTab = "schedule" | "monitor";
 type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
 type ScheduleActionState = { id: string; action: ScheduleAction };
@@ -347,6 +349,7 @@ function App() {
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
+  const [conversationViews, setConversationViews] = useState<Record<string, ConversationView>>({});
   const [search, setSearch] = useState("");
   const [scheduleJobs, setScheduleJobs] = useState<Record<string, ScheduleJobInfo[]>>({});
   const [monitorTasks, setMonitorTasks] = useState<Record<string, BackgroundTaskInfo[]>>({});
@@ -407,6 +410,7 @@ function App() {
   const activeSessionKey = activeConnection ? activeSessions[activeConnection.id] : null;
   const activeSession = activeSessionKey ? sessions[activeSessionKey] : null;
   const activeChannel = activeSessionKey ? channelRef.current.get(activeSessionKey) : null;
+  const activeConversationView = activeSessionKey ? conversationViews[activeSessionKey] ?? "chat" : "chat";
   const activeList = activeProject?.directories.length
     ? activeGateway?.sessionsByProject[activeProject.path] ?? []
     : [];
@@ -612,6 +616,10 @@ function App() {
     channelRef.current.get(target.key)?.dispose();
     channelRef.current.delete(target.key);
     setSessions((current) => {
+      const { [target.key]: _, ...rest } = current;
+      return rest;
+    });
+    setConversationViews((current) => {
       const { [target.key]: _, ...rest } = current;
       return rest;
     });
@@ -828,6 +836,11 @@ function App() {
             ...current,
             [connection.id]: current[connection.id] === previousKey ? nextKey : current[connection.id],
           }));
+          setConversationViews((current) => {
+            if (!current[previousKey]) return current;
+            const { [previousKey]: view, ...rest } = current;
+            return { ...rest, [nextKey]: view };
+          });
           key = nextKey;
         }
         updateConnection(connection.id, (current) => ({
@@ -1239,7 +1252,7 @@ function App() {
             },
             items: [
               ...current[activeSessionKey].items,
-              { id: crypto.randomUUID(), kind: "user", text: `引导：${attachmentLine}${attachmentLine && text ? "\n\n" : ""}${text}`, status: "complete" },
+              { id: crypto.randomUUID(), kind: "user", text: `引导：${attachmentLine}${attachmentLine && text ? "\n\n" : ""}${text}`, status: "complete", startedAt: now, completedAt: now, durationMs: 0 },
             ],
           },
         }));
@@ -1266,7 +1279,7 @@ function App() {
             operationId,
             items: [
               ...current[activeSessionKey].items,
-              { id: crypto.randomUUID(), kind: "user", text: `${attachmentLine}${attachmentLine && text ? "\n\n" : ""}${text}`, status: "complete" },
+              { id: crypto.randomUUID(), kind: "user", text: `${attachmentLine}${attachmentLine && text ? "\n\n" : ""}${text}`, status: "complete", startedAt: now, completedAt: now, durationMs: 0 },
             ],
           },
         }));
@@ -2019,6 +2032,22 @@ function App() {
                   <h1>{activeSession.title}</h1>
                   <span>{activeSession.cwd}</span>
                 </div>
+                <div className="conversation-view-tabs" role="tablist" aria-label="会话视图">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeConversationView === "chat"}
+                    className={activeConversationView === "chat" ? "active" : ""}
+                    onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "chat" }))}
+                  >对话</button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeConversationView === "trajectory"}
+                    className={activeConversationView === "trajectory" ? "active" : ""}
+                    onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "trajectory" }))}
+                  >轨迹</button>
+                </div>
                 <div className="conversation-actions">
                   <button className="icon-button" title="检查点" onClick={() => setCheckpointModal(true)}>
                     <History />
@@ -2035,7 +2064,9 @@ function App() {
                   </button>
                 </div>
               </div>
-              <div className="messages">
+              {activeConversationView === "trajectory" ? (
+                <TrajectoryView items={activeSession.items} now={runClock} />
+              ) : <div className="messages">
                 {activeSession.items.length === 0 && (
                   <div className="conversation-empty">
                     <Bot />
@@ -2066,7 +2097,7 @@ function App() {
                   />
                 )}
                 <div ref={messageEndRef} />
-              </div>
+              </div>}
               <div className="composer-wrap">
                 <div className="composer-context">
                   <span><Folder />{activeProject?.name}</span>
