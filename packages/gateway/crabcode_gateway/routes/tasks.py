@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from crabcode_gateway.schemas import BackgroundTaskInfo, TaskStopRequest
 from crabcode_gateway.safe_file import read_regular_file_tail
+from crabcode_gateway.session_registry import get_session_lock
 from crabcode_gateway.task_registry import SessionOperationRejected, run_session_operation
 
 
@@ -17,8 +18,10 @@ router = APIRouter(tags=["tasks"])
 def _task_dicts(session: Any) -> list[dict[str, Any]]:
     """Return one stable representation for monitors and managed agents."""
     result: list[dict[str, Any]] = []
+    cwd = str(getattr(session, "cwd", "") or "")
     for snapshot in session.list_monitor_tasks():
         data = snapshot.to_dict() if hasattr(snapshot, "to_dict") else dict(snapshot)
+        data.setdefault("cwd", cwd)
         result.append(data)
     for snapshot in session.list_agents():
         result.append(
@@ -26,6 +29,7 @@ def _task_dicts(session: Any) -> list[dict[str, Any]]:
                 "task_id": snapshot.agent_id,
                 "agent_id": snapshot.agent_id,
                 "session_id": snapshot.session_id,
+                "cwd": cwd,
                 "description": snapshot.title,
                 "task_type": "local_agent",
                 "source": "agent",
@@ -46,6 +50,7 @@ def _task_info(data: dict[str, Any]) -> BackgroundTaskInfo:
         task_id=str(data.get("task_id") or data.get("agent_id") or ""),
         agent_id=data.get("agent_id"),
         session_id=str(data.get("session_id") or ""),
+        cwd=str(data.get("cwd") or ""),
         description=str(data.get("description") or ""),
         task_type=str(data.get("task_type") or ""),
         source=str(data.get("source") or ""),
@@ -136,7 +141,49 @@ def _matching_tasks(session: Any, task_id: str) -> list[dict[str, Any]]:
 @router.get("/tasks", response_model=list[BackgroundTaskInfo])
 @router.get("/tasks/list", response_model=list[BackgroundTaskInfo])
 @router.get("/task/list", response_model=list[BackgroundTaskInfo])
-async def list_tasks(request: Request, session_id: str | None = None) -> list[BackgroundTaskInfo]:
+async def list_tasks(
+    request: Request,
+    session_id: str | None = None,
+    scope: str | None = None,
+    status: str | None = None,
+) -> list[BackgroundTaskInfo]:
+    if scope == "global":
+        # The automation deck needs one stable view across every currently
+        # loaded project instead of following whichever chat is the default.
+        async with get_session_lock(request.app.state):
+            closing = getattr(request.app.state, "closing_sessions", set())
+            sessions = [
+                session
+                for session in request.app.state.sessions.values()
+                if getattr(session, "session_id", None) not in closing
+            ]
+
+        result: list[BackgroundTaskInfo] = []
+        for session in sessions:
+            async def _list_global() -> list[BackgroundTaskInfo]:
+                initializer = getattr(session, "initialize", None)
+                if callable(initializer):
+                    await initializer()
+                return [
+                    _task_info(item)
+                    for item in _task_dicts(session)
+                    if status is None or str(item.get("status") or "") == status
+                ]
+
+            try:
+                result.extend(
+                    await run_session_operation(
+                        request.app.state,
+                        session,
+                        _list_global,
+                    )
+                )
+            except SessionOperationRejected:
+                # A session can be closing while the deck refreshes; the next
+                # poll will reconcile it without failing the whole dashboard.
+                continue
+        return sorted(result, key=lambda item: item.updated_at, reverse=True)
+
     session = _get_session(request, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -145,7 +192,11 @@ async def list_tasks(request: Request, session_id: str | None = None) -> list[Ba
         initializer = getattr(session, "initialize", None)
         if callable(initializer):
             await initializer()
-        return [_task_info(item) for item in _task_dicts(session)]
+        return [
+            _task_info(item)
+            for item in _task_dicts(session)
+            if status is None or str(item.get("status") or "") == status
+        ]
 
     try:
         return await run_session_operation(request.app.state, session, _list)

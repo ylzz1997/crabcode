@@ -220,7 +220,7 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/workspace/directories` | GET | 列出允许的工作区根目录内的子目录 |
 | `/logs` | GET | 列出、读取尾部或清空后台日志 |
 | `/logs/follow` | GET | 通过 SSE 实时跟随后台日志 |
-| `/tasks`, `/tasks/{id}` | GET | 列出后台任务或读取单个任务 |
+| `/tasks`, `/tasks/{id}` | GET | 列出后台任务或读取单个任务；`scope=global` 可列出所有已加载会话中的任务 |
 | `/tasks/{id}/output` | GET | 读取持久化的后台任务输出 |
 | `/tasks/stop` | POST | 停止后台任务 |
 | `/schedule`, `/schedule/{id}` | GET | 列出定时任务，或按 ID/唯一前缀读取单个任务 |

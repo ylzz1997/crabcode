@@ -73,6 +73,7 @@ import {
   storeCredential,
 } from "./native";
 import type {
+  BackgroundTaskInfo,
   ChatItem,
   ConnectionPreset,
   DesktopSettings,
@@ -92,6 +93,7 @@ import type {
 type GatewayMap = Record<string, GatewayViewState>;
 type SessionMap = Record<string, SessionViewState>;
 type WorkspaceView = "chat" | "scheduled" | "plugins" | "favorites";
+type AutomationTab = "schedule" | "monitor";
 type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
 type ScheduleActionState = { id: string; action: ScheduleAction };
 type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
@@ -314,12 +316,16 @@ function App() {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
   const [search, setSearch] = useState("");
   const [scheduleJobs, setScheduleJobs] = useState<Record<string, ScheduleJobInfo[]>>({});
+  const [monitorTasks, setMonitorTasks] = useState<Record<string, BackgroundTaskInfo[]>>({});
   const [pluginData, setPluginData] = useState<Record<string, PluginData>>({});
+  const [automationTab, setAutomationTab] = useState<AutomationTab>("schedule");
   const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [monitorLoading, setMonitorLoading] = useState(false);
   const [pluginLoading, setPluginLoading] = useState(false);
   const [scheduleAction, setScheduleAction] = useState<ScheduleActionState | null>(null);
   const [scheduleDeleteTarget, setScheduleDeleteTarget] = useState<ScheduleJobInfo | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [monitorError, setMonitorError] = useState<string | null>(null);
   const [pluginError, setPluginError] = useState<string | null>(null);
   const [deletingSessionIds, setDeletingSessionIds] = useState<Set<string>>(new Set());
   const [modelSelections, setModelSelections] = useState<Record<string, string>>({});
@@ -413,6 +419,21 @@ function App() {
       setScheduleError(error instanceof Error ? error.message : String(error));
     } finally {
       setScheduleLoading(false);
+    }
+  }, []);
+
+  const refreshMonitors = useCallback(async (connectionId: string) => {
+    const api = apiRef.current.get(connectionId);
+    if (!api) return;
+    setMonitorLoading(true);
+    setMonitorError(null);
+    try {
+      const tasks = await api.backgroundTasks(true, "running");
+      setMonitorTasks((current) => ({ ...current, [connectionId]: tasks }));
+    } catch (error) {
+      setMonitorError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setMonitorLoading(false);
     }
   }, []);
 
@@ -1371,6 +1392,7 @@ function App() {
     [activeConnection, activeGateway],
   );
   const activeJobs = activeConnection ? scheduleJobs[activeConnection.id] ?? [] : [];
+  const activeMonitorTasks = activeConnection ? monitorTasks[activeConnection.id] ?? [] : [];
   const resourceSessionId = activeSession && activeSession.cwd === activeProject?.path
     ? activeSession.id
     : undefined;
@@ -1395,13 +1417,20 @@ function App() {
     if (
       workspaceView !== "scheduled"
       || !activeConnection
-      || !activeJobs.some((job) => job.running)
     ) return;
+    if (automationTab === "schedule" && !activeJobs.some((job) => job.running)) return;
     const timer = window.setInterval(() => {
-      void refreshSchedules(activeConnection.id);
+      if (automationTab === "monitor") void refreshMonitors(activeConnection.id);
+      else void refreshSchedules(activeConnection.id);
     }, 1_500);
     return () => window.clearInterval(timer);
-  }, [activeConnection, activeJobs, refreshSchedules, workspaceView]);
+  }, [activeConnection, activeJobs, automationTab, refreshMonitors, refreshSchedules, workspaceView]);
+
+  useEffect(() => {
+    if (workspaceView !== "scheduled" || !activeConnection || activeGateway?.status !== "online") return;
+    if (automationTab === "monitor") void refreshMonitors(activeConnection.id);
+    else void refreshSchedules(activeConnection.id);
+  }, [activeConnection, activeGateway?.status, automationTab, refreshMonitors, refreshSchedules, workspaceView]);
 
   useEffect(() => {
     const previous = focusedSessionRef.current;
@@ -1796,12 +1825,21 @@ function App() {
         <main className="main-panel">
           {workspaceView === "scheduled" ? (
             <ScheduledTasksView
+              tab={automationTab}
+              onTabChange={setAutomationTab}
               jobs={activeJobs}
-              loading={scheduleLoading}
-              error={scheduleError}
+              tasks={activeMonitorTasks}
+              projects={activeConnection?.projects ?? []}
+              sessionsByProject={activeGateway?.sessionsByProject ?? {}}
+              loading={automationTab === "schedule" ? scheduleLoading : monitorLoading}
+              error={automationTab === "schedule" ? scheduleError : monitorError}
               actionState={scheduleAction}
               connected={activeGateway?.status === "online"}
-              onRefresh={() => activeConnection && void refreshSchedules(activeConnection.id)}
+              onRefresh={() => {
+                if (!activeConnection) return;
+                if (automationTab === "monitor") void refreshMonitors(activeConnection.id);
+                else void refreshSchedules(activeConnection.id);
+              }}
               onAction={(action, job) => {
                 if (action === "cancel") {
                   setScheduleError(null);
@@ -1814,6 +1852,15 @@ function App() {
                 if (!activeConnection || !activeProject) return;
                 openSession(activeConnection, activeProject);
                 if (prompt) setComposer(prompt);
+              }}
+              onOpenSession={(project, session) => {
+                if (!activeConnection) return;
+                updateConnection(activeConnection.id, (connection) => ({
+                  ...connection,
+                  last_project_path: project.path,
+                  last_project_id: project.id,
+                }));
+                openSession(activeConnection, project, session);
               }}
             />
           ) : workspaceView === "favorites" ? (
@@ -2197,8 +2244,13 @@ function ConnectionDot({ status }: { status: GatewayViewState["status"] }) {
     : <Circle className={`connection-dot ${status}`} fill="currentColor" />;
 }
 
-function ScheduledTasksView({
+export function ScheduledTasksView({
+  tab,
+  onTabChange,
   jobs,
+  tasks,
+  projects,
+  sessionsByProject,
   loading,
   error,
   actionState,
@@ -2206,8 +2258,14 @@ function ScheduledTasksView({
   onRefresh,
   onAction,
   onNew,
+  onOpenSession,
 }: {
+  tab: AutomationTab;
+  onTabChange: (tab: AutomationTab) => void;
   jobs: ScheduleJobInfo[];
+  tasks: BackgroundTaskInfo[];
+  projects: ProjectPreset[];
+  sessionsByProject: Record<string, SessionInfo[]>;
   loading: boolean;
   error: string | null;
   actionState: ScheduleActionState | null;
@@ -2215,11 +2273,44 @@ function ScheduledTasksView({
   onRefresh: () => void;
   onAction: (action: ScheduleAction, job: ScheduleJobInfo) => void;
   onNew: (prompt?: string) => void;
+  onOpenSession: (project: ProjectPreset, session: SessionInfo) => void;
 }) {
   const [query, setQuery] = useState("");
-  const filtered = jobs.filter((job) => {
-    const needle = query.trim().toLowerCase();
+  const needle = query.trim().toLowerCase();
+  const filteredJobs = jobs.filter((job) => {
     return !needle || [job.name, job.description, job.prompt, job.schedule]
+      .some((value) => value.toLowerCase().includes(needle));
+  });
+  const monitorContexts = tasks
+    .filter((task) => (
+      task.status === "running"
+      && task.task_type !== "local_agent"
+      && task.source !== "agent"
+      && !task.agent_id
+    ))
+    .map((task) => {
+      const project = projects.find((item) => item.path === task.cwd)
+        ?? projects.find((item) => (
+          sessionsByProject[item.path]?.some((session) => session.session_id === task.session_id)
+        ))
+        ?? null;
+      const session = (project ? sessionsByProject[project.path] : undefined)
+        ?.find((item) => item.session_id === task.session_id)
+        ?? Object.values(sessionsByProject).flat()
+          .find((item) => item.session_id === task.session_id)
+        ?? null;
+      return { task, project, session };
+    });
+  const filteredMonitors = monitorContexts.filter(({ task, project, session }) => {
+    return !needle || [
+      task.description,
+      task.source,
+      task.task_id,
+      project?.name ?? "",
+      project?.path ?? task.cwd ?? "",
+      session?.title ?? "",
+      task.session_id,
+    ]
       .some((value) => value.toLowerCase().includes(needle));
   });
   const runningCount = jobs.filter((job) => job.running).length;
@@ -2227,11 +2318,19 @@ function ScheduledTasksView({
   const nextRun = jobs
     .filter((job) => job.enabled && job.next_run)
     .sort((left, right) => String(left.next_run).localeCompare(String(right.next_run)))[0]?.next_run ?? null;
-  const summaryCards = [
-    { label: "正在执行", value: String(runningCount), icon: Activity, tone: "coral" },
-    { label: "暂停待命", value: String(pausedCount), icon: Timer, tone: "amber" },
-    { label: "最近触发", value: nextRun ? formatDateTime(nextRun) : "尚未安排", icon: Gauge, tone: "cyan" },
-  ] as const;
+  const monitorSessionCount = new Set(monitorContexts.map(({ task }) => task.session_id)).size;
+  const monitorProjectCount = new Set(monitorContexts.map(({ task, project }) => project?.id ?? task.cwd ?? task.session_id)).size;
+  const summaryCards = tab === "schedule"
+    ? [
+      { label: "正在执行", value: String(runningCount), icon: Activity, tone: "coral" },
+      { label: "暂停待命", value: String(pausedCount), icon: Timer, tone: "amber" },
+      { label: "最近触发", value: nextRun ? formatDateTime(nextRun) : "尚未安排", icon: Gauge, tone: "cyan" },
+    ] as const
+    : [
+      { label: "运行中 Monitor", value: String(monitorContexts.length), icon: Activity, tone: "coral" },
+      { label: "活跃会话", value: String(monitorSessionCount), icon: History, tone: "cyan" },
+      { label: "涉及项目", value: String(monitorProjectCount), icon: Folder, tone: "amber" },
+    ] as const;
   const suggestions = [
     {
       title: "晨间代码巡检",
@@ -2259,15 +2358,20 @@ function ScheduledTasksView({
   return (
     <section className="workspace-page scheduled-page">
       <div className="page-kicker"><Workflow /><span>CRAB DESKTOP AUTOMATION DECK</span><i /></div>
-      <header className="page-header">
-        <div>
-          <h1>自动化甲板</h1>
-          <p>让 Crab Desktop 按计划运行检查、整理和交付流程</p>
+      <header className="page-header plugins-header automation-header">
+        <div className="plugin-tabs automation-tabs" role="tablist" aria-label="自动化类型">
+          <button type="button" role="tab" aria-selected={tab === "schedule"} className={tab === "schedule" ? "active" : ""} onClick={() => onTabChange("schedule")}><Workflow />Schedule</button>
+          <button type="button" role="tab" aria-selected={tab === "monitor"} className={tab === "monitor" ? "active" : ""} onClick={() => onTabChange("monitor")}><Activity />Monitor</button>
         </div>
-        <button className="icon-button page-refresh" title="刷新自动化甲板" onClick={onRefresh} disabled={loading || !connected}>
+        <span className="capability-context automation-context"><CircleDotDashed />{connected ? "自动化已连接" : "等待 Gateway"}</span>
+        <button className="icon-button page-refresh" title={tab === "schedule" ? "刷新已安排任务" : "刷新 Monitor"} onClick={onRefresh} disabled={loading || !connected}>
           <RefreshCw className={loading ? "spin" : ""} />
         </button>
       </header>
+      <div className="page-intro automation-intro">
+        <h1>自动化甲板</h1>
+        <p>{tab === "schedule" ? "让 Crab Desktop 按计划运行检查、整理和交付流程" : "查看所有项目中正在执行的 Monitor 及其会话归属"}</p>
+      </div>
       <div className="automation-summary">
         {summaryCards.map(({ label, value, icon: Icon, tone }) => (
           <div className={`automation-stat ${tone}`} key={label}>
@@ -2278,15 +2382,61 @@ function ScheduledTasksView({
       </div>
       <label className="page-search">
         <Search />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="检索流程、触发器或工作区" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tab === "schedule" ? "检索流程、触发器或工作区" : "检索 Monitor、会话或项目"} />
       </label>
-      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取已安排任务" />}
+      {!connected && <PageNotice icon={<WifiOff />} text={tab === "schedule" ? "Gateway 尚未连接，无法读取已安排任务" : "Gateway 尚未连接，无法读取 Monitor"} />}
       {error && <PageNotice icon={<AlertTriangle />} text={error} error />}
-      {jobs.length > 0 ? (
+      {tab === "monitor" ? (
+        <div className="page-section monitor-section">
+          <div className="page-section-heading"><h2>运行中的 Monitor</h2><span>{filteredMonitors.length} 个任务</span></div>
+          {filteredMonitors.length > 0 ? (
+            <div className="monitor-list">
+              {filteredMonitors.map(({ task, project, session }) => {
+                const startedAt = task.started_at ? new Date(task.started_at).getTime() : Number.NaN;
+                const elapsed = Number.isNaN(startedAt) ? "刚刚启动" : `已运行 ${formatElapsed(Date.now() - startedAt)}`;
+                const source = task.source === "websocket" ? "WebSocket" : "命令";
+                const projectName = project?.name || basename(task.cwd || "") || "未知项目";
+                const sessionTitle = session?.title || `会话 ${task.session_id.slice(0, 8)}`;
+                return (
+                  <article className="monitor-item" key={`${task.session_id}:${task.task_id}`}>
+                    <div className="monitor-icon"><Activity /></div>
+                    <div className="monitor-copy">
+                      <div className="scheduled-title-row">
+                        <strong>{task.description || `${source} Monitor`}</strong>
+                        <span className="schedule-type">{source} · {task.task_id.slice(0, 8)}</span>
+                      </div>
+                      <div className="monitor-location">
+                        <span title={project?.path ?? task.cwd}><Folder />{projectName}</span>
+                        <i>/</i>
+                        <span title={task.session_id}><History />{sessionTitle}</span>
+                      </div>
+                      <div className="scheduled-meta">
+                        <small className="schedule-status live"><span />执行中</small>
+                        <small>{elapsed}</small>
+                      </div>
+                    </div>
+                    {project && session && (
+                      <button className="icon-button monitor-open" type="button" title="打开所属会话" aria-label={`打开会话 ${sessionTitle}`} onClick={() => onOpenSession(project, session)}><ArrowUpRight /></button>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          ) : loading ? (
+            <div className="page-loading"><LoaderCircle className="spin" />正在读取 Monitor</div>
+          ) : (
+            <div className="monitor-empty">
+              <span><Activity /></span>
+              <strong>{query.trim() ? "没有匹配的 Monitor" : "当前没有运行中的 Monitor"}</strong>
+              <small>{query.trim() ? "试试搜索任务描述、会话标题或项目名" : "会话启动命令或 WebSocket 监控后，会自动出现在这里"}</small>
+            </div>
+          )}
+        </div>
+      ) : jobs.length > 0 ? (
         <div className="page-section">
-          <div className="page-section-heading"><h2>运行队列</h2><span>{filtered.length} 个流程</span></div>
+          <div className="page-section-heading"><h2>运行队列</h2><span>{filteredJobs.length} 个流程</span></div>
           <div className="scheduled-list">
-            {filtered.map((job) => {
+            {filteredJobs.map((job) => {
               const action = actionState?.id === job.id ? actionState.action : null;
               const busy = action !== null || job.running;
               const paused = job.status === "paused" || job.status === "disabled";
@@ -2323,7 +2473,7 @@ function ScheduledTasksView({
                 </article>
               );
             })}
-            {filtered.length === 0 && <div className="page-empty">没有匹配的已安排任务</div>}
+            {filteredJobs.length === 0 && <div className="page-empty">没有匹配的已安排任务</div>}
           </div>
         </div>
       ) : (

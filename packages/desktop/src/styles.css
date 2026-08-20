@@ -4613,6 +4613,140 @@ body {
   color: var(--accent-strong);
 }
 
+.automation-header {
+  gap: 12px;
+}
+
+.automation-intro {
+  margin-top: 31px;
+}
+
+.monitor-list {
+  display: grid;
+  gap: 1px;
+  border-top: 1px solid #2a4648;
+}
+
+.monitor-item {
+  min-height: 124px;
+  display: flex;
+  align-items: flex-start;
+  gap: 17px;
+  padding: 23px 12px;
+  border-bottom: 1px solid #1e373a;
+  transition: background 150ms ease;
+}
+
+.monitor-item:hover {
+  background: #111f22;
+}
+
+.monitor-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #69403d;
+  border-radius: 9px;
+  background: #332326;
+  color: var(--accent);
+}
+
+.monitor-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.monitor-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.monitor-location {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 8px 0 7px;
+  color: #91a9a2;
+  font-size: 12px;
+}
+
+.monitor-location span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitor-location svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: #6f8c85;
+}
+
+.monitor-location i {
+  color: #45615c;
+  font-style: normal;
+}
+
+.monitor-open {
+  border-color: #2a4548;
+  color: #89a59c;
+}
+
+.monitor-open:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #2c292d;
+  color: var(--accent-strong);
+}
+
+.monitor-empty {
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 34px;
+  border: 1px dashed #294649;
+  border-radius: 10px;
+  background: #101d20;
+  color: #e1ece6;
+  text-align: center;
+}
+
+.monitor-empty>span {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 4px;
+  border: 1px solid #315256;
+  border-radius: 11px;
+  background: #16272a;
+  color: #789b93;
+}
+
+.monitor-empty>span svg {
+  width: 21px;
+  height: 21px;
+}
+
+.monitor-empty strong {
+  font-size: 15px;
+}
+
+.monitor-empty small {
+  color: #6f8983;
+  font-size: 12px;
+}
+
 .suggestion-list {
   border-top-color: #2a4648;
 }
@@ -5063,6 +5197,35 @@ body {
 
   .scheduled-actions {
     opacity: 1;
+  }
+
+  .automation-header {
+    align-items: center;
+  }
+
+  .automation-context {
+    display: none;
+  }
+
+  .monitor-item {
+    gap: 11px;
+    padding: 20px 2px;
+  }
+
+  .monitor-icon {
+    width: 31px;
+    height: 31px;
+    flex-basis: 31px;
+  }
+
+  .monitor-location {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .monitor-location i {
+    display: none;
   }
 
   .suggestion-item {
@@ -7822,20 +7985,37 @@ html[data-theme="light"] .workspace-page .page-refresh:hover:not(:disabled) {
   color: var(--text);
 }
 
-html[data-theme="light"] .workspace-page :is(.scheduled-list, .suggestion-list, .plugin-grid) {
+html[data-theme="light"] .workspace-page :is(.scheduled-list, .monitor-list, .suggestion-list, .plugin-grid) {
   border-color: var(--border);
 }
 
-html[data-theme="light"] .workspace-page :is(.scheduled-item, .suggestion-item, .plugin-item) {
+html[data-theme="light"] .workspace-page :is(.scheduled-item, .monitor-item, .suggestion-item, .plugin-item) {
   border-color: var(--border-soft);
 }
 
 html[data-theme="light"] .workspace-page :is(
   .scheduled-item:hover,
+  .monitor-item:hover,
   .suggestion-item:hover:not(:disabled),
   .plugin-item:hover
 ) {
   background: var(--surface-hover);
+}
+
+html[data-theme="light"] .workspace-page :is(.monitor-location, .monitor-empty small) {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .workspace-page .monitor-empty {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+html[data-theme="light"] .workspace-page .monitor-open {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--muted);
 }
 
 html[data-theme="light"] .workspace-page .page-command {

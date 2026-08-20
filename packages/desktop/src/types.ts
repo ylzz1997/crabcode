@@ -182,6 +182,24 @@ export interface ScheduleJobInfo {
   running: boolean;
 }
 
+export interface BackgroundTaskInfo {
+  task_id: string;
+  agent_id: string | null;
+  session_id: string;
+  cwd?: string;
+  description: string;
+  task_type: string;
+  source: string;
+  status: string;
+  output_file: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+  error: string;
+  exit_code: number | null;
+}
+
 export interface CheckpointInfo {
   id: string;
   label?: string;

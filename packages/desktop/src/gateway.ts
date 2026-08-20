@@ -1,6 +1,7 @@
 import { authenticateConnection, normalizeBaseUrl } from "./native";
 import type {
   CheckpointInfo,
+  BackgroundTaskInfo,
   ConnectionPreset,
   GatewayEvent,
   GatewayModel,
@@ -143,6 +144,14 @@ export class GatewayApi {
 
   schedules(globalScope = false): Promise<ScheduleJobInfo[]> {
     return this.request(globalScope ? "/schedule/list?scope=global" : "/schedule/list");
+  }
+
+  backgroundTasks(globalScope = false, status?: string): Promise<BackgroundTaskInfo[]> {
+    const query = new URLSearchParams();
+    if (globalScope) query.set("scope", "global");
+    if (status) query.set("status", status);
+    const suffix = query.size ? `?${query}` : "";
+    return this.request(`/tasks${suffix}`);
   }
 
   pauseSchedule(jobId: string): Promise<ScheduleJobInfo> {

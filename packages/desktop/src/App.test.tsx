@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,8 +9,9 @@ import {
   formatTurnDuration,
   resolveRememberedModel,
   ScheduleDeleteModal,
+  ScheduledTasksView,
 } from "./App";
-import type { ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
+import type { BackgroundTaskInfo, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
 
 const job: ScheduleJobInfo = {
   id: "job-1",
@@ -86,6 +87,88 @@ describe("ScheduleDeleteModal", () => {
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"));
     expect(buttons).toHaveLength(2);
     expect(buttons.every((button) => button.disabled)).toBe(true);
+  });
+});
+
+describe("automation deck tabs", () => {
+  it("switches to running monitors and exposes their project and session", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const project = {
+      id: "project-1",
+      path: "/work/crabcode",
+      name: "CrabCode",
+      directories: ["/work/crabcode"],
+      last_session_id: "session-1",
+    };
+    const session = {
+      session_id: "session-1",
+      message_count: 4,
+      model: "",
+      provider: "",
+      created_at: "2026-08-20T00:00:00Z",
+      title: "监控发布流水线",
+      cwd: project.path,
+      tokens_used: 0,
+      preview: "等待部署状态",
+    };
+    const monitor: BackgroundTaskInfo = {
+      task_id: "monitor-12345678",
+      agent_id: null,
+      session_id: session.session_id,
+      cwd: project.path,
+      description: "监听部署状态",
+      task_type: "local_bash",
+      source: "command",
+      status: "running",
+      output_file: null,
+      created_at: "2026-08-20T00:00:00Z",
+      started_at: "2026-08-20T00:00:00Z",
+      finished_at: null,
+      updated_at: "2026-08-20T00:00:00Z",
+      error: "",
+      exit_code: null,
+    };
+    const onOpenSession = vi.fn();
+
+    function Harness() {
+      const [tab, setTab] = useState<"schedule" | "monitor">("schedule");
+      return (
+        <ScheduledTasksView
+          tab={tab}
+          onTabChange={setTab}
+          jobs={[]}
+          tasks={[monitor]}
+          projects={[project]}
+          sessionsByProject={{ [project.path]: [session] }}
+          loading={false}
+          error={null}
+          actionState={null}
+          connected
+          onRefresh={vi.fn()}
+          onAction={vi.fn()}
+          onNew={vi.fn()}
+          onOpenSession={onOpenSession}
+        />
+      );
+    }
+
+    act(() => root.render(<Harness />));
+    expect(container.textContent).toContain("启动一个流程");
+    const monitorTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      .find((button) => button.textContent?.includes("Monitor"))!;
+    act(() => monitorTab.click());
+
+    expect(monitorTab.getAttribute("aria-selected")).toBe("true");
+    expect(container.textContent).toContain("监听部署状态");
+    expect(container.textContent).toContain("CrabCode");
+    expect(container.textContent).toContain("监控发布流水线");
+    act(() => container.querySelector<HTMLButtonElement>(".monitor-open")!.click());
+    expect(onOpenSession).toHaveBeenCalledWith(project, session);
+
+    act(() => root.unmount());
+    container.remove();
   });
 });
 

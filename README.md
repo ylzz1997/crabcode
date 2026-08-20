@@ -227,7 +227,7 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/workspace/directories` | GET | List subdirectories within the allowed browse roots |
 | `/logs` | GET | List, tail, or clear background logs |
 | `/logs/follow` | GET | Follow a background log as SSE |
-| `/tasks`, `/tasks/{id}` | GET | List background tasks or read one task |
+| `/tasks`, `/tasks/{id}` | GET | List background tasks or read one task; `scope=global` lists tasks across loaded sessions |
 | `/tasks/{id}/output` | GET | Read persisted background-task output |
 | `/tasks/stop` | POST | Stop a background task |
 | `/schedule`, `/schedule/{id}` | GET | List scheduled jobs or read one job by ID/unique prefix |

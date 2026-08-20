@@ -675,6 +675,7 @@ class MonitorInfo(BaseModel):
 class BackgroundTaskInfo(BaseModel):
     task_id: str
     session_id: str = ""
+    cwd: str = ""
     description: str = ""
     task_type: str = ""
     source: str = ""
