@@ -208,6 +208,7 @@ export class GatewayApi {
 interface SessionChannelOptions {
   sessionId?: string;
   cwd: string;
+  additionalDirectories?: string[];
   onEvent: (event: GatewayEvent) => void;
   onReady: (sessionId: string) => void;
   onState: (connected: boolean, error?: string) => void;
@@ -298,9 +299,17 @@ export class SessionChannel {
     if (this.initialCommandSent) return;
     this.initialCommandSent = true;
     if (this.sessionId) {
-      this.sendRaw({ type: "resume_session", session_id: this.sessionId });
+      this.sendRaw({
+        type: "resume_session",
+        session_id: this.sessionId,
+        additional_directories: this.options.additionalDirectories ?? [],
+      });
     } else {
-      this.sendRaw({ type: "new_session", cwd: this.options.cwd });
+      this.sendRaw({
+        type: "new_session",
+        cwd: this.options.cwd,
+        additional_directories: this.options.additionalDirectories ?? [],
+      });
     }
   }
 

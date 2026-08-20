@@ -1,6 +1,8 @@
 export interface ProjectPreset {
+  id: string;
   path: string;
   name: string;
+  directories: string[];
   last_session_id: string | null;
 }
 
@@ -12,10 +14,11 @@ export interface ConnectionPreset {
   allow_insecure_remote: boolean;
   projects: ProjectPreset[];
   last_project_path: string | null;
+  last_project_id: string | null;
 }
 
 export interface DesktopSettings {
-  schema_version: 1;
+  schema_version: 2;
   active_connection_id: string;
   connection_order: string[];
   connections: ConnectionPreset[];

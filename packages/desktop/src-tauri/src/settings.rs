@@ -14,7 +14,7 @@ fn settings_path() -> Result<PathBuf, String> {
 
 fn default_settings() -> Value {
     json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "active_connection_id": "local",
         "connection_order": ["local"],
         "connections": [{
@@ -24,7 +24,8 @@ fn default_settings() -> Value {
             "credential_ref": null,
             "allow_insecure_remote": false,
             "projects": [],
-            "last_project_path": null
+            "last_project_path": null,
+            "last_project_id": null
         }],
         "python_path": null,
         "sidebar_width": 280

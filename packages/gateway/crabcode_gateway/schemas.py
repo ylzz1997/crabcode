@@ -72,6 +72,7 @@ class SendMessageRequest(BaseModel):
 
 class NewSessionRequest(BaseModel):
     cwd: str | None = None
+    additional_directories: list[str] = Field(default_factory=list)
     model: str | None = None
     provider: str | None = None
     base_url: str | None = None
@@ -81,6 +82,7 @@ class NewSessionRequest(BaseModel):
 
 class ResumeSessionRequest(BaseModel):
     session_id: str
+    additional_directories: list[str] = Field(default_factory=list)
     model: str | None = None
     provider: str | None = None
     base_url: str | None = None

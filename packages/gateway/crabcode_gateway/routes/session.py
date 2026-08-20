@@ -192,7 +192,15 @@ def _build_session_settings(
     from crabcode_core.config.manager import ConfigManager
     from crabcode_core.types.config import CrabCodeSettings
 
-    explicit = CrabCodeSettings()
+    explicit = (
+        CrabCodeSettings(
+            permissions={
+                "additional_directories": list(req.additional_directories),
+            },
+        )
+        if req.additional_directories
+        else CrabCodeSettings()
+    )
     if req.model is not None:
         explicit.api.model = req.model
     if req.provider is not None:

@@ -2910,6 +2910,7 @@ class CoreSession:
             enabled_tools=tool_names,
             model_id=model,
             cwd=self.cwd,
+            additional_dirs=self.settings.permissions.additional_directories,
             language=self.settings.language,
             profile=profile,
             agent_mode=self._agent_mode,

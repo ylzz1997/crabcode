@@ -16,7 +16,7 @@ interface EnsureGatewayResult {
 }
 
 const DEFAULT_SETTINGS: DesktopSettings = {
-  schema_version: 1,
+  schema_version: 2,
   active_connection_id: "local",
   connection_order: ["local"],
   connections: [{
@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
     allow_insecure_remote: false,
     projects: [],
     last_project_path: null,
+    last_project_id: null,
   }],
   python_path: null,
   sidebar_width: 280,
@@ -37,14 +38,41 @@ export function isDesktopShell(): boolean {
 }
 
 export async function loadSettings(): Promise<DesktopSettings> {
-  if (isDesktopShell()) return invoke<DesktopSettings>("load_desktop_settings");
+  if (isDesktopShell()) return normalizeSettings(await invoke<DesktopSettings>("load_desktop_settings"));
   const raw = localStorage.getItem("crabcode.desktop.settings");
   if (!raw) return structuredClone(DEFAULT_SETTINGS);
   try {
-    return JSON.parse(raw) as DesktopSettings;
+    return normalizeSettings(JSON.parse(raw) as DesktopSettings);
   } catch {
     return structuredClone(DEFAULT_SETTINGS);
   }
+}
+
+export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
+  return {
+    ...raw,
+    schema_version: 2,
+    connections: (raw.connections ?? []).map((connection) => ({
+      ...connection,
+      projects: (connection.projects ?? []).map((project) => {
+        const legacyPath = typeof project.path === "string" ? project.path : "";
+        const directories = Array.isArray(project.directories)
+          ? project.directories.filter((path): path is string => typeof path === "string" && path.trim().length > 0)
+          : legacyPath ? [legacyPath] : [];
+        return {
+          ...project,
+          id: project.id || legacyPath || crypto.randomUUID(),
+          path: directories[0] || legacyPath || "",
+          directories,
+          last_session_id: project.last_session_id ?? null,
+        };
+      }),
+      last_project_id: connection.last_project_id
+        ?? connection.projects?.find((project) => project.path === connection.last_project_path)?.id
+        ?? connection.last_project_path
+        ?? null,
+    })),
+  };
 }
 
 export async function saveSettings(settings: DesktopSettings): Promise<void> {

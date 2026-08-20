@@ -126,6 +126,12 @@ function basename(path: string): string {
   return normalized.split(/[\\/]/).at(-1) || path;
 }
 
+function projectDirectoryTitle(project: ProjectPreset): string {
+  if (project.directories.length === 0) return "主目录";
+  if (project.directories.length === 1) return project.directories[0];
+  return `${project.directories[0]} 等 ${project.directories.length} 个目录`;
+}
+
 function firstUserText(items: ChatItem[]): string {
   return items.find((item) => item.kind === "user" && item.text?.trim())?.text?.trim() ?? "";
 }
@@ -267,7 +273,7 @@ function App() {
   }>>([]);
   const [pendingFolders, setPendingFolders] = useState<string[]>([]);
   const [connectionModal, setConnectionModal] = useState(false);
-  const [directoryModal, setDirectoryModal] = useState(false);
+  const [projectModal, setProjectModal] = useState<ProjectPreset | "new" | null>(null);
   const [referenceDirectoryModal, setReferenceDirectoryModal] = useState(false);
   const [goalModal, setGoalModal] = useState(false);
   const [settingsModal, setSettingsModal] = useState(false);
@@ -289,6 +295,8 @@ function App() {
   }, [settings]);
   const activeGateway = activeConnection ? gateways[activeConnection.id] : null;
   const activeProject = activeConnection?.projects.find(
+    (item) => item.id === activeConnection.last_project_id,
+  ) ?? activeConnection?.projects.find(
     (item) => item.path === activeConnection.last_project_path,
   ) ?? activeConnection?.projects[0] ?? null;
   const activeSessionKey = activeConnection ? activeSessions[activeConnection.id] : null;
@@ -578,6 +586,7 @@ function App() {
     channel = new SessionChannel(api, {
       sessionId: info?.session_id,
       cwd: project.path,
+      additionalDirectories: project.directories.slice(1),
       onEvent: (event: GatewayEvent) => {
         if (!isCurrentChannel()) return;
         if (event.type === "model_change" && event.model_profile) {
@@ -646,7 +655,8 @@ function App() {
         updateConnection(connection.id, (current) => ({
           ...current,
           last_project_path: project.path,
-          projects: current.projects.map((item) => item.path === project.path
+          last_project_id: project.id,
+          projects: current.projects.map((item) => item.id === project.id
             ? { ...item, last_session_id: id }
             : item),
         }));
@@ -684,7 +694,13 @@ function App() {
       const [workspace, models] = await Promise.all([api.workspaceInfo(), api.models()]);
       const projects = connection.projects.length > 0
         ? connection.projects
-        : [{ path: workspace.startup_cwd, name: basename(workspace.startup_cwd), last_session_id: null }];
+        : [{
+            id: crypto.randomUUID(),
+            path: workspace.startup_cwd,
+            name: basename(workspace.startup_cwd),
+            directories: [workspace.startup_cwd],
+            last_session_id: null,
+          }];
       const sessionEntries = await Promise.all(
         projects.map(async (project) => [project.path, await api.sessions(project.path)] as const),
       );
@@ -707,6 +723,7 @@ function App() {
           ...current,
           projects,
           last_project_path: workspace.startup_cwd,
+          last_project_id: projects[0].id,
         }));
       }
     } catch (error) {
@@ -809,6 +826,7 @@ function App() {
     updateConnection(activeConnection.id, (connection) => ({
       ...connection,
       last_project_path: project.path,
+      last_project_id: project.id,
     }));
     const lastId = project.last_session_id;
     if (lastId) {
@@ -1345,7 +1363,7 @@ function App() {
                     className="icon-button tiny"
                     title="添加项目"
                     disabled={activeGateway?.status !== "online"}
-                    onClick={() => setDirectoryModal(true)}
+                    onClick={() => setProjectModal("new")}
                   >
                     <Plus />
                   </button>
@@ -1367,26 +1385,25 @@ function App() {
                 <div className="section-content-inner">
                   <div className="project-list">
                     {activeConnection?.projects.map((project) => (
-                      <button
-                        key={project.path}
-                        className={`project-item ${activeProject?.path === project.path ? "active" : ""}`}
-                        title={project.path}
-                        onClick={() => switchProject(project)}
-                        onDoubleClick={() => {
-                          if (!activeConnection) return;
-                          const name = window.prompt("项目名称", project.name)?.trim();
-                          if (!name) return;
-                          updateConnection(activeConnection.id, (connection) => ({
-                            ...connection,
-                            projects: connection.projects.map((item) => item.path === project.path
-                              ? { ...item, name }
-                              : item),
-                          }));
-                        }}
-                      >
-                        {activeProject?.path === project.path ? <FolderOpen /> : <Folder />}
-                        <span>{project.name}</span>
-                      </button>
+                      <div className="project-item-row" key={project.id}>
+                        <button
+                          className={`project-item ${activeProject?.id === project.id ? "active" : ""}`}
+                          title={projectDirectoryTitle(project)}
+                          onClick={() => switchProject(project)}
+                          onDoubleClick={() => setProjectModal(project)}
+                        >
+                          {activeProject?.id === project.id ? <FolderOpen /> : <Folder />}
+                          <span>{project.name}</span>
+                        </button>
+                        <button
+                          className="icon-button tiny project-edit"
+                          title={`编辑项目 ${project.name}`}
+                          aria-label={`编辑项目 ${project.name}`}
+                          onClick={() => setProjectModal(project)}
+                        >
+                          <Settings />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -1747,23 +1764,45 @@ function App() {
         />
       )}
 
-      {directoryModal && activeConnection && activeGateway?.workspace && (
-        <DirectoryModal
+      {projectModal && activeConnection && activeGateway?.workspace && (
+        <ProjectModal
           api={apiRef.current.get(activeConnection.id)!}
           home={activeGateway.workspace.home}
           roots={activeGateway.workspace.browse_roots}
-          onClose={() => setDirectoryModal(false)}
-          onSelect={(path) => {
-            const project: ProjectPreset = { path, name: basename(path), last_session_id: null };
+          project={projectModal === "new" ? null : projectModal}
+          onClose={() => setProjectModal(null)}
+          onSave={(project) => {
+            const previousProject = projectModal === "new" ? null : projectModal;
+            if (previousProject && previousProject.id === activeProject?.id && previousProject.path !== project.path) {
+              setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
+            }
             updateConnection(activeConnection.id, (connection) => ({
               ...connection,
-              projects: connection.projects.some((item) => item.path === path)
-                ? connection.projects
+              projects: connection.projects.some((item) => item.id === project.id)
+                ? connection.projects.map((item) => item.id === project.id ? project : item)
                 : [...connection.projects, project],
-              last_project_path: path,
+              last_project_path: project.path,
+              last_project_id: project.id,
             }));
-            void refreshProjectSessions(activeConnection.id, path);
-            setDirectoryModal(false);
+            void refreshProjectSessions(activeConnection.id, project.path);
+            setProjectModal(null);
+          }}
+          onRemove={projectModal === "new" ? undefined : () => {
+            const removing = projectModal;
+            if (removing.id === activeProject?.id) {
+              setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
+            }
+            updateConnection(activeConnection.id, (connection) => {
+              const projects = connection.projects.filter((item) => item.id !== removing.id);
+              const next = projects[0] ?? null;
+              return {
+                ...connection,
+                projects,
+                last_project_path: connection.last_project_id === removing.id ? next?.path ?? null : connection.last_project_path,
+                last_project_id: connection.last_project_id === removing.id ? next?.id ?? null : connection.last_project_id,
+              };
+            });
+            setProjectModal(null);
           }}
         />
       )}
@@ -1771,7 +1810,7 @@ function App() {
       {referenceDirectoryModal && activeConnection && activeGateway?.workspace && (
         <DirectoryModal
           api={apiRef.current.get(activeConnection.id)!}
-          home={activeProject?.path ?? activeGateway.workspace.home}
+          home={activeProject?.path || activeGateway.workspace.home}
           roots={activeGateway.workspace.browse_roots}
           title="引用文件夹"
           selectLabel="引用此文件夹"
@@ -2540,7 +2579,7 @@ function EmptyWorkspace({
     <div className="empty-workspace">
       <Bot />
       <h1>{project ? `在 ${project.name} 中开始` : "选择一个项目"}</h1>
-      <p>{project?.path}</p>
+      <p>{project ? projectDirectoryTitle(project) : ""}</p>
       {project && <button className="command-button" onClick={onNew}><MessageSquarePlus />新会话</button>}
     </div>
   );
@@ -2739,6 +2778,7 @@ function ConnectionModal({ settings, activeConnectionId, onClose, onActivate, on
             allow_insecure_remote: allowInsecure,
             projects: editingConnection?.projects ?? [],
             last_project_path: editingConnection?.last_project_path ?? null,
+            last_project_id: editingConnection?.last_project_id ?? null,
           }, password).catch((reason) => {
             setError(reason instanceof Error ? reason.message : String(reason));
             setBusy(false);
@@ -2764,6 +2804,99 @@ function ConnectionModal({ settings, activeConnectionId, onClose, onActivate, on
           <button className="primary" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : editingConnection ? <Settings /> : <Plus />}保存并连接</button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+function ProjectModal({ api, home, roots, project, onClose, onSave, onRemove }: {
+  api: GatewayApi;
+  home: string;
+  roots: string[];
+  project: ProjectPreset | null;
+  onClose: () => void;
+  onSave: (project: ProjectPreset) => void;
+  onRemove?: () => void;
+}) {
+  const [name, setName] = useState(project?.name ?? "");
+  const [directories, setDirectories] = useState(project?.directories ?? []);
+  const [choosingDirectory, setChoosingDirectory] = useState(false);
+  const editing = project !== null;
+  const suggestedName = directories[0] ? basename(directories[0]) : "未命名项目";
+  const save = () => {
+    const nextDirectories = [...new Set(directories)];
+    const path = nextDirectories[0] ?? home;
+    onSave({
+      id: project?.id ?? crypto.randomUUID(),
+      path,
+      name: name.trim() || suggestedName,
+      directories: nextDirectories,
+      last_session_id: project?.path === path ? project.last_session_id : null,
+    });
+  };
+  if (choosingDirectory) {
+    return (
+      <DirectoryModal
+        api={api}
+        home={directories.at(-1) ?? home}
+        roots={roots}
+        title="加入项目目录"
+        selectLabel="加入此目录"
+        onClose={() => setChoosingDirectory(false)}
+        onSelect={(path) => {
+          setDirectories((current) => current.includes(path) ? current : [...current, path]);
+          setChoosingDirectory(false);
+        }}
+      />
+    );
+  }
+  return (
+    <Modal title={editing ? "编辑项目" : "新建项目"} onClose={onClose}>
+        <div className="project-form">
+          <label className="project-name-field">
+            <Folder />
+            <input
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && save()}
+              placeholder="给项目起个名字"
+            />
+          </label>
+          <section className="project-directories">
+            <h3>项目目录</h3>
+            <div className={`project-directory-box ${directories.length === 0 ? "empty" : ""}`}>
+              {directories.map((path) => (
+                <div className="project-directory-row" key={path} title={path}>
+                  <Folder />
+                  <span><strong>{basename(path)}</strong><small>{path}</small></span>
+                  <button
+                    className="icon-button small"
+                    title={`移除 ${basename(path)}`}
+                    aria-label={`移除目录 ${path}`}
+                    onClick={() => setDirectories((current) => current.filter((item) => item !== path))}
+                  >
+                    <X />
+                  </button>
+                </div>
+              ))}
+              <button className="project-add-directory" type="button" onClick={() => setChoosingDirectory(true)}>
+                <FolderInput />
+                <span>{directories.length === 0 ? "为项目加入工作目录" : "继续加入目录"}</span>
+              </button>
+            </div>
+            {directories.length === 0 && <p>暂不选择时，新会话会从用户主目录开始。</p>}
+          </section>
+        </div>
+        <div className={`modal-actions project-actions ${editing ? "editing" : ""}`}>
+          {editing && onRemove && (
+            <button className="danger-button" type="button" onClick={() => {
+              if (window.confirm(`从列表中移除项目“${project.name}”？项目文件不会被删除。`)) onRemove();
+            }}>移除项目</button>
+          )}
+          <span className="project-actions-spacer" />
+          <button type="button" onClick={onClose}>取消</button>
+          <button className="primary" type="button" onClick={save}>{editing ? "保存更改" : "创建项目"}</button>
+        </div>
     </Modal>
   );
 }

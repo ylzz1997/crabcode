@@ -1172,7 +1172,7 @@ button.primary:hover,
 }
 
 .form-grid input,
-.directory-toolbar input {
+.directory-toolbar>input {
   width: 100%;
   height: 34px;
   padding: 0 9px;
@@ -1351,6 +1351,140 @@ button.primary:hover,
   height: 260px;
   display: grid;
   place-items: center;
+}
+
+.project-item-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.project-item-row>.project-item {
+  width: 100%;
+  min-width: 0;
+  padding-right: 34px;
+}
+
+.project-item-row>.project-edit {
+  position: absolute;
+  right: 4px;
+  opacity: .45;
+}
+
+.project-item-row:hover>.project-edit,
+.project-item-row>.project-edit:focus-visible {
+  opacity: 1;
+}
+
+.project-form {
+  display: grid;
+  gap: 16px;
+}
+
+.project-name-field {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.project-name-field>svg {
+  color: var(--muted);
+}
+
+.project-name-field>input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.project-directories h3 {
+  margin: 0 0 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.project-directory-box {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+.project-directory-row {
+  min-height: 49px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px 6px 11px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.project-directory-row>span {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.project-directory-row strong,
+.project-directory-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-directory-row strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.project-directory-row small {
+  color: var(--subtle);
+  font-size: 10px;
+}
+
+.project-add-directory {
+  width: 100%;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.project-directory-box.empty>.project-add-directory {
+  height: 82px;
+  justify-content: center;
+}
+
+.project-add-directory:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.project-directories>p {
+  margin: 7px 1px 0;
+  color: var(--subtle);
+  font-size: 10.5px;
+}
+
+.project-actions-spacer {
+  flex: 1;
 }
 
 .settings-connections {
@@ -2216,7 +2350,7 @@ body {
 }
 
 .form-grid input,
-.directory-toolbar input,
+.directory-toolbar>input,
 .directory-list {
   border-color: rgba(255, 255, 255, .09);
   background: rgba(19, 22, 20, .46);
@@ -2224,7 +2358,7 @@ body {
 }
 
 .form-grid input:focus,
-.directory-toolbar input:focus {
+.directory-toolbar>input:focus {
   border-color: rgba(255, 255, 255, .2);
   background: rgba(27, 30, 28, .7);
   box-shadow: 0 0 0 3px rgba(255, 255, 255, .035);
