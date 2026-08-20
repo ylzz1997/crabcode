@@ -36,7 +36,7 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "CrabCode desktop client",
+    "shortDescription": "Crab Desktop client",
     "longDescription": "Connect to local and remote CrabCode Gateways."
   }
 }

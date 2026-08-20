@@ -283,35 +283,69 @@ async def manage_goal(req: GoalRequest, request: Request) -> GoalState:
 async def list_tools(
     request: Request,
     session_id: str | None = None,
+    cwd: str | None = None,
 ) -> list[ToolInfo]:
-    """List all available tools."""
+    """List enabled tools for the active session or a workspace."""
     async with get_session_lock(request.app.state):
         session = _get_session(request, session_id)
-        if not session:
+        if session_id is not None and session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        tools = [
-            ToolInfo(
-                name=t.name,
-                description=t.description or "",
-                is_read_only=t.is_read_only,
-                is_enabled=t.is_enabled,
+
+    if session:
+        async def _list_initialized_tools() -> list[ToolInfo]:
+            initializer = getattr(session, "initialize", None)
+            if callable(initializer):
+                await initializer()
+            return [
+                ToolInfo(
+                    name=t.name,
+                    description=t.description or "",
+                    is_read_only=t.is_read_only,
+                    is_enabled=t.is_enabled,
+                )
+                for t in session.tools
+                if bool(getattr(t, "is_enabled", True))
+            ]
+
+        try:
+            return await run_session_operation(
+                request.app.state,
+                session,
+                _list_initialized_tools,
             )
-            for t in session.tools
-        ]
-    return tools
+        except SessionOperationRejected as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    # Plugin discovery is also used before the first chat is opened. Return
+    # the built-in registry in that case; session initialization can still add
+    # MCP and project-specific tools later.
+    from crabcode_core.tools import get_default_tools
+
+    return [
+        ToolInfo(
+            name=t.name,
+            description=t.description or "",
+            is_read_only=t.is_read_only,
+            is_enabled=t.is_enabled,
+        )
+        for t in get_default_tools()
+        if bool(getattr(t, "is_enabled", True))
+    ]
 
 
 @router.get("/skills", response_model=list[SkillInfo])
 async def list_skills(
     request: Request,
     session_id: str | None = None,
+    cwd: str | None = None,
 ) -> list[SkillInfo]:
     """List all skills visible from the current working directory."""
     async with get_session_lock(request.app.state):
         session = _get_session(request, session_id)
         if session_id is not None and session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session and hasattr(session, "skills") and session.skills:
+        session_cwd = getattr(session, "cwd", None) if session else None
+        if not cwd and session and hasattr(session, "skills") and session.skills:
             skills = [
                 SkillInfo(name=s.name, description=s.description or "")
                 for s in session.skills
@@ -323,8 +357,12 @@ async def list_skills(
     # Fallback: load from cwd when no session is active yet
     import os
 
-    cwd = os.getcwd()
-    skills = load_skills(cwd)
+    skill_cwd = cwd or session_cwd or os.getcwd()
+    if cwd:
+        from crabcode_gateway.routes.workspace import _resolve_directory, _workspace_roots
+
+        skill_cwd = str(_resolve_directory(cwd, _workspace_roots(request)))
+    skills = load_skills(skill_cwd)
     return [SkillInfo(name=s.name, description=s.description or "") for s in skills]
 
 

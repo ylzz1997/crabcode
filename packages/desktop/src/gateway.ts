@@ -4,8 +4,11 @@ import type {
   ConnectionPreset,
   GatewayEvent,
   GatewayModel,
+  ScheduleJobInfo,
   SessionInfo,
   SessionStatus,
+  SkillInfo,
+  ToolInfo,
   WorkspaceDirectoryListing,
   WorkspaceInfo,
 } from "./types";
@@ -105,6 +108,50 @@ export class GatewayApi {
     return this.request(`/config/models${query}`);
   }
 
+  skills(sessionId?: string, cwd?: string): Promise<SkillInfo[]> {
+    const query = new URLSearchParams();
+    if (sessionId) query.set("session_id", sessionId);
+    if (cwd) query.set("cwd", cwd);
+    const suffix = query.size ? `?${query}` : "";
+    return this.request(`/skills${suffix}`);
+  }
+
+  tools(sessionId?: string, cwd?: string): Promise<ToolInfo[]> {
+    const query = new URLSearchParams();
+    if (sessionId) query.set("session_id", sessionId);
+    if (cwd) query.set("cwd", cwd);
+    const suffix = query.size ? `?${query}` : "";
+    return this.request(`/tools${suffix}`);
+  }
+
+  schedules(sessionId?: string): Promise<ScheduleJobInfo[]> {
+    const query = sessionId ? `?${new URLSearchParams({ session_id: sessionId })}` : "";
+    return this.request(`/schedule/list${query}`);
+  }
+
+  pauseSchedule(jobId: string, sessionId?: string): Promise<ScheduleJobInfo> {
+    return this.scheduleAction<ScheduleJobInfo>("pause", jobId, sessionId);
+  }
+
+  resumeSchedule(jobId: string, sessionId?: string): Promise<ScheduleJobInfo> {
+    return this.scheduleAction<ScheduleJobInfo>("resume", jobId, sessionId);
+  }
+
+  triggerSchedule(jobId: string, sessionId?: string): Promise<{ job_id: string; started: boolean }> {
+    return this.scheduleAction("trigger", jobId, sessionId);
+  }
+
+  cancelSchedule(jobId: string, sessionId?: string): Promise<{ job_id: string; cancelled: boolean }> {
+    return this.scheduleAction("cancel", jobId, sessionId);
+  }
+
+  private scheduleAction<T>(action: string, jobId: string, sessionId?: string): Promise<T> {
+    return this.request(`/schedule/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ job_id: jobId, session_id: sessionId ?? null }),
+    });
+  }
+
   sessionStatus(sessionId: string): Promise<SessionStatus> {
     return this.request(`/session/status?${new URLSearchParams({ session_id: sessionId })}`);
   }
@@ -162,17 +209,30 @@ export class SessionChannel {
     this.sessionId = options.sessionId ?? null;
   }
 
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
   async connect(): Promise<void> {
     if (this.disposed) return;
     try {
       await this.api.authenticate();
-      this.socket = new WebSocket(this.api.webSocketUrl());
-      this.socket.addEventListener("open", () => {
+      // The channel may have been disposed while authentication was in flight
+      // (for example when the component is refreshed or the session is deleted).
+      if (this.disposed) return;
+      const socket = new WebSocket(this.api.webSocketUrl());
+      this.socket = socket;
+      socket.addEventListener("open", () => {
+        if (this.disposed || this.socket !== socket) {
+          socket.close();
+          return;
+        }
         this.attempts = 0;
         this.options.onState(true);
         this.sendInitialCommand();
       });
-      this.socket.addEventListener("message", (message) => {
+      socket.addEventListener("message", (message) => {
+        if (this.disposed || this.socket !== socket) return;
         try {
           const event = JSON.parse(String(message.data)) as GatewayEvent;
           const announced = event.type === "server.connected"
@@ -188,7 +248,10 @@ export class SessionChannel {
           this.options.onState(false, "Gateway 返回了无效事件");
         }
       });
-      this.socket.addEventListener("close", (event) => {
+      socket.addEventListener("close", (event) => {
+        if (this.socket !== socket) return;
+        this.socket = null;
+        if (this.disposed) return;
         this.options.onState(
           false,
           event.code === 1008 ? "Gateway 认证已失效，正在重新认证" : undefined,
@@ -196,6 +259,7 @@ export class SessionChannel {
         if (event.code === 1008) {
           void this.api.refreshAuthentication()
             .catch((error) => {
+              if (this.disposed) return;
               this.options.onState(false, error instanceof Error ? error.message : String(error));
             })
             .finally(() => this.scheduleReconnect());
@@ -203,10 +267,12 @@ export class SessionChannel {
         }
         this.scheduleReconnect();
       });
-      this.socket.addEventListener("error", () => {
+      socket.addEventListener("error", () => {
+        if (this.disposed || this.socket !== socket) return;
         this.options.onState(false, "WebSocket 连接失败");
       });
     } catch (error) {
+      if (this.disposed) return;
       this.options.onState(false, error instanceof Error ? error.message : String(error));
       this.scheduleReconnect();
     }

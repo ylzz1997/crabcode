@@ -56,21 +56,80 @@ export interface SessionInfo {
 
 export interface SessionStatus {
   session_id: string;
+  version?: string;
   cwd: string;
+  initialized?: boolean;
+  message_count?: number;
   model: string;
   model_profile?: string | null;
   provider: string;
   mode: "agent" | "plan";
   reasoning_effort?: string | null;
+  ultra_mode?: boolean;
   permission_mode: string;
   context_used_tokens: number;
   context_window_tokens: number;
+  context_remaining_tokens?: number;
   context_used_percent: number;
+  compact_count?: number;
+  auto_compact_enabled?: boolean;
+  thinking_enabled?: boolean;
+  max_tokens?: number;
+  tool_count?: number | null;
+  agent_total?: number;
+  agent_active?: number;
+  agent_failed?: number;
+  agent_pending_callbacks?: number;
+  agent_max_concurrency?: number;
+  monitor_total?: number;
+  monitor_active?: number;
+  monitor_failed?: number;
+  search_index?: {
+    state: string;
+    chunks?: number | null;
+    files?: number | null;
+    done?: number | null;
+    total?: number | null;
+  } | null;
 }
 
 export interface GatewayModel {
   name: string;
   description?: string;
+}
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+}
+
+export interface ToolInfo {
+  name: string;
+  description: string;
+  is_read_only: boolean;
+  is_enabled: boolean;
+}
+
+export interface ScheduleJobInfo {
+  id: string;
+  name: string;
+  prompt: string;
+  schedule: string;
+  schedule_type: "cron" | "interval" | "once";
+  cwd: string | null;
+  enabled: boolean;
+  status: string;
+  last_run: string | null;
+  next_run: string | null;
+  run_count: number;
+  max_runs: number | null;
+  created_at: string;
+  session_id: string | null;
+  description: string;
+  tags: string[];
+  timeout: number | null;
+  model_profile: string | null;
+  extra: Record<string, unknown>;
 }
 
 export interface CheckpointInfo {
@@ -109,6 +168,15 @@ export interface ChatItem {
   path?: string;
   action?: string;
   collapsed?: boolean;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+}
+
+export interface SessionCurrentStep {
+  kind: "response" | "thinking" | "tool" | "permission" | "choice";
+  label: string;
+  startedAt: number;
 }
 
 export interface SessionViewState {
@@ -121,6 +189,9 @@ export interface SessionViewState {
   operationId: string | null;
   status: SessionStatus | null;
   error: string | null;
+  runStartedAt?: number | null;
+  currentStep?: SessionCurrentStep | null;
+  lastTurnUsage?: Record<string, unknown> | null;
 }
 
 export interface GatewayViewState {
@@ -165,9 +236,15 @@ export interface GatewayEvent {
   action?: string;
   diff?: string | null;
   mode?: "agent" | "plan";
+  model_profile?: string;
+  permission_mode?: string;
   context_used_tokens?: number;
   context_window_tokens?: number;
+  context_remaining_tokens?: number;
   context_used_percent?: number;
+  usage?: Record<string, unknown>;
   error_type?: string;
+  recoverable?: boolean;
+  command?: string;
   command_error?: boolean;
 }

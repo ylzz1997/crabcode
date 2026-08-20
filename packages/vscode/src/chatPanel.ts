@@ -5585,7 +5585,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       box-shadow: 0 8px 24px rgba(0,0,0,0.35);
       z-index: 200;
       padding: 3px 0;
-      min-width: 150px;
+      min-width: 245px;
     }
     .perm-menu.hidden { display: none; }
     .perm-item {
@@ -5598,7 +5598,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .perm-item:hover { background: var(--vscode-menu-selectionBackground, rgba(127,127,127,0.18)); }
     .perm-item-icon { font-size: 13px; width: 16px; text-align: center; }
-    .perm-item-text { flex: 1; }
+    .perm-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .perm-item-text strong { font-size: 12px; font-weight: 600; }
+    .perm-item-text small { color: var(--text-muted); font-size: 10.5px; line-height: 1.25; }
     .perm-item .perm-check { width: 14px; text-align: center; opacity: 0; font-size: 11px; }
     .perm-item.active .perm-check { opacity: 1; }
     .perm-item[data-perm="run_everything"] .perm-item-text { color: #e5c300; }
@@ -6045,7 +6047,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <div class="tb-perm-wrap">
         <button type="button" class="tb-perm-btn" id="perm-btn" title="切换权限模式" aria-haspopup="menu" aria-expanded="false">
           <span id="perm-icon" class="perm-icon">⚙</span>
-          <span id="perm-label">跟随配置</span>
+          <span id="perm-label">工作区默认规则</span>
           <span class="perm-chevron">▾</span>
         </button>
       </div>
@@ -6072,22 +6074,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <div id="perm-menu" class="perm-menu hidden" role="menu">
     <div class="perm-item active" data-perm="default" role="menuitem">
       <span class="perm-item-icon">⚙</span>
-      <span class="perm-item-text">跟随配置</span>
+      <span class="perm-item-text"><strong>工作区默认规则</strong><small>使用当前项目加载的 CrabCode 权限配置</small></span>
       <span class="perm-check">✓</span>
     </div>
     <div class="perm-item" data-perm="ask" role="menuitem">
       <span class="perm-item-icon">🛡</span>
-      <span class="perm-item-text">询问确认</span>
+      <span class="perm-item-text"><strong>每次确认</strong><small>高风险操作前先向你确认</small></span>
       <span class="perm-check">✓</span>
     </div>
     <div class="perm-item" data-perm="ai_review" role="menuitem">
       <span class="perm-item-icon">🤖</span>
-      <span class="perm-item-text">AI 审查</span>
+      <span class="perm-item-text"><strong>AI 审查</strong><small>由审查器判断是否放行</small></span>
       <span class="perm-check">✓</span>
     </div>
     <div class="perm-item" data-perm="run_everything" role="menuitem">
       <span class="perm-item-icon">⚡</span>
-      <span class="perm-item-text">全部允许</span>
+      <span class="perm-item-text"><strong>完全访问</strong><small>不再逐项弹出权限确认</small></span>
       <span class="perm-check">✓</span>
     </div>
   </div>
@@ -7579,7 +7581,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       const newPerm = msg.permissionMode === 'run_everything' ? 'run_everything' : (msg.permissionMode === 'ai_review' ? 'ai_review' : (msg.permissionMode === 'ask' ? 'ask' : 'default'));
       if (permBtn && permLabel && permIcon && permMenu) {
-        permLabel.textContent = newPerm === 'run_everything' ? '全部允许 ⚠️' : (newPerm === 'ai_review' ? 'AI 审查' : (newPerm === 'ask' ? '询问确认' : '跟随配置'));
+        permLabel.textContent = newPerm === 'run_everything' ? '完全访问' : (newPerm === 'ai_review' ? 'AI 审查' : (newPerm === 'ask' ? '每次确认' : '工作区默认规则'));
         permIcon.textContent = newPerm === 'run_everything' ? '⚡' : (newPerm === 'ai_review' ? '🤖' : (newPerm === 'ask' ? '🛡' : '⚙'));
         permBtn.classList.toggle('perm-danger', newPerm === 'run_everything');
         permMenu.querySelectorAll('.perm-item').forEach(function(el) {
@@ -8762,7 +8764,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     permMenu && permMenu.querySelectorAll('.perm-item').forEach(function(el) {
       el.addEventListener('click', function() {
         const perm = el.getAttribute('data-perm');
-        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '全部允许 ⚠️' : (perm === 'ai_review' ? 'AI 审查' : (perm === 'ask' ? '询问确认' : '跟随配置'));
+        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '完全访问' : (perm === 'ai_review' ? 'AI 审查' : (perm === 'ask' ? '每次确认' : '工作区默认规则'));
         if (permIcon) permIcon.textContent = perm === 'run_everything' ? '⚡' : (perm === 'ai_review' ? '🤖' : (perm === 'ask' ? '🛡' : '⚙'));
         if (permBtn) permBtn.classList.toggle('perm-danger', perm === 'run_everything');
         permMenu.querySelectorAll('.perm-item').forEach(function(item) {

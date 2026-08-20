@@ -25,7 +25,7 @@ function messageText(content: unknown): string {
     .join("\n");
 }
 
-function appendStream(items: ChatItem[], text: string): ChatItem[] {
+function appendStream(items: ChatItem[], text: string, now: number): ChatItem[] {
   const last = items.at(-1);
   if (last?.kind === "assistant" && last.status === "running") {
     return [
@@ -35,11 +35,11 @@ function appendStream(items: ChatItem[], text: string): ChatItem[] {
   }
   return [
     ...items,
-    { id: crypto.randomUUID(), kind: "assistant", text, status: "running" },
+    { id: crypto.randomUUID(), kind: "assistant", text, status: "running", startedAt: now },
   ];
 }
 
-function appendThinking(items: ChatItem[], text: string): ChatItem[] {
+function appendThinking(items: ChatItem[], text: string, now: number): ChatItem[] {
   const last = items.at(-1);
   if (last?.kind === "thinking" && last.status === "running") {
     return [
@@ -56,6 +56,7 @@ function appendThinking(items: ChatItem[], text: string): ChatItem[] {
       text,
       status: "running",
       collapsed: false,
+      startedAt: now,
     },
   ];
 }
@@ -68,14 +69,34 @@ function updateByToolId(
   return items.map((item) => item.tool_use_id === toolUseId ? updater(item) : item);
 }
 
-function completeRunning(items: ChatItem[]): ChatItem[] {
-  return items.map((item) => item.status === "running" ? { ...item, status: "complete" } : item);
+function completeRunning(items: ChatItem[], now: number): ChatItem[] {
+  return items.map((item) => {
+    if (item.status !== "running") return item;
+    const durationMs = item.startedAt ? Math.max(0, now - item.startedAt) : item.durationMs;
+    return {
+      ...item,
+      status: "complete",
+      completedAt: now,
+      ...(durationMs === undefined ? {} : { durationMs }),
+    };
+  });
+}
+
+function completeItem(item: ChatItem, now: number): ChatItem {
+  const durationMs = item.startedAt ? Math.max(0, now - item.startedAt) : item.durationMs;
+  return {
+    ...item,
+    status: item.status === "pending" ? item.status : "complete",
+    completedAt: now,
+    ...(durationMs === undefined ? {} : { durationMs }),
+  };
 }
 
 export function applyGatewayEvent(
   state: SessionViewState,
   event: GatewayEvent,
 ): SessionViewState {
+  const now = Date.now();
   switch (event.type) {
     case "server.connected":
     case "server.heartbeat":
@@ -87,18 +108,53 @@ export function applyGatewayEvent(
         text: messageText(message.content),
         status: "complete",
       }));
-      return { ...state, items: messages };
+      return {
+        ...state,
+        connected: true,
+        busy: false,
+        operationId: null,
+        error: null,
+        items: messages,
+        runStartedAt: null,
+        currentStep: null,
+      };
     }
     case "stream_text":
-      return { ...state, busy: true, items: appendStream(state.items, event.text ?? "") };
+      return {
+        ...state,
+        busy: true,
+        runStartedAt: state.runStartedAt ?? now,
+        currentStep: state.currentStep?.kind === "response"
+          ? state.currentStep
+          : { kind: "response", label: "生成回复", startedAt: now },
+        items: appendStream(
+          state.currentStep?.kind === "response" ? state.items : completeRunning(state.items, now),
+          event.text ?? "",
+          now,
+        ),
+      };
     case "thinking":
-      return { ...state, busy: true, items: appendThinking(state.items, event.text ?? "") };
+      return {
+        ...state,
+        busy: true,
+        runStartedAt: state.runStartedAt ?? now,
+        currentStep: state.currentStep?.kind === "thinking"
+          ? state.currentStep
+          : { kind: "thinking", label: "思考中", startedAt: now },
+        items: appendThinking(
+          state.currentStep?.kind === "thinking" ? state.items : completeRunning(state.items, now),
+          event.text ?? "",
+          now,
+        ),
+      };
     case "tool_use":
       return {
         ...state,
         busy: true,
+        runStartedAt: state.runStartedAt ?? now,
+        currentStep: { kind: "tool", label: event.tool_name ?? "执行工具", startedAt: now },
         items: [
-          ...completeRunning(state.items),
+          ...completeRunning(state.items, now),
           {
             id: event.tool_use_id ?? crypto.randomUUID(),
             kind: "tool",
@@ -107,21 +163,25 @@ export function applyGatewayEvent(
             tool_use_id: event.tool_use_id,
             status: "running",
             collapsed: true,
+            startedAt: now,
           },
         ],
       };
     case "tool_result":
       return {
         ...state,
+        currentStep: { kind: "response", label: "整理结果", startedAt: now },
         items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
-          ...item,
-          status: "complete",
+          ...completeItem(item, now),
           detail: event.result_for_display ?? event.result ?? "",
         })),
       };
     case "permission_request":
       return {
         ...state,
+        busy: true,
+        runStartedAt: state.runStartedAt ?? now,
+        currentStep: { kind: "permission", label: "等待权限确认", startedAt: now },
         items: [
           ...state.items,
           {
@@ -133,20 +193,25 @@ export function applyGatewayEvent(
             tool_use_id: event.tool_use_id,
             agent_id: event.agent_id,
             status: "pending",
+            startedAt: now,
           },
         ],
       };
     case "permission_response":
       return {
         ...state,
+        currentStep: { kind: "response", label: "继续执行", startedAt: now },
         items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
-          ...item,
+          ...completeItem(item, now),
           status: event.allowed ? "allowed" : "denied",
         })),
       };
     case "choice_request":
       return {
         ...state,
+        busy: true,
+        runStartedAt: state.runStartedAt ?? now,
+        currentStep: { kind: "choice", label: "等待选择", startedAt: now },
         items: [
           ...state.items,
           {
@@ -158,14 +223,16 @@ export function applyGatewayEvent(
             multiple: Boolean(event.multiple),
             selected: [],
             status: "pending",
+            startedAt: now,
           },
         ],
       };
     case "choice_response":
       return {
         ...state,
+        currentStep: { kind: "response", label: "继续执行", startedAt: now },
         items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
-          ...item,
+          ...completeItem(item, now),
           selected: event.selected ?? [],
           status: "complete",
         })),
@@ -174,8 +241,10 @@ export function applyGatewayEvent(
       return {
         ...state,
         busy: false,
+        runStartedAt: null,
+        currentStep: null,
         items: [
-          ...completeRunning(state.items),
+          ...completeRunning(state.items, now),
           {
             id: crypto.randomUUID(),
             kind: "plan",
@@ -206,27 +275,54 @@ export function applyGatewayEvent(
       return state.status
         ? { ...state, status: { ...state.status, mode: event.mode ?? state.status.mode } }
         : state;
+    case "model_change":
+      return state.status
+        ? {
+            ...state,
+            status: {
+              ...state.status,
+              model_profile: event.model_profile ?? state.status.model_profile,
+            },
+          }
+        : state;
+    case "permission_mode_change":
+      return state.status
+        ? {
+            ...state,
+            status: {
+              ...state.status,
+              permission_mode: event.permission_mode ?? state.status.permission_mode,
+            },
+          }
+        : state;
     case "error":
       return {
         ...state,
-        busy: event.command_error ? state.busy : false,
         error: event.message ?? "Gateway error",
-        items: [
-          ...completeRunning(state.items),
-          { id: crypto.randomUUID(), kind: "error", text: event.message ?? "Gateway error" },
-        ],
+        // Gateway guarantees a turn_complete boundary after foreground errors.
+        // Keep live cards and timers running until that boundary arrives.
+        items: event.command_error
+          ? state.items
+          : [
+              ...state.items,
+              { id: crypto.randomUUID(), kind: "error", text: event.message ?? "Gateway error" },
+            ],
       };
     case "turn_complete":
       return {
         ...state,
         busy: false,
         operationId: null,
-        items: completeRunning(state.items),
+        runStartedAt: null,
+        currentStep: null,
+        lastTurnUsage: event.usage ?? state.lastTurnUsage ?? null,
+        items: completeRunning(state.items, now),
         status: state.status && event.context_used_tokens !== undefined
           ? {
               ...state.status,
               context_used_tokens: event.context_used_tokens,
               context_window_tokens: event.context_window_tokens ?? state.status.context_window_tokens,
+              context_remaining_tokens: event.context_remaining_tokens ?? state.status.context_remaining_tokens,
               context_used_percent: event.context_used_percent ?? state.status.context_used_percent,
             }
           : state.status,

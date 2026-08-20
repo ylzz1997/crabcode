@@ -80,6 +80,23 @@ async def list_schedules(
     enabled: bool | None = None,
     limit: int = 100,
 ) -> list[ScheduleJobInfo]:
+    if session_id is None and _get_session(request, None) is None:
+        # The desktop workbench can open the schedule view before a chat
+        # session exists. Read the shared persistent store directly in that
+        # case; mutations still use a live session manager below.
+        from crabcode_core.schedule.store import ScheduleStore
+
+        store = ScheduleStore()
+        try:
+            rows = store.list_schedules(
+                status=status,
+                schedule_type=schedule_type,
+                enabled=enabled,
+                limit=max(1, min(int(limit), 1000)),
+            )
+        finally:
+            store.close()
+        return [_job_info(row) for row in rows]
     jobs = await _run_schedule_operation(
         request,
         session_id,

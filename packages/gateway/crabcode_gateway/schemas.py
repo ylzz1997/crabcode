@@ -979,6 +979,18 @@ class ModeChangePayload(BaseModel):
     reason: str = ""
 
 
+class ModelChangePayload(BaseModel):
+    type: Literal["model_change"] = "model_change"
+    session_id: str
+    model_profile: str
+
+
+class PermissionModeChangePayload(BaseModel):
+    type: Literal["permission_mode_change"] = "permission_mode_change"
+    session_id: str
+    permission_mode: Literal["default", "ask", "ai_review", "run_everything"]
+
+
 class PlanReadyPayload(BaseModel):
     type: Literal["plan_ready"] = "plan_ready"
     plan: dict[str, Any]
@@ -1111,6 +1123,8 @@ EventPayload = Union[
     AgentStatePayload,
     AgentOutputPayload,
     ModeChangePayload,
+    ModelChangePayload,
+    PermissionModeChangePayload,
     PlanReadyPayload,
     PeerMessagePayload,
     TeamMessagePayload,

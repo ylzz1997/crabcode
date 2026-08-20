@@ -1,11 +1,20 @@
 import {
   AlertTriangle,
+  Activity,
+  ArrowUpRight,
   Archive,
   Bot,
+  Boxes,
+  Check,
+  Code2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
+  GitBranch,
   Circle,
+  CircleDotDashed,
+  Gauge,
   FileDiff,
   Folder,
   FolderOpen,
@@ -14,18 +23,27 @@ import {
   LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
+  Pause,
   PanelLeftClose,
   PanelLeftOpen,
+  Play,
   Plus,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   Search,
   Send,
   Server,
+  ShieldCheck,
   Settings,
   ShieldAlert,
   Square,
+  Terminal,
   Trash2,
+  Timer,
+  Zap,
+  Wrench,
+  Workflow,
   WifiOff,
   X,
 } from "lucide-react";
@@ -52,13 +70,31 @@ import type {
   GatewayEvent,
   GatewayViewState,
   ProjectPreset,
+  ScheduleJobInfo,
   SessionInfo,
   SessionViewState,
+  SkillInfo,
+  ToolInfo,
   WorkspaceDirectoryListing,
 } from "./types";
 
 type GatewayMap = Record<string, GatewayViewState>;
 type SessionMap = Record<string, SessionViewState>;
+type WorkspaceView = "chat" | "scheduled" | "plugins";
+type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
+type PermissionMode = "default" | "ask" | "ai_review" | "run_everything";
+type SessionCleanupTarget = {
+  connectionId: string;
+  cwd: string;
+  key: string;
+  sessionId: string;
+};
+type FocusedSessionSnapshot = SessionCleanupTarget & {
+  empty: boolean;
+  busy: boolean;
+  projectPath: string;
+  view: WorkspaceView;
+};
 
 const EMPTY_GATEWAY: GatewayViewState = {
   status: "connecting",
@@ -91,6 +127,65 @@ function formatDate(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return "未安排";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
+  if (minutes > 0) return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+  return `${seconds}秒`;
+}
+
+function formatTokenCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${Math.floor(value / 1_000)}k`;
+  return String(value);
+}
+
+function usageToken(value: Record<string, unknown> | null | undefined, key: string): number {
+  const parsed = Number(value?.[key]);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+}
+
+function cacheUsageLabel(usage: Record<string, unknown> | null | undefined): string | null {
+  if (!usage || !("cache_read_tokens" in usage || "cache_write_tokens" in usage)) return null;
+  const cacheRead = usageToken(usage, "cache_read_tokens");
+  const totalInput = usageToken(usage, "total_input_tokens") || usageToken(usage, "input_tokens");
+  const hitRate = totalInput > 0 ? Math.min(100, cacheRead / totalInput * 100) : 0;
+  const parts = [`命中 ${hitRate.toFixed(1)}%`, `读取 ${formatTokenCount(cacheRead)}`];
+  if ("cache_write_tokens" in usage) {
+    parts.push(`写入 ${formatTokenCount(usageToken(usage, "cache_write_tokens"))}`);
+  }
+  return parts.join(" · ");
+}
+
+function normalizePermissionMode(value: string | undefined): PermissionMode {
+  return value === "ask" || value === "ai_review" || value === "run_everything"
+    ? value
+    : "default";
+}
+
+function scheduleSummary(job: ScheduleJobInfo): string {
+  if (!job.enabled || job.status === "paused") return "已暂停";
+  if (job.status === "completed") return "已完成";
+  if (job.status === "error") return "运行异常";
+  return `下次运行 ${formatDateTime(job.next_run)}`;
 }
 
 function textFromUnknown(value: unknown): string {
@@ -130,7 +225,21 @@ function App() {
   const [sessions, setSessions] = useState<SessionMap>({});
   const [activeSessions, setActiveSessions] = useState<Record<string, string | null>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
   const [search, setSearch] = useState("");
+  const [scheduleJobs, setScheduleJobs] = useState<Record<string, ScheduleJobInfo[]>>({});
+  const [pluginData, setPluginData] = useState<Record<string, PluginData>>({});
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [pluginLoading, setPluginLoading] = useState(false);
+  const [scheduleActionId, setScheduleActionId] = useState<string | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [pluginError, setPluginError] = useState<string | null>(null);
+  const [deletingSessionIds, setDeletingSessionIds] = useState<Set<string>>(new Set());
+  const [modelSelections, setModelSelections] = useState<Record<string, string>>({});
+  const [permissionSelections, setPermissionSelections] = useState<Record<string, PermissionMode>>({});
+  const [runClock, setRunClock] = useState(() => Date.now());
   const [composer, setComposer] = useState("");
   const [pendingImages, setPendingImages] = useState<Array<{
     name: string;
@@ -146,6 +255,9 @@ function App() {
   const apiRef = useRef(new Map<string, GatewayApi>());
   const channelRef = useRef(new Map<string, SessionChannel>());
   const connectedRef = useRef(new Set<string>());
+  const deletingSessionIdsRef = useRef(new Set<string>());
+  const sessionRefreshVersionRef = useRef(new Map<string, number>());
+  const focusedSessionRef = useRef<FocusedSessionSnapshot | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
   const activeConnection = useMemo(() => {
@@ -161,6 +273,42 @@ function App() {
   const activeSessionKey = activeConnection ? activeSessions[activeConnection.id] : null;
   const activeSession = activeSessionKey ? sessions[activeSessionKey] : null;
   const activeChannel = activeSessionKey ? channelRef.current.get(activeSessionKey) : null;
+  const activeList = activeProject
+    ? activeGateway?.sessionsByProject[activeProject.path] ?? []
+    : [];
+
+  const refreshSchedules = useCallback(async (connectionId: string, sessionId?: string) => {
+    const api = apiRef.current.get(connectionId);
+    if (!api) return;
+    setScheduleLoading(true);
+    setScheduleError(null);
+    try {
+      const jobs = await api.schedules(sessionId);
+      setScheduleJobs((current) => ({ ...current, [connectionId]: jobs }));
+    } catch (error) {
+      setScheduleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, []);
+
+  const refreshPlugins = useCallback(async (connectionId: string, sessionId?: string, cwd?: string) => {
+    const api = apiRef.current.get(connectionId);
+    if (!api) return;
+    setPluginLoading(true);
+    setPluginError(null);
+    try {
+      const [skills, tools] = await Promise.all([
+        api.skills(sessionId, cwd),
+        api.tools(sessionId, cwd),
+      ]);
+      setPluginData((current) => ({ ...current, [connectionId]: { skills, tools } }));
+    } catch (error) {
+      setPluginError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPluginLoading(false);
+    }
+  }, []);
 
   const commitSettings = useCallback((update: (current: DesktopSettings) => DesktopSettings) => {
     setSettings((current) => {
@@ -186,7 +334,11 @@ function App() {
   const refreshProjectSessions = useCallback(async (connectionId: string, cwd: string) => {
     const api = apiRef.current.get(connectionId);
     if (!api) return;
+    const refreshKey = `${connectionId}\u0000${cwd}`;
+    const version = (sessionRefreshVersionRef.current.get(refreshKey) ?? 0) + 1;
+    sessionRefreshVersionRef.current.set(refreshKey, version);
     const list = await api.sessions(cwd);
+    if (sessionRefreshVersionRef.current.get(refreshKey) !== version) return;
     setGateways((current) => ({
       ...current,
       [connectionId]: {
@@ -199,7 +351,12 @@ function App() {
     }));
   }, []);
 
-  const updateSessionStatus = useCallback(async (connectionId: string, key: string, id: string) => {
+  const updateSessionStatus = useCallback(async (
+    connectionId: string,
+    key: string,
+    id: string,
+    syncControls = false,
+  ) => {
     const api = apiRef.current.get(connectionId);
     if (!api) return;
     try {
@@ -207,25 +364,135 @@ function App() {
       setSessions((current) => current[key]
         ? { ...current, [key]: { ...current[key], status } }
         : current);
+      setModelSelections((current) => (
+        syncControls || !current[key]
+          ? { ...current, [key]: status.model_profile || status.model }
+          : current
+      ));
+      setPermissionSelections((current) => (
+        syncControls || !current[key]
+          ? { ...current, [key]: normalizePermissionMode(status.permission_mode) }
+          : current
+      ));
     } catch {
       // The history still works if the optional status request races session setup.
     }
   }, []);
+
+  const removeSessionState = useCallback((target: SessionCleanupTarget) => {
+    channelRef.current.get(target.key)?.dispose();
+    channelRef.current.delete(target.key);
+    setSessions((current) => {
+      const { [target.key]: _, ...rest } = current;
+      return rest;
+    });
+    setActiveSessions((current) => (
+      current[target.connectionId] === target.key
+        ? { ...current, [target.connectionId]: null }
+        : current
+    ));
+  }, []);
+
+  const removeSessionFromGateway = useCallback((target: SessionCleanupTarget) => {
+    const refreshKey = `${target.connectionId}\u0000${target.cwd}`;
+    sessionRefreshVersionRef.current.set(
+      refreshKey,
+      (sessionRefreshVersionRef.current.get(refreshKey) ?? 0) + 1,
+    );
+    setGateways((current) => {
+      const gateway = current[target.connectionId];
+      if (!gateway) return current;
+      let changed = false;
+      const sessionsByProject = Object.fromEntries(
+        Object.entries(gateway.sessionsByProject).map(([cwd, list]) => {
+          const next = list.filter((item) => item.session_id !== target.sessionId);
+          if (next.length !== list.length) changed = true;
+          return [cwd, next];
+        }),
+      );
+      if (!changed) return current;
+      return {
+        ...current,
+        [target.connectionId]: { ...gateway, sessionsByProject },
+      };
+    });
+  }, []);
+
+  const archiveSession = useCallback(async (
+    target: SessionCleanupTarget,
+    confirm = false,
+  ) => {
+    if (deletingSessionIdsRef.current.has(target.key)) return;
+    if (confirm && !window.confirm("删除这个会话？")) return;
+    deletingSessionIdsRef.current.add(target.key);
+    setDeletingSessionIds((current) => new Set(current).add(target.key));
+
+    const archiveRequest = target.sessionId.startsWith("new-")
+      ? Promise.resolve()
+      : apiRef.current.get(target.connectionId)?.archive(target.sessionId)
+        ?? Promise.reject(new Error("Gateway 尚未连接"));
+
+    // Remove local state before waiting for resource teardown on the gateway.
+    removeSessionState(target);
+    removeSessionFromGateway(target);
+    commitSettings((current) => ({
+      ...current,
+      connections: current.connections.map((connection) => connection.id === target.connectionId
+        ? {
+            ...connection,
+            projects: connection.projects.map((project) => (
+              project.path === target.cwd && project.last_session_id === target.sessionId
+                ? { ...project, last_session_id: null }
+                : project
+            )),
+          }
+        : connection),
+    }));
+
+    try {
+      await archiveRequest;
+      void refreshProjectSessions(target.connectionId, target.cwd).catch((error) => {
+        setGlobalError(error instanceof Error ? error.message : String(error));
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+      try {
+        await refreshProjectSessions(target.connectionId, target.cwd);
+      } catch (refreshError) {
+        setGlobalError(refreshError instanceof Error ? refreshError.message : String(refreshError));
+      }
+    } finally {
+      deletingSessionIdsRef.current.delete(target.key);
+      setDeletingSessionIds((current) => {
+        const next = new Set(current);
+        next.delete(target.key);
+        return next;
+      });
+    }
+  }, [commitSettings, refreshProjectSessions, removeSessionFromGateway, removeSessionState]);
 
   const openSession = useCallback((
     connection: ConnectionPreset,
     project: ProjectPreset,
     info?: SessionInfo,
   ) => {
+    setWorkspaceView("chat");
     const api = apiRef.current.get(connection.id);
     if (!api) {
       setGlobalError("Gateway 尚未连接");
       return;
     }
     let key = sessionKey(connection.id, info?.session_id ?? `new-${crypto.randomUUID()}`);
-    if (channelRef.current.has(key)) {
+    const existingChannel = channelRef.current.get(key);
+    if (existingChannel && !existingChannel.isDisposed) {
       setActiveSessions((current) => ({ ...current, [connection.id]: key }));
       return;
+    }
+    // A component refresh can dispose a channel while preserving React state.
+    // Do not let that dead channel block a later resume of the same session.
+    if (existingChannel) {
+      existingChannel.dispose();
+      channelRef.current.delete(key);
     }
     const initial: SessionViewState = {
       id: info?.session_id ?? key.split(":").slice(1).join(":"),
@@ -237,24 +504,62 @@ function App() {
       operationId: null,
       status: null,
       error: null,
+      runStartedAt: null,
+      currentStep: null,
+      lastTurnUsage: null,
     };
-    setSessions((current) => ({ ...current, [key]: initial }));
+    setSessions((current) => {
+      const previous = current[key];
+      return {
+        ...current,
+        [key]: previous
+          ? { ...previous, cwd: project.path, title: info?.title || previous.title, connected: false, error: null }
+          : initial,
+      };
+    });
     setActiveSessions((current) => ({ ...current, [connection.id]: key }));
 
-    const channel = new SessionChannel(api, {
+    let channel: SessionChannel;
+    const isCurrentChannel = () => channelRef.current.get(key) === channel;
+    channel = new SessionChannel(api, {
       sessionId: info?.session_id,
       cwd: project.path,
       onEvent: (event: GatewayEvent) => {
+        if (!isCurrentChannel()) return;
+        if (event.type === "model_change" && event.model_profile) {
+          setModelSelections((current) => ({ ...current, [key]: event.model_profile! }));
+        }
+        if (event.type === "permission_mode_change" && event.permission_mode) {
+          setPermissionSelections((current) => ({
+            ...current,
+            [key]: normalizePermissionMode(event.permission_mode),
+          }));
+        }
         setSessions((current) => {
           const state = current[key];
           return state ? { ...current, [key]: applyGatewayEvent(state, event) } : current;
         });
         if (event.type === "server.connected") {
           const id = event.properties?.session_id;
-          if (typeof id === "string") void updateSessionStatus(connection.id, key, id);
+          if (typeof id === "string") void updateSessionStatus(connection.id, key, id, true);
+        }
+        if (
+          channel.sessionId
+          && (event.type === "turn_complete" || event.type === "compact" || event.type === "agent_state")
+        ) {
+          void updateSessionStatus(connection.id, key, channel.sessionId, true);
+        }
+        if (
+          event.type === "error"
+          && event.command_error
+          && (event.command === "switch_model" || event.command === "set_permission_mode")
+          && channel.sessionId
+        ) {
+          void updateSessionStatus(connection.id, key, channel.sessionId, true);
         }
       },
       onReady: (id) => {
+        if (!isCurrentChannel()) return;
         const nextKey = sessionKey(connection.id, id);
         if (nextKey !== key) {
           const previousKey = key;
@@ -284,6 +589,7 @@ function App() {
         void updateSessionStatus(connection.id, key, id);
       },
       onState: (connected, error) => {
+        if (!isCurrentChannel()) return;
         setSessions((current) => current[key]
           ? { ...current, [key]: { ...current[key], connected, error: error ?? null } }
           : current);
@@ -360,6 +666,7 @@ function App() {
       .catch((error) => setGlobalError(String(error)));
     return () => {
       channelRef.current.forEach((channel) => channel.dispose());
+      channelRef.current.clear();
     };
   }, []);
 
@@ -373,6 +680,57 @@ function App() {
   }, [connectGateway, settings]);
 
   useEffect(() => {
+    if (!activeConnection || activeGateway?.status !== "online") return;
+    const cwd = activeProject?.path ?? activeGateway.workspace?.startup_cwd;
+    const sessionId = activeSession && activeSession.cwd === cwd ? activeSession.id : undefined;
+    void refreshSchedules(activeConnection.id, sessionId);
+    void refreshPlugins(activeConnection.id, sessionId, cwd);
+  }, [
+    activeConnection?.id,
+    activeGateway?.status,
+    activeGateway?.workspace?.startup_cwd,
+    activeProject?.path,
+    activeSession?.id,
+    refreshPlugins,
+    refreshSchedules,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeConnection
+      || !activeProject
+      || !activeSessionKey
+      || activeGateway?.status !== "online"
+    ) return;
+    const channel = channelRef.current.get(activeSessionKey);
+    if (channel && !channel.isDisposed) return;
+
+    const sessionId = activeSession?.id;
+    const info = sessionId && !sessionId.startsWith("new-")
+      ? activeList.find((item) => item.session_id === sessionId) ?? {
+          session_id: sessionId,
+          message_count: activeSession.items.length,
+          model: activeSession.status?.model ?? "",
+          provider: activeSession.status?.provider ?? "",
+          created_at: "",
+          title: activeSession.title,
+          cwd: activeSession.cwd,
+          tokens_used: activeSession.status?.context_used_tokens ?? 0,
+          preview: "",
+        }
+      : undefined;
+    openSession(activeConnection, activeProject, info);
+  }, [
+    activeConnection,
+    activeGateway?.status,
+    activeList,
+    activeProject,
+    activeSession,
+    activeSessionKey,
+    openSession,
+  ]);
+
+  useEffect(() => {
     messageEndRef.current?.scrollIntoView({ block: "end" });
   }, [activeSession?.items.length, activeSession?.items.at(-1)?.text]);
 
@@ -382,6 +740,7 @@ function App() {
 
   const switchProject = (project: ProjectPreset) => {
     if (!activeConnection) return;
+    setWorkspaceView("chat");
     updateConnection(activeConnection.id, (connection) => ({
       ...connection,
       last_project_path: project.path,
@@ -396,6 +755,7 @@ function App() {
   const sendMessage = async () => {
     const text = composer.trim();
     if ((!text && pendingImages.length === 0) || !activeChannel || !activeSessionKey || !activeSession) return;
+    const now = Date.now();
     try {
       if (activeSession.busy && activeSession.operationId) {
         activeChannel.steer(
@@ -410,6 +770,12 @@ function App() {
           ...current,
           [activeSessionKey]: {
             ...current[activeSessionKey],
+            runStartedAt: current[activeSessionKey].runStartedAt ?? now,
+            currentStep: current[activeSessionKey].currentStep ?? {
+              kind: "response",
+              label: "接收引导",
+              startedAt: now,
+            },
             items: [
               ...current[activeSessionKey].items,
               { id: crypto.randomUUID(), kind: "user", text: `引导：${attachmentLine}${text}`, status: "complete" },
@@ -429,6 +795,12 @@ function App() {
           [activeSessionKey]: {
             ...current[activeSessionKey],
             busy: true,
+            runStartedAt: current[activeSessionKey].runStartedAt ?? now,
+            currentStep: current[activeSessionKey].currentStep ?? {
+              kind: "response",
+              label: "发送任务",
+              startedAt: now,
+            },
             operationId,
             items: [
               ...current[activeSessionKey].items,
@@ -479,6 +851,32 @@ function App() {
     activeChannel.choice(item.tool_use_id, item.selected ?? []);
   };
 
+  const updateSchedule = async (
+    action: "pause" | "resume" | "trigger" | "cancel",
+    job: ScheduleJobInfo,
+  ) => {
+    if (!activeConnection) return;
+    if (action === "cancel" && !window.confirm(`取消“${job.name}”？`)) return;
+    const api = apiRef.current.get(activeConnection.id);
+    if (!api) return;
+    setScheduleActionId(job.id);
+    setScheduleError(null);
+    try {
+      const sessionId = activeSession && activeSession.cwd === activeProject?.path
+        ? activeSession.id
+        : undefined;
+      if (action === "pause") await api.pauseSchedule(job.id, sessionId);
+      if (action === "resume") await api.resumeSchedule(job.id, sessionId);
+      if (action === "trigger") await api.triggerSchedule(job.id, sessionId);
+      if (action === "cancel") await api.cancelSchedule(job.id, sessionId);
+      await refreshSchedules(activeConnection.id, sessionId);
+    } catch (error) {
+      setScheduleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setScheduleActionId(null);
+    }
+  };
+
   const selectMode = (mode: "agent" | "plan") => {
     activeChannel?.switchMode(mode);
     if (activeSessionKey) {
@@ -490,13 +888,119 @@ function App() {
     }
   };
 
-  const activeList = activeProject
-    ? activeGateway?.sessionsByProject[activeProject.path] ?? []
-    : [];
-  const filteredSessions = activeList.filter((item) => {
+  const selectModel = (name: string) => {
+    if (!activeChannel || !activeSessionKey || !name) return;
+    try {
+      activeChannel.switchModel(name);
+      setModelSelections((current) => ({ ...current, [activeSessionKey]: name }));
+      setSessions((current) => {
+        const session = current[activeSessionKey];
+        if (!session?.status) return current;
+        return {
+          ...current,
+          [activeSessionKey]: {
+            ...session,
+            status: { ...session.status, model_profile: name },
+          },
+        };
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const selectPermissionMode = (mode: PermissionMode) => {
+    if (!activeChannel || !activeSessionKey) return;
+    try {
+      activeChannel.setPermissionMode(mode);
+      setPermissionSelections((current) => ({ ...current, [activeSessionKey]: mode }));
+      setSessions((current) => {
+        const session = current[activeSessionKey];
+        if (!session?.status) return current;
+        return {
+          ...current,
+          [activeSessionKey]: {
+            ...session,
+            status: { ...session.status, permission_mode: mode },
+          },
+        };
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const titledSessions = activeList.filter((item) => item.title.trim().length > 0);
+  const filteredSessions = titledSessions.filter((item) => {
     const needle = search.trim().toLowerCase();
     return !needle || item.title.toLowerCase().includes(needle) || item.preview.toLowerCase().includes(needle);
   });
+  const activeJobs = activeConnection ? scheduleJobs[activeConnection.id] ?? [] : [];
+  const resourceSessionId = activeSession && activeSession.cwd === activeProject?.path
+    ? activeSession.id
+    : undefined;
+  const activePluginData = activeConnection
+    ? pluginData[activeConnection.id] ?? { skills: [], tools: [] }
+    : { skills: [], tools: [] };
+  const activeModel = activeSessionKey
+    ? modelSelections[activeSessionKey] || activeSession?.status?.model_profile || activeSession?.status?.model || ""
+    : "";
+  const activePermissionMode = activeSessionKey
+    ? permissionSelections[activeSessionKey] || normalizePermissionMode(activeSession?.status?.permission_mode)
+    : "default";
+
+  useEffect(() => {
+    if (!activeSession?.busy) return;
+    setRunClock(Date.now());
+    const timer = window.setInterval(() => setRunClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [activeSession?.busy, activeSessionKey]);
+
+  useEffect(() => {
+    const previous = focusedSessionRef.current;
+    const nextProjectPath = activeProject?.path ?? "";
+    const sameEmptyHandshake = Boolean(
+      previous
+      && activeSession
+      && previous.sessionId.startsWith("new-")
+      && !activeSession.id.startsWith("new-")
+      && activeSessionKey === sessionKey(activeConnection?.id ?? "", activeSession.id)
+      && activeSession.cwd === previous.cwd
+      && activeSession.items.length === 0,
+    );
+    const changedFocus = previous && (
+      previous.key !== activeSessionKey
+      || previous.view !== workspaceView
+      || previous.projectPath !== nextProjectPath
+    );
+    if (changedFocus && !sameEmptyHandshake && previous.empty && !previous.busy) {
+      void archiveSession(previous);
+    }
+
+    if (!activeSessionKey || !activeSession || workspaceView !== "chat") {
+      focusedSessionRef.current = null;
+      return;
+    }
+    const sessionInfo = activeList.find((item) => item.session_id === activeSession.id);
+    focusedSessionRef.current = {
+      connectionId: activeConnection?.id ?? "",
+      cwd: activeSession.cwd,
+      key: activeSessionKey,
+      sessionId: activeSession.id,
+      empty: activeSession.items.length === 0 && (!sessionInfo || sessionInfo.message_count === 0),
+      busy: activeSession.busy,
+      projectPath: nextProjectPath,
+      view: workspaceView,
+    };
+  }, [
+    activeConnection?.id,
+    activeList,
+    activeProject?.path,
+    activeSession,
+    activeSessionKey,
+    archiveSession,
+    workspaceView,
+  ]);
 
   if (!settings) {
     return <div className="boot"><LoaderCircle className="spin" />正在加载 Crab Desktop</div>;
@@ -512,6 +1016,11 @@ function App() {
         >
           {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
         </button>
+        <div className="top-brand" aria-label="Crab Desktop 工作台">
+          <span className={`top-brand-mark ${activeGateway?.status === "online" ? "online" : ""}`}><Code2 /></span>
+          <span className="top-brand-name">Crab Desktop</span>
+          <span className="top-brand-mode">WORKBENCH</span>
+        </div>
         <div className="tab-strip">
           {settings.connection_order.map((id) => {
             const connection = settings.connections.find((item) => item.id === id);
@@ -551,25 +1060,41 @@ function App() {
         </button>
       </header>
 
-      <div className="workbench">
-        {sidebarOpen && (
-          <aside className="sidebar" style={{ width: settings.sidebar_width }}>
-            <div className="sidebar-heading">
-              <div className="connection-name">
-                <Server />
-                <span>{activeConnection?.name ?? "Gateway"}</span>
+      <div className={`workbench ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+        <aside
+          className={`sidebar ${sidebarOpen ? "open" : "closed"}`}
+          style={{ width: sidebarOpen ? settings.sidebar_width : 0 }}
+          aria-hidden={!sidebarOpen}
+          {...(!sidebarOpen ? { inert: "" } : {})}
+        >
+          <div className="sidebar-content" style={{ width: settings.sidebar_width }}>
+            <div className="workspace-brand">
+              <div className="workspace-brand-lockup" title={activeProject?.path ?? activeConnection?.base_url}>
+                <span className="workspace-brand-copy">
+                  <strong>Crab Desktop</strong>
+                  <small>{activeProject?.name ?? "工作区"}</small>
+                </span>
               </div>
-              <button
-                className="icon-button small"
-                title="重新连接"
-                onClick={() => {
-                  if (!activeConnection) return;
-                  connectedRef.current.add(activeConnection.id);
-                  void connectGateway(activeConnection, settings.python_path);
-                }}
-              >
-                <RefreshCw />
-              </button>
+              <div className="workspace-brand-actions">
+                <button
+                  className="icon-button small"
+                  title="已安排"
+                  onClick={() => setWorkspaceView("scheduled")}
+                >
+                  <Clock />
+                </button>
+                <button
+                  className="icon-button small"
+                  title="重新连接"
+                  onClick={() => {
+                    if (!activeConnection) return;
+                    connectedRef.current.add(activeConnection.id);
+                    void connectGateway(activeConnection, settings.python_path);
+                  }}
+                >
+                  <RefreshCw />
+                </button>
+              </div>
             </div>
 
             {activeGateway?.status === "error" && (
@@ -579,92 +1104,208 @@ function App() {
               </button>
             )}
 
-            <button
-              className="primary-action"
-              disabled={!activeConnection || !activeProject || activeGateway?.status !== "online"}
-              onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
-            >
-              <MessageSquarePlus />
-              新会话
-            </button>
+            <nav className="workspace-nav" aria-label="工作区">
+              <button
+                className={`workspace-nav-item ${workspaceView === "chat" ? "active" : ""}`}
+                disabled={!activeConnection || !activeProject || activeGateway?.status !== "online"}
+                onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
+              >
+                <MessageSquarePlus />
+                <span>新会话</span>
+              </button>
+              <button
+                className={`workspace-nav-item ${workspaceView === "scheduled" ? "active" : ""}`}
+                onClick={() => setWorkspaceView("scheduled")}
+              >
+                <Clock />
+                <span>已安排</span>
+              </button>
+              <button
+                className={`workspace-nav-item ${workspaceView === "plugins" ? "active" : ""}`}
+                onClick={() => setWorkspaceView("plugins")}
+              >
+                <Puzzle />
+                <span>插件</span>
+              </button>
+            </nav>
 
-            <section className="sidebar-section projects-section">
+            {workspaceView === "chat" && <section className={`sidebar-section projects-section ${projectsCollapsed ? "collapsed" : ""}`}>
               <div className="section-label">
-                <span>项目</span>
                 <button
-                  className="icon-button tiny"
-                  title="添加项目"
-                  disabled={activeGateway?.status !== "online"}
-                  onClick={() => setDirectoryModal(true)}
+                  className="section-label-toggle"
+                  aria-expanded={!projectsCollapsed}
+                  onClick={() => setProjectsCollapsed((value) => !value)}
                 >
-                  <Plus />
+                  <span>项目</span>
                 </button>
-              </div>
-              <div className="project-list">
-                {activeConnection?.projects.map((project) => (
+                <span className="section-label-actions">
                   <button
-                    key={project.path}
-                    className={`project-item ${activeProject?.path === project.path ? "active" : ""}`}
-                    title={project.path}
-                    onClick={() => switchProject(project)}
-                    onDoubleClick={() => {
-                      if (!activeConnection) return;
-                      const name = window.prompt("项目名称", project.name)?.trim();
-                      if (!name) return;
-                      updateConnection(activeConnection.id, (connection) => ({
-                        ...connection,
-                        projects: connection.projects.map((item) => item.path === project.path
-                          ? { ...item, name }
-                          : item),
-                      }));
-                    }}
+                    className="icon-button tiny"
+                    title="添加项目"
+                    disabled={activeGateway?.status !== "online"}
+                    onClick={() => setDirectoryModal(true)}
                   >
-                    {activeProject?.path === project.path ? <FolderOpen /> : <Folder />}
-                    <span>{project.name}</span>
+                    <Plus />
                   </button>
-                ))}
+                  <button
+                    className="icon-button tiny section-collapse"
+                    title={projectsCollapsed ? "展开项目" : "折叠项目"}
+                    aria-expanded={!projectsCollapsed}
+                    onClick={() => setProjectsCollapsed((value) => !value)}
+                  >
+                    <ChevronDown className={projectsCollapsed ? "collapsed" : ""} />
+                  </button>
+                </span>
               </div>
-            </section>
+              <div
+                className="section-content"
+                aria-hidden={projectsCollapsed}
+                {...(projectsCollapsed ? { inert: "" } : {})}
+              >
+                <div className="section-content-inner">
+                  <div className="project-list">
+                    {activeConnection?.projects.map((project) => (
+                      <button
+                        key={project.path}
+                        className={`project-item ${activeProject?.path === project.path ? "active" : ""}`}
+                        title={project.path}
+                        onClick={() => switchProject(project)}
+                        onDoubleClick={() => {
+                          if (!activeConnection) return;
+                          const name = window.prompt("项目名称", project.name)?.trim();
+                          if (!name) return;
+                          updateConnection(activeConnection.id, (connection) => ({
+                            ...connection,
+                            projects: connection.projects.map((item) => item.path === project.path
+                              ? { ...item, name }
+                              : item),
+                          }));
+                        }}
+                      >
+                        {activeProject?.path === project.path ? <FolderOpen /> : <Folder />}
+                        <span>{project.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>}
 
-            <section className="sidebar-section sessions-section">
-              <div className="section-label"><span>会话</span><span>{filteredSessions.length}</span></div>
-              <label className="session-search">
-                <Search />
-                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索会话" />
-              </label>
-              <div className="session-list">
-                {filteredSessions.map((info) => {
-                  const key = sessionKey(activeConnection!.id, info.session_id);
-                  const view = sessions[key];
-                  const isActive = activeSessionKey === key;
-                  const pending = view?.items.some((item) => item.status === "pending" && (
-                    item.kind === "permission" || item.kind === "choice"
-                  ));
-                  return (
-                    <button
-                      key={info.session_id}
-                      className={`session-item ${isActive ? "active" : ""}`}
-                      onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject, info)}
-                    >
-                      <span className="session-title-row">
-                        <span className="session-title">{info.title || "未命名会话"}</span>
-                        {view?.busy && <LoaderCircle className="spin" />}
-                        {pending && <ShieldAlert className="pending-icon" />}
-                      </span>
-                      <span className="session-preview">{info.preview || formatDate(info.created_at)}</span>
-                    </button>
-                  );
-                })}
-                {activeGateway?.status === "online" && filteredSessions.length === 0 && (
-                  <div className="empty-sidebar">暂无会话</div>
-                )}
+            {workspaceView === "chat" && <section className={`sidebar-section sessions-section ${sessionsCollapsed ? "collapsed" : ""}`}>
+              <div className="section-label">
+                <button
+                  className="section-label-toggle"
+                  aria-expanded={!sessionsCollapsed}
+                  onClick={() => setSessionsCollapsed((value) => !value)}
+                >
+                  <span>会话</span>
+                </button>
+                <span className="section-label-actions">
+                  <span className="section-count">{filteredSessions.length}</span>
+                  <button
+                    className="icon-button tiny section-collapse"
+                    title={sessionsCollapsed ? "展开会话" : "折叠会话"}
+                    aria-expanded={!sessionsCollapsed}
+                    onClick={() => setSessionsCollapsed((value) => !value)}
+                  >
+                    <ChevronDown className={sessionsCollapsed ? "collapsed" : ""} />
+                  </button>
+                </span>
               </div>
-            </section>
-          </aside>
-        )}
+              <div
+                className="section-content"
+                aria-hidden={sessionsCollapsed}
+                {...(sessionsCollapsed ? { inert: "" } : {})}
+              >
+                <div className="section-content-inner">
+                  <label className="session-search">
+                    <Search />
+                    <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索会话" />
+                  </label>
+                  <div className="session-list">
+                    {filteredSessions.map((info) => {
+                      const key = sessionKey(activeConnection!.id, info.session_id);
+                      const view = sessions[key];
+                      const isActive = activeSessionKey === key;
+                      const deleting = deletingSessionIds.has(key);
+                      const pending = view?.items.some((item) => item.status === "pending" && (
+                        item.kind === "permission" || item.kind === "choice"
+                      ));
+                      return (
+                        <div className={`session-item-row ${isActive ? "active" : ""}`} key={info.session_id}>
+                          <button
+                            type="button"
+                            className="session-item"
+                            onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject, info)}
+                          >
+                            <span className="session-title-row">
+                              <span className="session-title">{info.title || "未命名会话"}</span>
+                              {view?.busy && <LoaderCircle className="spin" />}
+                              {pending && <ShieldAlert className="pending-icon" />}
+                            </span>
+                            <span className="session-preview">{info.preview || formatDate(info.created_at)}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button tiny session-delete"
+                            title="删除会话"
+                            aria-label={`删除会话 ${info.title || "未命名会话"}`}
+                            disabled={deleting}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void archiveSession({
+                                connectionId: activeConnection!.id,
+                                cwd: info.cwd || activeProject?.path || "",
+                                key,
+                                sessionId: info.session_id,
+                              });
+                            }}
+                          >
+                            {deleting ? <LoaderCircle className="spin" /> : <Trash2 />}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {activeGateway?.status === "online" && filteredSessions.length === 0 && (
+                      <div className="empty-sidebar">暂无会话</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>}
+          </div>
+        </aside>
 
         <main className="main-panel">
-          {!activeSession ? (
+          {workspaceView === "scheduled" ? (
+            <ScheduledTasksView
+              jobs={activeJobs}
+              loading={scheduleLoading}
+              error={scheduleError}
+              actionId={scheduleActionId}
+              connected={activeGateway?.status === "online"}
+              onRefresh={() => activeConnection && void refreshSchedules(activeConnection.id, resourceSessionId)}
+              onAction={(action, job) => void updateSchedule(action, job)}
+              onNew={(prompt) => {
+                if (!activeConnection || !activeProject) return;
+                openSession(activeConnection, activeProject);
+                if (prompt) setComposer(prompt);
+              }}
+            />
+          ) : workspaceView === "plugins" ? (
+            <PluginsView
+              data={activePluginData}
+              loading={pluginLoading}
+              error={pluginError}
+              connected={activeGateway?.status === "online"}
+              onRefresh={() => activeConnection && void refreshPlugins(
+                activeConnection.id,
+                resourceSessionId,
+                activeProject?.path ?? activeGateway?.workspace?.startup_cwd,
+              )}
+            />
+          ) : !activeSession ? (
             <EmptyWorkspace
               connection={activeConnection}
               project={activeProject}
@@ -686,18 +1327,14 @@ function App() {
                   <button
                     className="icon-button"
                     title="归档会话"
-                    onClick={async () => {
-                      if (!activeConnection || !activeProject || !activeSession.id) return;
-                      if (!window.confirm("归档这个会话？")) return;
-                      await apiRef.current.get(activeConnection.id)?.archive(activeSession.id);
-                      channelRef.current.get(activeSessionKey!)?.dispose();
-                      channelRef.current.delete(activeSessionKey!);
-                      setSessions((current) => {
-                        const { [activeSessionKey!]: _, ...rest } = current;
-                        return rest;
-                      });
-                      setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
-                      await refreshProjectSessions(activeConnection.id, activeProject.path);
+                    onClick={() => {
+                      if (!activeConnection || !activeProject || !activeSessionKey || !activeSession.id) return;
+                      void archiveSession({
+                        connectionId: activeConnection.id,
+                        cwd: activeProject.path,
+                        key: activeSessionKey,
+                        sessionId: activeSession.id,
+                      }, true);
                     }}
                   >
                     <Archive />
@@ -715,6 +1352,7 @@ function App() {
                   <ChatItemView
                     key={item.id}
                     item={item}
+                    now={runClock}
                     onPermission={resolvePermission}
                     onToggleChoice={toggleChoice}
                     onSubmitChoice={submitChoice}
@@ -724,13 +1362,28 @@ function App() {
                     )}
                   />
                 ))}
+                {activeSession.busy && (
+                  <ExecutionStatusBar
+                    startedAt={activeSession.runStartedAt ?? runClock}
+                    currentStep={activeSession.currentStep ?? null}
+                    now={runClock}
+                  />
+                )}
                 <div ref={messageEndRef} />
               </div>
               <div className="composer-wrap">
                 <div className="composer-context">
                   <span><Folder />{activeProject?.name}</span>
                   <span><Server />{activeConnection?.name}</span>
-                  {!activeSession.connected && <span className="danger"><WifiOff />连接中断</span>}
+                  {!activeSession.connected && (
+                    <span
+                      className="danger connection-state"
+                      title={activeSession.error || "会话连接已断开，Crab Desktop 正在重连"}
+                    >
+                      <WifiOff />
+                      {activeSession.error || "连接中断，正在重连"}
+                    </span>
+                  )}
                 </div>
                 <div className="composer-box">
                   {pendingImages.length > 0 && (
@@ -789,16 +1442,13 @@ function App() {
                           }}
                         />
                       </label>
-                      <select
-                        aria-label="模型"
-                        value={activeSession.status?.model_profile ?? ""}
-                        onChange={(event) => activeChannel?.switchModel(event.target.value)}
-                      >
-                        <option value="">{activeSession.status?.model || "默认模型"}</option>
-                        {activeGateway?.models.map((model) => (
-                          <option key={model.name} value={model.name}>{model.name}</option>
-                        ))}
-                      </select>
+                      <ModelPicker
+                        models={activeGateway?.models ?? []}
+                        value={activeModel}
+                        fallback={activeSession.status?.model || "默认模型"}
+                        disabled={!activeSession.connected}
+                        onChange={selectModel}
+                      />
                       <div className="segmented-control" aria-label="运行模式">
                         <button
                           className={activeSession.status?.mode !== "plan" ? "active" : ""}
@@ -809,23 +1459,14 @@ function App() {
                           onClick={() => selectMode("plan")}
                         >Plan</button>
                       </div>
-                      <select
-                        aria-label="权限模式"
-                        value={activeSession.status?.permission_mode ?? "default"}
-                        onChange={(event) => activeChannel?.setPermissionMode(event.target.value)}
-                      >
-                        <option value="default">跟随设置</option>
-                        <option value="ask">每次询问</option>
-                        <option value="ai_review">AI 审查</option>
-                        <option value="run_everything">完全访问</option>
-                      </select>
+                      <PermissionPicker
+                        value={activePermissionMode}
+                        disabled={!activeSession.connected}
+                        onChange={selectPermissionMode}
+                      />
                     </div>
                     <div className="toolbar-right">
-                      {activeSession.status?.context_window_tokens ? (
-                        <span className="context-usage" title="上下文用量">
-                          {Math.round(activeSession.status.context_used_percent)}%
-                        </span>
-                      ) : null}
+                      <ContextMeter status={activeSession.status} usage={activeSession.lastTurnUsage} />
                       {activeSession.busy ? (
                         <button
                           className="round-action stop"
@@ -973,6 +1614,498 @@ function ConnectionDot({ status }: { status: GatewayViewState["status"] }) {
     : <Circle className={`connection-dot ${status}`} fill="currentColor" />;
 }
 
+type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
+
+function ScheduledTasksView({
+  jobs,
+  loading,
+  error,
+  actionId,
+  connected,
+  onRefresh,
+  onAction,
+  onNew,
+}: {
+  jobs: ScheduleJobInfo[];
+  loading: boolean;
+  error: string | null;
+  actionId: string | null;
+  connected: boolean;
+  onRefresh: () => void;
+  onAction: (action: ScheduleAction, job: ScheduleJobInfo) => void;
+  onNew: (prompt?: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = jobs.filter((job) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || [job.name, job.description, job.prompt, job.schedule]
+      .some((value) => value.toLowerCase().includes(needle));
+  });
+  const runningCount = jobs.filter((job) => job.enabled && !["paused", "completed", "error"].includes(job.status)).length;
+  const pausedCount = jobs.filter((job) => !job.enabled || job.status === "paused").length;
+  const nextRun = jobs
+    .filter((job) => job.enabled && job.next_run)
+    .sort((left, right) => String(left.next_run).localeCompare(String(right.next_run)))[0]?.next_run ?? null;
+  const summaryCards = [
+    { label: "活跃流程", value: String(runningCount), icon: Activity, tone: "coral" },
+    { label: "暂停待命", value: String(pausedCount), icon: Timer, tone: "amber" },
+    { label: "最近触发", value: nextRun ? formatDateTime(nextRun) : "尚未安排", icon: Gauge, tone: "cyan" },
+  ] as const;
+  const suggestions = [
+    {
+      title: "晨间代码巡检",
+      meta: "工作日 · 08:30",
+      description: "扫描工作区变更、测试结果与待处理分支，生成一页晨间信号",
+      icon: Code2,
+      tone: "coral",
+    },
+    {
+      title: "版本周报",
+      meta: "周五 · 16:00",
+      description: "汇总本周提交、合并请求和发布风险，输出可交付的状态摘要",
+      icon: GitBranch,
+      tone: "cyan",
+    },
+    {
+      title: "依赖脉冲",
+      meta: "工作日 · 09:00",
+      description: "检查依赖更新与安全告警，只把需要决策的变化推到会话中",
+      icon: Zap,
+      tone: "amber",
+    },
+  ] as const;
+
+  return (
+    <section className="workspace-page scheduled-page">
+      <div className="page-kicker"><Workflow /><span>CRAB DESKTOP AUTOMATION DECK</span><i /></div>
+      <header className="page-header">
+        <div>
+          <h1>自动化甲板</h1>
+          <p>让 Crab Desktop 按计划运行检查、整理和交付流程</p>
+        </div>
+        <button className="icon-button page-refresh" title="刷新自动化甲板" onClick={onRefresh} disabled={loading || !connected}>
+          <RefreshCw className={loading ? "spin" : ""} />
+        </button>
+      </header>
+      <div className="automation-summary">
+        {summaryCards.map(({ label, value, icon: Icon, tone }) => (
+          <div className={`automation-stat ${tone}`} key={label}>
+            <span className="automation-stat-icon"><Icon /></span>
+            <span className="automation-stat-copy"><small>{label}</small><strong>{value}</strong></span>
+          </div>
+        ))}
+      </div>
+      <label className="page-search">
+        <Search />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="检索流程、触发器或工作区" />
+      </label>
+      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取已安排任务" />}
+      {error && <PageNotice icon={<AlertTriangle />} text={error} error />}
+      {jobs.length > 0 ? (
+        <div className="page-section">
+          <div className="page-section-heading"><h2>运行队列</h2><span>{filtered.length} 个流程</span></div>
+          <div className="scheduled-list">
+            {filtered.map((job) => {
+              const busy = actionId === job.id;
+              const paused = !job.enabled || job.status === "paused";
+              const statusTone = paused ? "paused" : job.status === "error" ? "error" : job.status === "completed" ? "complete" : "live";
+              const statusText = paused ? "待命" : job.status === "error" ? "运行异常" : job.status === "completed" ? "已完成" : "运行中";
+              return (
+                <article className="scheduled-item" key={job.id}>
+                  <div className={`scheduled-icon ${statusTone}`}><Workflow /></div>
+                  <div className="scheduled-copy">
+                    <div className="scheduled-title-row">
+                      <strong>{job.name}</strong>
+                      <span className="schedule-type">{job.schedule_type} · {job.schedule}</span>
+                    </div>
+                    <p>{job.description || job.prompt}</p>
+                    <div className="scheduled-meta">
+                      <small className={`schedule-status ${statusTone}`}><span />{statusText}</small>
+                      <small>{scheduleSummary(job)}{job.run_count > 0 ? ` · 已运行 ${job.run_count} 次` : ""}</small>
+                      {job.cwd && <small className="schedule-scope" title={job.cwd}><Folder />{basename(job.cwd)}</small>}
+                    </div>
+                  </div>
+                  <div className="scheduled-actions">
+                    <button className="icon-button tiny" title={paused ? "恢复任务" : "暂停任务"} disabled={busy} onClick={() => onAction(paused ? "resume" : "pause", job)}>
+                      {busy ? <LoaderCircle className="spin" /> : paused ? <Play /> : <Pause />}
+                    </button>
+                    <button className="icon-button tiny" title="立即运行" disabled={busy || paused} onClick={() => onAction("trigger", job)}><Play /></button>
+                    <button className="icon-button tiny danger-button" title="取消任务" disabled={busy} onClick={() => onAction("cancel", job)}><Trash2 /></button>
+                  </div>
+                </article>
+              );
+            })}
+            {filtered.length === 0 && <div className="page-empty">没有匹配的已安排任务</div>}
+          </div>
+        </div>
+      ) : (
+        <div className="page-section">
+          <div className="page-section-heading"><h2>启动一个流程</h2><span>从工作区信号开始</span></div>
+          <div className="suggestion-list">
+            {suggestions.map(({ title, meta, description, icon: Icon, tone }) => (
+              <button
+                className="suggestion-item"
+                key={title}
+                onClick={() => onNew(`请创建“${title}”已安排任务：${description}。${meta}。`)}
+                disabled={!connected}
+              >
+                <span className={`suggestion-icon ${tone}`}><Icon /></span>
+                <span className="suggestion-copy"><strong>{title}</strong><span>{meta}</span><small>{description}</small></span>
+              </button>
+            ))}
+          </div>
+          <button className="page-command" onClick={() => onNew()} disabled={!connected}><MessageSquarePlus />新建任务</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PluginsView({
+  data,
+  loading,
+  error,
+  connected,
+  onRefresh,
+}: {
+  data: PluginData;
+  loading: boolean;
+  error: string | null;
+  connected: boolean;
+  onRefresh: () => void;
+}) {
+  const [tab, setTab] = useState<"skills" | "tools">("skills");
+  const [query, setQuery] = useState("");
+  const tools = data.tools.filter((tool) => tool.is_enabled && tool.name !== "Skill");
+  const source = tab === "skills" ? data.skills : tools;
+  const filtered = source.filter((item) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || item.name.toLowerCase().includes(needle) || item.description.toLowerCase().includes(needle);
+  });
+  const readOnlyCount = tools.filter((tool) => tool.is_read_only).length;
+  const executeCount = tools.length - readOnlyCount;
+  const capabilityStats = tab === "skills"
+    ? [
+      { label: "已加载技能", value: data.skills.length, icon: Boxes, tone: "coral" },
+      { label: "工作流入口", value: data.skills.length > 0 ? "READY" : "EMPTY", icon: Workflow, tone: "cyan" },
+    ] as const
+    : [
+      { label: "可用工具", value: tools.length, icon: Wrench, tone: "cyan" },
+      { label: "只读 / 执行", value: `${readOnlyCount} / ${executeCount}`, icon: ShieldCheck, tone: "amber" },
+    ] as const;
+  return (
+    <section className="workspace-page plugins-page">
+      <div className="page-kicker"><Boxes /><span>CRAB DESKTOP CAPABILITY BAY</span><i /></div>
+      <header className="page-header plugins-header">
+        <div className="plugin-tabs" role="tablist" aria-label="插件类型">
+          <button role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}><Puzzle />Skills</button>
+          <button role="tab" aria-selected={tab === "tools"} className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}><Wrench />Tools</button>
+        </div>
+        <span className="capability-context"><CircleDotDashed />{connected ? "工作区已连接" : "等待 Gateway"}</span>
+        <button className="icon-button page-refresh" title="刷新能力舱" onClick={onRefresh} disabled={loading || !connected}><RefreshCw className={loading ? "spin" : ""} /></button>
+      </header>
+      <div className="page-intro">
+        <h1>{tab === "skills" ? "Skills 能力舱" : "Tools 能力舱"}</h1>
+        <p>{tab === "skills" ? "把团队工作流接入 Crab Desktop，按需装载专用能力" : "只展示当前工作区真正可用的执行接口"}</p>
+      </div>
+      <div className="capability-summary">
+        {capabilityStats.map(({ label, value, icon: Icon, tone }) => (
+          <div className={`capability-stat ${tone}`} key={label}>
+            <Icon /><span><small>{label}</small><strong>{value}</strong></span>
+          </div>
+        ))}
+        <div className="capability-note"><Terminal /><span>能力由当前 Gateway 提供</span><ArrowUpRight /></div>
+      </div>
+      <label className="page-search">
+        <Search />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`检索 ${tab === "skills" ? "skill" : "tool"} 名称或描述`} />
+      </label>
+      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取插件" />}
+      {error && <PageNotice icon={<AlertTriangle />} text={error} error />}
+      <div className="page-section plugin-section">
+        <div className="page-section-heading"><h2>已挂载能力</h2><span>{filtered.length} 项可用</span></div>
+        {loading && filtered.length === 0 ? <div className="page-loading"><LoaderCircle className="spin" /></div> : (
+          <div className="plugin-grid">
+            {filtered.map((item) => (
+              <article className="plugin-item" key={item.name}>
+                <div className={`plugin-icon ${tab === "skills" ? "skill" : "tool"}`}>{tab === "skills" ? <Puzzle /> : <Wrench />}</div>
+                <div className="plugin-copy"><div className="plugin-title-row"><strong>{item.name}</strong><span className="plugin-availability"><span />AVAILABLE</span></div><p>{item.description || "暂无描述"}</p><small>{tab === "skills" ? "WORKFLOW SKILL" : ("is_read_only" in item && item.is_read_only ? "READ ONLY TOOL" : "EXECUTION TOOL")}</small></div>
+                <Check className="plugin-check" aria-label="可用" />
+              </article>
+            ))}
+            {filtered.length === 0 && !loading && <div className="page-empty">暂无可用{tab === "skills" ? "技能" : "工具"}</div>}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function PageNotice({ icon, text, error = false }: { icon: React.ReactNode; text: string; error?: boolean }) {
+  return <div className={`page-notice ${error ? "error" : ""}`}>{icon}<span>{text}</span></div>;
+}
+
+const PERMISSION_OPTIONS: Array<{
+  value: PermissionMode;
+  label: string;
+  description: string;
+  icon: typeof ShieldCheck;
+  tone: string;
+}> = [
+  {
+    value: "default",
+    label: "工作区默认规则",
+    description: "使用当前项目加载的 CrabCode 权限配置",
+    icon: ShieldCheck,
+    tone: "neutral",
+  },
+  {
+    value: "ask",
+    label: "每次确认",
+    description: "执行高风险操作前先向你确认",
+    icon: ShieldAlert,
+    tone: "ask",
+  },
+  {
+    value: "ai_review",
+    label: "AI 审查",
+    description: "由审查器判断是否放行，必要时再询问",
+    icon: Bot,
+    tone: "review",
+  },
+  {
+    value: "run_everything",
+    label: "完全访问",
+    description: "直接执行所有工具操作，不再弹出权限确认",
+    icon: Zap,
+    tone: "danger",
+  },
+];
+
+function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [close, open, ref]);
+}
+
+function ModelPicker({
+  models,
+  value,
+  fallback,
+  disabled,
+  onChange,
+}: {
+  models: GatewayViewState["models"];
+  value: string;
+  fallback: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement | null>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissMenu(open, close, ref);
+  const filtered = models.filter((model) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || model.name.toLowerCase().includes(needle) || (model.description ?? "").toLowerCase().includes(needle);
+  });
+  return (
+    <div className="picker model-picker" ref={ref}>
+      <button
+        type="button"
+        className="picker-trigger model-picker-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled || models.length === 0}
+        title="选择模型"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="picker-trigger-icon"><Bot /></span>
+        <span className="picker-trigger-label">{value || fallback}</span>
+        <ChevronDown className={open ? "picker-chevron open" : "picker-chevron"} />
+      </button>
+      {open && (
+        <div className="picker-menu model-picker-menu" role="listbox" aria-label="选择模型">
+          <div className="picker-menu-heading"><span>模型</span><small>{models.length} 个可用</small></div>
+          <label className="picker-search"><Search /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型" /></label>
+          <div className="picker-options">
+            {filtered.map((model) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={model.name === value}
+                className={`picker-option ${model.name === value ? "selected" : ""}`}
+                key={model.name}
+                onClick={() => { onChange(model.name); setOpen(false); setQuery(""); }}
+              >
+                <span className="picker-option-icon"><Bot /></span>
+                <span className="picker-option-copy"><strong>{model.name}</strong>{model.description && <small>{model.description}</small>}</span>
+                {model.name === value && <Check className="picker-check" />}
+              </button>
+            ))}
+            {filtered.length === 0 && <span className="picker-empty">没有匹配的模型</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PermissionPicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: PermissionMode;
+  disabled: boolean;
+  onChange: (value: PermissionMode) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissMenu(open, close, ref);
+  const selected = PERMISSION_OPTIONS.find((item) => item.value === value) ?? PERMISSION_OPTIONS[0];
+  const Icon = selected.icon;
+  return (
+    <div className="picker permission-picker" ref={ref}>
+      <button
+        type="button"
+        className={`picker-trigger permission-picker-trigger ${selected.tone === "danger" ? "danger" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        title="选择权限策略"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Icon />
+        <span className="picker-trigger-label">{selected.label}</span>
+        <ChevronDown className={open ? "picker-chevron open" : "picker-chevron"} />
+      </button>
+      {open && (
+        <div className="picker-menu permission-picker-menu" role="menu" aria-label="权限策略">
+          <div className="picker-menu-heading"><span>工具执行权限</span><small>仅作用于当前会话</small></div>
+          <div className="permission-options">
+            {PERMISSION_OPTIONS.map((option) => {
+              const OptionIcon = option.icon;
+              return (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={option.value === value}
+                  className={`permission-option ${option.value === value ? "selected" : ""} ${option.tone}`}
+                  key={option.value}
+                  onClick={() => { onChange(option.value); setOpen(false); }}
+                >
+                  <span className="permission-option-icon"><OptionIcon /></span>
+                  <span className="permission-option-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
+                  {option.value === value && <Check className="picker-check" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContextMeter({
+  status,
+  usage,
+}: {
+  status: SessionViewState["status"];
+  usage: Record<string, unknown> | null | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissMenu(open, close, ref);
+  if (!status?.context_window_tokens) return null;
+  const percent = Math.min(100, Math.max(0, status.context_used_percent));
+  const remaining = status.context_remaining_tokens ?? Math.max(0, status.context_window_tokens - status.context_used_tokens);
+  const contextClass = percent >= 90 ? "danger" : percent >= 75 ? "warn" : "";
+  const cacheDetail = cacheUsageLabel(usage);
+  const searchDetail = status.search_index
+    ? [
+        status.search_index.state,
+        status.search_index.files == null ? null : `${status.search_index.files} 文件`,
+        status.search_index.chunks == null ? null : `${status.search_index.chunks} 分块`,
+        status.search_index.done == null || status.search_index.total == null
+          ? null
+          : `${status.search_index.done}/${status.search_index.total}`,
+      ].filter(Boolean).join(" · ")
+    : null;
+  return (
+    <div className="context-meter-wrap" ref={ref}>
+      <button
+        type="button"
+        className={`context-meter ${contextClass}`}
+        title="查看背景窗口"
+        aria-label={`背景窗口已使用 ${Math.round(percent)}%`}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        style={{ "--context-progress": `${percent}%` } as React.CSSProperties}
+      >
+        <span className="context-meter-ring" />
+        <span>{Math.round(percent)}%</span>
+      </button>
+      {open && (
+        <div className="context-popover">
+          <div className="context-popover-title"><span>背景窗口</span><strong>{Math.round(percent)}% 已用</strong></div>
+          <div className="context-progress"><span style={{ width: `${percent}%` }} /></div>
+          <div className="context-stat-row"><span>已用</span><strong>{formatTokenCount(status.context_used_tokens)} / {formatTokenCount(status.context_window_tokens)} tokens</strong></div>
+          <div className="context-stat-row"><span>剩余</span><strong>{formatTokenCount(remaining)} tokens</strong></div>
+          {cacheDetail && <div className="context-stat-row"><span>提示缓存</span><strong>{cacheDetail}</strong></div>}
+          <div className="context-stat-row"><span>模型</span><strong>{status.model_profile || [status.provider, status.model].filter(Boolean).join("/") || "未配置"}</strong></div>
+          <div className="context-stat-row"><span>模式</span><strong>{status.mode === "plan" ? "Plan" : "Agent"}</strong></div>
+          <div className="context-stat-row"><span>推理</span><strong>{status.reasoning_effort || "自动"}{status.ultra_mode ? " · Ultra" : ""}</strong></div>
+          <div className="context-stat-row"><span>会话</span><strong>{status.message_count ?? 0} 条消息 · 压缩 {status.compact_count ?? 0} 次</strong></div>
+          <div className="context-stat-row"><span>自动压缩</span><strong>{status.auto_compact_enabled === false ? "关闭" : "开启"}</strong></div>
+          <div className="context-stat-row"><span>输出配置</span><strong>思考 {status.thinking_enabled ? "开启" : "关闭"} · {formatTokenCount(status.max_tokens ?? 0)} tokens</strong></div>
+          {status.tool_count != null && <div className="context-stat-row"><span>可用工具</span><strong>{status.tool_count}</strong></div>}
+          {(status.agent_total ?? 0) > 0 && <div className="context-stat-row"><span>Agents</span><strong>{status.agent_active ?? 0} 运行中 / {status.agent_total} 个 · {status.agent_failed ?? 0} 失败</strong></div>}
+          {(status.monitor_total ?? 0) > 0 && <div className="context-stat-row"><span>后台任务</span><strong>{status.monitor_active ?? 0} 运行中 / {status.monitor_total} 个 · {status.monitor_failed ?? 0} 失败</strong></div>}
+          {searchDetail && <div className="context-stat-row"><span>语义索引</span><strong>{searchDetail}</strong></div>}
+          <div className="context-stat-row"><span>工作目录</span><strong title={status.cwd}>{status.cwd}</strong></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExecutionStatusBar({
+  startedAt,
+  currentStep,
+  now,
+}: {
+  startedAt: number;
+  currentStep: SessionViewState["currentStep"];
+  now: number;
+}) {
+  const total = Math.max(0, now - startedAt);
+  const step = currentStep ? Math.max(0, now - currentStep.startedAt) : total;
+  return (
+    <div className="execution-status" role="status" aria-live="polite">
+      <span className="execution-pulse"><span /></span>
+      <span className="execution-copy"><strong>Agent 正在工作</strong><small>{currentStep?.label ?? "处理中"}</small></span>
+      <span className="execution-time"><span>本轮 {formatElapsed(total)}</span><span>当前步骤 {formatElapsed(step)}</span></span>
+    </div>
+  );
+}
+
 function EmptyWorkspace({
   connection,
   project,
@@ -1009,14 +2142,17 @@ function EmptyWorkspace({
   );
 }
 
-function ChatItemView({ item, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
+function ChatItemView({ item, now, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
   item: ChatItem;
+  now: number;
   onPermission: (item: ChatItem, allowed: boolean, always?: boolean) => void;
   onToggleChoice: (item: ChatItem, option: string) => void;
   onSubmitChoice: (item: ChatItem) => void;
   onPlan: (action: "execute" | "revise" | "cancel") => void;
 }) {
   const [collapsed, setCollapsed] = useState(item.collapsed ?? false);
+  const durationMs = item.durationMs ?? (item.startedAt ? Math.max(0, now - item.startedAt) : null);
+  const durationLabel = durationMs === null ? null : formatElapsed(durationMs);
   if (item.kind === "user") {
     return <article className="message user-message"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text ?? ""}</ReactMarkdown></article>;
   }
@@ -1031,6 +2167,7 @@ function ChatItemView({ item, onPermission, onToggleChoice, onSubmitChoice, onPl
         <button className="activity-header" onClick={() => setCollapsed((value) => !value)}>
           {item.status === "running" ? <LoaderCircle className="spin" /> : <Bot />}
           <span>{item.title}</span>
+          {durationLabel && <small className="activity-duration">{durationLabel}</small>}
           {collapsed ? <ChevronRight /> : <ChevronDown />}
         </button>
         {!collapsed && <div className="activity-body prose-muted">{item.text}</div>}
@@ -1044,6 +2181,7 @@ function ChatItemView({ item, onPermission, onToggleChoice, onSubmitChoice, onPl
           {item.status === "running" ? <LoaderCircle className="spin" /> : <Circle fill="currentColor" />}
           <span>{item.title}</span>
           <code>{typeof item.detail === "object" && item.detail && "path" in item.detail ? String((item.detail as Record<string, unknown>).path) : ""}</code>
+          {durationLabel && <small className="activity-duration">{durationLabel}</small>}
           {collapsed ? <ChevronRight /> : <ChevronDown />}
         </button>
         {!collapsed && <pre className="activity-body">{textFromUnknown(item.detail)}</pre>}
@@ -1065,7 +2203,7 @@ function ChatItemView({ item, onPermission, onToggleChoice, onSubmitChoice, onPl
   if (item.kind === "permission") {
     return (
       <article className="request-card">
-        <div className="request-title"><ShieldAlert /><strong>{item.title}</strong></div>
+        <div className="request-title"><ShieldAlert /><strong>{item.title}</strong>{durationLabel && <small className="activity-duration">{durationLabel}</small>}</div>
         {item.text && <p>{item.text}</p>}
         <pre>{textFromUnknown(item.detail)}</pre>
         {item.status === "pending" ? (
@@ -1081,7 +2219,7 @@ function ChatItemView({ item, onPermission, onToggleChoice, onSubmitChoice, onPl
   if (item.kind === "choice") {
     return (
       <article className="request-card">
-        <div className="request-title"><MoreHorizontal /><strong>{item.title}</strong></div>
+        <div className="request-title"><MoreHorizontal /><strong>{item.title}</strong>{durationLabel && <small className="activity-duration">{durationLabel}</small>}</div>
         <div className="choice-list">
           {item.options?.map((option) => (
             <label key={option}>

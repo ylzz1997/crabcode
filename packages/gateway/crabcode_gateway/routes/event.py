@@ -18,6 +18,8 @@ from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.schemas import (
     ImageAttachment,
+    ModelChangePayload,
+    PermissionModeChangePayload,
     SessionHistoryPayload,
     SessionMessagePayload,
 )
@@ -1219,6 +1221,12 @@ async def _handle_switch_model(ws: WebSocket, msg: dict) -> None:
         )
         return
     logger.info("ws switch_model session=%s name=%s", session.session_id, name)
+    await ws.send_text(
+        ModelChangePayload(
+            session_id=session.session_id,
+            model_profile=name,
+        ).model_dump_json()
+    )
 
 
 async def _handle_switch_mode(ws: WebSocket, msg: dict) -> None:
@@ -1383,6 +1391,16 @@ async def _handle_set_permission_mode(ws: WebSocket, msg: dict) -> None:
         )
         return
     logger.info("ws set_permission_mode session=%s mode=%s", session.session_id, mode)
+    normalized_mode = {
+        "bypassPermissions": "run_everything",
+        "aiReview": "ai_review",
+    }.get(mode, mode)
+    await ws.send_text(
+        PermissionModeChangePayload(
+            session_id=session.session_id,
+            permission_mode=normalized_mode,
+        ).model_dump_json()
+    )
 
 
 async def _handle_plan_action(ws: WebSocket, msg: dict) -> None:
