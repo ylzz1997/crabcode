@@ -119,6 +119,9 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
           kind: "tool",
           title: typeof block.name === "string" ? block.name : "Tool",
           detail: block.input && typeof block.input === "object" ? block.input : {},
+          input: block.input && typeof block.input === "object" && !Array.isArray(block.input)
+            ? block.input as Record<string, unknown>
+            : {},
           tool_use_id: toolUseId,
           status: "complete",
           collapsed: true,
@@ -133,7 +136,13 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
         const result = stringify(block.content ?? block.result ?? "");
         const toolIndex = tools.get(toolUseId);
         if (toolIndex !== undefined) {
-          items[toolIndex] = { ...items[toolIndex], detail: result, status: "complete" };
+          items[toolIndex] = {
+            ...items[toolIndex],
+            detail: result,
+            result,
+            isError: block.is_error === true,
+            status: "complete",
+          };
         } else {
           tools.set(toolUseId, items.length);
           items.push({
@@ -141,6 +150,9 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
             kind: "tool",
             title: "Tool",
             detail: result,
+            input: {},
+            result,
+            isError: block.is_error === true,
             tool_use_id: toolUseId,
             status: "complete",
             collapsed: true,
@@ -311,6 +323,7 @@ export function applyGatewayEvent(
             kind: "tool",
             title: event.tool_name ?? "Tool",
             detail: event.tool_input ?? {},
+            input: event.tool_input ?? {},
             tool_use_id: event.tool_use_id,
             status: "running",
             collapsed: true,
@@ -318,15 +331,39 @@ export function applyGatewayEvent(
           },
         ],
       };
-    case "tool_result":
+    case "tool_result": {
+      const toolUseId = event.tool_use_id ?? "";
+      const result = event.result_for_display ?? event.result ?? "";
+      const hasTool = state.items.some((item) => item.kind === "tool" && item.tool_use_id === toolUseId);
+      const items = hasTool
+        ? updateByToolId(state.items, toolUseId, (item) => ({
+            ...completeItem(item, now),
+            detail: result,
+            result,
+            isError: event.is_error ?? false,
+          }), "tool")
+        : [
+            ...state.items,
+            {
+              id: toolUseId || crypto.randomUUID(),
+              kind: "tool" as const,
+              title: event.tool_name ?? "Tool",
+              detail: result,
+              input: event.tool_input ?? {},
+              result,
+              isError: event.is_error ?? false,
+              tool_use_id: event.tool_use_id,
+              status: "complete" as const,
+              collapsed: true,
+              completedAt: now,
+            },
+          ];
       return {
         ...state,
         currentStep: { kind: "response", label: "整理结果", startedAt: now },
-        items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
-          ...completeItem(item, now),
-          detail: event.result_for_display ?? event.result ?? "",
-        }), "tool"),
+        items,
       };
+    }
     case "permission_request":
       return {
         ...state,

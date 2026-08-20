@@ -3677,13 +3677,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleToolResultOnState(state: SessionState, payload: ToolResultPayload, updateWebview: boolean): void {
-    const card = state.toolCards.get(payload.tool_use_id);
-    if (card) {
-      card.result = payload.result_for_display ?? payload.result;
-      card.isError = payload.is_error ?? false;
-      card.collapsed = !card.isError;
-      if (updateWebview) this.postMessage({ type: "toolResult", card });
+    let card = state.toolCards.get(payload.tool_use_id);
+    if (!card) {
+      card = {
+        id: payload.tool_use_id,
+        toolName: payload.tool_name || "tool",
+        input: payload.tool_input ?? {},
+        result: null,
+        isError: false,
+        collapsed: false,
+      };
+      state.toolCards.set(payload.tool_use_id, card);
+      state.history.push({ kind: "tool", card });
+      if (updateWebview) this.postMessage({ type: "toolUse", card });
     }
+    card.result = payload.result_for_display ?? payload.result;
+    card.isError = payload.is_error ?? false;
+    card.collapsed = !card.isError;
+    if (updateWebview) this.postMessage({ type: "toolResult", card });
   }
 
   private handleChoiceRequest(payload: ChoiceRequestPayload): void {
@@ -4257,6 +4268,119 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       font-size: 11px;
       line-height: 1.4;
     }
+    .tool-card { --tool-tone: var(--accent); }
+    .tool-card::before { background: color-mix(in srgb, var(--tool-tone) 64%, transparent); }
+    .tool-kind-file { --tool-tone: #59a8f5; }
+    .tool-kind-terminal { --tool-tone: #8bd17c; }
+    .tool-kind-search { --tool-tone: #b69cff; }
+    .tool-kind-web { --tool-tone: #4dc9c0; }
+    .tool-kind-debug { --tool-tone: #f19b62; }
+    .tool-kind-memory, .tool-kind-goal { --tool-tone: #e8bd55; }
+    .tool-kind-agent, .tool-kind-team, .tool-kind-message { --tool-tone: #d48fe8; }
+    .tool-kind-task, .tool-kind-schedule { --tool-tone: #64b9cb; }
+    .tool-kind-checkpoint { --tool-tone: #ef7f88; }
+    .tool-kind-checklist { --tool-tone: #79c56e; }
+    .tool-kind-mode, .tool-kind-skill { --tool-tone: #a7a1ff; }
+    .tool-card.is-error { --tool-tone: var(--vscode-errorForeground, #f48771); }
+    .tool-card-header .icon {
+      flex: 0 0 20px;
+      width: 20px;
+      height: 20px;
+      color: var(--tool-tone);
+      background: color-mix(in srgb, var(--tool-tone) 13%, transparent);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-weight: 700;
+    }
+    .tool-card-header .tool-name { flex: 0 1 auto; }
+    .tool-technical-name {
+      flex: 0 1 auto;
+      max-width: 110px;
+      overflow: hidden;
+      padding: 1px 5px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      font: 9.5px/1.35 var(--vscode-editor-font-family, monospace);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tool-summary {
+      flex: 1 1 120px;
+      min-width: 60px;
+      overflow: hidden;
+      color: var(--text-muted);
+      font: 10.5px/1.35 var(--vscode-editor-font-family, monospace);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tool-card-body {
+      display: grid;
+      gap: 10px;
+      max-height: 420px;
+    }
+    .tool-card-section { min-width: 0; }
+    .tool-card-section .timeline-meta { margin-bottom: 5px; }
+    .tool-action-badge {
+      display: inline-flex;
+      margin: 0 0 6px;
+      padding: 1px 7px;
+      border: 1px solid color-mix(in srgb, var(--tool-tone) 30%, var(--border));
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--tool-tone) 9%, transparent);
+      color: var(--tool-tone);
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .tool-detail-list {
+      display: grid;
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--border);
+    }
+    .tool-detail-row {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(66px, 96px) minmax(0, 1fr);
+      align-items: baseline;
+      gap: 8px;
+      padding: 5px 7px;
+      background: color-mix(in srgb, var(--surface-soft) 82%, var(--vscode-editor-background));
+    }
+    .tool-detail-row > span {
+      color: var(--text-muted);
+      font-size: 10px;
+    }
+    .tool-detail-row > code {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--text);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 10.5px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tool-detail-row > code.path { cursor: pointer; color: var(--accent); }
+    .tool-detail-row.stacked { grid-template-columns: 1fr; gap: 4px; }
+    .tool-detail-row.stacked pre {
+      max-height: 220px;
+      overflow: auto;
+      margin: 0;
+      padding: 7px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--vscode-editor-background);
+    }
+    .tool-chip-list { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tool-chip-list code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--vscode-editor-background);
+      color: var(--text-muted);
+      font-size: 10px;
+    }
+    .tool-empty { color: var(--text-muted); font-size: 10.5px; }
 
     .request-card {
       margin: 4px 0 0;
@@ -5637,6 +5761,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     :root[data-panel-width="narrow"] .card-preview {
       display: none;
     }
+    :root[data-panel-width="narrow"] .tool-technical-name {
+      display: none;
+    }
+    :root[data-panel-width="narrow"] .tool-summary {
+      order: 4;
+      flex-basis: calc(100% - 24px);
+      margin-left: 24px;
+    }
     :root[data-panel-width="narrow"] .tool-card-header .status,
     :root[data-panel-width="narrow"] .request-status {
       order: 3;
@@ -6603,7 +6735,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       const shouldStick = captureScrollAnchor();
       const el = document.createElement('div');
-      el.className = 'tool-card';
+      const presentation = getToolPresentation(card.toolName, card.input || {});
+      el.className = 'tool-card tool-kind-' + presentation.kind + (card.isError ? ' is-error' : '');
       el.id = 'tool-' + card.id;
       el.innerHTML = buildToolCardHtml(card);
       const turn = getCurrentTurn();
@@ -6617,34 +6750,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         vscode.postMessage({ type: 'toggleToolCard', id: card.id });
       });
 
-      const pathEl = el.querySelector('.path');
-      if (pathEl) {
+      el.querySelectorAll('.path').forEach(pathEl => {
         pathEl.addEventListener('click', (e) => {
           const path = e.target.dataset.path;
           if (path) vscode.postMessage({ type: 'openFile', path });
         });
-      }
+      });
 
       toolCards.set(card.id, card);
       return el;
     }
 
     function updateToolCard(el, card) {
+      const presentation = getToolPresentation(card.toolName, card.input || {});
+      el.className = 'tool-card tool-kind-' + presentation.kind + (card.isError ? ' is-error' : '');
       el.innerHTML = buildToolCardHtml(card);
       el.querySelector('.tool-card-header').addEventListener('click', () => {
         vscode.postMessage({ type: 'toggleToolCard', id: card.id });
       });
-      const pathEl = el.querySelector('.path');
-      if (pathEl) {
+      el.querySelectorAll('.path').forEach(pathEl => {
         pathEl.addEventListener('click', (e) => {
           const path = e.target.dataset.path;
           if (path) vscode.postMessage({ type: 'openFile', path });
         });
-      }
+      });
       toolCards.set(card.id, card);
     }
 
     function buildToolCardHtml(card) {
+      const presentation = getToolPresentation(card.toolName, card.input || {});
       const chevron = card.collapsed ? 'chevron collapsed' : 'chevron';
       let statusHtml = '';
       if (card.result !== null) {
@@ -6655,11 +6789,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         statusHtml = '<span class="status running">运行中</span>';
       }
 
-      const inputHtml = renderToolInput(card.toolName, card.input);
+      const inputHtml = renderToolInput(card.toolName, card.input, presentation);
       let bodyHtml = '';
       if (!card.collapsed) {
         if (card.result !== null) {
-          bodyHtml = '<div class="tool-card-body">' + renderResult(card.result, card.toolName) + '</div>';
+          bodyHtml = '<div class="tool-card-body">' + inputHtml +
+            '<section class="tool-card-section">' + renderResult(card.result, card.toolName) + '</section></div>';
         } else {
           bodyHtml = '<div class="tool-card-body">' + inputHtml + '</div>';
         }
@@ -6669,11 +6804,131 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       return '<div class="tool-card-header">' +
-        '<span class="icon">&#9881;</span>' +
-        '<span class="tool-name">' + escapeHtml(card.toolName) + '</span>' +
+        '<span class="icon">' + escapeHtml(presentation.glyph) + '</span>' +
+        '<span class="tool-name">' + escapeHtml(presentation.label) + '</span>' +
+        '<span class="tool-technical-name">' + escapeHtml(card.toolName) + '</span>' +
+        (presentation.summary ? '<span class="tool-summary">' + escapeHtml(presentation.summary) + '</span>' : '') +
         statusHtml +
         '<span class="' + chevron + '">▾</span>' +
         '</div>' + bodyHtml;
+    }
+
+    const TOOL_PRESENTATIONS = {
+      read: ['file', '读取文件', 'R'], fileread: ['file', '读取文件', 'R'],
+      edit: ['file', '编辑文件', 'E'], fileedit: ['file', '编辑文件', 'E'],
+      write: ['file', '写入文件', 'W'], filewrite: ['file', '写入文件', 'W'],
+      bash: ['terminal', '运行命令', '>_'], lint: ['terminal', '检查诊断', '!'],
+      grep: ['search', '搜索内容', 'G'], glob: ['search', '查找文件', '*'],
+      codebasesearch: ['search', '语义搜索', 'S'], websearch: ['web', '搜索网页', '↗'],
+      browser: ['web', '浏览器操作', '◎'], debugger: ['debug', '调试程序', 'D'],
+      processdebugger: ['debug', '进程调试', 'P'], memory: ['memory', '管理记忆', 'M'],
+      monitor: ['task', '启动监控', '◉'], tasklist: ['task', '查看后台任务', '≡'], taskstop: ['task', '停止后台任务', '■'],
+      agent: ['agent', '启动 Agent', 'A'], agentstatus: ['agent', '查看 Agent', 'A'],
+      agentwait: ['agent', '等待 Agent', 'A'], agentcancel: ['agent', '取消 Agent', 'A'], agentsendinput: ['agent', '向 Agent 发送输入', 'A'],
+      listagents: ['message', '查看会话', '↔'], sendmessage: ['message', '发送会话消息', '↗'], askuser: ['message', '请求用户选择', '?'],
+      checkpoint: ['checkpoint', '创建检查点', '◆'], revert: ['checkpoint', '回退检查点', '↶'], checklist: ['checklist', '任务清单', '✓'],
+      create_goal: ['goal', '创建 Goal', '◎'], get_goal: ['goal', '查看 Goal', '◎'], update_goal: ['goal', '更新 Goal', '◎'],
+      switchmode: ['mode', '切换工作模式', '⇄'],
+      teamcreate: ['team', '创建 Team', 'T'], teamspawn: ['team', '添加 Team 成员', 'T'], teammessage: ['team', '发送 Team 消息', 'T'],
+      teambroadcast: ['team', '广播 Team 消息', 'T'], teamstatus: ['team', '查看 Team', 'T'], teamtaskadd: ['team', '添加 Team 任务', 'T'],
+      teamtaskclaim: ['team', '认领 Team 任务', 'T'], teamtaskcomplete: ['team', '完成 Team 任务', 'T'], teamshutdown: ['team', '关闭 Team', 'T'],
+      schedulecreate: ['schedule', '创建定时任务', '◷'], schedulelist: ['schedule', '查看定时任务', '◷'],
+      schedulecancel: ['schedule', '删除定时任务', '◷'], schedulestatus: ['schedule', '查看任务状态', '◷'],
+      schedulepause: ['schedule', '暂停定时任务', '◷'], scheduleresume: ['schedule', '恢复定时任务', '◷'], schedulerun: ['schedule', '立即运行任务', '◷'],
+      skill: ['skill', '加载 Skill', '◇'],
+    };
+
+    const TOOL_FIELD_LABELS = {
+      action: '操作', file_path: '文件', path: '路径', target_file: '文件', target_directory: '目录', cwd: '工作目录', program: '程序',
+      command: '命令', timeout: '超时', timeout_seconds: '超时', offset: '起始行', limit: '行数', old_string: '替换前', new_string: '替换后',
+      content: '内容', replace_all: '全部替换', pattern: '匹配模式', glob: '文件过滤', query: '查询', num_results: '结果数',
+      case_insensitive: '忽略大小写', url: '网址', selector: '选择器', script: '脚本', text: '消息', prompt: '任务', description: '说明',
+      objective: '目标', token_budget: 'Token 预算', status: '状态', target_mode: '目标模式', explanation: '原因', plan: '执行计划',
+      session_id: 'Session', agent_id: 'Agent', agent_ids: 'Agents', task_id: '任务 ID', team_id: 'Team', to: '接收方', role: '角色',
+      name: '名称', model_profile: '模型', run_in_background: '后台运行', checklist_id: '清单 ID', item: '清单项', items: '清单项',
+      remove_items: '移除项', checkpoint_id: '检查点', label: '标签', schedule: '时间规则', schedule_type: '调度类型', enabled: '启用',
+      max_runs: '最大次数', next_run: '下次运行', tags: '标签', language: '语言', adapter_id: '调试适配器', pid: '进程 ID',
+      lines: '行号', thread_id: '线程', frame_id: '栈帧', expression: '表达式', title: '标题', skill_name: 'Skill', user_input: '用户要求',
+      ws: 'WebSocket', timeout_ms: '超时', persistent: '持续监控', scope: '范围', memory_id: '记忆 ID', max_teammates: '成员上限',
+      headless: '无界面模式', tab_id: '标签页', wait_until: '等待条件', return_format: '返回格式', wait_any: '任一完成即返回', interrupt: '中断当前任务',
+      job_id: '任务 ID', run_limit: '运行记录数', extra: '附加配置', paths: '检查路径', linter: '检查器', args: '参数', levels: '栈深度',
+      variables_reference: '变量引用', start: '起始位置', count: '数量', context: '上下文', terminate_debuggee: '终止被调试程序',
+      launch_config: '启动配置', attach_config: '附加配置', duration_seconds: '持续时间', interval_seconds: '采样间隔', output_path: '输出文件',
+      module_filter: '模块过滤', target_address: '目标地址', address: '地址', base_address: '基址', module_path: '模块路径', module_offset: '模块偏移',
+      max_depth: '最大深度', max_offset: '最大偏移', offsets: '偏移链', pointer_size: '指针大小', align: '对齐', size: '大小',
+      value_type: '值类型', value: '值', value_hex: '十六进制值', patch_hex: '补丁字节', expected_hex: '预期字节', patch_id: '补丁 ID',
+      endian: '字节序', readable: '可读', writable: '可写', executable: '可执行', writable_only: '仅可写内存', executable_only: '仅可执行内存',
+      max_results: '结果数', max_scan_bytes: '最大扫描字节', search_id: '搜索 ID', freeze_id: '冻结 ID', comparison: '比较方式', all: '全部',
+    };
+
+    const TOOL_FIELD_ORDER = {
+      file: ['file_path', 'path', 'target_file', 'offset', 'limit', 'replace_all', 'old_string', 'new_string', 'content'],
+      terminal: ['command', 'paths', 'linter', 'file_path', 'path', 'language', 'timeout'],
+      search: ['query', 'pattern', 'path', 'target_directory', 'glob', 'num_results', 'case_insensitive'],
+      web: ['action', 'url', 'selector', 'text', 'script', 'path', 'session_id', 'tab_id', 'headless', 'wait_until', 'return_format', 'timeout_seconds', 'options'],
+      debug: ['action', 'session_id', 'program', 'pid', 'language', 'path', 'address', 'base_address', 'lines', 'thread_id', 'frame_id', 'expression', 'query', 'pattern', 'value', 'value_hex', 'patch_hex', 'args', 'cwd'],
+      memory: ['action', 'title', 'query', 'content', 'memory_id', 'id'],
+      task: ['action', 'task_id', 'description', 'command', 'ws', 'persistent', 'interval', 'timeout_ms', 'timeout'],
+      agent: ['agent_id', 'agent_ids', 'name', 'description', 'prompt', 'subagent_type', 'model_profile', 'run_in_background', 'wait_any', 'interrupt', 'timeout_seconds', 'timeout_ms'],
+      message: ['to', 'from_name', 'question', 'options', 'multiple', 'text'], checkpoint: ['checkpoint_id', 'label'],
+      checklist: ['action', 'title', 'checklist_id', 'item', 'items', 'remove_items'], goal: ['objective', 'status', 'token_budget'],
+      mode: ['target_mode', 'explanation', 'plan'], team: ['team_id', 'task_id', 'name', 'role', 'to', 'description', 'prompt', 'text', 'result', 'model_profile', 'max_teammates'],
+      schedule: ['job_id', 'name', 'status', 'schedule_type', 'schedule', 'prompt', 'description', 'cwd', 'enabled', 'max_runs', 'next_run', 'run_limit', 'tags', 'timeout', 'model_profile', 'session_id', 'extra'],
+      skill: ['skill_name', 'skill', 'name', 'user_input', 'path', 'args'],
+    };
+
+    const TOOL_ACTION_LABELS = {
+      create: '创建', update: '更新', delete: '删除', list: '查看列表', search: '搜索', read: '读取', check: '标记完成',
+      uncheck: '取消完成', clear: '清空', launch: '启动', attach: '附加', navigate: '打开网页', click: '点击', type: '输入文本',
+      extract: '提取内容', screenshot: '截图', evaluate: '执行脚本', pause: '暂停', resume: '继续', stop: '停止', status: '查看状态',
+      create_session: '创建浏览器会话', goto: '打开网页', fill: '填写内容', press: '按键', wait_for: '等待元素', list_tabs: '查看标签页',
+      new_tab: '新建标签页', switch_tab: '切换标签页', close_tab: '关闭标签页', close_session: '关闭浏览器会话', start: '启动调试',
+      set_breakpoints: '设置断点', continue: '继续执行', step_over: '单步跳过', step_in: '单步进入', step_out: '单步跳出', threads: '查看线程',
+      stack: '查看调用栈', scopes: '查看作用域', variables: '查看变量', events: '查看事件', list_processes: '查看进程', inspect_process: '检查进程',
+      attach_debugger: '附加调试器', sample_stack: '采样调用栈', dump_core: '导出 Core Dump', memory_maps: '查看内存映射', memory_regions: '查看内存区域',
+      memory_read: '读取内存', memory_search: '搜索内存', memory_refine: '筛选内存搜索', memory_write: '写入内存', memory_freeze: '冻结内存值',
+      memory_unfreeze: '取消冻结', memory_freezes: '查看冻结项', aob_scan: '扫描字节特征', pointer_scan: '扫描指针', pointer_resolve: '解析指针',
+      code_read: '读取机器码', code_patch: '修改机器码', code_restore: '恢复机器码', code_patches: '查看机器码补丁', trace_syscalls: '跟踪系统调用',
+      detach: '断开调试器', terminate: '终止进程', kill: '强制结束进程',
+    };
+
+    function toolValue(value) {
+      if (typeof value === 'string') return value;
+      if (typeof value === 'boolean') return value ? '是' : '否';
+      if (value === null) return 'null';
+      if (Array.isArray(value) && value.every(item => ['string', 'number', 'boolean'].includes(typeof item))) return value.map(String).join(' · ');
+      try { return JSON.stringify(value, null, 2); } catch (_) { return String(value); }
+    }
+
+    function getToolPresentation(toolName, input) {
+      const normalized = String(toolName || '').trim().toLowerCase().replace(/[\\s.-]/g, '');
+      const definition = TOOL_PRESENTATIONS[normalized] || ['generic', toolName || '工具', '⚙'];
+      const kind = definition[0];
+      const rawAction = typeof input.action === 'string' ? input.action : '';
+      const action = rawAction ? (TOOL_ACTION_LABELS[rawAction.toLowerCase()] || rawAction) : '';
+      const summaryKeys = {
+        file: ['file_path', 'path', 'target_file'], terminal: ['command', 'paths', 'linter', 'file_path', 'path'], search: ['query', 'pattern', 'glob'],
+        web: ['url', 'selector', 'text', 'path'], debug: ['program', 'pid', 'path', 'expression', 'session_id'], memory: ['title', 'query', 'content'],
+        task: ['description', 'command', 'task_id'], agent: ['description', 'name', 'prompt', 'agent_id', 'agent_ids'], message: ['to', 'text', 'question'],
+        checkpoint: ['label', 'checkpoint_id'], checklist: ['title', 'checklist_id', 'item'], goal: ['objective', 'status'], mode: ['target_mode', 'explanation'],
+        team: ['team_id', 'name', 'description', 'to', 'prompt'], schedule: ['name', 'job_id', 'schedule'], skill: ['skill_name', 'skill', 'name', 'path'],
+      };
+      const summaryKey = (summaryKeys[kind] || []).find(key => input[key] !== undefined && input[key] !== '');
+      let summaryValue = summaryKey ? toolValue(input[summaryKey]).replace(/\\s+/g, ' ').trim() : '';
+      if (summaryValue.length > 120) summaryValue = summaryValue.substring(0, 117) + '…';
+      const order = TOOL_FIELD_ORDER[kind] || [];
+      const fields = Object.entries(input).filter(([, value]) => value !== undefined && value !== '' && value !== null).sort(([left], [right]) => {
+        const leftIndex = order.indexOf(left); const rightIndex = order.indexOf(right);
+        return (leftIndex < 0 ? 10000 : leftIndex) - (rightIndex < 0 ? 10000 : rightIndex);
+      }).map(([key, value]) => {
+        let variant = 'text';
+        if (Array.isArray(value) && value.every(item => ['string', 'number', 'boolean'].includes(typeof item))) variant = 'list';
+        else if (value !== null && typeof value === 'object') variant = 'json';
+        else if (['file_path', 'path', 'target_file', 'target_directory', 'cwd', 'program', 'output_path', 'module_path'].includes(key)) variant = 'path';
+        else if (['command', 'script', 'old_string', 'new_string', 'content', 'pattern', 'expression'].includes(key)) variant = 'code';
+        return { key, label: TOOL_FIELD_LABELS[key] || key.replaceAll('_', ' '), value: toolValue(value), variant };
+      });
+      return { kind, label: definition[1], glyph: definition[2], action, summary: [action, summaryValue].filter(Boolean).join(' · '), fields };
     }
 
     function formatToolInput(toolName, input) {
@@ -6690,11 +6945,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return JSON.stringify(input, null, 2);
     }
 
-    function renderToolInput(toolName, input) {
+    function renderToolInput(toolName, input, suppliedPresentation) {
       if ((toolName || '').toLowerCase() === 'checklist') {
         return renderChecklistInput(input);
       }
-      return '<div class="timeline-meta">input</div><pre>' + escapeHtml(formatToolInput(toolName, input)) + '</pre>';
+      const presentation = suppliedPresentation || getToolPresentation(toolName, input || {});
+      if (presentation.fields.length === 0) return '<div class="tool-empty">无需参数</div>';
+      const fields = presentation.fields.map(field => {
+        if (field.variant === 'list') {
+          return '<div class="tool-detail-row"><span>' + escapeHtml(field.label) + '</span><div class="tool-chip-list">' +
+            field.value.split(' · ').map(value => '<code>' + escapeHtml(value) + '</code>').join('') + '</div></div>';
+        }
+        if (field.variant === 'code' || field.variant === 'json') {
+          return '<div class="tool-detail-row stacked"><span>' + escapeHtml(field.label) + '</span><pre>' + escapeHtml(field.value) + '</pre></div>';
+        }
+        return '<div class="tool-detail-row"><span>' + escapeHtml(field.label) + '</span><code' +
+          (field.variant === 'path' ? ' class="path" data-path="' + escapeAttr(field.value) + '"' : '') + '>' + escapeHtml(field.value) + '</code></div>';
+      }).join('');
+      return '<section class="tool-card-section">' +
+        '<div class="timeline-meta">input</div>' +
+        (presentation.action ? '<span class="tool-action-badge">' + escapeHtml(presentation.action) + '</span>' : '') +
+        '<div class="tool-detail-list">' + fields + '</div></section>';
     }
 
     function formatChecklistInput(input) {

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
-    "build": "tsc --noEmit && vite build",
+    "build": "node ../../scripts/audit_tool_cards.mjs && tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "tauri": "tauri",
     "test": "vitest run"

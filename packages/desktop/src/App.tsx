@@ -59,6 +59,7 @@ import remarkGfm from "remark-gfm";
 import { applyGatewayEvent } from "./events";
 import { GatewayApi, SessionChannel } from "./gateway";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
+import { getToolPresentation, parseChecklistResult, type ToolField } from "./toolPresentation";
 import {
   deleteCredential,
   ensureLocalGateway,
@@ -2926,6 +2927,62 @@ function EmptyWorkspace({
   );
 }
 
+function ToolFieldView({ field }: { field: ToolField }) {
+  if (field.variant === "list") {
+    return (
+      <div className="tool-detail-row">
+        <span>{field.label}</span>
+        <div className="tool-chip-list">
+          {field.value.split(" · ").map((value, index) => <code key={`${field.key}-${index}`}>{value}</code>)}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className={`tool-detail-row ${field.variant === "code" || field.variant === "json" ? "stacked" : ""}`}>
+      <span>{field.label}</span>
+      {field.variant === "code" || field.variant === "json"
+        ? <pre>{field.value}</pre>
+        : <code className={field.variant === "path" ? "tool-path" : ""}>{field.value}</code>}
+    </div>
+  );
+}
+
+function ChecklistResultView({ result }: { result: unknown }) {
+  const blocks = parseChecklistResult(result);
+  if (!blocks.length) return null;
+  return (
+    <div className="tool-checklist-stack">
+      {blocks.map((block, blockIndex) => {
+        const total = block.total || block.items.length;
+        const done = block.done || block.items.filter((item) => item.checked).length;
+        const progress = total ? Math.round(done / total * 100) : 0;
+        return (
+          <section className="tool-checklist" key={`${block.title}-${blockIndex}`}>
+            <header><strong>{block.title}</strong><span>{done}/{total}</span></header>
+            <div className="tool-progress"><span style={{ width: `${progress}%` }} /></div>
+            <ul>
+              {block.items.map((entry, index) => (
+                <li className={entry.checked ? "checked" : ""} key={`${entry.text}-${index}`}>
+                  <i>{entry.checked ? "✓" : ""}</i><span>{entry.text}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function ToolResultView({ toolName, result }: { toolName: string; result: unknown }) {
+  const checklist = toolName.toLowerCase() === "checklist" ? parseChecklistResult(result) : [];
+  if (checklist.length) return <ChecklistResultView result={result} />;
+  const text = textFromUnknown(result);
+  const isDiff = text.startsWith("---") || text.startsWith("diff --git") || text.includes("\n+++");
+  return <pre className={`tool-result ${isDiff ? "diff-view" : ""}`}>{isDiff ? diffLines(text) : text}</pre>;
+}
+
 function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
   item: ChatItem;
   now: number;
@@ -2966,16 +3023,44 @@ function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermi
     );
   }
   if (item.kind === "tool") {
+    const input = item.input ?? (
+      item.result === undefined && item.detail && typeof item.detail === "object" && !Array.isArray(item.detail)
+        ? item.detail as Record<string, unknown>
+        : {}
+    );
+    const result = item.result ?? (typeof item.detail === "string" ? item.detail : undefined);
+    const presentation = getToolPresentation(item.title ?? "Tool", input);
     return (
-      <article className="activity-card tool-card">
+      <article className={`activity-card tool-card tool-kind-${presentation.kind} ${item.isError ? "is-error" : ""}`}>
         <button className="activity-header" onClick={() => setCollapsed((value) => !value)}>
-          {item.status === "running" ? <LoaderCircle className="spin" /> : <Circle fill="currentColor" />}
-          <span>{item.title}</span>
-          <code>{typeof item.detail === "object" && item.detail && "path" in item.detail ? String((item.detail as Record<string, unknown>).path) : ""}</code>
+          <i className="tool-glyph" aria-hidden="true">{item.status === "running" ? <LoaderCircle className="spin" /> : presentation.glyph}</i>
+          <span className="tool-card-title">{presentation.label}</span>
+          <small className="tool-technical-name">{item.title}</small>
+          {presentation.summary && <code className="tool-summary">{presentation.summary}</code>}
+          <em className={`tool-status ${item.isError ? "error" : item.status === "running" ? "running" : "complete"}`}>
+            {item.isError ? "失败" : item.status === "running" ? "运行中" : "完成"}
+          </em>
           {durationLabel && <small className="activity-duration">{durationLabel}</small>}
           {collapsed ? <ChevronRight /> : <ChevronDown />}
         </button>
-        {!collapsed && <pre className="activity-body">{textFromUnknown(item.detail)}</pre>}
+        {!collapsed && (
+          <div className="activity-body tool-card-body">
+            {presentation.action && <div className="tool-action-badge">{presentation.action}</div>}
+            {presentation.fields.length > 0 && (
+              <section className="tool-card-section">
+                <h4>调用参数</h4>
+                <div className="tool-detail-list">{presentation.fields.map((field) => <ToolFieldView field={field} key={field.key} />)}</div>
+              </section>
+            )}
+            {result !== undefined && (
+              <section className="tool-card-section">
+                <h4>{item.isError ? "错误" : "执行结果"}</h4>
+                <ToolResultView toolName={item.title ?? "Tool"} result={result} />
+              </section>
+            )}
+            {presentation.fields.length === 0 && result === undefined && <div className="tool-empty">无需参数</div>}
+          </div>
+        )}
       </article>
     );
   }

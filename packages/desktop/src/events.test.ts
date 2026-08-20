@@ -44,7 +44,27 @@ describe("Gateway event reducer", () => {
     expect(current.items[1].status).toBe("allowed");
     current = applyGatewayEvent(current, { type: "tool_result", tool_use_id: "tool-1", result: "done" });
     expect(current.items[0].status).toBe("complete");
+    expect(current.items[0].input).toEqual({ command: "sleep 30" });
+    expect(current.items[0].result).toBe("done");
     expect(current.items[1].status).toBe("allowed");
+  });
+
+  it("creates a completed tool card when a result arrives without its use event", () => {
+    const current = applyGatewayEvent(state(), {
+      type: "tool_result",
+      tool_use_id: "tool-late",
+      tool_name: "Grep",
+      tool_input: { pattern: "needle", path: "src" },
+      result: "src/a.ts:1:needle",
+      is_error: false,
+    });
+    expect(current.items[0]).toMatchObject({
+      kind: "tool",
+      title: "Grep",
+      input: { pattern: "needle", path: "src" },
+      result: "src/a.ts:1:needle",
+      status: "complete",
+    });
   });
 
   it("records live and completed step durations", () => {

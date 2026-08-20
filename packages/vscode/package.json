@@ -206,7 +206,7 @@
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.js --production",
     "watch": "node esbuild.js",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && node ../../scripts/audit_tool_cards.mjs",
     "package": "vsce package"
   },
   "dependencies": {

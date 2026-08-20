@@ -207,6 +207,9 @@ export interface ChatItem {
   text?: string;
   title?: string;
   detail?: unknown;
+  input?: Record<string, unknown>;
+  result?: string;
+  isError?: boolean;
   status?: "pending" | "running" | "complete" | "allowed" | "denied" | "cancelled";
   tool_use_id?: string;
   agent_id?: string | null;

@@ -668,6 +668,262 @@ svg {
   color: var(--accent);
 }
 
+.tool-card {
+  --tool-tone: var(--accent);
+  border-left-width: 3px;
+  border-color: color-mix(in srgb, var(--tool-tone) 72%, var(--border));
+}
+
+.tool-kind-file { --tool-tone: #59a8f5; }
+.tool-kind-terminal { --tool-tone: #8bd17c; }
+.tool-kind-search { --tool-tone: #b69cff; }
+.tool-kind-web { --tool-tone: #4dc9c0; }
+.tool-kind-debug { --tool-tone: #f19b62; }
+.tool-kind-memory,
+.tool-kind-goal { --tool-tone: #e8bd55; }
+.tool-kind-agent,
+.tool-kind-team,
+.tool-kind-message { --tool-tone: #d48fe8; }
+.tool-kind-task,
+.tool-kind-schedule { --tool-tone: #64b9cb; }
+.tool-kind-checkpoint { --tool-tone: #ef7f88; }
+.tool-kind-checklist { --tool-tone: #79c56e; }
+.tool-kind-mode,
+.tool-kind-skill { --tool-tone: #a7a1ff; }
+.tool-card.is-error { --tool-tone: var(--red); }
+
+.tool-card .activity-header {
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.tool-glyph {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--tool-tone) 15%, transparent);
+  color: var(--tool-tone);
+  font: 700 10px/1 var(--code-font-family);
+  font-style: normal;
+}
+
+.tool-glyph svg {
+  width: 13px;
+  height: 13px;
+}
+
+.tool-card-title {
+  flex: 0 1 auto;
+}
+
+.tool-technical-name {
+  padding: 1px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  color: var(--subtle);
+  font: 9.5px/1.4 var(--code-font-family);
+}
+
+.activity-header>.tool-summary {
+  flex: 1 1 150px;
+  color: var(--muted);
+}
+
+.tool-status {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  color: var(--green);
+  font-size: 9.5px;
+  font-style: normal;
+}
+
+.tool-status.running {
+  background: color-mix(in srgb, var(--tool-tone) 12%, transparent);
+  color: var(--tool-tone);
+}
+
+.tool-status.error {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
+
+.tool-card-body {
+  display: grid;
+  gap: 10px;
+  max-height: 520px;
+  padding-top: 4px;
+}
+
+.tool-action-badge {
+  width: max-content;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--tool-tone) 32%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tool-tone) 9%, transparent);
+  color: var(--tool-tone);
+  font: 600 10px/1.5 var(--code-font-family);
+}
+
+.tool-card-section {
+  min-width: 0;
+}
+
+.tool-card-section h4 {
+  margin: 0 0 6px;
+  color: var(--subtle);
+  font: 600 9.5px/1.4 var(--code-font-family);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.tool-detail-list {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--border-soft);
+}
+
+.tool-detail-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(72px, 110px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--code-bg));
+}
+
+.tool-detail-row>span {
+  color: var(--subtle);
+  font: 10px/1.5 var(--code-font-family);
+}
+
+.tool-detail-row>code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-detail-row.stacked {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.tool-detail-row pre,
+.tool-result {
+  max-height: 300px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--text);
+  font: var(--code-font-size)/1.5 var(--code-font-family);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tool-chip-list code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.tool-checklist-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.tool-checklist {
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--code-bg));
+}
+
+.tool-checklist header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px 6px;
+}
+
+.tool-checklist header strong { color: var(--text); }
+.tool-checklist header span { color: var(--green); font-size: 10px; }
+
+.tool-progress {
+  height: 2px;
+  margin: 0 10px 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-soft);
+}
+
+.tool-progress span {
+  height: 100%;
+  display: block;
+  background: var(--green);
+}
+
+.tool-checklist ul {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0 10px 9px;
+  list-style: none;
+}
+
+.tool-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+}
+
+.tool-checklist li i {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--green);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.tool-checklist li.checked span {
+  color: var(--subtle);
+  text-decoration: line-through;
+}
+
+.tool-empty {
+  color: var(--subtle);
+  font-size: 11px;
+}
+
 .diff-card {
   border-color: var(--green);
 }
