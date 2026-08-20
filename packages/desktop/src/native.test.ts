@@ -63,7 +63,29 @@ describe("desktop settings migration", () => {
       directories: ["/work/crab"],
       favorite_session_ids: [],
     });
+    expect(migrated.connections[0].last_model_profile).toBeNull();
     expect(migrated.connections[0].last_project_id).toBe("/work/crab");
+  });
+
+  it("preserves a non-empty remembered model profile", () => {
+    const configured = {
+      schema_version: 2,
+      active_connection_id: "local",
+      connection_order: ["local"],
+      connections: [{
+        id: "local",
+        name: "Local",
+        base_url: "http://127.0.0.1:4096",
+        credential_ref: null,
+        allow_insecure_remote: false,
+        last_model_profile: "fast",
+        projects: [],
+        last_project_path: null,
+        last_project_id: null,
+      }],
+    } as unknown as DesktopSettings;
+
+    expect(normalizeSettings(configured).connections[0].last_model_profile).toBe("fast");
   });
 
   it("preserves explicit appearance preferences", () => {

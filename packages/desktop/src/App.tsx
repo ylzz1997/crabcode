@@ -136,6 +136,16 @@ export function collectFavoriteSessions(
   });
 }
 
+export function resolveRememberedModel(
+  connection: Pick<ConnectionPreset, "last_model_profile">,
+  models: GatewayViewState["models"],
+): string | undefined {
+  const remembered = connection.last_model_profile;
+  return remembered && models.some((model) => model.name === remembered)
+    ? remembered
+    : undefined;
+}
+
 function sessionKey(connectionId: string, sessionId: string): string {
   return `${connectionId}:${sessionId}`;
 }
@@ -657,10 +667,17 @@ function App() {
       sessionId: info?.session_id,
       cwd: project.path,
       additionalDirectories: project.directories.slice(1),
+      modelProfile: info
+        ? undefined
+        : resolveRememberedModel(connection, gateways[connection.id]?.models ?? []),
       onEvent: (event: GatewayEvent) => {
         if (!isCurrentChannel()) return;
         if (event.type === "model_change" && event.model_profile) {
           setModelSelections((current) => ({ ...current, [key]: event.model_profile! }));
+          updateConnection(connection.id, (current) => ({
+            ...current,
+            last_model_profile: event.model_profile!,
+          }));
         }
         if (event.type === "permission_mode_change" && event.permission_mode) {
           setPermissionSelections((current) => ({
@@ -742,7 +759,7 @@ function App() {
     });
     channelRef.current.set(key, channel);
     void channel.connect();
-  }, [refreshProjectSessions, updateConnection, updateSessionStatus]);
+  }, [gateways, refreshProjectSessions, updateConnection, updateSessionStatus]);
 
   const connectGateway = useCallback(async (connection: ConnectionPreset, pythonPath: string | null) => {
     setGateways((current) => ({
@@ -762,6 +779,13 @@ function App() {
       apiRef.current.set(connection.id, api);
       await api.authenticate();
       const [workspace, models] = await Promise.all([api.workspaceInfo(), api.models()]);
+      if (connection.last_model_profile && !resolveRememberedModel(connection, models)) {
+        updateConnection(connection.id, (current) => (
+          current.last_model_profile === connection.last_model_profile
+            ? { ...current, last_model_profile: null }
+            : current
+        ));
+      }
       const projects = connection.projects.length > 0
         ? connection.projects
         : [{
@@ -3215,6 +3239,7 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
               ? editingConnection?.credential_ref ?? `gateway-${id}`
               : editingConnection?.credential_ref ?? null,
             allow_insecure_remote: allowInsecure,
+            last_model_profile: editingConnection?.last_model_profile ?? null,
             projects: editingConnection?.projects ?? [],
             last_project_path: editingConnection?.last_project_path ?? null,
             last_project_id: editingConnection?.last_project_id ?? null,

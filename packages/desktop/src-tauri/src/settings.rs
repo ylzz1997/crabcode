@@ -39,6 +39,7 @@ fn default_settings() -> Value {
             "base_url": "http://127.0.0.1:4096",
             "credential_ref": null,
             "allow_insecure_remote": false,
+            "last_model_profile": null,
             "projects": [],
             "last_project_path": null,
             "last_project_id": null

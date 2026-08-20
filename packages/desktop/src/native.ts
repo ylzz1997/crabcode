@@ -54,6 +54,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
     base_url: "http://127.0.0.1:4096",
     credential_ref: null,
     allow_insecure_remote: false,
+    last_model_profile: null,
     projects: [],
     last_project_path: null,
     last_project_id: null,
@@ -166,6 +167,10 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     dock_icon: dockIcon,
     connections: (raw.connections ?? []).map((connection) => ({
       ...connection,
+      last_model_profile: typeof connection.last_model_profile === "string"
+        && connection.last_model_profile.trim().length > 0
+        ? connection.last_model_profile
+        : null,
       projects: (connection.projects ?? []).map((project) => {
         const legacyPath = typeof project.path === "string" ? project.path : "";
         const directories = Array.isArray(project.directories)

@@ -13,6 +13,7 @@ export interface ConnectionPreset {
   base_url: string;
   credential_ref: string | null;
   allow_insecure_remote: boolean;
+  last_model_profile?: string | null;
   projects: ProjectPreset[];
   last_project_path: string | null;
   last_project_id: string | null;

@@ -209,6 +209,7 @@ interface SessionChannelOptions {
   sessionId?: string;
   cwd: string;
   additionalDirectories?: string[];
+  modelProfile?: string;
   onEvent: (event: GatewayEvent) => void;
   onReady: (sessionId: string) => void;
   onState: (connected: boolean, error?: string) => void;
@@ -309,6 +310,7 @@ export class SessionChannel {
         type: "new_session",
         cwd: this.options.cwd,
         additional_directories: this.options.additionalDirectories ?? [],
+        model_profile: this.options.modelProfile,
       });
     }
   }

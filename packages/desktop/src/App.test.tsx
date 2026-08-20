@@ -3,7 +3,13 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { collectFavoriteSessions, FavoritesView, formatTurnDuration, ScheduleDeleteModal } from "./App";
+import {
+  collectFavoriteSessions,
+  FavoritesView,
+  formatTurnDuration,
+  resolveRememberedModel,
+  ScheduleDeleteModal,
+} from "./App";
 import type { ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
 
 const job: ScheduleJobInfo = {
@@ -154,5 +160,21 @@ describe("favorite sessions", () => {
     expect(onOpen).toHaveBeenCalledWith(item);
     act(() => root.unmount());
     container.remove();
+  });
+});
+
+describe("remembered model selection", () => {
+  it("uses the remembered profile while it is still advertised by the Gateway", () => {
+    expect(resolveRememberedModel(
+      { last_model_profile: "fast" },
+      [{ name: "fast" }, { name: "smart" }],
+    )).toBe("fast");
+  });
+
+  it("omits a removed profile so the Gateway default is used", () => {
+    expect(resolveRememberedModel(
+      { last_model_profile: "removed" },
+      [{ name: "fast" }, { name: "smart" }],
+    )).toBeUndefined();
   });
 });
