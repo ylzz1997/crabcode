@@ -277,6 +277,7 @@ function App() {
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [pluginLoading, setPluginLoading] = useState(false);
   const [scheduleAction, setScheduleAction] = useState<ScheduleActionState | null>(null);
+  const [scheduleDeleteTarget, setScheduleDeleteTarget] = useState<ScheduleJobInfo | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [pluginError, setPluginError] = useState<string | null>(null);
   const [deletingSessionIds, setDeletingSessionIds] = useState<Set<string>>(new Set());
@@ -1151,11 +1152,10 @@ function App() {
   const updateSchedule = async (
     action: ScheduleAction,
     job: ScheduleJobInfo,
-  ) => {
-    if (!activeConnection) return;
-    if (action === "cancel" && !window.confirm(`永久删除“${job.name}”？`)) return;
+  ): Promise<boolean> => {
+    if (!activeConnection) return false;
     const api = apiRef.current.get(activeConnection.id);
-    if (!api) return;
+    if (!api) return false;
     setScheduleAction({ id: job.id, action });
     setScheduleError(null);
     try {
@@ -1164,11 +1164,19 @@ function App() {
       if (action === "trigger") await api.triggerSchedule(job.id);
       if (action === "cancel") await api.cancelSchedule(job.id);
       await refreshSchedules(activeConnection.id);
+      return true;
     } catch (error) {
       setScheduleError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setScheduleAction(null);
     }
+  };
+
+  const confirmScheduleDelete = async () => {
+    if (!scheduleDeleteTarget) return;
+    const deleted = await updateSchedule("cancel", scheduleDeleteTarget);
+    if (deleted) setScheduleDeleteTarget(null);
   };
 
   const selectReasoningEffort = (effort: ReasoningEffort) => {
@@ -1684,7 +1692,14 @@ function App() {
               actionState={scheduleAction}
               connected={activeGateway?.status === "online"}
               onRefresh={() => activeConnection && void refreshSchedules(activeConnection.id)}
-              onAction={(action, job) => void updateSchedule(action, job)}
+              onAction={(action, job) => {
+                if (action === "cancel") {
+                  setScheduleError(null);
+                  setScheduleDeleteTarget(job);
+                  return;
+                }
+                void updateSchedule(action, job);
+              }}
               onNew={(prompt) => {
                 if (!activeConnection || !activeProject) return;
                 openSession(activeConnection, activeProject);
@@ -2028,6 +2043,18 @@ function App() {
             const info = activeList.find((item) => item.session_id === activeSession.id);
             if (activeProject && info) openSession(activeConnection, activeProject, info);
           }}
+        />
+      )}
+
+      {scheduleDeleteTarget && (
+        <ScheduleDeleteModal
+          job={scheduleDeleteTarget}
+          busy={scheduleAction?.id === scheduleDeleteTarget.id && scheduleAction.action === "cancel"}
+          error={scheduleError}
+          onClose={() => {
+            if (scheduleAction?.id !== scheduleDeleteTarget.id) setScheduleDeleteTarget(null);
+          }}
+          onConfirm={() => void confirmScheduleDelete()}
         />
       )}
 
@@ -3228,6 +3255,34 @@ function CheckpointModal({ api, sessionId, onClose, onRestored }: {
         ))}
         {items?.length === 0 && <div className="empty-sidebar">暂无检查点</div>}
         {error && <div className="form-error"><AlertTriangle />{error}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+export function ScheduleDeleteModal({ job, busy, error, onClose, onConfirm }: {
+  job: ScheduleJobInfo;
+  busy: boolean;
+  error: string | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal title="永久删除任务" onClose={onClose}>
+      <div className="confirm-dialog-copy">
+        <AlertTriangle />
+        <div>
+          <strong>删除“{job.name}”？</strong>
+          <p>这个任务及其运行历史会被永久删除，无法恢复。</p>
+        </div>
+      </div>
+      {error && <div className="form-error"><AlertTriangle />{error}</div>}
+      <div className="modal-actions">
+        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button className="confirm-danger" type="button" disabled={busy} onClick={onConfirm}>
+          {busy ? <LoaderCircle className="spin" /> : <Trash2 />}
+          永久删除
+        </button>
       </div>
     </Modal>
   );

@@ -1272,6 +1272,45 @@ button.primary:hover,
   cursor: default;
 }
 
+.confirm-dialog-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--border));
+  border-radius: 6px;
+  background: var(--red-soft);
+}
+
+.confirm-dialog-copy>svg {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  color: var(--red);
+}
+
+.confirm-dialog-copy strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.confirm-dialog-copy p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.modal-actions button.confirm-danger {
+  border-color: var(--red);
+  background: var(--red);
+  color: white;
+}
+
+.modal-actions button.confirm-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 84%, white);
+}
+
 .directory-roots {
   display: flex;
   gap: 6px;
