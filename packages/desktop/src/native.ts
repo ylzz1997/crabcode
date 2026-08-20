@@ -171,6 +171,9 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
           path: directories[0] || legacyPath || "",
           directories,
           last_session_id: project.last_session_id ?? null,
+          favorite_session_ids: Array.isArray(project.favorite_session_ids)
+            ? [...new Set(project.favorite_session_ids.filter((id): id is string => typeof id === "string" && id.length > 0))]
+            : [],
         };
       }),
       last_project_id: connection.last_project_id

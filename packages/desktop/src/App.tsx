@@ -2,7 +2,6 @@ import {
   AlertTriangle,
   Activity,
   ArrowUpRight,
-  Archive,
   Bot,
   Boxes,
   Brain,
@@ -43,6 +42,7 @@ import {
   ShieldAlert,
   Square,
   Sparkles,
+  Star,
   Target,
   Terminal,
   Trash2,
@@ -89,10 +89,11 @@ import type {
 
 type GatewayMap = Record<string, GatewayViewState>;
 type SessionMap = Record<string, SessionViewState>;
-type WorkspaceView = "chat" | "scheduled" | "plugins";
+type WorkspaceView = "chat" | "scheduled" | "plugins" | "favorites";
 type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
 type ScheduleActionState = { id: string; action: ScheduleAction };
 type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
+export type FavoriteSessionItem = { project: ProjectPreset; session: SessionInfo };
 type PermissionMode = "default" | "ask" | "ai_review" | "run_everything";
 type SessionCleanupTarget = {
   connectionId: string;
@@ -118,6 +119,20 @@ const EMPTY_GATEWAY: GatewayViewState = {
   runningCount: 0,
   pendingCount: 0,
 };
+
+export function collectFavoriteSessions(
+  connection: ConnectionPreset | null,
+  gateway: GatewayViewState | null,
+): FavoriteSessionItem[] {
+  if (!connection || !gateway) return [];
+  return connection.projects.flatMap((project) => {
+    const sessions = gateway.sessionsByProject[project.path] ?? [];
+    return (project.favorite_session_ids ?? []).flatMap((sessionId) => {
+      const session = sessions.find((item) => item.session_id === sessionId);
+      return session ? [{ project, session }] : [];
+    });
+  });
+}
 
 function sessionKey(connectionId: string, sessionId: string): string {
   return `${connectionId}:${sessionId}`;
@@ -414,6 +429,20 @@ function App() {
     }));
   }, [commitSettings]);
 
+  const toggleFavoriteSession = useCallback((projectId: string, sessionId: string) => {
+    if (!activeConnection || sessionId.startsWith("new-")) return;
+    updateConnection(activeConnection.id, (connection) => ({
+      ...connection,
+      projects: connection.projects.map((project) => {
+        if (project.id !== projectId) return project;
+        const favorites = new Set(project.favorite_session_ids ?? []);
+        if (favorites.has(sessionId)) favorites.delete(sessionId);
+        else favorites.add(sessionId);
+        return { ...project, favorite_session_ids: [...favorites] };
+      }),
+    }));
+  }, [activeConnection, updateConnection]);
+
   const refreshProjectSessions = useCallback(async (connectionId: string, cwd: string) => {
     const api = apiRef.current.get(connectionId);
     if (!api) return;
@@ -524,8 +553,12 @@ function App() {
         ? {
             ...connection,
             projects: connection.projects.map((project) => (
-              project.path === target.cwd && project.last_session_id === target.sessionId
-                ? { ...project, last_session_id: null }
+              project.path === target.cwd
+                ? {
+                    ...project,
+                    last_session_id: project.last_session_id === target.sessionId ? null : project.last_session_id,
+                    favorite_session_ids: (project.favorite_session_ids ?? []).filter((id) => id !== target.sessionId),
+                  }
                 : project
             )),
           }
@@ -721,6 +754,7 @@ function App() {
             name: basename(workspace.startup_cwd),
             directories: [workspace.startup_cwd],
             last_session_id: null,
+            favorite_session_ids: [],
           }];
       const sessionEntries = await Promise.all(
         projects.map(async (project) => [project.path, await api.sessions(project.path)] as const),
@@ -1281,13 +1315,21 @@ function App() {
     }
   };
 
+  const favoriteSessionIds = new Set(activeProject?.favorite_session_ids ?? []);
   const visibleSessions = displayList.filter((item) => (
     item.title.trim().length > 0 || item.message_count > 0 || item.preview.trim().length > 0
   ));
   const filteredSessions = visibleSessions.filter((item) => {
     const needle = search.trim().toLowerCase();
     return !needle || item.title.toLowerCase().includes(needle) || item.preview.toLowerCase().includes(needle);
-  });
+  }).sort((left, right) => (
+    Number(favoriteSessionIds.has(right.session_id)) - Number(favoriteSessionIds.has(left.session_id))
+  ));
+  const activeSessionFavorite = Boolean(activeSession && favoriteSessionIds.has(activeSession.id));
+  const favoriteSessions = useMemo(
+    () => collectFavoriteSessions(activeConnection, activeGateway),
+    [activeConnection, activeGateway],
+  );
   const activeJobs = activeConnection ? scheduleJobs[activeConnection.id] ?? [] : [];
   const resourceSessionId = activeSession && activeSession.cwd === activeProject?.path
     ? activeSession.id
@@ -1527,6 +1569,15 @@ function App() {
                 <Puzzle />
                 <span>插件</span>
               </button>
+              <button
+                className={`workspace-nav-item ${workspaceView === "favorites" ? "active" : ""}`}
+                disabled={!activeConnection || activeGateway?.status !== "online"}
+                onClick={() => setWorkspaceView("favorites")}
+              >
+                <Star />
+                <span>收藏</span>
+                {favoriteSessions.length > 0 && <span className="workspace-nav-count">{favoriteSessions.length}</span>}
+              </button>
             </nav>
 
             {workspaceView === "chat" && <section className={`sidebar-section projects-section ${projectsCollapsed ? "collapsed" : ""}`}>
@@ -1626,6 +1677,7 @@ function App() {
                       const key = sessionKey(activeConnection!.id, info.session_id);
                       const view = sessions[key];
                       const isActive = activeSessionKey === key;
+                      const favorite = favoriteSessionIds.has(info.session_id);
                       const deleting = deletingSessionIds.has(key);
                       const pending = view?.items.some((item) => item.status === "pending" && (
                         item.kind === "permission" || item.kind === "choice"
@@ -1638,11 +1690,26 @@ function App() {
                             onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject, info)}
                           >
                             <span className="session-title-row">
+                              {favorite && <Star className="session-favorite" fill="currentColor" />}
                               <span className="session-title">{info.title || "未命名会话"}</span>
                               {view?.busy && <LoaderCircle className="spin" />}
                               {pending && <ShieldAlert className="pending-icon" />}
                             </span>
                             <span className="session-preview">{info.preview || formatDate(info.created_at)}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`icon-button tiny session-favorite-action ${favorite ? "active" : ""}`}
+                            title={favorite ? "取消收藏会话" : "收藏会话"}
+                            aria-label={`${favorite ? "取消收藏" : "收藏"}会话 ${info.title || "未命名会话"}`}
+                            aria-pressed={favorite}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              if (activeProject) toggleFavoriteSession(activeProject.id, info.session_id);
+                            }}
+                          >
+                            <Star fill={favorite ? "currentColor" : "none"} />
                           </button>
                           <button
                             type="button"
@@ -1706,6 +1773,21 @@ function App() {
                 if (prompt) setComposer(prompt);
               }}
             />
+          ) : workspaceView === "favorites" ? (
+            <FavoritesView
+              items={favoriteSessions}
+              connected={activeGateway?.status === "online"}
+              onOpen={(item) => {
+                if (!activeConnection) return;
+                updateConnection(activeConnection.id, (connection) => ({
+                  ...connection,
+                  last_project_path: item.project.path,
+                  last_project_id: item.project.id,
+                }));
+                openSession(activeConnection, item.project, item.session);
+              }}
+              onToggle={(item) => toggleFavoriteSession(item.project.id, item.session.session_id)}
+            />
           ) : workspaceView === "plugins" ? (
             <PluginsView
               data={activePluginData}
@@ -1738,19 +1820,14 @@ function App() {
                     <History />
                   </button>
                   <button
-                    className="icon-button"
-                    title="归档会话"
-                    onClick={() => {
-                      if (!activeConnection || !activeProject || !activeSessionKey || !activeSession.id) return;
-                      void archiveSession({
-                        connectionId: activeConnection.id,
-                        cwd: activeProject.path,
-                        key: activeSessionKey,
-                        sessionId: activeSession.id,
-                      }, true);
-                    }}
+                    className={`icon-button ${activeSessionFavorite ? "favorite-active" : ""}`}
+                    title={activeSessionFavorite ? "取消收藏会话" : "收藏会话"}
+                    aria-label={activeSessionFavorite ? "取消收藏会话" : "收藏会话"}
+                    aria-pressed={activeSessionFavorite}
+                    disabled={activeSession.id.startsWith("new-")}
+                    onClick={() => activeProject && toggleFavoriteSession(activeProject.id, activeSession.id)}
                   >
-                    <Archive />
+                    <Star fill={activeSessionFavorite ? "currentColor" : "none"} />
                   </button>
                 </div>
               </div>
@@ -2223,6 +2300,66 @@ function ScheduledTasksView({
           <button className="page-command" onClick={() => onNew()} disabled={!connected}><MessageSquarePlus />新建任务</button>
         </div>
       )}
+    </section>
+  );
+}
+
+export function FavoritesView({ items, connected, onOpen, onToggle }: {
+  items: FavoriteSessionItem[];
+  connected: boolean;
+  onOpen: (item: FavoriteSessionItem) => void;
+  onToggle: (item: FavoriteSessionItem) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = items.filter(({ project, session }) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || [project.name, project.path, session.title, session.preview]
+      .some((value) => value.toLowerCase().includes(needle));
+  });
+  return (
+    <section className="workspace-page favorites-page">
+      <div className="page-kicker"><Star /><span>CRAB DESKTOP FAVORITES</span><i /></div>
+      <header className="page-header">
+        <div>
+          <h1>收藏</h1>
+          <p>跨项目返回重要会话</p>
+        </div>
+      </header>
+      <label className="page-search">
+        <Search />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="检索会话或项目" />
+      </label>
+      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取收藏会话" />}
+      <div className="page-section favorites-section">
+        <div className="page-section-heading"><h2>收藏会话</h2><span>{filtered.length} 项</span></div>
+        <div className="favorite-session-list">
+          {filtered.map((item) => (
+            <article className="favorite-session-item" key={`${item.project.id}:${item.session.session_id}`}>
+              <button className="favorite-session-main" type="button" onClick={() => onOpen(item)}>
+                <span className="favorite-session-icon"><Star fill="currentColor" /></span>
+                <span className="favorite-session-copy">
+                  <strong>{item.session.title || "未命名会话"}</strong>
+                  <span>{item.session.preview || formatDate(item.session.created_at)}</span>
+                  <small title={item.project.path}><Folder />{item.project.name}<i>{item.project.path}</i></small>
+                </span>
+                <ChevronRight />
+              </button>
+              <button
+                className="icon-button favorite-session-remove"
+                type="button"
+                title="取消收藏"
+                aria-label={`取消收藏 ${item.session.title || "未命名会话"}`}
+                onClick={() => onToggle(item)}
+              >
+                <Star fill="currentColor" />
+              </button>
+            </article>
+          ))}
+          {connected && filtered.length === 0 && (
+            <div className="page-empty">{query.trim() ? "没有匹配的收藏会话" : "暂无收藏会话"}</div>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
@@ -3021,6 +3158,7 @@ function ProjectModal({ api, home, roots, project, onClose, onSave, onRemove }: 
       name: name.trim() || suggestedName,
       directories: nextDirectories,
       last_session_id: project?.path === path ? project.last_session_id : null,
+      favorite_session_ids: project?.path === path ? project.favorite_session_ids ?? [] : [],
     });
   };
   if (choosingDirectory) {

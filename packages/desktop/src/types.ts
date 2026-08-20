@@ -4,6 +4,7 @@ export interface ProjectPreset {
   name: string;
   directories: string[];
   last_session_id: string | null;
+  favorite_session_ids?: string[];
 }
 
 export interface ConnectionPreset {
