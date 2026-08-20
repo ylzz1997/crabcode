@@ -8,6 +8,7 @@ import {
   defaultProjectDirectory,
   FavoritesView,
   formatTurnDuration,
+  MessageMarkdown,
   ProjectActionsMenu,
   ProjectDeleteModal,
   ProjectModal,
@@ -18,6 +19,24 @@ import {
 } from "./App";
 import type { GatewayApi } from "./gateway";
 import type { BackgroundTaskInfo, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
+
+describe("MessageMarkdown", () => {
+  it("renders inline and display math with KaTeX", () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    act(() => root.render(
+      <MessageMarkdown>{"Inline $x^2$\n\n$$\n\\int_0^1 x\\,dx\n$$"}</MessageMarkdown>,
+    ));
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(2);
+    expect(container.querySelector(".katex-display")).not.toBeNull();
+    expect(container.textContent).toContain("x2");
+
+    act(() => root.unmount());
+  });
+});
 
 const job: ScheduleJobInfo = {
   id: "job-1",

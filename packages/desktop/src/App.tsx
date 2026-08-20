@@ -58,7 +58,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { applyGatewayEvent } from "./events";
 import { GatewayApi, SessionChannel } from "./gateway";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
@@ -3383,6 +3385,17 @@ function ToolResultView({ toolName, result }: { toolName: string; result: unknow
   return <pre className={`tool-result ${isDiff ? "diff-view" : ""}`}>{isDiff ? diffLines(text) : text}</pre>;
 }
 
+export function MessageMarkdown({ children }: { children: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+}
+
 function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
   item: ChatItem;
   now: number;
@@ -3402,10 +3415,10 @@ function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermi
     return <div className="turn-duration-divider" role="separator" aria-label={label}><span>{label}</span></div>;
   }
   if (item.kind === "user") {
-    return <article className="message user-message"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text ?? ""}</ReactMarkdown></article>;
+    return <article className="message user-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></article>;
   }
   if (item.kind === "assistant") {
-    return <article className="message assistant-message"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text ?? ""}</ReactMarkdown></article>;
+    return <article className="message assistant-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></article>;
   }
   if (item.kind === "system") return <div className="system-line">{item.text}</div>;
   if (item.kind === "error") return <div className="error-line"><AlertTriangle />{item.text}</div>;
