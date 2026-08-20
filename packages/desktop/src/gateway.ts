@@ -4,6 +4,7 @@ import type {
   ConnectionPreset,
   GatewayEvent,
   GatewayModel,
+  GoalState,
   ReasoningEffort,
   ScheduleJobInfo,
   SessionInfo,
@@ -107,6 +108,21 @@ export class GatewayApi {
   models(sessionId?: string): Promise<GatewayModel[]> {
     const query = sessionId ? `?${new URLSearchParams({ session_id: sessionId })}` : "";
     return this.request(`/config/models${query}`);
+  }
+
+  goal(sessionId: string): Promise<GoalState> {
+    return this.request(`/config/goal?${new URLSearchParams({ session_id: sessionId })}`);
+  }
+
+  manageGoal(
+    sessionId: string,
+    action: "set" | "edit" | "clear",
+    objective?: string,
+  ): Promise<GoalState> {
+    return this.request("/config/goal", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, action, objective }),
+    });
   }
 
   skills(sessionId?: string, cwd?: string): Promise<SkillInfo[]> {
@@ -333,25 +349,36 @@ export class SessionChannel {
     });
   }
 
-  permission(toolUseId: string, allowed: boolean, alwaysAllow = false, feedback?: string): void {
+  permission(
+    toolUseId: string,
+    allowed: boolean,
+    alwaysAllow = false,
+    feedback?: string,
+    agentId: string | null = null,
+  ): void {
     this.sendRaw({
       type: "permission_response",
       tool_use_id: toolUseId,
       allowed,
       always_allow: alwaysAllow,
       feedback: feedback ?? null,
-      agent_id: null,
+      agent_id: agentId,
       session_id: this.sessionId,
     });
   }
 
-  choice(toolUseId: string, selected: string[], cancelled = false): void {
+  choice(
+    toolUseId: string,
+    selected: string[],
+    cancelled = false,
+    agentId: string | null = null,
+  ): void {
     this.sendRaw({
       type: "choice_response",
       tool_use_id: toolUseId,
       selected,
       cancelled,
-      agent_id: null,
+      agent_id: agentId,
       session_id: this.sessionId,
     });
   }
@@ -366,6 +393,10 @@ export class SessionChannel {
 
   setReasoningEffort(effort: ReasoningEffort): void {
     this.sendRaw({ type: "set_reasoning_effort", effort, session_id: this.sessionId });
+  }
+
+  setUltraMode(enabled: boolean): void {
+    this.sendRaw({ type: "set_ultra_mode", enabled, session_id: this.sessionId });
   }
 
   setPermissionMode(mode: string): void {

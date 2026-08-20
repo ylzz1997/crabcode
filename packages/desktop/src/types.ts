@@ -100,6 +100,20 @@ export interface GatewayModel {
   description?: string;
 }
 
+export interface GoalInfo {
+  objective: string;
+  status: "active" | "paused" | "complete" | "blocked";
+  token_budget: number | null;
+  tokens_used: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface GoalState {
+  goal: GoalInfo | null;
+}
+
 export interface SkillInfo {
   name: string;
   description: string;

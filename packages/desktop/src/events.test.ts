@@ -36,11 +36,13 @@ describe("Gateway event reducer", () => {
 
   it("resolves tool and permission cards by tool id", () => {
     let current = applyGatewayEvent(state(), {
-      type: "tool_use", tool_name: "FileEdit", tool_use_id: "tool-1", tool_input: { path: "app.ts" },
+      type: "tool_use", tool_name: "Bash", tool_use_id: "tool-1", tool_input: { command: "sleep 30" },
     });
+    current = applyGatewayEvent(current, { type: "permission_request", tool_name: "Bash", tool_use_id: "tool-1" });
+    current = applyGatewayEvent(current, { type: "permission_response", tool_use_id: "tool-1", allowed: true });
+    expect(current.items[0].status).toBe("running");
+    expect(current.items[1].status).toBe("allowed");
     current = applyGatewayEvent(current, { type: "tool_result", tool_use_id: "tool-1", result: "done" });
-    current = applyGatewayEvent(current, { type: "permission_request", tool_name: "Bash", tool_use_id: "tool-2" });
-    current = applyGatewayEvent(current, { type: "permission_response", tool_use_id: "tool-2", allowed: true });
     expect(current.items[0].status).toBe("complete");
     expect(current.items[1].status).toBe("allowed");
   });
@@ -88,6 +90,49 @@ describe("Gateway event reducer", () => {
     expect(current.error).toBeNull();
     expect(current.items[0].text).toBe("恢复成功");
     expect(current.runStartedAt).toBeNull();
+  });
+
+  it("rebuilds structured history cards and hides internal task notifications", () => {
+    const current = applyGatewayEvent(state(), {
+      type: "session_history",
+      messages: [
+        { uuid: "user-1", role: "user", content: "测试后台任务" },
+        {
+          uuid: "assistant-1",
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Planning execution" },
+            { type: "tool_use", id: "tool-1", name: "Monitor", input: { command: "sleep 30" } },
+          ],
+        },
+        {
+          uuid: "result-1",
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-1", content: "taskId: task-1" }],
+        },
+        {
+          uuid: "notification-1",
+          role: "user",
+          origin: "task-notification",
+          content: "<monitor-event>internal</monitor-event>",
+        },
+        { uuid: "assistant-2", role: "assistant", content: [{ type: "text", text: "后台任务已完成" }] },
+      ],
+    });
+
+    expect(current.items.map((item) => item.kind)).toEqual([
+      "user",
+      "thinking",
+      "tool",
+      "assistant",
+    ]);
+    expect(current.items[2]).toMatchObject({
+      title: "Monitor",
+      detail: "taskId: task-1",
+      tool_use_id: "tool-1",
+      status: "complete",
+    });
+    expect(current.items.some((item) => item.text?.includes("monitor-event"))).toBe(false);
   });
 
   it("keeps an active turn running when a command fails", () => {

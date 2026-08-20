@@ -17,8 +17,10 @@ from sse_starlette.sse import EventSourceResponse
 from crabcode_core.logging_utils import get_logger
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.schemas import (
+    ChoiceResponsePayload,
     ImageAttachment,
     ModelChangePayload,
+    PermissionResponsePayload,
     PermissionModeChangePayload,
     SessionHistoryPayload,
     SessionMessagePayload,
@@ -504,6 +506,20 @@ async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
             session_id=session.session_id,
             error_type="session_closing",
         )
+        return
+    # ``respond_permission`` only wakes the core permission waiter; it does
+    # not publish a CoreEvent. Echo the accepted command to this WebSocket so
+    # clients can resolve their pending card immediately. Include the session
+    # id because this socket is subscribed to multiple sessions.
+    payload = PermissionResponsePayload(
+        tool_use_id=tool_use_id,
+        allowed=allowed,
+        always_allow=always_allow,
+        agent_id=agent_id,
+        feedback=feedback,
+    ).model_dump()
+    payload["session_id"] = session.session_id
+    await ws.send_text(json.dumps(payload))
 
 
 async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
@@ -564,6 +580,15 @@ async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
             session_id=session.session_id,
             error_type="session_closing",
         )
+        return
+    payload = ChoiceResponsePayload(
+        tool_use_id=tool_use_id,
+        selected=selected,
+        cancelled=cancelled,
+        agent_id=agent_id,
+    ).model_dump()
+    payload["session_id"] = session.session_id
+    await ws.send_text(json.dumps(payload))
 
 
 async def _handle_send_message(ws: WebSocket, msg: dict) -> None:

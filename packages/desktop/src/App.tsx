@@ -17,10 +17,13 @@ import {
   CircleDotDashed,
   Gauge,
   FileDiff,
+  FileText,
   Folder,
+  FolderInput,
   FolderOpen,
   History,
-  ImagePlus,
+  Image as ImageIcon,
+  ListTodo,
   LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
@@ -39,6 +42,8 @@ import {
   Settings,
   ShieldAlert,
   Square,
+  Sparkles,
+  Target,
   Terminal,
   Trash2,
   Timer,
@@ -260,8 +265,11 @@ function App() {
     data: string;
     dataUrl: string;
   }>>([]);
+  const [pendingFolders, setPendingFolders] = useState<string[]>([]);
   const [connectionModal, setConnectionModal] = useState(false);
   const [directoryModal, setDirectoryModal] = useState(false);
+  const [referenceDirectoryModal, setReferenceDirectoryModal] = useState(false);
+  const [goalModal, setGoalModal] = useState(false);
   const [settingsModal, setSettingsModal] = useState(false);
   const [checkpointModal, setCheckpointModal] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -607,6 +615,8 @@ function App() {
             event.command === "switch_model"
             || event.command === "set_permission_mode"
             || event.command === "set_reasoning_effort"
+            || event.command === "set_ultra_mode"
+            || event.command === "switch_mode"
           )
           && channel.sessionId
         ) {
@@ -807,20 +817,60 @@ function App() {
     }
   };
 
+  const addImages = async (files: File[]) => {
+    try {
+      const images: Array<{ name: string; media_type: string; data: string; dataUrl: string }> = [];
+      for (const file of files) {
+        if (file.size > 20 * 1024 * 1024) {
+          setGlobalError(`${file.name} 超过 20MB`);
+          continue;
+        }
+        images.push(await readImage(file));
+      }
+      if (images.length > 0) setPendingImages((current) => [...current, ...images]);
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const addFiles = async (files: File[]) => {
+    try {
+      const chunks: string[] = [];
+      for (const file of files) {
+        if (file.size > 5 * 1024 * 1024) {
+          setGlobalError(`${file.name} 超过 5MB`);
+          continue;
+        }
+        chunks.push(`\n\n<file name="${file.name}">\n${await file.text()}\n</file>`);
+      }
+      if (chunks.length > 0) setComposer((value) => value + chunks.join(""));
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const sendMessage = async () => {
     const text = composer.trim();
-    if ((!text && pendingImages.length === 0) || !activeChannel || !activeSessionKey || !activeSession) return;
+    if (
+      (!text && pendingImages.length === 0 && pendingFolders.length === 0)
+      || !activeChannel
+      || !activeSessionKey
+      || !activeSession
+    ) return;
+    const folderContext = pendingFolders.map((path) => `<folder>\n${path}\n</folder>`).join("\n");
+    const messageText = [folderContext, text].filter(Boolean).join("\n\n");
     const now = Date.now();
     try {
       if (activeSession.busy && activeSession.operationId) {
         activeChannel.steer(
-          text,
+          messageText,
           activeSession.operationId,
           pendingImages.map(({ media_type, data }) => ({ media_type, data })),
         );
-        const attachmentLine = pendingImages.length > 0
-          ? `${pendingImages.map((image) => `[图片：${image.name}]`).join(" ")}${text ? "\n\n" : ""}`
-          : "";
+        const attachmentLine = [
+          ...pendingImages.map((image) => `[图片：${image.name}]`),
+          ...pendingFolders.map((path) => `[文件夹：${path}]`),
+        ].join(" ");
         setSessions((current) => ({
           ...current,
           [activeSessionKey]: {
@@ -833,18 +883,19 @@ function App() {
             },
             items: [
               ...current[activeSessionKey].items,
-              { id: crypto.randomUUID(), kind: "user", text: `引导：${attachmentLine}${text}`, status: "complete" },
+              { id: crypto.randomUUID(), kind: "user", text: `引导：${attachmentLine}${attachmentLine && text ? "\n\n" : ""}${text}`, status: "complete" },
             ],
           },
         }));
       } else {
         const operationId = activeChannel.sendMessage(
-          text,
+          messageText,
           pendingImages.map(({ media_type, data }) => ({ media_type, data })),
         );
-        const attachmentLine = pendingImages.length > 0
-          ? `${pendingImages.map((image) => `[图片：${image.name}]`).join(" ")}${text ? "\n\n" : ""}`
-          : "";
+        const attachmentLine = [
+          ...pendingImages.map((image) => `[图片：${image.name}]`),
+          ...pendingFolders.map((path) => `[文件夹：${path}]`),
+        ].join(" ");
         setSessions((current) => ({
           ...current,
           [activeSessionKey]: {
@@ -859,23 +910,42 @@ function App() {
             operationId,
             items: [
               ...current[activeSessionKey].items,
-              { id: crypto.randomUUID(), kind: "user", text: `${attachmentLine}${text}`, status: "complete" },
+              { id: crypto.randomUUID(), kind: "user", text: `${attachmentLine}${attachmentLine && text ? "\n\n" : ""}${text}`, status: "complete" },
             ],
           },
         }));
       }
       setComposer("");
       setPendingImages([]);
+      setPendingFolders([]);
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const resolvePermission = (item: ChatItem, allowed: boolean, always = false) => {
-    if (!activeChannel || !item.tool_use_id) return;
+    if (!activeChannel || !activeSessionKey || !item.tool_use_id) return;
     let feedback: string | undefined;
     if (!allowed) feedback = window.prompt("拒绝原因（可选）") ?? undefined;
-    activeChannel.permission(item.tool_use_id, allowed, always, feedback);
+    try {
+      activeChannel.permission(item.tool_use_id, allowed, always, feedback, item.agent_id);
+      const response: GatewayEvent = {
+        type: "permission_response",
+        tool_use_id: item.tool_use_id,
+        allowed,
+        always_allow: always,
+        feedback: feedback ?? null,
+        agent_id: item.agent_id,
+      };
+      setSessions((current) => {
+        const session = current[activeSessionKey];
+        return session
+          ? { ...current, [activeSessionKey]: applyGatewayEvent(session, response) }
+          : current;
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const toggleChoice = (item: ChatItem, option: string) => {
@@ -902,8 +972,25 @@ function App() {
   };
 
   const submitChoice = (item: ChatItem) => {
-    if (!activeChannel || !item.tool_use_id) return;
-    activeChannel.choice(item.tool_use_id, item.selected ?? []);
+    if (!activeChannel || !activeSessionKey || !item.tool_use_id) return;
+    const selected = item.selected ?? [];
+    try {
+      activeChannel.choice(item.tool_use_id, selected, false, item.agent_id);
+      const response: GatewayEvent = {
+        type: "choice_response",
+        tool_use_id: item.tool_use_id,
+        selected,
+        agent_id: item.agent_id,
+      };
+      setSessions((current) => {
+        const session = current[activeSessionKey];
+        return session
+          ? { ...current, [activeSessionKey]: applyGatewayEvent(session, response) }
+          : current;
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const updateSchedule = async (
@@ -941,6 +1028,46 @@ function App() {
           [activeSessionKey]: {
             ...session,
             status: { ...session.status, reasoning_effort: effort },
+          },
+        };
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const selectMode = (mode: "agent" | "plan") => {
+    if (!activeChannel || !activeSessionKey) return;
+    try {
+      activeChannel.switchMode(mode);
+      setSessions((current) => {
+        const session = current[activeSessionKey];
+        if (!session?.status) return current;
+        return {
+          ...current,
+          [activeSessionKey]: {
+            ...session,
+            status: { ...session.status, mode },
+          },
+        };
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const selectUltraMode = (enabled: boolean) => {
+    if (!activeChannel || !activeSessionKey) return;
+    try {
+      activeChannel.setUltraMode(enabled);
+      setSessions((current) => {
+        const session = current[activeSessionKey];
+        if (!session?.status) return current;
+        return {
+          ...current,
+          [activeSessionKey]: {
+            ...session,
+            status: { ...session.status, ultra_mode: enabled },
           },
         };
       });
@@ -1460,8 +1587,8 @@ function App() {
                     </span>
                   )}
                 </div>
-                <div className="composer-box">
-                  {pendingImages.length > 0 && (
+                <div className={`composer-box ${activeSession.status?.ultra_mode ? "ultra-mode" : ""}`}>
+                  {(pendingImages.length > 0 || pendingFolders.length > 0) && (
                     <div className="attachment-strip">
                       {pendingImages.map((image, index) => (
                         <div className="attachment-thumb" key={`${image.name}-${index}`}>
@@ -1470,6 +1597,17 @@ function App() {
                             className="icon-button tiny"
                             title="移除图片"
                             onClick={() => setPendingImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                          ><X /></button>
+                        </div>
+                      ))}
+                      {pendingFolders.map((path) => (
+                        <div className="folder-attachment" key={path} title={path}>
+                          <Folder />
+                          <span>{basename(path)}</span>
+                          <button
+                            type="button"
+                            title="移除文件夹引用"
+                            onClick={() => setPendingFolders((current) => current.filter((item) => item !== path))}
                           ><X /></button>
                         </div>
                       ))}
@@ -1489,34 +1627,17 @@ function App() {
                   />
                   <div className="composer-toolbar">
                     <div className="toolbar-left">
-                      <label className="icon-button small" title="添加图片或文本文件">
-                        <ImagePlus />
-                        <input
-                          type="file"
-                          multiple
-                          hidden
-                          accept="image/*,.txt,.md,.json,.py,.ts,.tsx,.js,.jsx,.rs,.go,.java,.css,.html,.yaml,.yml,.toml"
-                          onChange={async (event) => {
-                            const files = Array.from(event.target.files ?? []);
-                            const chunks: string[] = [];
-                            const images: Array<{ name: string; media_type: string; data: string; dataUrl: string }> = [];
-                            for (const file of files) {
-                              if (file.type.startsWith("image/")) {
-                                if (file.size > 20 * 1024 * 1024) {
-                                  setGlobalError(`${file.name} 超过 20MB`);
-                                  continue;
-                                }
-                                images.push(await readImage(file));
-                              } else {
-                                chunks.push(`\n\n<file name="${file.name}">\n${await file.text()}\n</file>`);
-                              }
-                            }
-                            if (images.length > 0) setPendingImages((current) => [...current, ...images]);
-                            setComposer((value) => value + chunks.join(""));
-                            event.target.value = "";
-                          }}
-                        />
-                      </label>
+                      <ComposerAddMenu
+                        disabled={!activeSession.connected}
+                        planActive={activeSession.status?.mode === "plan"}
+                        ultraActive={Boolean(activeSession.status?.ultra_mode)}
+                        onImages={(files) => void addImages(files)}
+                        onFiles={(files) => void addFiles(files)}
+                        onReferenceFolder={() => setReferenceDirectoryModal(true)}
+                        onGoal={() => setGoalModal(true)}
+                        onPlan={() => selectMode("plan")}
+                        onUltra={() => selectUltraMode(true)}
+                      />
                       <ModelPicker
                         models={activeGateway?.models ?? []}
                         value={activeModel}
@@ -1534,6 +1655,26 @@ function App() {
                         disabled={!activeSession.connected}
                         onChange={selectPermissionMode}
                       />
+                      {activeSession.status?.mode === "plan" && (
+                        <button
+                          type="button"
+                          className="composer-mode-chip plan"
+                          title="关闭计划模式"
+                          onClick={() => selectMode("agent")}
+                        >
+                          <ListTodo /><span>计划模式</span><X />
+                        </button>
+                      )}
+                      {activeSession.status?.ultra_mode && (
+                        <button
+                          type="button"
+                          className="composer-mode-chip ultra"
+                          title="关闭 Ultra 模式"
+                          onClick={() => selectUltraMode(false)}
+                        >
+                          <Sparkles /><span>Ultra 模式</span><X />
+                        </button>
+                      )}
                     </div>
                     <div className="toolbar-right">
                       <ContextMeter status={activeSession.status} usage={activeSession.lastTurnUsage} />
@@ -1549,7 +1690,11 @@ function App() {
                         <button
                           className="round-action send"
                           title="发送"
-                          disabled={(!composer.trim() && pendingImages.length === 0) || !activeSession.connected}
+                          disabled={(
+                            !composer.trim()
+                            && pendingImages.length === 0
+                            && pendingFolders.length === 0
+                          ) || !activeSession.connected}
                           onClick={() => void sendMessage()}
                         >
                           <Send />
@@ -1620,6 +1765,29 @@ function App() {
             void refreshProjectSessions(activeConnection.id, path);
             setDirectoryModal(false);
           }}
+        />
+      )}
+
+      {referenceDirectoryModal && activeConnection && activeGateway?.workspace && (
+        <DirectoryModal
+          api={apiRef.current.get(activeConnection.id)!}
+          home={activeProject?.path ?? activeGateway.workspace.home}
+          roots={activeGateway.workspace.browse_roots}
+          title="引用文件夹"
+          selectLabel="引用此文件夹"
+          onClose={() => setReferenceDirectoryModal(false)}
+          onSelect={(path) => {
+            setPendingFolders((current) => current.includes(path) ? current : [...current, path]);
+            setReferenceDirectoryModal(false);
+          }}
+        />
+      )}
+
+      {goalModal && activeConnection && activeChannel?.sessionId && (
+        <GoalModal
+          api={apiRef.current.get(activeConnection.id)!}
+          sessionId={activeChannel.sessionId}
+          onClose={() => setGoalModal(false)}
         />
       )}
 
@@ -1986,6 +2154,99 @@ function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<H
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [close, open, ref]);
+}
+
+function ComposerAddMenu({
+  disabled,
+  planActive,
+  ultraActive,
+  onImages,
+  onFiles,
+  onReferenceFolder,
+  onGoal,
+  onPlan,
+  onUltra,
+}: {
+  disabled: boolean;
+  planActive: boolean;
+  ultraActive: boolean;
+  onImages: (files: File[]) => void;
+  onFiles: (files: File[]) => void;
+  onReferenceFolder: () => void;
+  onGoal: () => void;
+  onPlan: () => void;
+  onUltra: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissMenu(open, close, ref);
+  const run = (action: () => void) => {
+    action();
+    setOpen(false);
+  };
+  return (
+    <div className="composer-add" ref={ref}>
+      <button
+        type="button"
+        className="composer-add-trigger"
+        title="添加内容或切换模式"
+        aria-label="添加"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+      ><Plus /></button>
+      <input
+        ref={imageInputRef}
+        type="file"
+        multiple
+        hidden
+        accept="image/*"
+        onChange={(event) => {
+          onImages(Array.from(event.target.files ?? []));
+          event.target.value = "";
+        }}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        accept=".txt,.md,.json,.py,.ts,.tsx,.js,.jsx,.rs,.go,.java,.css,.html,.yaml,.yml,.toml"
+        onChange={(event) => {
+          onFiles(Array.from(event.target.files ?? []));
+          event.target.value = "";
+        }}
+      />
+      {open && (
+        <div className="composer-add-menu" role="menu" aria-label="添加">
+          <div className="composer-add-heading">添加</div>
+          <button type="button" role="menuitem" onClick={() => run(() => imageInputRef.current?.click())}>
+            <ImageIcon /><span>添加图片</span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => run(() => fileInputRef.current?.click())}>
+            <FileText /><span>添加文件</span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => run(onReferenceFolder)}>
+            <FolderInput /><span>引用文件夹</span>
+          </button>
+          <div className="composer-add-separator" />
+          <button type="button" role="menuitem" onClick={() => run(onGoal)}>
+            <Target /><span>目标</span>
+          </button>
+          <button className={planActive ? "active" : ""} type="button" role="menuitem" onClick={() => run(onPlan)}>
+            <ListTodo /><span>计划模式</span>{planActive && <Check />}
+          </button>
+          <button className={ultraActive ? "active ultra" : "ultra"} type="button" role="menuitem" onClick={() => run(onUltra)}>
+            <Sparkles /><span>Ultra 模式</span>{ultraActive && <Check />}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ModelPicker({
@@ -2507,10 +2768,20 @@ function ConnectionModal({ settings, activeConnectionId, onClose, onActivate, on
   );
 }
 
-function DirectoryModal({ api, home, roots, onClose, onSelect }: {
+function DirectoryModal({
+  api,
+  home,
+  roots,
+  title = "选择项目目录",
+  selectLabel = "使用此目录",
+  onClose,
+  onSelect,
+}: {
   api: GatewayApi;
   home: string;
   roots: string[];
+  title?: string;
+  selectLabel?: string;
   onClose: () => void;
   onSelect: (path: string) => void;
 }) {
@@ -2526,7 +2797,7 @@ function DirectoryModal({ api, home, roots, onClose, onSelect }: {
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
   }, [api, path, showHidden]);
   return (
-    <Modal title="选择项目目录" onClose={onClose} wide>
+    <Modal title={title} onClose={onClose} wide>
       <div className="directory-roots">
         {roots.map((root) => <button key={root} onClick={() => setPath(root)}><Folder />{root}</button>)}
       </div>
@@ -2549,7 +2820,75 @@ function DirectoryModal({ api, home, roots, onClose, onSelect }: {
       </div>
       <div className="modal-actions">
         <button onClick={onClose}>取消</button>
-        <button className="primary" disabled={!listing} onClick={() => listing && onSelect(listing.path)}><FolderOpen />使用此目录</button>
+        <button className="primary" disabled={!listing} onClick={() => listing && onSelect(listing.path)}><FolderOpen />{selectLabel}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function GoalModal({ api, sessionId, onClose }: {
+  api: GatewayApi;
+  sessionId: string;
+  onClose: () => void;
+}) {
+  const [objective, setObjective] = useState("");
+  const [hasGoal, setHasGoal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void api.goal(sessionId)
+      .then(({ goal }) => {
+        const editable = Boolean(goal && (goal.status === "active" || goal.status === "paused"));
+        setObjective(editable ? goal?.objective ?? "" : "");
+        setHasGoal(editable);
+      })
+      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => setLoading(false));
+  }, [api, sessionId]);
+  const save = async () => {
+    if (!objective.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.manageGoal(sessionId, hasGoal ? "edit" : "set", objective.trim());
+      onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setBusy(false);
+    }
+  };
+  const clear = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.manageGoal(sessionId, "clear");
+      onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="目标" onClose={onClose}>
+      <div className="goal-form">
+        <label htmlFor="goal-objective">持续追踪的目标</label>
+        <textarea
+          id="goal-objective"
+          autoFocus
+          value={objective}
+          disabled={loading || busy}
+          placeholder="输入当前会话要持续追踪的目标"
+          onChange={(event) => setObjective(event.target.value)}
+        />
+        {error && <div className="form-error"><AlertTriangle />{error}</div>}
+      </div>
+      <div className="modal-actions">
+        {hasGoal && <button type="button" disabled={busy} onClick={() => void clear()}>清除目标</button>}
+        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button className="primary" disabled={loading || busy || !objective.trim()} onClick={() => void save()}>
+          {busy ? <LoaderCircle className="spin" /> : <Target />}{hasGoal ? "更新目标" : "设置目标"}
+        </button>
       </div>
     </Modal>
   );

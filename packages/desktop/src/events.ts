@@ -9,20 +9,107 @@ function stringify(value: unknown): string {
   }
 }
 
-function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return stringify(content);
-  return content
-    .map((block) => {
-      if (!block || typeof block !== "object") return String(block);
-      const value = block as Record<string, unknown>;
-      if (typeof value.text === "string") return value.text;
-      if (value.type === "tool_use") return `调用工具 ${String(value.name ?? "")}`;
-      if (value.type === "tool_result") return stringify(value.content ?? value.result);
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
+function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
+  const items: ChatItem[] = [];
+  const tools = new Map<string, number>();
+
+  for (const message of messages) {
+    // Synthetic task callbacks are model input. Their user-facing result is
+    // the assistant reply that follows, so replaying the raw envelope leaks
+    // protocol markup that was never shown in the live conversation.
+    if (message.origin === "task-notification") continue;
+
+    const baseId = String(message.uuid ?? crypto.randomUUID());
+    const kind = message.role === "user"
+      ? "user"
+      : message.role === "assistant"
+        ? "assistant"
+        : "system";
+    const content = message.content;
+    if (typeof content === "string") {
+      if (content) items.push({ id: baseId, kind, text: content, status: "complete" });
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+
+    let text = "";
+    let segment = 0;
+    const flushText = () => {
+      if (!text) return;
+      items.push({
+        id: segment === 0 ? baseId : `${baseId}:part-${segment}`,
+        kind,
+        text,
+        status: "complete",
+      });
+      text = "";
+      segment += 1;
+    };
+
+    content.forEach((rawBlock, index) => {
+      if (!rawBlock || typeof rawBlock !== "object") return;
+      const block = rawBlock as Record<string, unknown>;
+      if (block.type === "text") {
+        if (typeof block.text === "string") text += block.text;
+        return;
+      }
+      if (block.type === "thinking") {
+        flushText();
+        if (typeof block.thinking !== "string" || !block.thinking) return;
+        items.push({
+          id: `${baseId}:thinking-${index}`,
+          kind: "thinking",
+          title: "思考过程",
+          text: block.thinking,
+          status: "complete",
+          collapsed: true,
+        });
+        return;
+      }
+      if (block.type === "tool_use") {
+        flushText();
+        const toolUseId = typeof block.id === "string" && block.id
+          ? block.id
+          : `${baseId}:tool-${index}`;
+        const toolIndex = items.length;
+        items.push({
+          id: toolUseId,
+          kind: "tool",
+          title: typeof block.name === "string" ? block.name : "Tool",
+          detail: block.input && typeof block.input === "object" ? block.input : {},
+          tool_use_id: toolUseId,
+          status: "complete",
+          collapsed: true,
+        });
+        tools.set(toolUseId, toolIndex);
+        return;
+      }
+      if (block.type === "tool_result") {
+        flushText();
+        const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
+        if (!toolUseId) return;
+        const result = stringify(block.content ?? block.result ?? "");
+        const toolIndex = tools.get(toolUseId);
+        if (toolIndex !== undefined) {
+          items[toolIndex] = { ...items[toolIndex], detail: result, status: "complete" };
+        } else {
+          tools.set(toolUseId, items.length);
+          items.push({
+            id: toolUseId,
+            kind: "tool",
+            title: "Tool",
+            detail: result,
+            tool_use_id: toolUseId,
+            status: "complete",
+            collapsed: true,
+          });
+        }
+      }
+    });
+    flushText();
+  }
+
+  return items;
 }
 
 function appendStream(items: ChatItem[], text: string, now: number): ChatItem[] {
@@ -65,8 +152,13 @@ function updateByToolId(
   items: ChatItem[],
   toolUseId: string,
   updater: (item: ChatItem) => ChatItem,
+  kind?: ChatItem["kind"],
 ): ChatItem[] {
-  return items.map((item) => item.tool_use_id === toolUseId ? updater(item) : item);
+  return items.map((item) => (
+    item.tool_use_id === toolUseId && (kind === undefined || item.kind === kind)
+      ? updater(item)
+      : item
+  ));
 }
 
 function completeRunning(items: ChatItem[], now: number): ChatItem[] {
@@ -102,12 +194,7 @@ export function applyGatewayEvent(
     case "server.heartbeat":
       return { ...state, connected: true, error: null };
     case "session_history": {
-      const messages = (event.messages ?? []).map((message): ChatItem => ({
-        id: String(message.uuid ?? crypto.randomUUID()),
-        kind: message.role === "user" ? "user" : message.role === "assistant" ? "assistant" : "system",
-        text: messageText(message.content),
-        status: "complete",
-      }));
+      const messages = historyItems(event.messages ?? []);
       return {
         ...state,
         connected: true,
@@ -174,7 +261,7 @@ export function applyGatewayEvent(
         items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
           ...completeItem(item, now),
           detail: event.result_for_display ?? event.result ?? "",
-        })),
+        }), "tool"),
       };
     case "permission_request":
       return {
@@ -204,7 +291,7 @@ export function applyGatewayEvent(
         items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
           ...completeItem(item, now),
           status: event.allowed ? "allowed" : "denied",
-        })),
+        }), "permission"),
       };
     case "choice_request":
       return {
@@ -235,7 +322,7 @@ export function applyGatewayEvent(
           ...completeItem(item, now),
           selected: event.selected ?? [],
           status: "complete",
-        })),
+        }), "choice"),
       };
     case "plan_ready":
       return {

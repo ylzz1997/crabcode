@@ -887,6 +887,54 @@ button.primary:hover,
   color: white;
 }
 
+.folder-attachment {
+  max-width: 230px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.folder-attachment>svg {
+  width: 14px;
+  color: var(--subtle);
+}
+
+.folder-attachment>span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.folder-attachment>button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--subtle);
+  cursor: pointer;
+}
+
+.folder-attachment>button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.folder-attachment>button svg {
+  width: 12px;
+}
+
 .composer-box textarea::placeholder {
   color: var(--subtle);
 }
@@ -1132,6 +1180,43 @@ button.primary:hover,
   border-radius: 5px;
   background: var(--bg);
   color: var(--text);
+}
+
+.goal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-form>label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.goal-form>textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.goal-form>textarea:focus {
+  border-color: rgba(255, 255, 255, .2);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, .035);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-box.ultra-mode,
+  .composer-box.ultra-mode::after {
+    animation: none;
+  }
 }
 
 .warning-check {
@@ -4247,7 +4332,204 @@ body {
 
 /* Composer controls and live execution telemetry */
 .composer-box {
+  position: relative;
+  isolation: isolate;
   overflow: visible;
+}
+
+.composer-box.ultra-mode {
+  animation: ultra-border-awaken 900ms ease-out both;
+}
+
+.composer-box.ultra-mode::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    rgba(80, 220, 255, .15) 20%,
+    rgba(133, 103, 255, .62) 42%,
+    rgba(255, 91, 178, .68) 58%,
+    rgba(255, 211, 91, .42) 74%,
+    transparent 100%
+  );
+  background-position: -70% 0;
+  background-repeat: no-repeat;
+  background-size: 38% 100%;
+  clip-path: inset(0 round 0 0 7px 7px);
+  filter: blur(5px);
+  animation: ultra-spectrum-sweep 950ms cubic-bezier(.2, .72, .2, 1) both;
+}
+
+@keyframes ultra-spectrum-sweep {
+  from { background-position: -70% 0; opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: .9; }
+  to { background-position: 170% 0; opacity: 0; }
+}
+
+@keyframes ultra-border-awaken {
+  45% { border-color: rgba(174, 124, 255, .7); box-shadow: 0 0 0 2px rgba(100, 205, 255, .1), 0 18px 55px rgba(130, 83, 255, .18); }
+}
+
+.composer-add {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.composer-add-trigger {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .055);
+  color: #aeb2ac;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.composer-add-trigger:hover:not(:disabled),
+.composer-add-trigger[aria-expanded="true"] {
+  background: rgba(255, 255, 255, .1);
+  color: #f0f2ed;
+}
+
+.composer-add-trigger:active:not(:disabled) {
+  transform: scale(.94);
+}
+
+.composer-add-trigger:disabled {
+  opacity: .4;
+  cursor: default;
+}
+
+.composer-add-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.composer-add-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  z-index: 100;
+  width: min(230px, calc(100vw - 44px));
+  overflow: hidden;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 8px;
+  background: rgba(38, 41, 39, .98);
+  box-shadow: 0 22px 64px rgba(0, 0, 0, .46), inset 0 1px rgba(255, 255, 255, .055);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+  backdrop-filter: blur(26px) saturate(135%);
+  animation: composer-menu-in 150ms ease-out both;
+}
+
+.composer-add-heading {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: #777c76;
+  font-size: 10.5px;
+}
+
+.composer-add-menu>button {
+  width: 100%;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #b9bdb6;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-add-menu>button:hover,
+.composer-add-menu>button.active {
+  background: rgba(255, 255, 255, .06);
+  color: #f0f2ed;
+}
+
+.composer-add-menu>button>svg {
+  width: 15px;
+  color: #8e948c;
+}
+
+.composer-add-menu>button>span {
+  flex: 1;
+  font-size: 11.5px;
+}
+
+.composer-add-menu>button>svg:last-child:not(:first-child) {
+  width: 14px;
+  color: var(--green);
+}
+
+.composer-add-menu>button.ultra>svg:first-child {
+  color: #c69cff;
+}
+
+.composer-add-separator {
+  height: 1px;
+  margin: 5px 7px;
+  background: rgba(255, 255, 255, .07);
+}
+
+.composer-mode-chip {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .055);
+  color: #a9aca7;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.composer-mode-chip:hover {
+  border-color: rgba(255, 255, 255, .13);
+  background: rgba(255, 255, 255, .09);
+  color: #e4e6e1;
+}
+
+.composer-mode-chip svg {
+  width: 12px;
+  height: 12px;
+}
+
+.composer-mode-chip span {
+  font-size: 10.5px;
+}
+
+.composer-mode-chip>svg:last-child {
+  width: 16px;
+  height: 16px;
+  padding: 2px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .08);
+  opacity: .65;
+}
+
+.composer-mode-chip.ultra {
+  border-color: rgba(184, 130, 255, .22);
+  background: linear-gradient(100deg, rgba(92, 202, 255, .09), rgba(179, 105, 255, .11), rgba(255, 111, 183, .08));
+  color: #d8c3ef;
 }
 
 .picker,
