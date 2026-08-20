@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { legacyFavoriteEntries, normalizeFavoriteEntries } from "./favorites";
 import type {
   CodeFontFamily,
   DesktopSettings,
@@ -56,6 +57,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
     allow_insecure_remote: false,
     last_model_profile: null,
     projects: [],
+    favorite_items: [],
     last_project_path: null,
     last_project_id: null,
   }],
@@ -165,13 +167,8 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     show_turn_duration: raw.show_turn_duration !== false,
     turn_duration_format: turnDurationFormat,
     dock_icon: dockIcon,
-    connections: (raw.connections ?? []).map((connection) => ({
-      ...connection,
-      last_model_profile: typeof connection.last_model_profile === "string"
-        && connection.last_model_profile.trim().length > 0
-        ? connection.last_model_profile
-        : null,
-      projects: (connection.projects ?? []).map((project, index) => {
+    connections: (raw.connections ?? []).map((connection) => {
+      const projects = (connection.projects ?? []).map((project, index) => {
         const legacyPath = typeof project.path === "string" ? project.path : "";
         const directories = Array.isArray(project.directories)
           ? project.directories.filter((path): path is string => typeof path === "string" && path.trim().length > 0)
@@ -187,12 +184,24 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
             ? [...new Set(project.favorite_session_ids.filter((id): id is string => typeof id === "string" && id.length > 0))]
             : [],
         };
-      }),
-      last_project_id: connection.last_project_id
-        ?? connection.projects?.find((project) => project.path === connection.last_project_path)?.id
-        ?? connection.last_project_path
-        ?? null,
-    })),
+      });
+      const favoriteItems = Array.isArray(connection.favorite_items)
+        ? normalizeFavoriteEntries(connection.favorite_items)
+        : legacyFavoriteEntries({ projects });
+      return {
+        ...connection,
+        last_model_profile: typeof connection.last_model_profile === "string"
+          && connection.last_model_profile.trim().length > 0
+          ? connection.last_model_profile
+          : null,
+        projects,
+        favorite_items: favoriteItems,
+        last_project_id: connection.last_project_id
+          ?? projects.find((project) => project.path === connection.last_project_path)?.id
+          ?? connection.last_project_path
+          ?? null,
+      };
+    }),
   };
 }
 

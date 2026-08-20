@@ -41,6 +41,7 @@ fn default_settings() -> Value {
             "allow_insecure_remote": false,
             "last_model_profile": null,
             "projects": [],
+            "favorite_items": [],
             "last_project_path": null,
             "last_project_id": null
         }],

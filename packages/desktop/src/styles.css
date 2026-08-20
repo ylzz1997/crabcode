@@ -5487,6 +5487,270 @@ body {
   transform: translateY(-50%);
 }
 
+.project-favorite {
+  width: 12px !important;
+  height: 12px !important;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--orange) !important;
+}
+
+.favorites-header {
+  align-items: center;
+}
+
+.favorites-new-folder {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.favorite-tree {
+  gap: 0;
+}
+
+.favorite-folder {
+  min-width: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .055);
+}
+
+.favorite-folder-heading {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: rgba(21, 36, 39, .62);
+}
+
+.favorite-folder-toggle {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 7px;
+  border: 0;
+  background: transparent;
+  color: #dce8e2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.favorite-folder-toggle:hover {
+  color: var(--accent-strong);
+}
+
+.favorite-folder-toggle>svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: #7e9b94;
+}
+
+.favorite-folder-toggle>svg:first-child {
+  width: 13px;
+  height: 13px;
+  transition: transform 160ms ease;
+}
+
+.favorite-folder-toggle>svg:first-child.collapsed {
+  transform: rotate(-90deg);
+}
+
+.favorite-folder-toggle strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.favorite-folder-toggle small {
+  flex: 0 0 auto;
+  color: #708b85;
+  font-size: 10px;
+}
+
+.favorite-folder-actions,
+.favorite-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.favorite-folder-actions .icon-button,
+.favorite-item-actions .icon-button {
+  color: #8ca39d;
+}
+
+.favorite-folder-actions .danger-button:hover {
+  color: var(--red);
+}
+
+.favorite-folder-children {
+  margin-left: 22px;
+  border-left: 1px solid #294447;
+}
+
+.favorite-folder-children:empty::after {
+  content: "此文件夹为空";
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  padding-left: 18px;
+  color: #607a74;
+  font-size: 11px;
+}
+
+.favorite-location-select {
+  width: 132px;
+  height: 28px;
+  padding: 0 25px 0 8px;
+  border: 1px solid #304b4d;
+  border-radius: 6px;
+  outline: 0;
+  background: #111f22;
+  color: #8fa8a1;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.favorite-location-select:focus {
+  border-color: var(--accent);
+}
+
+.favorite-session-item .favorite-session-main {
+  padding-right: 205px;
+}
+
+.favorite-item-actions {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+}
+
+.favorite-item-actions .icon-button {
+  color: var(--orange);
+}
+
+.favorite-session-icon.project {
+  border-color: #31545a;
+  background: #1b3034;
+  color: #78b7b5;
+}
+
+.favorite-folder-form {
+  min-width: min(360px, calc(100vw - 64px));
+}
+
+.favorite-folder-delete-copy {
+  min-width: min(430px, calc(100vw - 64px));
+}
+
+.favorite-folder-delete-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.favorite-folder-delete-options>button {
+  width: 100%;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.favorite-folder-delete-options>button:hover {
+  border-color: #4c6665;
+  background: var(--surface-hover);
+}
+
+.favorite-folder-delete-options>button.recommended {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+}
+
+.favorite-folder-delete-options>button.danger:hover {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+  background: var(--red-soft);
+}
+
+.favorite-folder-delete-options>button>svg {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.favorite-folder-delete-options>button.recommended>svg {
+  color: var(--accent-strong);
+}
+
+.favorite-folder-delete-options>button.danger>svg,
+.favorite-folder-delete-options>button.danger strong {
+  color: var(--red);
+}
+
+.favorite-folder-delete-options>button>span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.favorite-folder-delete-options strong {
+  font-size: 12px;
+}
+
+.favorite-folder-delete-options small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.favorite-folder-delete-actions {
+  margin-top: 12px;
+}
+
+@media (max-width: 720px) {
+  .favorites-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .favorite-folder-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .favorite-folder-actions {
+    justify-content: flex-end;
+  }
+
+  .favorite-session-item {
+    padding-bottom: 42px;
+  }
+
+  .favorite-session-item .favorite-session-main {
+    padding-right: 12px;
+  }
+
+  .favorite-item-actions {
+    top: auto;
+    right: 8px;
+    bottom: 7px;
+    transform: none;
+  }
+}
+
 /* Composer controls and live execution telemetry */
 .composer-box {
   position: relative;
@@ -7829,6 +8093,28 @@ html[data-theme="light"] .favorite-session-copy strong {
 
 html[data-theme="light"] .favorite-session-copy>span,
 html[data-theme="light"] .favorite-session-copy small {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .favorite-folder {
+  border-color: var(--border-soft);
+}
+
+html[data-theme="light"] .favorite-folder-heading {
+  background: color-mix(in srgb, var(--surface-active) 72%, transparent);
+}
+
+html[data-theme="light"] .favorite-folder-toggle {
+  color: var(--text);
+}
+
+html[data-theme="light"] .favorite-folder-children {
+  border-color: var(--border);
+}
+
+html[data-theme="light"] .favorite-location-select {
+  border-color: var(--border);
+  background: var(--surface);
   color: var(--muted);
 }
 

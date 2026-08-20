@@ -18,6 +18,7 @@ import {
   ScheduledTasksView,
 } from "./App";
 import type { GatewayApi } from "./gateway";
+import { favoriteEntries, resolveFavoriteEntries } from "./favorites";
 import type { BackgroundTaskInfo, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
 
 describe("MessageMarkdown", () => {
@@ -202,6 +203,26 @@ describe("ProjectActionsMenu", () => {
     expect(deleteAction.textContent).toBe("默认项目不可删除");
     act(() => deleteAction.click());
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("can favorite and unfavorite a project from the project menu", () => {
+    const onToggleFavorite = vi.fn();
+    act(() => root.render(
+      <ProjectActionsMenu
+        projectName="CrabCode"
+        favorite
+        onNewSession={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleFavorite={onToggleFavorite}
+        onDelete={vi.fn()}
+      />,
+    ));
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!.click());
+    const favoriteAction = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+      .find((button) => button.textContent === "取消收藏项目")!;
+    act(() => favoriteAction.click());
+    expect(onToggleFavorite).toHaveBeenCalledOnce();
   });
 });
 
@@ -580,11 +601,80 @@ describe("favorite sessions", () => {
     document.body.append(container);
     const root = createRoot(container);
     const item = collectFavoriteSessions(connection, gateway)[0];
+    const items = resolveFavoriteEntries(connection, gateway);
     const onOpen = vi.fn();
-    act(() => root.render(<FavoritesView items={[item]} connected onOpen={onOpen} onToggle={vi.fn()} />));
+    act(() => root.render(
+      <FavoritesView
+        items={items}
+        entries={favoriteEntries(connection)}
+        connected
+        onOpenProject={vi.fn()}
+        onOpenSession={onOpen}
+        onCreateFolder={vi.fn()}
+        onRenameFolder={vi.fn()}
+        onMove={vi.fn()}
+        onRemove={vi.fn()}
+        onDeleteFolder={vi.fn()}
+      />,
+    ));
     expect(container.textContent).toContain("CrabCode");
     act(() => container.querySelector<HTMLButtonElement>(".favorite-session-main")!.click());
-    expect(onOpen).toHaveBeenCalledWith(item);
+    expect(onOpen).toHaveBeenCalledWith(item.project, item.session);
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("renders nested folders and creates a child folder at the selected level", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const nestedConnection: ConnectionPreset = {
+      ...connection,
+      favorite_items: [{
+        id: "folder-1",
+        type: "folder",
+        name: "客户",
+        children: [{
+          id: "favorite-1",
+          type: "session",
+          project_id: project.id,
+          session_id: "session-1",
+        }],
+      }],
+    };
+    const onCreateFolder = vi.fn();
+    const onDeleteFolder = vi.fn();
+    act(() => root.render(
+      <FavoritesView
+        items={resolveFavoriteEntries(nestedConnection, gateway)}
+        entries={favoriteEntries(nestedConnection)}
+        connected
+        onOpenProject={vi.fn()}
+        onOpenSession={vi.fn()}
+        onCreateFolder={onCreateFolder}
+        onRenameFolder={vi.fn()}
+        onMove={vi.fn()}
+        onRemove={vi.fn()}
+        onDeleteFolder={onDeleteFolder}
+      />,
+    ));
+
+    expect(container.textContent).toContain("客户");
+    expect(container.textContent).toContain("重要会话");
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="在 客户 中新建文件夹"]')!.click());
+    const input = container.querySelector<HTMLInputElement>('.favorite-folder-form input')!;
+    act(() => changeInput(input, "发布"));
+    act(() => container.querySelector<HTMLFormElement>('.favorite-folder-form')!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(onCreateFolder).toHaveBeenCalledWith("folder-1", "发布");
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="删除文件夹 客户"]')!.click());
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("请选择如何处理");
+    const keepButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.favorite-folder-delete-options button'))
+      .find((button) => button.textContent?.includes("移到收藏根目录"))!;
+    act(() => keepButton.click());
+    expect(onDeleteFolder).toHaveBeenCalledWith("folder-1", "promote");
+
     act(() => root.unmount());
     container.remove();
   });

@@ -20,6 +20,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  FolderPlus,
   History,
   Image as ImageIcon,
   ListTodo,
@@ -62,6 +63,23 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { applyGatewayEvent } from "./events";
+import {
+  addFavoriteEntry,
+  countFavoriteItems,
+  deleteFavoriteFolder,
+  favoriteEntries,
+  favoriteFolderOptions,
+  favoriteParentId,
+  favoriteSessionIdsForProject,
+  hasFavoriteProject,
+  hasFavoriteSession,
+  moveFavoriteEntry,
+  removeFavoriteEntries,
+  renameFavoriteFolder,
+  resolveFavoriteEntries,
+  type FavoriteViewEntry,
+  type FavoriteFolderDeleteMode,
+} from "./favorites";
 import { GatewayApi, SessionChannel } from "./gateway";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
 import { TrajectoryView } from "./TrajectoryView";
@@ -83,6 +101,8 @@ import type {
   ChatItem,
   ConnectionPreset,
   DesktopSettings,
+  FavoriteEntry,
+  FavoriteFolder,
   GatewayEvent,
   GatewayViewState,
   ProjectPreset,
@@ -135,14 +155,22 @@ export function collectFavoriteSessions(
   connection: ConnectionPreset | null,
   gateway: GatewayViewState | null,
 ): FavoriteSessionItem[] {
-  if (!connection || !gateway) return [];
-  return connection.projects.flatMap((project) => {
-    const sessions = gateway.sessionsByProject[project.path] ?? [];
-    return (project.favorite_session_ids ?? []).flatMap((sessionId) => {
-      const session = sessions.find((item) => item.session_id === sessionId);
-      return session ? [{ project, session }] : [];
-    });
+  const collect = (items: FavoriteViewEntry[]): FavoriteSessionItem[] => items.flatMap((item) => {
+    if (item.kind === "folder") return collect(item.children);
+    return item.kind === "session" ? [{ project: item.project, session: item.session }] : [];
   });
+  return collect(resolveFavoriteEntries(connection, gateway));
+}
+
+function withFavoriteItems(connection: ConnectionPreset, items: FavoriteEntry[]): ConnectionPreset {
+  return {
+    ...connection,
+    favorite_items: items,
+    projects: connection.projects.map((project) => ({
+      ...project,
+      favorite_session_ids: favoriteSessionIdsForProject(items, project.id),
+    })),
+  };
 }
 
 export function resolveRememberedModel(
@@ -552,16 +580,41 @@ function App() {
 
   const toggleFavoriteSession = useCallback((projectId: string, sessionId: string) => {
     if (!activeConnection || sessionId.startsWith("new-")) return;
-    updateConnection(activeConnection.id, (connection) => ({
-      ...connection,
-      projects: connection.projects.map((project) => {
-        if (project.id !== projectId) return project;
-        const favorites = new Set(project.favorite_session_ids ?? []);
-        if (favorites.has(sessionId)) favorites.delete(sessionId);
-        else favorites.add(sessionId);
-        return { ...project, favorite_session_ids: [...favorites] };
-      }),
-    }));
+    updateConnection(activeConnection.id, (connection) => {
+      const items = favoriteEntries(connection);
+      const next = hasFavoriteSession(items, projectId, sessionId)
+        ? removeFavoriteEntries(items, (entry) => entry.type === "session"
+          && entry.project_id === projectId && entry.session_id === sessionId)
+        : addFavoriteEntry(items, null, {
+          id: crypto.randomUUID(),
+          type: "session",
+          project_id: projectId,
+          session_id: sessionId,
+        });
+      return withFavoriteItems(connection, next);
+    });
+  }, [activeConnection, updateConnection]);
+
+  const toggleFavoriteProject = useCallback((projectId: string) => {
+    if (!activeConnection) return;
+    updateConnection(activeConnection.id, (connection) => {
+      const items = favoriteEntries(connection);
+      const next = hasFavoriteProject(items, projectId)
+        ? removeFavoriteEntries(items, (entry) => entry.type === "project" && entry.project_id === projectId)
+        : addFavoriteEntry(items, null, {
+          id: crypto.randomUUID(),
+          type: "project",
+          project_id: projectId,
+        });
+      return withFavoriteItems(connection, next);
+    });
+  }, [activeConnection, updateConnection]);
+
+  const updateFavorites = useCallback((update: (items: FavoriteEntry[]) => FavoriteEntry[]) => {
+    if (!activeConnection) return;
+    updateConnection(activeConnection.id, (connection) => (
+      withFavoriteItems(connection, update(favoriteEntries(connection)))
+    ));
   }, [activeConnection, updateConnection]);
 
   const refreshProjectSessions = useCallback(async (connectionId: string, cwd: string) => {
@@ -675,18 +728,19 @@ function App() {
     commitSettings((current) => ({
       ...current,
       connections: current.connections.map((connection) => connection.id === target.connectionId
-        ? {
-            ...connection,
-            projects: connection.projects.map((project) => (
-              project.path === target.cwd
-                ? {
-                    ...project,
-                    last_session_id: project.last_session_id === target.sessionId ? null : project.last_session_id,
-                    favorite_session_ids: (project.favorite_session_ids ?? []).filter((id) => id !== target.sessionId),
-                  }
-                : project
-            )),
-          }
+        ? withFavoriteItems({
+          ...connection,
+          projects: connection.projects.map((project) => (
+            project.path === target.cwd
+              ? {
+                ...project,
+                last_session_id: project.last_session_id === target.sessionId ? null : project.last_session_id,
+              }
+              : project
+          )),
+        }, removeFavoriteEntries(favoriteEntries(connection), (entry) => entry.type === "session"
+          && entry.session_id === target.sessionId
+          && connection.projects.some((project) => project.id === entry.project_id && project.path === target.cwd)))
         : connection),
     }));
 
@@ -1176,12 +1230,14 @@ function App() {
     updateConnection(activeConnection.id, (connection) => {
       const projects = connection.projects.filter((item) => item.id !== removing.id);
       const next = projects[0] ?? null;
-      return {
+      return withFavoriteItems({
         ...connection,
         projects,
         last_project_path: connection.last_project_id === removing.id ? next?.path ?? null : connection.last_project_path,
         last_project_id: connection.last_project_id === removing.id ? next?.id ?? null : connection.last_project_id,
-      };
+      }, removeFavoriteEntries(favoriteEntries(connection), (entry) => (
+        entry.type !== "folder" && entry.project_id === removing.id
+      )));
     });
     return true;
   };
@@ -1494,7 +1550,10 @@ function App() {
     }
   };
 
-  const favoriteSessionIds = new Set(activeProject?.favorite_session_ids ?? []);
+  const activeFavoriteEntries = favoriteEntries(activeConnection);
+  const favoriteSessionIds = new Set(activeProject
+    ? favoriteSessionIdsForProject(activeFavoriteEntries, activeProject.id)
+    : []);
   const visibleSessions = displayList.filter((item) => (
     item.title.trim().length > 0 || item.message_count > 0 || item.preview.trim().length > 0
   ));
@@ -1505,10 +1564,11 @@ function App() {
     Number(favoriteSessionIds.has(right.session_id)) - Number(favoriteSessionIds.has(left.session_id))
   ));
   const activeSessionFavorite = Boolean(activeSession && favoriteSessionIds.has(activeSession.id));
-  const favoriteSessions = useMemo(
-    () => collectFavoriteSessions(activeConnection, activeGateway),
+  const favoriteItems = useMemo(
+    () => resolveFavoriteEntries(activeConnection, activeGateway),
     [activeConnection, activeGateway],
   );
+  const favoriteItemCount = countFavoriteItems(activeFavoriteEntries);
   const activeJobs = activeConnection ? scheduleJobs[activeConnection.id] ?? [] : [];
   const activeMonitorTasks = activeConnection ? monitorTasks[activeConnection.id] ?? [] : [];
   const resourceSessionId = activeSession && activeSession.cwd === activeProject?.path
@@ -1766,7 +1826,7 @@ function App() {
               >
                 <Star />
                 <span>收藏</span>
-                {favoriteSessions.length > 0 && <span className="workspace-nav-count">{favoriteSessions.length}</span>}
+                {favoriteItemCount > 0 && <span className="workspace-nav-count">{favoriteItemCount}</span>}
               </button>
             </nav>
 
@@ -1805,8 +1865,9 @@ function App() {
               >
                 <div className="section-content-inner">
                   <div className="project-list">
-                    {activeConnection?.projects.map((project) => (
-                      <div className="project-item-row" key={project.id}>
+                    {activeConnection?.projects.map((project) => {
+                      const projectFavorite = hasFavoriteProject(activeFavoriteEntries, project.id);
+                      return <div className="project-item-row" key={project.id}>
                         <button
                           className={`project-item ${activeProject?.id === project.id ? "active" : ""}`}
                           title={projectDirectoryTitle(project)}
@@ -1815,9 +1876,11 @@ function App() {
                         >
                           {activeProject?.id === project.id ? <FolderOpen /> : <Folder />}
                           <span>{project.name}</span>
+                          {projectFavorite && <Star className="project-favorite" fill="currentColor" />}
                         </button>
                         <ProjectActionsMenu
                           projectName={project.name}
+                          favorite={projectFavorite}
                           newSessionDisabled={project.directories.length === 0 || activeGateway?.status !== "online"}
                           deleteDisabled={project.id === defaultProjectId}
                           onNewSession={() => {
@@ -1831,10 +1894,11 @@ function App() {
                             openSession(activeConnection, project);
                           }}
                           onEdit={() => setProjectModal(project)}
+                          onToggleFavorite={() => toggleFavoriteProject(project.id)}
                           onDelete={() => setProjectDeleteTarget(project)}
                         />
                       </div>
-                    ))}
+                    })}
                   </div>
                 </div>
               </div>
@@ -1992,18 +2056,31 @@ function App() {
             />
           ) : workspaceView === "favorites" ? (
             <FavoritesView
-              items={favoriteSessions}
+              items={favoriteItems}
+              entries={activeFavoriteEntries}
               connected={activeGateway?.status === "online"}
-              onOpen={(item) => {
+              onOpenProject={(project) => switchProject(project)}
+              onOpenSession={(project, session) => {
                 if (!activeConnection) return;
                 updateConnection(activeConnection.id, (connection) => ({
                   ...connection,
-                  last_project_path: item.project.path,
-                  last_project_id: item.project.id,
+                  last_project_path: project.path,
+                  last_project_id: project.id,
                 }));
-                openSession(activeConnection, item.project, item.session);
+                openSession(activeConnection, project, session);
               }}
-              onToggle={(item) => toggleFavoriteSession(item.project.id, item.session.session_id)}
+              onCreateFolder={(parentId, name) => {
+                updateFavorites((items) => addFavoriteEntry(items, parentId, {
+                  id: crypto.randomUUID(),
+                  type: "folder",
+                  name,
+                  children: [],
+                }));
+              }}
+              onRenameFolder={(folderId, name) => updateFavorites((items) => renameFavoriteFolder(items, folderId, name))}
+              onMove={(entryId, parentId) => updateFavorites((items) => moveFavoriteEntry(items, entryId, parentId))}
+              onRemove={(entryId) => updateFavorites((items) => removeFavoriteEntries(items, (entry) => entry.id === entryId))}
+              onDeleteFolder={(folderId, mode) => updateFavorites((items) => deleteFavoriteFolder(items, folderId, mode))}
             />
           ) : workspaceView === "plugins" ? (
             <PluginsView
@@ -2289,14 +2366,22 @@ function App() {
             if (previousProject && previousProject.id === activeProject?.id && previousProject.path !== project.path) {
               setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
             }
-            updateConnection(activeConnection.id, (connection) => ({
-              ...connection,
-              projects: connection.projects.some((item) => item.id === project.id)
-                ? connection.projects.map((item) => item.id === project.id ? project : item)
-                : [...connection.projects, project],
-              last_project_path: project.path,
-              last_project_id: project.id,
-            }));
+            updateConnection(activeConnection.id, (connection) => {
+              const changedPrimaryPath = Boolean(previousProject && previousProject.path !== project.path);
+              const favoriteItems = changedPrimaryPath
+                ? removeFavoriteEntries(favoriteEntries(connection), (entry) => (
+                  entry.type === "session" && entry.project_id === project.id
+                ))
+                : favoriteEntries(connection);
+              return withFavoriteItems({
+                ...connection,
+                projects: connection.projects.some((item) => item.id === project.id)
+                  ? connection.projects.map((item) => item.id === project.id ? project : item)
+                  : [...connection.projects, project],
+                last_project_path: project.path,
+                last_project_id: project.id,
+              }, favoriteItems);
+            });
             void refreshProjectSessions(activeConnection.id, project.path);
             setProjectModal(null);
           }}
@@ -2644,63 +2729,300 @@ export function ScheduledTasksView({
   );
 }
 
-export function FavoritesView({ items, connected, onOpen, onToggle }: {
-  items: FavoriteSessionItem[];
+export function FavoritesView({
+  items,
+  entries,
+  connected,
+  onOpenProject,
+  onOpenSession,
+  onCreateFolder,
+  onRenameFolder,
+  onMove,
+  onRemove,
+  onDeleteFolder,
+}: {
+  items: FavoriteViewEntry[];
+  entries: FavoriteEntry[];
   connected: boolean;
-  onOpen: (item: FavoriteSessionItem) => void;
-  onToggle: (item: FavoriteSessionItem) => void;
+  onOpenProject: (project: ProjectPreset) => void;
+  onOpenSession: (project: ProjectPreset, session: SessionInfo) => void;
+  onCreateFolder: (parentId: string | null, name: string) => void;
+  onRenameFolder: (folderId: string, name: string) => void;
+  onMove: (entryId: string, parentId: string | null) => void;
+  onRemove: (entryId: string) => void;
+  onDeleteFolder: (folderId: string, mode: FavoriteFolderDeleteMode) => void;
 }) {
   const [query, setQuery] = useState("");
-  const filtered = items.filter(({ project, session }) => {
-    const needle = query.trim().toLowerCase();
-    return !needle || [project.name, project.path, session.title, session.preview]
-      .some((value) => value.toLowerCase().includes(needle));
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [folderEditor, setFolderEditor] = useState<{
+    folderId?: string;
+    parentId: string | null;
+    name: string;
+  } | null>(null);
+  const [folderDeleteTarget, setFolderDeleteTarget] = useState<FavoriteFolder | null>(null);
+  const needle = query.trim().toLowerCase();
+
+  const filterItems = (source: FavoriteViewEntry[]): FavoriteViewEntry[] => source.flatMap((item) => {
+    if (!needle) return [item];
+    if (item.kind === "folder") {
+      if (item.entry.name.toLowerCase().includes(needle)) return [item];
+      const children = filterItems(item.children);
+      return children.length ? [{ ...item, children }] : [];
+    }
+    if (item.kind === "project") {
+      return [item.project.name, item.project.path].some((value) => value.toLowerCase().includes(needle))
+        ? [item]
+        : [];
+    }
+    return [item.project.name, item.project.path, item.session.title, item.session.preview]
+      .some((value) => value.toLowerCase().includes(needle)) ? [item] : [];
   });
+  const filtered = filterItems(items);
+
+  const locationSelect = (entryId: string) => (
+    <select
+      className="favorite-location-select"
+      aria-label="移动到收藏文件夹"
+      title="移动到收藏文件夹"
+      value={favoriteParentId(entries, entryId) ?? ""}
+      onChange={(event) => onMove(entryId, event.target.value || null)}
+    >
+      {favoriteFolderOptions(entries, entryId).map((folder) => (
+        <option key={folder.id ?? "root"} value={folder.id ?? ""}>
+          {`${"　".repeat(folder.depth)}${folder.name}`}
+        </option>
+      ))}
+    </select>
+  );
+
+  const renderItems = (source: FavoriteViewEntry[]) => source.map((item) => {
+    if (item.kind === "folder") {
+      const isCollapsed = !needle && collapsed.has(item.entry.id);
+      return (
+        <section className="favorite-folder" key={item.entry.id}>
+          <div className="favorite-folder-heading">
+            <button
+              className="favorite-folder-toggle"
+              type="button"
+              aria-expanded={!isCollapsed}
+              onClick={() => setCollapsed((current) => {
+                const next = new Set(current);
+                if (next.has(item.entry.id)) next.delete(item.entry.id);
+                else next.add(item.entry.id);
+                return next;
+              })}
+            >
+              <ChevronDown className={isCollapsed ? "collapsed" : ""} />
+              {isCollapsed ? <Folder /> : <FolderOpen />}
+              <strong>{item.entry.name}</strong>
+              <small>{countFavoriteItems(item.entry.children)} 项</small>
+            </button>
+            <div className="favorite-folder-actions">
+              {locationSelect(item.entry.id)}
+              <button
+                className="icon-button tiny"
+                type="button"
+                title="新建子文件夹"
+                aria-label={`在 ${item.entry.name} 中新建文件夹`}
+                onClick={() => setFolderEditor({ parentId: item.entry.id, name: "" })}
+              ><FolderPlus /></button>
+              <button
+                className="icon-button tiny"
+                type="button"
+                title="重命名文件夹"
+                aria-label={`重命名文件夹 ${item.entry.name}`}
+                onClick={() => setFolderEditor({ folderId: item.entry.id, parentId: null, name: item.entry.name })}
+              ><Pencil /></button>
+              <button
+                className="icon-button tiny danger-button"
+                type="button"
+                title="删除文件夹"
+                aria-label={`删除文件夹 ${item.entry.name}`}
+                onClick={() => setFolderDeleteTarget(item.entry)}
+              ><Trash2 /></button>
+            </div>
+          </div>
+          {!isCollapsed && <div className="favorite-folder-children">{renderItems(item.children)}</div>}
+        </section>
+      );
+    }
+
+    if (item.kind === "project") {
+      return (
+        <article className="favorite-session-item favorite-project-item" key={item.entry.id}>
+          <button className="favorite-session-main" type="button" onClick={() => onOpenProject(item.project)}>
+            <span className="favorite-session-icon project"><FolderOpen /></span>
+            <span className="favorite-session-copy">
+              <strong>{item.project.name}</strong>
+              <span>{projectDirectoryTitle(item.project)}</span>
+              <small><Star fill="currentColor" />收藏项目</small>
+            </span>
+            <ChevronRight />
+          </button>
+          <div className="favorite-item-actions">
+            {locationSelect(item.entry.id)}
+            <button
+              className="icon-button"
+              type="button"
+              title="取消收藏项目"
+              aria-label={`取消收藏项目 ${item.project.name}`}
+              onClick={() => onRemove(item.entry.id)}
+            ><Star fill="currentColor" /></button>
+          </div>
+        </article>
+      );
+    }
+
+    return (
+      <article className="favorite-session-item" key={item.entry.id}>
+        <button className="favorite-session-main" type="button" onClick={() => onOpenSession(item.project, item.session)}>
+          <span className="favorite-session-icon"><Star fill="currentColor" /></span>
+          <span className="favorite-session-copy">
+            <strong>{item.session.title || "未命名会话"}</strong>
+            <span>{item.session.preview || formatDate(item.session.created_at)}</span>
+            <small title={item.project.path}><Folder />{item.project.name}<i>{item.project.path}</i></small>
+          </span>
+          <ChevronRight />
+        </button>
+        <div className="favorite-item-actions">
+          {locationSelect(item.entry.id)}
+          <button
+            className="icon-button"
+            type="button"
+            title="取消收藏会话"
+            aria-label={`取消收藏 ${item.session.title || "未命名会话"}`}
+            onClick={() => onRemove(item.entry.id)}
+          ><Star fill="currentColor" /></button>
+        </div>
+      </article>
+    );
+  });
+
   return (
     <section className="workspace-page favorites-page">
       <div className="page-kicker"><Star /><span>CRAB DESKTOP FAVORITES</span><i /></div>
-      <header className="page-header">
+      <header className="page-header favorites-header">
         <div>
           <h1>收藏</h1>
-          <p>跨项目返回重要会话</p>
+          <p>用分级文件夹整理重要项目和会话</p>
         </div>
+        <button
+          className="page-command favorites-new-folder"
+          type="button"
+          onClick={() => setFolderEditor({ parentId: null, name: "" })}
+        ><FolderPlus />新建文件夹</button>
       </header>
       <label className="page-search">
         <Search />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="检索会话或项目" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="检索收藏、项目或文件夹" />
       </label>
-      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取收藏会话" />}
+      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取收藏内容" />}
       <div className="page-section favorites-section">
-        <div className="page-section-heading"><h2>收藏会话</h2><span>{filtered.length} 项</span></div>
-        <div className="favorite-session-list">
-          {filtered.map((item) => (
-            <article className="favorite-session-item" key={`${item.project.id}:${item.session.session_id}`}>
-              <button className="favorite-session-main" type="button" onClick={() => onOpen(item)}>
-                <span className="favorite-session-icon"><Star fill="currentColor" /></span>
-                <span className="favorite-session-copy">
-                  <strong>{item.session.title || "未命名会话"}</strong>
-                  <span>{item.session.preview || formatDate(item.session.created_at)}</span>
-                  <small title={item.project.path}><Folder />{item.project.name}<i>{item.project.path}</i></small>
-                </span>
-                <ChevronRight />
-              </button>
-              <button
-                className="icon-button favorite-session-remove"
-                type="button"
-                title="取消收藏"
-                aria-label={`取消收藏 ${item.session.title || "未命名会话"}`}
-                onClick={() => onToggle(item)}
-              >
-                <Star fill="currentColor" />
-              </button>
-            </article>
-          ))}
+        <div className="page-section-heading"><h2>全部收藏</h2><span>{countFavoriteItems(entries)} 项</span></div>
+        <div className="favorite-session-list favorite-tree">
+          {renderItems(filtered)}
           {connected && filtered.length === 0 && (
-            <div className="page-empty">{query.trim() ? "没有匹配的收藏会话" : "暂无收藏会话"}</div>
+            <div className="page-empty">{needle ? "没有匹配的收藏" : "暂无收藏项目或会话"}</div>
           )}
         </div>
       </div>
+      {folderEditor && (
+        <Modal title={folderEditor.folderId ? "重命名收藏文件夹" : "新建收藏文件夹"} onClose={() => setFolderEditor(null)}>
+          <form
+            className="form-grid favorite-folder-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const name = folderEditor.name.trim();
+              if (!name) return;
+              if (folderEditor.folderId) onRenameFolder(folderEditor.folderId, name);
+              else onCreateFolder(folderEditor.parentId, name);
+              setFolderEditor(null);
+            }}
+          >
+            <label>
+              <span>文件夹名称</span>
+              <input
+                autoFocus
+                value={folderEditor.name}
+                onChange={(event) => setFolderEditor({ ...folderEditor, name: event.target.value })}
+                placeholder="例如：客户项目"
+              />
+            </label>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setFolderEditor(null)}>取消</button>
+              <button className="primary" type="submit" disabled={!folderEditor.name.trim()}>
+                {folderEditor.folderId ? <Pencil /> : <FolderPlus />}{folderEditor.folderId ? "保存" : "创建"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {folderDeleteTarget && (
+        <FavoriteFolderDeleteModal
+          folder={folderDeleteTarget}
+          hasParent={favoriteParentId(entries, folderDeleteTarget.id) !== null}
+          onClose={() => setFolderDeleteTarget(null)}
+          onChoose={(mode) => {
+            onDeleteFolder(folderDeleteTarget.id, mode);
+            setFolderDeleteTarget(null);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+export function FavoriteFolderDeleteModal({ folder, hasParent, onClose, onChoose }: {
+  folder: FavoriteFolder;
+  hasParent: boolean;
+  onClose: () => void;
+  onChoose: (mode: FavoriteFolderDeleteMode) => void;
+}) {
+  const itemCount = countFavoriteItems(folder.children);
+  const empty = folder.children.length === 0;
+  return (
+    <Modal title="删除收藏文件夹" onClose={onClose}>
+      <div className="confirm-dialog-copy favorite-folder-delete-copy">
+        <FolderOpen />
+        <div>
+          <strong>删除“{folder.name}”？</strong>
+          <p>{empty ? "这个文件夹是空的。" : `其中有 ${itemCount} 项收藏及可能的子文件夹，请选择如何处理。`}</p>
+        </div>
+      </div>
+      {!empty && (
+        <div className="favorite-folder-delete-options">
+          <button type="button" className="recommended" onClick={() => onChoose("promote")}>
+            <FolderInput />
+            <span>
+              <strong>{hasParent ? "移到上一级并删除文件夹" : "移到收藏根目录并删除文件夹"}</strong>
+              <small>保留文件夹内的项目、会话和子文件夹</small>
+            </span>
+          </button>
+          {hasParent && (
+            <button type="button" onClick={() => onChoose("root")}>
+              <FolderOpen />
+              <span>
+                <strong>全部移到收藏根目录</strong>
+                <small>跳过上一级，直接放到收藏列表顶层</small>
+              </span>
+            </button>
+          )}
+          <button type="button" className="danger" onClick={() => onChoose("recursive")}>
+            <Trash2 />
+            <span>
+              <strong>递归删除全部收藏</strong>
+              <small>文件夹、子文件夹及其中收藏都会移除</small>
+            </span>
+          </button>
+        </div>
+      )}
+      <div className="modal-actions favorite-folder-delete-actions">
+        <button type="button" onClick={onClose}>取消</button>
+        {empty && <button className="confirm-danger" type="button" onClick={() => onChoose("recursive")}>
+          <Trash2 />删除空文件夹
+        </button>}
+      </div>
+    </Modal>
   );
 }
 
@@ -2858,17 +3180,21 @@ function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<H
 
 export function ProjectActionsMenu({
   projectName,
+  favorite = false,
   newSessionDisabled = false,
   deleteDisabled = false,
   onNewSession,
   onEdit,
+  onToggleFavorite,
   onDelete,
 }: {
   projectName: string;
+  favorite?: boolean;
   newSessionDisabled?: boolean;
   deleteDisabled?: boolean;
   onNewSession: () => void;
   onEdit: () => void;
+  onToggleFavorite?: () => void;
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -2883,7 +3209,7 @@ export function ProjectActionsMenu({
     const viewportPadding = 8;
     const gap = 8;
     const menuWidth = 208;
-    const menuHeight = 142;
+    const menuHeight = onToggleFavorite ? 180 : 142;
     const fitsRight = rect.right + gap + menuWidth <= window.innerWidth - viewportPadding;
     setPosition({
       top: Math.min(
@@ -2894,7 +3220,7 @@ export function ProjectActionsMenu({
         ? rect.right + gap
         : Math.max(viewportPadding, rect.left - menuWidth - gap),
     });
-  }, []);
+  }, [onToggleFavorite]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -2958,6 +3284,10 @@ export function ProjectActionsMenu({
             <Pencil />
             <span>编辑项目</span>
           </button>
+          {onToggleFavorite && <button type="button" role="menuitem" onClick={() => choose(onToggleFavorite)}>
+            <Star fill={favorite ? "currentColor" : "none"} />
+            <span>{favorite ? "取消收藏项目" : "收藏项目"}</span>
+          </button>}
           <div className="project-action-separator" role="separator" />
           <button className="danger" type="button" role="menuitem" disabled={deleteDisabled} onClick={() => choose(onDelete)}>
             <Trash2 />
@@ -3661,6 +3991,7 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
             allow_insecure_remote: allowInsecure,
             last_model_profile: editingConnection?.last_model_profile ?? null,
             projects: editingConnection?.projects ?? [],
+            favorite_items: editingConnection?.favorite_items ?? [],
             last_project_path: editingConnection?.last_project_path ?? null,
             last_project_id: editingConnection?.last_project_id ?? null,
           }, password).catch((reason) => {

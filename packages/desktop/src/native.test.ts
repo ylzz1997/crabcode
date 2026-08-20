@@ -64,8 +64,41 @@ describe("desktop settings migration", () => {
       is_default: true,
       favorite_session_ids: [],
     });
+    expect(migrated.connections[0].favorite_items).toEqual([]);
     expect(migrated.connections[0].last_model_profile).toBeNull();
     expect(migrated.connections[0].last_project_id).toBe("/work/crab");
+  });
+
+  it("migrates legacy session favorites into the root of the favorite tree", () => {
+    const migrated = normalizeSettings({
+      schema_version: 2,
+      active_connection_id: "local",
+      connection_order: ["local"],
+      connections: [{
+        id: "local",
+        name: "Local",
+        base_url: "http://127.0.0.1:4096",
+        credential_ref: null,
+        allow_insecure_remote: false,
+        projects: [{
+          id: "project-1",
+          path: "/work/crab",
+          name: "Crab",
+          directories: ["/work/crab"],
+          last_session_id: null,
+          favorite_session_ids: ["session-1"],
+        }],
+        last_project_path: "/work/crab",
+        last_project_id: "project-1",
+      }],
+    } as unknown as DesktopSettings);
+
+    expect(migrated.connections[0].favorite_items).toEqual([{
+      id: "favorite:session:project-1:session-1",
+      type: "session",
+      project_id: "project-1",
+      session_id: "session-1",
+    }]);
   });
 
   it("preserves a non-empty remembered model profile", () => {

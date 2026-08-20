@@ -8,6 +8,28 @@ export interface ProjectPreset {
   favorite_session_ids?: string[];
 }
 
+export interface FavoriteFolder {
+  id: string;
+  type: "folder";
+  name: string;
+  children: FavoriteEntry[];
+}
+
+export interface FavoriteProject {
+  id: string;
+  type: "project";
+  project_id: string;
+}
+
+export interface FavoriteSession {
+  id: string;
+  type: "session";
+  project_id: string;
+  session_id: string;
+}
+
+export type FavoriteEntry = FavoriteFolder | FavoriteProject | FavoriteSession;
+
 export interface ConnectionPreset {
   id: string;
   name: string;
@@ -16,6 +38,7 @@ export interface ConnectionPreset {
   allow_insecure_remote: boolean;
   last_model_profile?: string | null;
   projects: ProjectPreset[];
+  favorite_items?: FavoriteEntry[];
   last_project_path: string | null;
   last_project_id: string | null;
 }
