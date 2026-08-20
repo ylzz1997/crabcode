@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DesktopSettings } from "./types";
+import type {
+  CodeFontFamily,
+  DesktopSettings,
+  DiffMarkerStyle,
+  DockIconChoice,
+  ThemeMode,
+  ThemeProfile,
+  UiFontFamily,
+} from "./types";
 
 interface AuthResult {
   access_token: string | null;
@@ -14,6 +22,26 @@ interface EnsureGatewayResult {
   version: string | null;
   message: string;
 }
+
+const DEFAULT_LIGHT_THEME: ThemeProfile = {
+  accent_color: "#e75f4b",
+  background_color: "#f5f7f6",
+  foreground_color: "#172421",
+  ui_font_family: "system",
+  code_font_family: "system-mono",
+  translucent_sidebar: false,
+  contrast: 50,
+};
+
+const DEFAULT_DARK_THEME: ThemeProfile = {
+  accent_color: "#ff765f",
+  background_color: "#0d1517",
+  foreground_color: "#edf4ef",
+  ui_font_family: "system",
+  code_font_family: "system-mono",
+  translucent_sidebar: false,
+  contrast: 50,
+};
 
 const DEFAULT_SETTINGS: DesktopSettings = {
   schema_version: 2,
@@ -31,7 +59,68 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   }],
   python_path: null,
   sidebar_width: 280,
+  theme_mode: "system",
+  light_theme: DEFAULT_LIGHT_THEME,
+  dark_theme: DEFAULT_DARK_THEME,
+  pointer_cursor: true,
+  ui_font_size: 14,
+  code_font_size: 12,
+  diff_marker_style: "color",
+  font_smoothing: true,
+  dock_icon: "dark",
 };
+
+function validHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function clampInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
+}
+
+interface LegacyAppearanceSettings {
+  auto_night_mode?: boolean;
+  accent_color?: string;
+  background_color?: string | null;
+  foreground_color?: string | null;
+  ui_font_family?: UiFontFamily;
+  code_font_family?: CodeFontFamily;
+  translucent_sidebar?: boolean;
+  contrast?: number;
+}
+
+function normalizeThemeProfile(
+  raw: Partial<ThemeProfile> | undefined,
+  fallback: ThemeProfile,
+  legacy: LegacyAppearanceSettings,
+): ThemeProfile {
+  const uiFontFamily: UiFontFamily = raw?.ui_font_family === "inter" || raw?.ui_font_family === "serif"
+    ? raw.ui_font_family
+    : legacy.ui_font_family === "inter" || legacy.ui_font_family === "serif"
+      ? legacy.ui_font_family
+      : fallback.ui_font_family;
+  const codeFontFamily: CodeFontFamily = raw?.code_font_family === "menlo" || raw?.code_font_family === "monaco"
+    ? raw.code_font_family
+    : legacy.code_font_family === "menlo" || legacy.code_font_family === "monaco"
+      ? legacy.code_font_family
+      : fallback.code_font_family;
+  return {
+    accent_color: validHexColor(raw?.accent_color)
+      ? raw.accent_color.toLowerCase()
+      : validHexColor(legacy.accent_color) ? legacy.accent_color.toLowerCase() : fallback.accent_color,
+    background_color: validHexColor(raw?.background_color)
+      ? raw.background_color.toLowerCase()
+      : validHexColor(legacy.background_color) ? legacy.background_color.toLowerCase() : fallback.background_color,
+    foreground_color: validHexColor(raw?.foreground_color)
+      ? raw.foreground_color.toLowerCase()
+      : validHexColor(legacy.foreground_color) ? legacy.foreground_color.toLowerCase() : fallback.foreground_color,
+    ui_font_family: uiFontFamily,
+    code_font_family: codeFontFamily,
+    translucent_sidebar: raw?.translucent_sidebar ?? legacy.translucent_sidebar === true,
+    contrast: clampInteger(raw?.contrast ?? legacy.contrast, 0, 100, fallback.contrast),
+  };
+}
 
 export function isDesktopShell(): boolean {
   return "__TAURI_INTERNALS__" in window;
@@ -49,9 +138,26 @@ export async function loadSettings(): Promise<DesktopSettings> {
 }
 
 export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
+  const legacy = raw as DesktopSettings & LegacyAppearanceSettings;
+  const dockIcon: DockIconChoice = raw.dock_icon === "light" || raw.dock_icon === "custom"
+    ? raw.dock_icon
+    : "dark";
+  const themeMode: ThemeMode = raw.theme_mode === "light" || raw.theme_mode === "dark"
+    ? raw.theme_mode
+    : raw.theme_mode === "system" ? "system" : legacy.auto_night_mode === false ? "light" : "system";
+  const diffMarkerStyle: DiffMarkerStyle = raw.diff_marker_style === "symbols" ? "symbols" : "color";
   return {
     ...raw,
     schema_version: 2,
+    theme_mode: themeMode,
+    light_theme: normalizeThemeProfile(raw.light_theme, DEFAULT_LIGHT_THEME, legacy),
+    dark_theme: normalizeThemeProfile(raw.dark_theme, DEFAULT_DARK_THEME, legacy),
+    pointer_cursor: raw.pointer_cursor !== false,
+    ui_font_size: clampInteger(raw.ui_font_size, 11, 18, 14),
+    code_font_size: clampInteger(raw.code_font_size, 10, 18, 12),
+    diff_marker_style: diffMarkerStyle,
+    font_smoothing: raw.font_smoothing !== false,
+    dock_icon: dockIcon,
     connections: (raw.connections ?? []).map((connection) => ({
       ...connection,
       projects: (connection.projects ?? []).map((project) => {
@@ -73,6 +179,20 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
         ?? null,
     })),
   };
+}
+
+export async function setDockIcon(choice: DockIconChoice, pngBytes?: Uint8Array): Promise<void> {
+  if (!isDesktopShell()) return;
+  await invoke("set_dock_icon", {
+    choice,
+    pngBytes: pngBytes ? Array.from(pngBytes) : null,
+  });
+}
+
+export async function loadCustomDockIcon(): Promise<Uint8Array | null> {
+  if (!isDesktopShell()) return null;
+  const bytes = await invoke<number[] | null>("load_custom_dock_icon");
+  return bytes ? new Uint8Array(bytes) : null;
 }
 
 export async function saveSettings(settings: DesktopSettings): Promise<void> {

@@ -13,6 +13,8 @@ pub fn run() {
             settings::save_desktop_settings,
             settings::store_credential,
             settings::delete_credential,
+            settings::set_dock_icon,
+            settings::load_custom_dock_icon,
             gateway::authenticate_connection,
             gateway::ensure_local_gateway,
             gateway::shutdown_gateway,

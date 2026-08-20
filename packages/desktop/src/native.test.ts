@@ -44,11 +44,94 @@ describe("desktop settings migration", () => {
     const migrated = normalizeSettings(legacy);
 
     expect(migrated.schema_version).toBe(2);
+    expect(migrated.theme_mode).toBe("system");
+    expect(migrated.dock_icon).toBe("dark");
+    expect(migrated).toMatchObject({
+      light_theme: { accent_color: "#e75f4b", background_color: "#f5f7f6" },
+      dark_theme: { accent_color: "#ff765f", background_color: "#0d1517" },
+      pointer_cursor: true,
+      ui_font_size: 14,
+      code_font_size: 12,
+      diff_marker_style: "color",
+      font_smoothing: true,
+    });
     expect(migrated.connections[0].projects[0]).toMatchObject({
       id: "/work/crab",
       path: "/work/crab",
       directories: ["/work/crab"],
     });
     expect(migrated.connections[0].last_project_id).toBe("/work/crab");
+  });
+
+  it("preserves explicit appearance preferences", () => {
+    const configured = {
+      schema_version: 2,
+      active_connection_id: "local",
+      connection_order: ["local"],
+      connections: [],
+      python_path: null,
+      sidebar_width: 280,
+      theme_mode: "dark",
+      light_theme: {
+        accent_color: "#e75f4b",
+        background_color: "#f5f7f6",
+        foreground_color: "#172421",
+        ui_font_family: "system",
+        code_font_family: "system-mono",
+        translucent_sidebar: false,
+        contrast: 50,
+      },
+      dark_theme: {
+        accent_color: "#33AA88",
+        background_color: "#101820",
+        foreground_color: "#f0f4f2",
+        ui_font_family: "serif",
+        code_font_family: "menlo",
+        translucent_sidebar: true,
+        contrast: 120,
+      },
+      pointer_cursor: false,
+      ui_font_size: 30,
+      code_font_size: 2,
+      diff_marker_style: "symbols",
+      font_smoothing: false,
+      dock_icon: "light",
+    } as DesktopSettings;
+
+    const normalized = normalizeSettings(configured);
+
+    expect(normalized.theme_mode).toBe("dark");
+    expect(normalized.dock_icon).toBe("light");
+    expect(normalized).toMatchObject({
+      dark_theme: {
+        accent_color: "#33aa88",
+        background_color: "#101820",
+        foreground_color: "#f0f4f2",
+        ui_font_family: "serif",
+        code_font_family: "menlo",
+        translucent_sidebar: true,
+        contrast: 100,
+      },
+      pointer_cursor: false,
+      ui_font_size: 18,
+      code_font_size: 10,
+      diff_marker_style: "symbols",
+      font_smoothing: false,
+    });
+  });
+
+  it("maps the legacy night-mode switch to a forced light theme", () => {
+    const migrated = normalizeSettings({
+      schema_version: 1,
+      active_connection_id: "local",
+      connection_order: ["local"],
+      connections: [],
+      python_path: null,
+      sidebar_width: 280,
+      auto_night_mode: false,
+    } as unknown as DesktopSettings);
+
+    expect(migrated.theme_mode).toBe("light");
+    expect(migrated.light_theme.background_color).toBe("#f5f7f6");
   });
 });

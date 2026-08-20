@@ -24,6 +24,31 @@ export interface DesktopSettings {
   connections: ConnectionPreset[];
   python_path: string | null;
   sidebar_width: number;
+  theme_mode: ThemeMode;
+  light_theme: ThemeProfile;
+  dark_theme: ThemeProfile;
+  pointer_cursor: boolean;
+  ui_font_size: number;
+  code_font_size: number;
+  diff_marker_style: DiffMarkerStyle;
+  font_smoothing: boolean;
+  dock_icon: DockIconChoice;
+}
+
+export type DockIconChoice = "dark" | "light" | "custom";
+export type ThemeMode = "system" | "light" | "dark";
+export type UiFontFamily = "system" | "inter" | "serif";
+export type CodeFontFamily = "system-mono" | "menlo" | "monaco";
+export type DiffMarkerStyle = "color" | "symbols";
+
+export interface ThemeProfile {
+  accent_color: string;
+  background_color: string;
+  foreground_color: string;
+  ui_font_family: UiFontFamily;
+  code_font_family: CodeFontFamily;
+  translucent_sidebar: boolean;
+  contrast: number;
 }
 
 export interface WorkspaceInfo {

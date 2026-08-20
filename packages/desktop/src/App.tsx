@@ -68,6 +68,7 @@ import {
   loadSettings,
   normalizeBaseUrl,
   saveSettings,
+  setDockIcon,
   storeCredential,
 } from "./native";
 import type {
@@ -220,6 +221,23 @@ function textFromUnknown(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function diffLines(diff: string) {
+  return diff.split("\n").map((line, index) => {
+    const added = line.startsWith("+") && !line.startsWith("+++");
+    const removed = line.startsWith("-") && !line.startsWith("---");
+    const marker = added ? "+" : removed ? "-" : "";
+    return (
+      <span
+        className={`diff-line ${added ? "added" : removed ? "removed" : "context"}`}
+        data-marker={marker}
+        key={`${index}-${line}`}
+      >
+        {marker ? line.slice(1) : line}
+      </span>
+    );
+  });
 }
 
 function readImage(file: File): Promise<{ name: string; media_type: string; data: string; dataUrl: string }> {
@@ -746,13 +764,79 @@ function App() {
 
   useEffect(() => {
     void loadSettings()
-      .then(setSettings)
+      .then((loaded) => {
+        setSettings(loaded);
+        if (isDesktopShell()) void setDockIcon(loaded.dock_icon).catch(() => undefined);
+      })
       .catch((error) => setGlobalError(String(error)));
     return () => {
       channelRef.current.forEach((channel) => channel.dispose());
       channelRef.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!settings) return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const root = document.documentElement;
+    const applyAppearance = () => {
+      const dark = settings.theme_mode === "dark"
+        || (settings.theme_mode === "system" && media.matches);
+      const profile = dark ? settings.dark_theme : settings.light_theme;
+      const background = profile.background_color;
+      root.dataset.theme = dark ? "dark" : "light";
+      root.dataset.themeMode = settings.theme_mode;
+      root.dataset.customBackground = "true";
+      root.dataset.customForeground = "true";
+      root.dataset.translucentSidebar = String(profile.translucent_sidebar);
+      root.dataset.pointerCursor = String(settings.pointer_cursor);
+      root.dataset.diffMarkers = settings.diff_marker_style;
+      root.dataset.fontSmoothing = String(settings.font_smoothing);
+      root.style.setProperty("--accent", profile.accent_color);
+      root.style.setProperty(
+        "--accent-strong",
+        `color-mix(in srgb, ${profile.accent_color} ${dark ? 72 : 78}%, ${dark ? "white" : "black"})`,
+      );
+      root.style.setProperty("--accent-soft", `color-mix(in srgb, ${profile.accent_color} 22%, transparent)`);
+      root.style.setProperty("--ui-font-family", ({
+        system: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        inter: 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        serif: 'ui-serif, Georgia, "Times New Roman", serif',
+      })[profile.ui_font_family]);
+      root.style.setProperty("--code-font-family", ({
+        "system-mono": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        menlo: 'Menlo, Monaco, "Courier New", monospace',
+        monaco: 'Monaco, Menlo, "Courier New", monospace',
+      })[profile.code_font_family]);
+      root.style.setProperty("--ui-font-size", `${settings.ui_font_size}px`);
+      root.style.setProperty("--code-font-size", `${settings.code_font_size}px`);
+      root.style.setProperty("--ui-contrast", String(0.8 + profile.contrast * 0.004));
+      root.style.setProperty("--bg", background);
+      root.style.setProperty("--panel", `color-mix(in srgb, ${background} 94%, ${dark ? "white" : "black"})`);
+      root.style.setProperty("--panel-strong", `color-mix(in srgb, ${background} 88%, ${dark ? "white" : "black"})`);
+      root.style.setProperty("--surface", dark ? `color-mix(in srgb, ${background} 90%, white)` : `color-mix(in srgb, ${background} 35%, white)`);
+      root.style.setProperty("--surface-hover", `color-mix(in srgb, ${background} 84%, ${dark ? "white" : "black"})`);
+      root.style.setProperty("--surface-active", `color-mix(in srgb, ${background} 78%, ${dark ? "white" : "black"})`);
+      root.style.setProperty("--border", `color-mix(in srgb, ${background} 72%, ${dark ? "white" : "black"})`);
+      root.style.setProperty("--border-soft", `color-mix(in srgb, ${background} 82%, ${dark ? "white" : "black"})`);
+      root.style.setProperty("--code-bg", `color-mix(in srgb, ${background} 78%, black)`);
+      root.style.setProperty("--text", profile.foreground_color);
+      root.style.setProperty("--muted", `color-mix(in srgb, ${profile.foreground_color} 72%, ${background})`);
+      root.style.setProperty("--subtle", `color-mix(in srgb, ${profile.foreground_color} 56%, ${background})`);
+    };
+    applyAppearance();
+    if (settings.theme_mode === "system") media.addEventListener("change", applyAppearance);
+    return () => media.removeEventListener("change", applyAppearance);
+  }, [
+    settings?.dark_theme,
+    settings?.code_font_size,
+    settings?.diff_marker_style,
+    settings?.font_smoothing,
+    settings?.light_theme,
+    settings?.pointer_cursor,
+    settings?.theme_mode,
+    settings?.ui_font_size,
+  ]);
 
   useEffect(() => {
     if (!settings) return;
@@ -1292,6 +1376,23 @@ function App() {
           onBack={() => setSettingsOpen(false)}
           onSavePythonPath={(pythonPath) => {
             commitSettings((current) => ({ ...current, python_path: pythonPath || null }));
+          }}
+          onThemeModeChange={(mode) => {
+            commitSettings((current) => ({ ...current, theme_mode: mode }));
+          }}
+          onThemeProfileChange={(scheme, changes) => {
+            const key = scheme === "light" ? "light_theme" : "dark_theme";
+            commitSettings((current) => ({
+              ...current,
+              [key]: { ...current[key], ...changes },
+            }));
+          }}
+          onAppearanceChange={(changes) => {
+            commitSettings((current) => ({ ...current, ...changes }));
+          }}
+          onDockIconChange={async (choice, pngBytes) => {
+            await setDockIcon(choice, pngBytes);
+            commitSettings((current) => ({ ...current, dock_icon: choice }));
           }}
           onActivateConnection={switchConnection}
           onNewConnection={() => setConnectionModal("new")}
@@ -2695,7 +2796,11 @@ function ChatItemView({ item, now, onPermission, onToggleChoice, onSubmitChoice,
           <span>{item.action} {item.title}</span>
           {collapsed ? <ChevronRight /> : <ChevronDown />}
         </button>
-        {!collapsed && <pre className="activity-body diff-view">{item.diff || "此事件没有附带 diff"}</pre>}
+        {!collapsed && (
+          <pre className="activity-body diff-view">
+            {item.diff ? diffLines(item.diff) : "此事件没有附带 diff"}
+          </pre>
+        )}
       </article>
     );
   }

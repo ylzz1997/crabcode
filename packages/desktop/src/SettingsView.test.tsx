@@ -44,6 +44,31 @@ const settings: DesktopSettings = {
   ],
   python_path: null,
   sidebar_width: 280,
+  theme_mode: "system",
+  light_theme: {
+    accent_color: "#e75f4b",
+    background_color: "#f5f7f6",
+    foreground_color: "#172421",
+    ui_font_family: "system",
+    code_font_family: "system-mono",
+    translucent_sidebar: false,
+    contrast: 50,
+  },
+  dark_theme: {
+    accent_color: "#ff765f",
+    background_color: "#0d1517",
+    foreground_color: "#edf4ef",
+    ui_font_family: "system",
+    code_font_family: "system-mono",
+    translucent_sidebar: false,
+    contrast: 50,
+  },
+  pointer_cursor: true,
+  ui_font_size: 14,
+  code_font_size: 12,
+  diff_marker_style: "color",
+  font_smoothing: true,
+  dock_icon: "dark",
 };
 
 const onlineGateway: GatewayViewState = {
@@ -79,6 +104,9 @@ describe("settings search", () => {
     expect(filterSettingsSections("Python").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("凭据").map((section) => section.id)).toEqual(["connections"]);
     expect(filterSettingsSections("工作目录").map((section) => section.id)).toEqual(["projects"]);
+    expect(filterSettingsSections("Dock 图标").map((section) => section.id)).toEqual(["appearance"]);
+    expect(filterSettingsSections("字体平滑").map((section) => section.id)).toEqual(["appearance"]);
+    expect(filterSettingsSections("对比度").map((section) => section.id)).toEqual(["appearance"]);
     expect(filterSettingsSections("不存在")).toEqual([]);
   });
 });
@@ -103,6 +131,10 @@ describe("SettingsView", () => {
   const callbacks = () => ({
     onBack: vi.fn(),
     onSavePythonPath: vi.fn(),
+    onThemeModeChange: vi.fn(),
+    onThemeProfileChange: vi.fn(),
+    onAppearanceChange: vi.fn(),
+    onDockIconChange: vi.fn().mockResolvedValue(undefined),
     onActivateConnection: vi.fn(),
     onNewConnection: vi.fn(),
     onEditConnection: vi.fn(),
@@ -181,6 +213,127 @@ describe("SettingsView", () => {
 
     expect(handlers.onEditConnection).toHaveBeenCalledWith("remote");
     expect(handlers.onDeleteConnection).toHaveBeenCalledWith("remote");
+  });
+
+  it("changes the theme mode and built-in Dock icon", async () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="appearance"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    const themeChoices = Array.from(container.querySelectorAll<HTMLButtonElement>(".theme-choice"));
+    const lightTheme = themeChoices.find((button) => button.textContent?.includes("始终使用浅色主题"))!;
+    const darkTheme = themeChoices.find((button) => button.textContent?.includes("始终使用深色主题"))!;
+    const lightDockIcon = Array.from(container.querySelectorAll<HTMLButtonElement>(".dock-icon-choice"))
+      .find((button) => button.textContent?.includes("白底黑蟹"))!;
+    act(() => lightTheme.click());
+    act(() => darkTheme.click());
+    await act(async () => {
+      lightDockIcon.click();
+      await Promise.resolve();
+    });
+
+    expect(themeChoices).toHaveLength(3);
+    expect(handlers.onThemeModeChange).toHaveBeenNthCalledWith(1, "light");
+    expect(handlers.onThemeModeChange).toHaveBeenNthCalledWith(2, "dark");
+    expect(handlers.onDockIconChange).toHaveBeenCalledWith("light", undefined);
+  });
+
+  it("updates light and dark theme profiles independently", () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="appearance"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    const accent = container.querySelector<HTMLInputElement>('input[aria-label="浅色主题强调色"]')!;
+    const contrast = container.querySelector<HTMLInputElement>('input[aria-label="深色主题对比度"]')!;
+    const uiFont = container.querySelector<HTMLSelectElement>('select[aria-label="浅色主题UI 字体"]')!;
+    act(() => changeInput(accent, "#33aa88"));
+    act(() => changeInput(contrast, "72"));
+    act(() => {
+      uiFont.value = "serif";
+      uiFont.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="深色主题半透明侧栏"]')!.click());
+
+    expect(container.querySelectorAll(".theme-profile-card")).toHaveLength(2);
+    expect(handlers.onThemeProfileChange).toHaveBeenCalledWith("light", { accent_color: "#33aa88" });
+    expect(handlers.onThemeProfileChange).toHaveBeenCalledWith("dark", { contrast: 72 });
+    expect(handlers.onThemeProfileChange).toHaveBeenCalledWith("light", { ui_font_family: "serif" });
+    expect(handlers.onThemeProfileChange).toHaveBeenCalledWith("dark", { translucent_sidebar: true });
+  });
+
+  it("shows both profiles for system mode and only the forced profile otherwise", () => {
+    const handlers = callbacks();
+    const renderAppearance = (themeMode: DesktopSettings["theme_mode"]) => act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={{ ...settings, theme_mode: themeMode }}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="appearance"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    renderAppearance("system");
+    expect(container.querySelectorAll(".theme-profile-card")).toHaveLength(2);
+
+    renderAppearance("light");
+    expect(container.querySelectorAll(".theme-profile-card")).toHaveLength(1);
+    expect(container.querySelector('[aria-label="浅色主题"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="深色主题"]')).toBeNull();
+
+    renderAppearance("dark");
+    expect(container.querySelectorAll(".theme-profile-card")).toHaveLength(1);
+    expect(container.querySelector('[aria-label="浅色主题"]')).toBeNull();
+    expect(container.querySelector('[aria-label="深色主题"]')).not.toBeNull();
+  });
+
+  it("updates shared appearance preferences", () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="appearance"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="指针光标"]')!.click());
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="增大界面字号"]')!.click());
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="增大代码字号"]')!.click());
+    const symbolMarkers = Array.from(container.querySelectorAll<HTMLButtonElement>('.settings-segmented button'))
+      .find((button) => button.textContent?.includes("+ / -"))!;
+    act(() => symbolMarkers.click());
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="字体平滑"]')!.click());
+
+    expect(handlers.onAppearanceChange).toHaveBeenCalledWith({ pointer_cursor: false });
+    expect(handlers.onAppearanceChange).toHaveBeenCalledWith({ ui_font_size: 15 });
+    expect(handlers.onAppearanceChange).toHaveBeenCalledWith({ code_font_size: 13 });
+    expect(handlers.onAppearanceChange).toHaveBeenCalledWith({ diff_marker_style: "symbols" });
+    expect(handlers.onAppearanceChange).toHaveBeenCalledWith({ font_smoothing: false });
   });
 
   it("keeps project rows visible but disables directory operations while offline", () => {
