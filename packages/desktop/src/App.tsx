@@ -428,14 +428,47 @@ function App() {
     setMonitorLoading(true);
     setMonitorError(null);
     try {
-      const tasks = await api.backgroundTasks(true, "running");
-      setMonitorTasks((current) => ({ ...current, [connectionId]: tasks }));
+      const globalTasks = await api.backgroundTasks(true, "running");
+      const connectedSessions = Array.from(channelRef.current.entries())
+        .filter(([key, channel]) => key.startsWith(`${connectionId}:`) && !channel.isDisposed)
+        .flatMap(([key]) => {
+          const state = sessions[key];
+          return state && !state.id.startsWith("new-")
+            ? [{ id: state.id, cwd: state.cwd }]
+            : [];
+        });
+
+      // Gateways started before global task listing was added silently ignore
+      // scope=global and only return the default session. Fall back to the
+      // sessions whose channels this desktop already keeps alive, then merge
+      // by the stable session/task pair. The fallback can be removed once the
+      // desktop and gateway versions are negotiated explicitly.
+      const needsSessionFallback = globalTasks.length === 0
+        || globalTasks.some((task) => !task.cwd);
+      const sessionResults = needsSessionFallback
+        ? await Promise.allSettled(connectedSessions.map(async ({ id, cwd }) => (
+          (await api.backgroundTasks(false, "running", id)).map((task) => ({
+            ...task,
+            cwd: task.cwd || cwd,
+          }))
+        )))
+        : [];
+      const merged = new Map<string, BackgroundTaskInfo>();
+      globalTasks.forEach((task) => merged.set(`${task.session_id}:${task.task_id}`, task));
+      sessionResults.forEach((result) => {
+        if (result.status !== "fulfilled") return;
+        result.value.forEach((task) => merged.set(`${task.session_id}:${task.task_id}`, task));
+      });
+      setMonitorTasks((current) => ({
+        ...current,
+        [connectionId]: Array.from(merged.values()),
+      }));
     } catch (error) {
       setMonitorError(error instanceof Error ? error.message : String(error));
     } finally {
       setMonitorLoading(false);
     }
-  }, []);
+  }, [sessions]);
 
   const refreshPlugins = useCallback(async (connectionId: string, sessionId?: string, cwd?: string) => {
     const api = apiRef.current.get(connectionId);

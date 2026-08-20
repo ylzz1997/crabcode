@@ -146,10 +146,15 @@ export class GatewayApi {
     return this.request(globalScope ? "/schedule/list?scope=global" : "/schedule/list");
   }
 
-  backgroundTasks(globalScope = false, status?: string): Promise<BackgroundTaskInfo[]> {
+  backgroundTasks(
+    globalScope = false,
+    status?: string,
+    sessionId?: string,
+  ): Promise<BackgroundTaskInfo[]> {
     const query = new URLSearchParams();
     if (globalScope) query.set("scope", "global");
     if (status) query.set("status", status);
+    if (sessionId) query.set("session_id", sessionId);
     const suffix = query.size ? `?${query}` : "";
     return this.request(`/tasks${suffix}`);
   }
