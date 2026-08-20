@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from inspect import isawaitable
+import asyncio
+import os
+from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
@@ -34,28 +37,75 @@ def _get_session(request: Request, session_id: str | None):
     return session
 
 
+async def _get_standalone_manager(request: Request):
+    """Return a gateway-owned scheduler when no chat session is loaded.
+
+    Listing schedules intentionally works without a live session. Mutations
+    must do the same; otherwise the desktop automation deck can display a
+    persistent job but cannot pause, run, or delete it until a chat WebSocket
+    happens to be connected.
+    """
+    manager = getattr(request.app.state, "standalone_schedule_manager", None)
+    if manager is not None:
+        return manager
+    lock = getattr(request.app.state, "standalone_schedule_manager_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        request.app.state.standalone_schedule_manager_lock = lock
+    async with lock:
+        manager = getattr(request.app.state, "standalone_schedule_manager", None)
+        if manager is not None:
+            return manager
+        from crabcode_core.config.manager import ConfigManager
+        from crabcode_core.schedule.manager import ScheduleManager
+
+        cwd = os.getcwd()
+        settings = ConfigManager(cwd=cwd).load().schedule
+        manager = ScheduleManager(settings=settings, cwd=cwd, session_id="")
+        try:
+            await manager.start()
+        except Exception:
+            await manager.close()
+            raise
+        request.app.state.standalone_schedule_manager = manager
+        return manager
+
+
 async def _run_schedule_operation(
     request: Request,
     session_id: str | None,
     operation: Callable[[Any], T | Awaitable[T]],
+    *,
+    global_scope: bool = False,
 ) -> T:
-    session = _get_session(request, session_id)
-    if session is None:
+    if getattr(request.app.state, "gateway_closing", False):
+        raise HTTPException(status_code=503, detail="Gateway is shutting down")
+    session = None if global_scope else _get_session(request, session_id)
+    if not global_scope and session_id is not None and session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if session is None:
+        manager = await _get_standalone_manager(request)
+    else:
+        manager = None
+
     async def _owned() -> T:
-        initializer = getattr(session, "initialize", None)
-        if callable(initializer):
-            await initializer()
-        manager = getattr(session, "_schedule_manager", None)
-        if manager is None:
-            raise HTTPException(status_code=503, detail="Schedule manager is unavailable")
-        result = operation(manager)
+        operation_manager = manager
+        if session is not None:
+            initializer = getattr(session, "initialize", None)
+            if callable(initializer):
+                await initializer()
+            operation_manager = getattr(session, "_schedule_manager", None)
+            if operation_manager is None:
+                raise HTTPException(status_code=503, detail="Schedule manager is unavailable")
+        result = operation(operation_manager)
         if isawaitable(result):
             return await result
         return result
 
     try:
+        if session is None:
+            return await _owned()
         return await run_session_operation(request.app.state, session, _owned)
     except SessionOperationRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -67,7 +117,14 @@ def _job_info(job: Any) -> ScheduleJobInfo:
         if hasattr(job, "model_dump")
         else dict(job)
     )
-    return ScheduleJobInfo.model_validate(data)
+    claimed_until = data.get("claimed_until")
+    running = False
+    if claimed_until:
+        try:
+            running = datetime.fromisoformat(str(claimed_until)) > datetime.now(timezone.utc)
+        except (TypeError, ValueError):
+            pass
+    return ScheduleJobInfo.model_validate({**data, "running": running})
 
 
 @router.get("", response_model=list[ScheduleJobInfo])
@@ -75,15 +132,24 @@ def _job_info(job: Any) -> ScheduleJobInfo:
 async def list_schedules(
     request: Request,
     session_id: str | None = None,
+    scope: str | None = None,
     status: str | None = None,
     schedule_type: str | None = None,
     enabled: bool | None = None,
     limit: int = 100,
 ) -> list[ScheduleJobInfo]:
+    if scope == "global":
+        # The automation deck is gateway-scoped, so its list must not change
+        # when the user opens or closes an unrelated chat session.
+        manager = await _get_standalone_manager(request)
+        rows = manager.store.list_schedules(
+            status=status,
+            schedule_type=schedule_type,
+            enabled=enabled,
+            limit=max(1, min(int(limit), 1000)),
+        )
+        return [_job_info(row) for row in rows]
     if session_id is None and _get_session(request, None) is None:
-        # The desktop workbench can open the schedule view before a chat
-        # session exists. Read the shared persistent store directly in that
-        # case; mutations still use a live session manager below.
         from crabcode_core.schedule.store import ScheduleStore
 
         store = ScheduleStore()
@@ -147,6 +213,7 @@ async def cancel_schedule(req: ScheduleJobRequest, request: Request) -> dict[str
         request,
         req.session_id,
         lambda manager: manager.cancel_job(req.job_id),
+        global_scope=req.scope == "global",
     )
     if not cancelled:
         raise HTTPException(status_code=404, detail="Schedule not found or selector is ambiguous")
@@ -159,6 +226,7 @@ async def pause_schedule(req: ScheduleJobRequest, request: Request) -> ScheduleJ
         request,
         req.session_id,
         lambda manager: manager.pause_job(req.job_id),
+        global_scope=req.scope == "global",
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Schedule not found or selector is ambiguous")
@@ -171,6 +239,7 @@ async def resume_schedule(req: ScheduleJobRequest, request: Request) -> Schedule
         request,
         req.session_id,
         lambda manager: manager.resume_job(req.job_id),
+        global_scope=req.scope == "global",
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Schedule not found or selector is ambiguous")
@@ -183,11 +252,12 @@ async def trigger_schedule(req: ScheduleJobRequest, request: Request) -> dict[st
         request,
         req.session_id,
         lambda manager: manager.trigger_job(req.job_id),
+        global_scope=req.scope == "global",
     )
     if not started:
         raise HTTPException(
             status_code=409,
-            detail="Schedule is missing, disabled, completed, or already running",
+            detail="Schedule is missing, paused, or already running",
         )
     return {"job_id": req.job_id, "started": True}
 

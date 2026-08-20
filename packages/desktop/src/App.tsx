@@ -81,6 +81,8 @@ import type {
 type GatewayMap = Record<string, GatewayViewState>;
 type SessionMap = Record<string, SessionViewState>;
 type WorkspaceView = "chat" | "scheduled" | "plugins";
+type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
+type ScheduleActionState = { id: string; action: ScheduleAction };
 type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
 type PermissionMode = "default" | "ask" | "ai_review" | "run_everything";
 type SessionCleanupTarget = {
@@ -115,6 +117,10 @@ function sessionKey(connectionId: string, sessionId: string): string {
 function basename(path: string): string {
   const normalized = path.replace(/[\\/]+$/, "");
   return normalized.split(/[\\/]/).at(-1) || path;
+}
+
+function firstUserText(items: ChatItem[]): string {
+  return items.find((item) => item.kind === "user" && item.text?.trim())?.text?.trim() ?? "";
 }
 
 function formatDate(value: string): string {
@@ -182,9 +188,10 @@ function normalizePermissionMode(value: string | undefined): PermissionMode {
 }
 
 function scheduleSummary(job: ScheduleJobInfo): string {
-  if (!job.enabled || job.status === "paused") return "已暂停";
+  if (job.running) return "正在执行";
   if (job.status === "completed") return "已完成";
   if (job.status === "error") return "运行异常";
+  if (!job.enabled || job.status === "paused") return "已暂停";
   return `下次运行 ${formatDateTime(job.next_run)}`;
 }
 
@@ -233,7 +240,7 @@ function App() {
   const [pluginData, setPluginData] = useState<Record<string, PluginData>>({});
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [pluginLoading, setPluginLoading] = useState(false);
-  const [scheduleActionId, setScheduleActionId] = useState<string | null>(null);
+  const [scheduleAction, setScheduleAction] = useState<ScheduleActionState | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [pluginError, setPluginError] = useState<string | null>(null);
   const [deletingSessionIds, setDeletingSessionIds] = useState<Set<string>>(new Set());
@@ -276,14 +283,47 @@ function App() {
   const activeList = activeProject
     ? activeGateway?.sessionsByProject[activeProject.path] ?? []
     : [];
+  // The HTTP session list is persisted metadata and can briefly lag behind
+  // the live WebSocket state (especially while the first title is generated).
+  // Keep the active conversation visible as soon as its first user message is
+  // rendered, then let the next list refresh replace the optimistic values.
+  const displayList = useMemo(() => {
+    if (
+      !activeSession
+      || !activeProject
+      || activeSession.cwd !== activeProject.path
+      || activeSession.id.startsWith("new-")
+      || activeSession.items.length === 0
+    ) return activeList;
 
-  const refreshSchedules = useCallback(async (connectionId: string, sessionId?: string) => {
+    const userPreview = firstUserText(activeSession.items);
+    const existing = activeList.find((item) => item.session_id === activeSession.id);
+    const optimistic: SessionInfo = {
+      session_id: activeSession.id,
+      message_count: Math.max(existing?.message_count ?? 0, activeSession.items.length),
+      model: existing?.model || activeSession.status?.model || "",
+      provider: existing?.provider || activeSession.status?.provider || "",
+      created_at: existing?.created_at || new Date().toISOString(),
+      title: existing?.title?.trim()
+        || (activeSession.title !== "新会话" ? activeSession.title : userPreview.slice(0, 200))
+        || "未命名会话",
+      cwd: activeSession.cwd,
+      tokens_used: existing?.tokens_used ?? activeSession.status?.context_used_tokens ?? 0,
+      preview: existing?.preview || userPreview.slice(0, 100),
+    };
+    if (existing) {
+      return activeList.map((item) => item.session_id === activeSession.id ? optimistic : item);
+    }
+    return [optimistic, ...activeList];
+  }, [activeList, activeProject, activeSession]);
+
+  const refreshSchedules = useCallback(async (connectionId: string) => {
     const api = apiRef.current.get(connectionId);
     if (!api) return;
     setScheduleLoading(true);
     setScheduleError(null);
     try {
-      const jobs = await api.schedules(sessionId);
+      const jobs = await api.schedules(true);
       setScheduleJobs((current) => ({ ...current, [connectionId]: jobs }));
     } catch (error) {
       setScheduleError(error instanceof Error ? error.message : String(error));
@@ -548,6 +588,11 @@ function App() {
           && (event.type === "turn_complete" || event.type === "compact" || event.type === "agent_state")
         ) {
           void updateSessionStatus(connection.id, key, channel.sessionId, true);
+          if (event.type === "turn_complete") {
+            void refreshProjectSessions(connection.id, project.path).catch((error) => {
+              setGlobalError(error instanceof Error ? error.message : String(error));
+            });
+          }
         }
         if (
           event.type === "error"
@@ -683,7 +728,7 @@ function App() {
     if (!activeConnection || activeGateway?.status !== "online") return;
     const cwd = activeProject?.path ?? activeGateway.workspace?.startup_cwd;
     const sessionId = activeSession && activeSession.cwd === cwd ? activeSession.id : undefined;
-    void refreshSchedules(activeConnection.id, sessionId);
+    void refreshSchedules(activeConnection.id);
     void refreshPlugins(activeConnection.id, sessionId, cwd);
   }, [
     activeConnection?.id,
@@ -852,28 +897,25 @@ function App() {
   };
 
   const updateSchedule = async (
-    action: "pause" | "resume" | "trigger" | "cancel",
+    action: ScheduleAction,
     job: ScheduleJobInfo,
   ) => {
     if (!activeConnection) return;
-    if (action === "cancel" && !window.confirm(`取消“${job.name}”？`)) return;
+    if (action === "cancel" && !window.confirm(`永久删除“${job.name}”？`)) return;
     const api = apiRef.current.get(activeConnection.id);
     if (!api) return;
-    setScheduleActionId(job.id);
+    setScheduleAction({ id: job.id, action });
     setScheduleError(null);
     try {
-      const sessionId = activeSession && activeSession.cwd === activeProject?.path
-        ? activeSession.id
-        : undefined;
-      if (action === "pause") await api.pauseSchedule(job.id, sessionId);
-      if (action === "resume") await api.resumeSchedule(job.id, sessionId);
-      if (action === "trigger") await api.triggerSchedule(job.id, sessionId);
-      if (action === "cancel") await api.cancelSchedule(job.id, sessionId);
-      await refreshSchedules(activeConnection.id, sessionId);
+      if (action === "pause") await api.pauseSchedule(job.id);
+      if (action === "resume") await api.resumeSchedule(job.id);
+      if (action === "trigger") await api.triggerSchedule(job.id);
+      if (action === "cancel") await api.cancelSchedule(job.id);
+      await refreshSchedules(activeConnection.id);
     } catch (error) {
       setScheduleError(error instanceof Error ? error.message : String(error));
     } finally {
-      setScheduleActionId(null);
+      setScheduleAction(null);
     }
   };
 
@@ -930,8 +972,10 @@ function App() {
     }
   };
 
-  const titledSessions = activeList.filter((item) => item.title.trim().length > 0);
-  const filteredSessions = titledSessions.filter((item) => {
+  const visibleSessions = displayList.filter((item) => (
+    item.title.trim().length > 0 || item.message_count > 0 || item.preview.trim().length > 0
+  ));
+  const filteredSessions = visibleSessions.filter((item) => {
     const needle = search.trim().toLowerCase();
     return !needle || item.title.toLowerCase().includes(needle) || item.preview.toLowerCase().includes(needle);
   });
@@ -955,6 +999,18 @@ function App() {
     const timer = window.setInterval(() => setRunClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [activeSession?.busy, activeSessionKey]);
+
+  useEffect(() => {
+    if (
+      workspaceView !== "scheduled"
+      || !activeConnection
+      || !activeJobs.some((job) => job.running)
+    ) return;
+    const timer = window.setInterval(() => {
+      void refreshSchedules(activeConnection.id);
+    }, 1_500);
+    return () => window.clearInterval(timer);
+  }, [activeConnection, activeJobs, refreshSchedules, workspaceView]);
 
   useEffect(() => {
     const previous = focusedSessionRef.current;
@@ -1283,9 +1339,9 @@ function App() {
               jobs={activeJobs}
               loading={scheduleLoading}
               error={scheduleError}
-              actionId={scheduleActionId}
+              actionState={scheduleAction}
               connected={activeGateway?.status === "online"}
-              onRefresh={() => activeConnection && void refreshSchedules(activeConnection.id, resourceSessionId)}
+              onRefresh={() => activeConnection && void refreshSchedules(activeConnection.id)}
               onAction={(action, job) => void updateSchedule(action, job)}
               onNew={(prompt) => {
                 if (!activeConnection || !activeProject) return;
@@ -1614,13 +1670,11 @@ function ConnectionDot({ status }: { status: GatewayViewState["status"] }) {
     : <Circle className={`connection-dot ${status}`} fill="currentColor" />;
 }
 
-type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
-
 function ScheduledTasksView({
   jobs,
   loading,
   error,
-  actionId,
+  actionState,
   connected,
   onRefresh,
   onAction,
@@ -1629,7 +1683,7 @@ function ScheduledTasksView({
   jobs: ScheduleJobInfo[];
   loading: boolean;
   error: string | null;
-  actionId: string | null;
+  actionState: ScheduleActionState | null;
   connected: boolean;
   onRefresh: () => void;
   onAction: (action: ScheduleAction, job: ScheduleJobInfo) => void;
@@ -1641,13 +1695,13 @@ function ScheduledTasksView({
     return !needle || [job.name, job.description, job.prompt, job.schedule]
       .some((value) => value.toLowerCase().includes(needle));
   });
-  const runningCount = jobs.filter((job) => job.enabled && !["paused", "completed", "error"].includes(job.status)).length;
-  const pausedCount = jobs.filter((job) => !job.enabled || job.status === "paused").length;
+  const runningCount = jobs.filter((job) => job.running).length;
+  const pausedCount = jobs.filter((job) => job.status === "paused" || job.status === "disabled").length;
   const nextRun = jobs
     .filter((job) => job.enabled && job.next_run)
     .sort((left, right) => String(left.next_run).localeCompare(String(right.next_run)))[0]?.next_run ?? null;
   const summaryCards = [
-    { label: "活跃流程", value: String(runningCount), icon: Activity, tone: "coral" },
+    { label: "正在执行", value: String(runningCount), icon: Activity, tone: "coral" },
     { label: "暂停待命", value: String(pausedCount), icon: Timer, tone: "amber" },
     { label: "最近触发", value: nextRun ? formatDateTime(nextRun) : "尚未安排", icon: Gauge, tone: "cyan" },
   ] as const;
@@ -1706,10 +1760,13 @@ function ScheduledTasksView({
           <div className="page-section-heading"><h2>运行队列</h2><span>{filtered.length} 个流程</span></div>
           <div className="scheduled-list">
             {filtered.map((job) => {
-              const busy = actionId === job.id;
-              const paused = !job.enabled || job.status === "paused";
-              const statusTone = paused ? "paused" : job.status === "error" ? "error" : job.status === "completed" ? "complete" : "live";
-              const statusText = paused ? "待命" : job.status === "error" ? "运行异常" : job.status === "completed" ? "已完成" : "运行中";
+              const action = actionState?.id === job.id ? actionState.action : null;
+              const busy = action !== null || job.running;
+              const paused = job.status === "paused" || job.status === "disabled";
+              const retryable = job.status === "error";
+              const terminal = job.status === "completed";
+              const statusTone = job.running ? "live" : paused ? "paused" : job.status === "error" ? "error" : job.status === "completed" ? "complete" : "live";
+              const statusText = job.running ? "执行中" : paused ? "待命" : job.status === "error" ? "运行异常" : job.status === "completed" ? "已完成" : "等待触发";
               return (
                 <article className="scheduled-item" key={job.id}>
                   <div className={`scheduled-icon ${statusTone}`}><Workflow /></div>
@@ -1726,11 +1783,15 @@ function ScheduledTasksView({
                     </div>
                   </div>
                   <div className="scheduled-actions">
-                    <button className="icon-button tiny" title={paused ? "恢复任务" : "暂停任务"} disabled={busy} onClick={() => onAction(paused ? "resume" : "pause", job)}>
-                      {busy ? <LoaderCircle className="spin" /> : paused ? <Play /> : <Pause />}
+                    <button className="icon-button tiny" title={paused ? "恢复任务" : "暂停任务"} disabled={busy || terminal} onClick={() => onAction(paused ? "resume" : "pause", job)}>
+                      {action === "pause" || action === "resume" ? <LoaderCircle className="spin" /> : paused ? <Play /> : <Pause />}
                     </button>
-                    <button className="icon-button tiny" title="立即运行" disabled={busy || paused} onClick={() => onAction("trigger", job)}><Play /></button>
-                    <button className="icon-button tiny danger-button" title="取消任务" disabled={busy} onClick={() => onAction("cancel", job)}><Trash2 /></button>
+                    <button className="icon-button tiny" title={retryable ? "重新运行" : "立即运行"} disabled={busy || paused || terminal} onClick={() => onAction("trigger", job)}>
+                      {action === "trigger" || job.running ? <LoaderCircle className="spin" /> : <Play />}
+                    </button>
+                    <button className="icon-button tiny danger-button" title="永久删除任务" disabled={action !== null} onClick={() => onAction("cancel", job)}>
+                      {action === "cancel" ? <LoaderCircle className="spin" /> : <Trash2 />}
+                    </button>
                   </div>
                 </article>
               );

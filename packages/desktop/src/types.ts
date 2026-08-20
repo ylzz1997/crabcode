@@ -130,6 +130,7 @@ export interface ScheduleJobInfo {
   timeout: number | null;
   model_profile: string | null;
   extra: Record<string, unknown>;
+  running: boolean;
 }
 
 export interface CheckpointInfo {

@@ -338,16 +338,21 @@ class ScheduleStore:
         owner: str,
         *,
         lease_seconds: int,
+        include_terminal: bool = False,
     ) -> bool:
-        """Lease one active job regardless of whether its next run is due."""
+        """Lease a job for a manual run, optionally including terminal jobs."""
         conn = self._conn_or_create()
         now = datetime.now(timezone.utc)
+        status_clause = (
+            "status IN ('active', 'error', 'disabled')"
+            if include_terminal
+            else "status = 'active' AND enabled = 1"
+        )
         changed = conn.execute(
-            """UPDATE schedules
+            f"""UPDATE schedules
                SET claimed_by = ?, claimed_until = ?
                WHERE id = ?
-                 AND status = 'active'
-                 AND enabled = 1
+                 AND {status_clause}
                  AND (claimed_until IS NULL OR claimed_until <= ?)""",
             (
                 owner,

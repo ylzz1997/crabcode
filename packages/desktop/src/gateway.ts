@@ -124,31 +124,30 @@ export class GatewayApi {
     return this.request(`/tools${suffix}`);
   }
 
-  schedules(sessionId?: string): Promise<ScheduleJobInfo[]> {
-    const query = sessionId ? `?${new URLSearchParams({ session_id: sessionId })}` : "";
-    return this.request(`/schedule/list${query}`);
+  schedules(globalScope = false): Promise<ScheduleJobInfo[]> {
+    return this.request(globalScope ? "/schedule/list?scope=global" : "/schedule/list");
   }
 
-  pauseSchedule(jobId: string, sessionId?: string): Promise<ScheduleJobInfo> {
-    return this.scheduleAction<ScheduleJobInfo>("pause", jobId, sessionId);
+  pauseSchedule(jobId: string): Promise<ScheduleJobInfo> {
+    return this.scheduleAction<ScheduleJobInfo>("pause", jobId);
   }
 
-  resumeSchedule(jobId: string, sessionId?: string): Promise<ScheduleJobInfo> {
-    return this.scheduleAction<ScheduleJobInfo>("resume", jobId, sessionId);
+  resumeSchedule(jobId: string): Promise<ScheduleJobInfo> {
+    return this.scheduleAction<ScheduleJobInfo>("resume", jobId);
   }
 
-  triggerSchedule(jobId: string, sessionId?: string): Promise<{ job_id: string; started: boolean }> {
-    return this.scheduleAction("trigger", jobId, sessionId);
+  triggerSchedule(jobId: string): Promise<{ job_id: string; started: boolean }> {
+    return this.scheduleAction("trigger", jobId);
   }
 
-  cancelSchedule(jobId: string, sessionId?: string): Promise<{ job_id: string; cancelled: boolean }> {
-    return this.scheduleAction("cancel", jobId, sessionId);
+  cancelSchedule(jobId: string): Promise<{ job_id: string; cancelled: boolean }> {
+    return this.scheduleAction("cancel", jobId);
   }
 
-  private scheduleAction<T>(action: string, jobId: string, sessionId?: string): Promise<T> {
+  private scheduleAction<T>(action: string, jobId: string): Promise<T> {
     return this.request(`/schedule/${action}`, {
       method: "POST",
-      body: JSON.stringify({ job_id: jobId, session_id: sessionId ?? null }),
+      body: JSON.stringify({ job_id: jobId, scope: "global" }),
     });
   }
 

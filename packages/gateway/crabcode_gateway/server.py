@@ -114,6 +114,8 @@ class GatewayServer:
         app.state.default_session_id: str | None = None
         app.state.event_bus = self._event_bus
         app.state.client_contexts: dict[str, Any] = {}
+        app.state.standalone_schedule_manager = None
+        app.state.standalone_schedule_manager_lock = asyncio.Lock()
         from crabcode_core.config.manager import ConfigManager
 
         workspace_settings = ConfigManager(cwd=os.getcwd()).load_gateway_workspace()
@@ -198,6 +200,22 @@ class GatewayServer:
         self._app = app
         return app
 
+    async def _start_standalone_schedule_manager(self) -> None:
+        """Start the scheduler that covers jobs when no chat is connected."""
+        if self._app is None or self._app.state.standalone_schedule_manager is not None:
+            return
+        from crabcode_core.config.manager import ConfigManager
+        from crabcode_core.schedule.manager import ScheduleManager
+
+        cwd = os.getcwd()
+        manager = ScheduleManager(
+            settings=ConfigManager(cwd=cwd).load().schedule,
+            cwd=cwd,
+            session_id="",
+        )
+        await manager.start()
+        self._app.state.standalone_schedule_manager = manager
+
     async def start(self) -> None:
         """Start HTTP and optionally gRPC servers."""
         async with self._lifecycle_lock:
@@ -205,6 +223,8 @@ class GatewayServer:
             self._ensure_not_running()
             if self._app is None:
                 self.build_app()
+
+            await self._start_standalone_schedule_manager()
 
             async with get_session_lock(self._app.state):
                 self._app.state.gateway_closing = False
@@ -251,6 +271,8 @@ class GatewayServer:
             self._ensure_not_running()
             if self._app is None:
                 self.build_app()
+
+            await self._start_standalone_schedule_manager()
 
             async with get_session_lock(self._app.state):
                 self._app.state.gateway_closing = False
@@ -417,6 +439,14 @@ class GatewayServer:
 
         # Close all sessions
         if app:
+            schedule_manager = getattr(app.state, "standalone_schedule_manager", None)
+            if schedule_manager is not None:
+                try:
+                    await schedule_manager.close()
+                except Exception:
+                    logger.warning("Failed to close standalone schedule manager", exc_info=True)
+                finally:
+                    app.state.standalone_schedule_manager = None
             for sid, session in pending:
                 try:
                     # The marker was installed under the registry lock above;

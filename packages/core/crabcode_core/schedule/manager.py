@@ -325,12 +325,16 @@ class ScheduleManager:
     async def trigger_job(self, job_id: str) -> bool:
         """Run one job immediately without changing its recurring schedule."""
         job = self.get_job(job_id)
-        if job is None or not job.enabled or job.status != JobStatus.ACTIVE:
+        if job is None or job.status == JobStatus.PAUSED:
+            return False
+        terminal = job.status in {JobStatus.ERROR, JobStatus.DISABLED}
+        if not terminal and (not job.enabled or job.status != JobStatus.ACTIVE):
             return False
         if not self._store.claim_schedule(
             job.id,
             self._owner,
             lease_seconds=max(60, (job.timeout or self.settings.default_timeout) + 60),
+            include_terminal=terminal,
         ):
             return False
         self._recover_job_runs(job.id)
@@ -493,6 +497,16 @@ class ScheduleManager:
                 current.status = JobStatus.COMPLETED
                 current.enabled = False
                 current.next_run = None
+            elif success and original.status in {
+                JobStatus.ERROR,
+                JobStatus.DISABLED,
+            }:
+                current.status = JobStatus.ACTIVE
+                current.enabled = True
+                current.next_run = compute_next_run(
+                    current.schedule,
+                    current.schedule_type,
+                )
             self._store.upsert_schedule(current)
         elif current.max_runs is not None and current.run_count >= current.max_runs:
             current.next_run = None

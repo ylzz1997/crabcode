@@ -249,6 +249,7 @@ class ScheduleCreateRequest(BaseModel):
 class ScheduleJobRequest(BaseModel):
     job_id: str = Field(min_length=1)
     session_id: str | None = None
+    scope: Literal["global"] | None = None
 
 
 class PeerSendRequest(BaseModel):
@@ -706,6 +707,7 @@ class ScheduleJobInfo(BaseModel):
     timeout: int | None = None
     model_profile: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+    running: bool = False
 
 
 class ScheduleRunInfo(BaseModel):
