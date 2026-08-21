@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   clampDocumentZoom,
+  documentZoomDeltaForKeyboardEvent,
+  documentZoomFromPinchWheel,
   groupTextBlocksIntoParagraphs,
   looksLikeFormulaText,
   translatedBox,
@@ -47,6 +49,33 @@ describe("document translation coordinates", () => {
     expect(clampDocumentZoom(.1)).toBe(.6);
     expect(clampDocumentZoom(1.24)).toBe(1.2);
     expect(clampDocumentZoom(2.9)).toBe(2.5);
+  });
+
+  it("uses physical minus and equal keys for macOS Option shortcuts", () => {
+    const shortcut = (code: string, overrides = {}) => documentZoomDeltaForKeyboardEvent({
+      altKey: true,
+      ctrlKey: false,
+      metaKey: false,
+      code,
+      ...overrides,
+    });
+    expect(shortcut("Equal")).toBe(.1);
+    expect(shortcut("Minus")).toBe(-.1);
+    expect(shortcut("Equal", { altKey: false })).toBe(0);
+    expect(shortcut("Minus", { metaKey: true })).toBe(0);
+  });
+
+  it("accumulates smooth trackpad pinch deltas in the expected direction", () => {
+    let targetZoom = 1.2;
+    for (let index = 0; index < 6; index += 1) {
+      targetZoom = documentZoomFromPinchWheel(targetZoom, -1);
+    }
+    expect(targetZoom).toBeGreaterThan(1.2);
+    expect(clampDocumentZoom(targetZoom)).toBe(1.3);
+
+    expect(documentZoomFromPinchWheel(1.2, 10)).toBeLessThan(1.2);
+    expect(documentZoomFromPinchWheel(2.5, -10)).toBe(2.5);
+    expect(documentZoomFromPinchWheel(.6, 10)).toBe(.6);
   });
 
   it("keeps normalized boxes anchored through page rotations", () => {

@@ -54,10 +54,36 @@ type DocumentView = "document" | "blog";
 const DOCUMENT_ZOOM_MIN = .6;
 const DOCUMENT_ZOOM_MAX = 2.5;
 const DOCUMENT_ZOOM_STEP = .1;
+const DOCUMENT_PINCH_SENSITIVITY = .01;
+
+function boundDocumentZoom(value: number): number {
+  return Math.min(DOCUMENT_ZOOM_MAX, Math.max(DOCUMENT_ZOOM_MIN, value));
+}
 
 export function clampDocumentZoom(value: number): number {
-  return Math.round(Math.min(DOCUMENT_ZOOM_MAX, Math.max(DOCUMENT_ZOOM_MIN, value)) * 10) / 10;
+  return Math.round(boundDocumentZoom(value) * 10) / 10;
 }
+
+export function documentZoomFromPinchWheel(currentZoom: number, deltaY: number, deltaMode = 0): number {
+  const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 100 : 1);
+  const limitedPixels = Math.min(20, Math.max(-20, pixels));
+  return boundDocumentZoom(currentZoom * Math.exp(-limitedPixels * DOCUMENT_PINCH_SENSITIVITY));
+}
+
+export function documentZoomDeltaForKeyboardEvent(
+  event: Pick<KeyboardEvent, "altKey" | "ctrlKey" | "metaKey" | "code">,
+): number {
+  if (!event.altKey || event.ctrlKey || event.metaKey) return 0;
+  if (event.code === "Equal" || event.code === "NumpadAdd") return DOCUMENT_ZOOM_STEP;
+  if (event.code === "Minus" || event.code === "NumpadSubtract") return -DOCUMENT_ZOOM_STEP;
+  return 0;
+}
+
+type WebKitGestureEvent = Event & {
+  scale?: number;
+  clientX?: number;
+  clientY?: number;
+};
 
 function BlogAssetImage({ api, workspace, src, alt }: {
   api: GatewayApi;
@@ -1126,6 +1152,8 @@ export default function DocumentWorkspace({
   const previousBusy = useRef(sessionBusy);
   const scrollRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(zoom);
+  const pinchZoomTargetRef = useRef(zoom);
+  const pinchWheelEndTimerRef = useRef<number | null>(null);
   const projectKey = `${connectionId}:${project.id}:${project.path}`;
   const projectKeyRef = useRef(projectKey);
   const viewIdentityRef = useRef({ connectionId, projectId: project.id });
@@ -1162,9 +1190,9 @@ export default function DocumentWorkspace({
     persistTimerRef.current = window.setTimeout(commit, 250);
   }, []);
 
-  const changeZoom = useCallback((delta: number, anchor?: { clientX: number; clientY: number }) => {
+  const applyZoom = useCallback((requestedZoom: number, anchor?: { clientX: number; clientY: number }) => {
     const previousZoom = zoomRef.current;
-    const nextZoom = clampDocumentZoom(previousZoom + delta);
+    const nextZoom = clampDocumentZoom(requestedZoom);
     if (nextZoom === previousZoom) return;
     const element = scrollRef.current;
     const rect = element?.getBoundingClientRect();
@@ -1190,6 +1218,12 @@ export default function DocumentWorkspace({
     });
   }, [persistViewState]);
 
+  const changeZoom = useCallback((delta: number, anchor?: { clientX: number; clientY: number }) => {
+    const nextZoom = clampDocumentZoom(zoomRef.current + delta);
+    pinchZoomTargetRef.current = nextZoom;
+    applyZoom(nextZoom, anchor);
+  }, [applyZoom]);
+
   useLayoutEffect(() => {
     if (projectKeyRef.current === projectKey) return;
     persistViewState(true);
@@ -1197,6 +1231,7 @@ export default function DocumentWorkspace({
     viewIdentityRef.current = { connectionId, projectId: project.id };
     const nextZoom = clampDocumentZoom(documentView?.zoom ?? 1.2);
     zoomRef.current = nextZoom;
+    pinchZoomTargetRef.current = nextZoom;
     setZoom(nextZoom);
     latestScrollRef.current = {
       top: Math.max(0, documentView?.scroll_top ?? 0),
@@ -1234,12 +1269,15 @@ export default function DocumentWorkspace({
 
   useEffect(() => () => {
     if (persistTimerRef.current !== null) window.clearTimeout(persistTimerRef.current);
+    if (pinchWheelEndTimerRef.current !== null) window.clearTimeout(pinchWheelEndTimerRef.current);
     persistViewState(true);
   }, [persistViewState]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (view !== "document" || !event.altKey || event.ctrlKey || event.metaKey) return;
+      if (view !== "document") return;
+      const delta = documentZoomDeltaForKeyboardEvent(event);
+      if (delta === 0) return;
       const target = event.target;
       if (target instanceof HTMLElement && (
         target.isContentEditable
@@ -1247,13 +1285,8 @@ export default function DocumentWorkspace({
         || target.tagName === "TEXTAREA"
         || target.tagName === "SELECT"
       )) return;
-      if (event.key === "+" || event.key === "=") {
-        event.preventDefault();
-        changeZoom(DOCUMENT_ZOOM_STEP);
-      } else if (event.key === "-" || event.key === "_") {
-        event.preventDefault();
-        changeZoom(-DOCUMENT_ZOOM_STEP);
-      }
+      event.preventDefault();
+      changeZoom(delta);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
@@ -1442,14 +1475,68 @@ export default function DocumentWorkspace({
     if (element) latestScrollRef.current = { top: element.scrollTop, left: element.scrollLeft };
     persistViewState();
   }, [persistViewState]);
-  const handlePdfWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    if (!event.altKey || event.deltaY === 0) return;
+  const handlePdfWheel = useCallback((event: WheelEvent) => {
+    if (event.deltaY === 0) return;
+    const anchor = { clientX: event.clientX, clientY: event.clientY };
+    if (event.ctrlKey) {
+      event.preventDefault();
+      if (pinchWheelEndTimerRef.current === null) pinchZoomTargetRef.current = zoomRef.current;
+      pinchZoomTargetRef.current = documentZoomFromPinchWheel(
+        pinchZoomTargetRef.current,
+        event.deltaY,
+        event.deltaMode,
+      );
+      applyZoom(pinchZoomTargetRef.current, anchor);
+      if (pinchWheelEndTimerRef.current !== null) window.clearTimeout(pinchWheelEndTimerRef.current);
+      pinchWheelEndTimerRef.current = window.setTimeout(() => {
+        pinchWheelEndTimerRef.current = null;
+        pinchZoomTargetRef.current = zoomRef.current;
+      }, 160);
+      return;
+    }
+    if (!event.altKey) return;
     event.preventDefault();
-    changeZoom(event.deltaY < 0 ? DOCUMENT_ZOOM_STEP : -DOCUMENT_ZOOM_STEP, {
-      clientX: event.clientX,
-      clientY: event.clientY,
-    });
-  }, [changeZoom]);
+    changeZoom(event.deltaY < 0 ? DOCUMENT_ZOOM_STEP : -DOCUMENT_ZOOM_STEP, anchor);
+  }, [applyZoom, changeZoom]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || loading || view !== "document") return undefined;
+    let gestureStartZoom = zoomRef.current;
+    let gestureAnchor: { clientX: number; clientY: number } | undefined;
+    const eventAnchor = (event: WebKitGestureEvent) => (
+      Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+        ? { clientX: event.clientX!, clientY: event.clientY! }
+        : undefined
+    );
+    const onGestureStart = (rawEvent: Event) => {
+      const event = rawEvent as WebKitGestureEvent;
+      event.preventDefault();
+      gestureStartZoom = zoomRef.current;
+      gestureAnchor = eventAnchor(event);
+    };
+    const onGestureChange = (rawEvent: Event) => {
+      const event = rawEvent as WebKitGestureEvent;
+      if (!Number.isFinite(event.scale) || event.scale! <= 0) return;
+      event.preventDefault();
+      const anchor = eventAnchor(event) ?? gestureAnchor;
+      applyZoom(gestureStartZoom * event.scale!, anchor);
+    };
+    const onGestureEnd = (rawEvent: Event) => {
+      rawEvent.preventDefault();
+      pinchZoomTargetRef.current = zoomRef.current;
+    };
+    element.addEventListener("wheel", handlePdfWheel, { passive: false });
+    element.addEventListener("gesturestart", onGestureStart, { passive: false });
+    element.addEventListener("gesturechange", onGestureChange, { passive: false });
+    element.addEventListener("gestureend", onGestureEnd, { passive: false });
+    return () => {
+      element.removeEventListener("wheel", handlePdfWheel);
+      element.removeEventListener("gesturestart", onGestureStart);
+      element.removeEventListener("gesturechange", onGestureChange);
+      element.removeEventListener("gestureend", onGestureEnd);
+    };
+  }, [applyZoom, handlePdfWheel, loading, view]);
 
   const positionSelection = useCallback((rects: DocumentSelectionRect[]): SelectionBox | null => {
     const clientRects = rects.flatMap((rect) => {
@@ -1764,7 +1851,6 @@ export default function DocumentWorkspace({
           ref={scrollRef}
           className="document-pdf-scroll"
           onScroll={handlePdfScroll}
-          onWheel={handlePdfWheel}
         >
           {scannedPages > 0 && (
             <div className="document-scan-warning"><AlertTriangle />检测到 {scannedPages} 个无文本页面，可阅读但暂不能原位翻译。</div>
