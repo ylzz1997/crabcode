@@ -2144,6 +2144,7 @@ function App() {
                                 text: "正在准备文档内容",
                                 action,
                                 locale: options.locale,
+                                language: options.language,
                                 source: options.source,
                                 current: 0,
                                 total: 0,
@@ -4016,7 +4017,9 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
             {item.status === "running" || item.status === "retrying" ? <LoaderCircle className="spin" /> : item.action === "translate" ? <FileText /> : <Sparkles />}
           </i>
           <span>{item.title}</span>
-          {item.locale && <code>{item.locale}</code>}
+          {(item.action === "generate_blog" ? item.language : item.locale) && (
+            <code>{item.action === "generate_blog" ? item.language : item.locale}</code>
+          )}
           <em className="tool-status">{statusLabel}</em>
         </div>
         <div className="document-job-body">

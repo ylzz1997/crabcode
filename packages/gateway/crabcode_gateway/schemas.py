@@ -969,6 +969,7 @@ class DocumentJobPayload(BaseModel):
     action: str
     status: str
     locale: str = ""
+    language: str = ""
     source: str = ""
     current: int = 0
     total: int = 0
@@ -1292,6 +1293,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             action=event.action,
             status=event.status,
             locale=event.locale,
+            language=event.language,
             source=event.source,
             current=event.current,
             total=event.total,

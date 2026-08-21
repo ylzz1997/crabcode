@@ -488,6 +488,7 @@ export class SessionChannel {
     action: "translate" | "generate_blog",
     options: {
       locale?: string;
+      language?: string;
       source?: "original" | "translation";
       translation_concurrency?: number;
       translation_batch_size?: number;
@@ -498,6 +499,7 @@ export class SessionChannel {
       type: "document_action",
       action,
       locale: options.locale,
+      language: options.language,
       source: options.source,
       translation_concurrency: options.translation_concurrency,
       translation_batch_size: options.translation_batch_size,

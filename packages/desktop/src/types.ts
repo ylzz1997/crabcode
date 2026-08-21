@@ -132,6 +132,7 @@ export interface DocumentManifest {
     action: "translate" | "generate_blog";
     status: string;
     locale: string;
+    language?: string;
     source: string;
     current: number;
     total: number;
@@ -386,6 +387,7 @@ export interface ChatItem {
   path?: string;
   action?: string;
   locale?: string;
+  language?: string;
   source?: string;
   current?: number;
   total?: number;
@@ -458,6 +460,7 @@ export interface GatewayEvent {
   action?: string;
   status?: string;
   locale?: string;
+  language?: string;
   source?: string;
   current?: number;
   total?: number;

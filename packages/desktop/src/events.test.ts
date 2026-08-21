@@ -201,6 +201,26 @@ describe("Gateway event reducer", () => {
     });
   });
 
+  it("keeps the requested Blog language on its operation card", () => {
+    const current = applyGatewayEvent(state(), {
+      type: "document_job",
+      operation_id: "blog-operation-1",
+      action: "generate_blog",
+      status: "running",
+      locale: "en",
+      language: "ja",
+      source: "translation",
+      message: "正在生成",
+    });
+    expect(current.items[0]).toMatchObject({
+      kind: "document_job",
+      action: "generate_blog",
+      locale: "en",
+      language: "ja",
+      source: "translation",
+    });
+  });
+
   it("keeps an active turn running when a command fails", () => {
     const running = {
       ...state(),

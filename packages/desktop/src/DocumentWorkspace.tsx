@@ -165,6 +165,7 @@ interface DocumentWorkspaceProps {
     action: "translate" | "generate_blog",
     options: {
       locale?: string;
+      language?: string;
       source?: "original" | "translation";
       translation_concurrency?: number;
       translation_batch_size?: number;
@@ -182,6 +183,11 @@ const TARGET_LANGUAGES = [
   ["fr", "Français"],
   ["de", "Deutsch"],
   ["es", "Español"],
+] as const;
+
+const BLOG_LANGUAGES = [
+  ["source", "跟随当前内容"],
+  ...TARGET_LANGUAGES,
 ] as const;
 
 type SelectionBox = { left: number; top: number; width: number; height: number };
@@ -252,6 +258,7 @@ function sourceLooksChinese(layout: DocumentLayout): boolean {
 
 function DocumentActionsMenu({
   locale,
+  blogLanguage,
   sessionBusy,
   translating,
   clearing,
@@ -260,11 +267,13 @@ function DocumentActionsMenu({
   clearDisabled,
   blogDisabled,
   onLocale,
+  onBlogLanguage,
   onTranslate,
   onClear,
   onGenerateBlog,
 }: {
   locale: string;
+  blogLanguage: string;
   sessionBusy: boolean;
   translating: boolean;
   clearing: boolean;
@@ -273,6 +282,7 @@ function DocumentActionsMenu({
   clearDisabled: boolean;
   blogDisabled: boolean;
   onLocale: (locale: string) => void;
+  onBlogLanguage: (language: string) => void;
   onTranslate: () => void;
   onClear: () => void;
   onGenerateBlog: () => void;
@@ -287,7 +297,7 @@ function DocumentActionsMenu({
     if (!rect) return;
     const viewportPadding = 8;
     const menuWidth = Math.min(236, window.innerWidth - viewportPadding * 2);
-    const menuHeight = 205;
+    const menuHeight = 250;
     setPosition({
       top: Math.min(rect.bottom + 7, Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding)),
       left: Math.max(viewportPadding, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding)),
@@ -370,6 +380,18 @@ function DocumentActionsMenu({
             <span>清空翻译缓存</span>
           </button>
           <div className="document-actions-separator" role="separator" />
+          <label className="document-actions-locale">
+            <Languages />
+            <span>Blog 语言</span>
+            <select
+              aria-label="Blog 生成语言"
+              value={blogLanguage}
+              disabled={sessionBusy}
+              onChange={(event) => onBlogLanguage(event.target.value)}
+            >
+              {BLOG_LANGUAGES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+            </select>
+          </label>
           <button className="blog" type="button" role="menuitem" disabled={blogDisabled} onClick={() => choose(onGenerateBlog)}>
             {generatingBlog ? <LoaderCircle className="spin" /> : <Sparkles />}
             <span>生成 Blog</span>
@@ -1171,6 +1193,7 @@ export default function DocumentWorkspace({
   const [layout, setLayout] = useState<DocumentLayout | null>(null);
   const [translation, setTranslation] = useState<DocumentTranslation | null>(null);
   const [locale, setLocale] = useState("zh-CN");
+  const [blogLanguage, setBlogLanguage] = useState("source");
   const [showTranslation, setShowTranslation] = useState(false);
   const [zoom, setZoom] = useState(() => clampDocumentZoom(documentView?.zoom ?? 1.2));
   const [rotation, setRotation] = useState(0);
@@ -1789,6 +1812,7 @@ export default function DocumentWorkspace({
             <button className="icon-button small" title="顺时针旋转" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
             <DocumentActionsMenu
               locale={locale}
+              blogLanguage={blogLanguage}
               sessionBusy={sessionBusy}
               translating={pendingAction === "translate"}
               clearing={clearingTranslation}
@@ -1797,6 +1821,7 @@ export default function DocumentWorkspace({
               clearDisabled={sessionBusy || clearingTranslation}
               blogDisabled={!layout || sessionBusy || (showTranslation && !translation)}
               onLocale={setLocale}
+              onBlogLanguage={setBlogLanguage}
               onTranslate={() => {
                 setPendingAction("translate");
                 if (!onDocumentAction("translate", {
@@ -1810,7 +1835,11 @@ export default function DocumentWorkspace({
                 setView("blog");
                 setBlogView("preview");
                 setPendingAction("generate_blog");
-                if (!onDocumentAction("generate_blog", { locale, source: showTranslation ? "translation" : "original" })) setPendingAction(null);
+                if (!onDocumentAction("generate_blog", {
+                  locale,
+                  language: blogLanguage,
+                  source: showTranslation ? "translation" : "original",
+                })) setPendingAction(null);
               }}
             />
             <label className={`document-translation-toggle ${translation ? "ready" : ""}`}>

@@ -68,6 +68,7 @@ router = APIRouter(tags=["events"])
 class _DocumentJobContext:
     action: str
     locale: str
+    language: str
     source: str
     workspace: str
     recovered: int = 0
@@ -970,6 +971,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
     action = msg.get("action")
     locale = msg.get("locale") or "zh-CN"
     source = msg.get("source") or "original"
+    requested_language = msg.get("language")
     requested_operation_id = msg.get("operation_id")
     try:
         translation_concurrency = _translation_option(
@@ -1029,6 +1031,33 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
         return
     if action == "translate":
         source = "original"
+    language = ""
+    if action == "generate_blog":
+        if requested_language is not None and not isinstance(requested_language, str):
+            await _send_ws_command_error(
+                ws,
+                "invalid Blog language",
+                command="document_action",
+                request=msg,
+                operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+                error_type="invalid_request",
+            )
+            return
+        language = (
+            requested_language
+            if isinstance(requested_language, str) and requested_language
+            else locale if source == "translation" else "source"
+        )
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", language):
+            await _send_ws_command_error(
+                ws,
+                "invalid Blog language",
+                command="document_action",
+                request=msg,
+                operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+                error_type="invalid_request",
+            )
+            return
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", operation_id):
         await _send_ws_command_error(
             ws,
@@ -1088,12 +1117,18 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
         )
     else:
         source_instruction = (
-            f"优先读取 .crabcode/document/translations/{locale}.json，并按 layout.json 的 id 顺序还原内容；Blog 必须使用该译文的语言。"
+            f"优先读取 .crabcode/document/translations/{locale}.json，并按 layout.json 的 id 顺序还原内容。"
             if source == "translation"
-            else "读取 .crabcode/document/content.md 作为原文；Blog 必须保持原文的主要语言。"
+            else "读取 .crabcode/document/content.md 作为原文。"
+        )
+        language_instruction = (
+            "Blog 必须使用当前内容的主要语言。"
+            if language == "source"
+            else f"Blog 的标题和正文必须使用 {language}。"
         )
         prompt = f"""[文档操作：生成 Blog]
 {source_instruction}
+{language_instruction}
 基于整份文档生成结构清晰、事实忠实的 Markdown Blog，先写入 .crabcode/document/jobs/{operation_id}/blog.md，Gateway 校验成功后再原子发布。
 使用一个 H1 标题以及适量的 H2/H3、段落、列表、引用和代码块；数学公式使用 KaTeX 兼容的 Markdown 定界符：行内公式使用 $...$，块级公式使用独占行的 $$...$$，不要使用 \\(...\\) 或 \\[...\\]；如需配图，将图片放在 blog-assets/ 并使用相对路径引用。不要声称未在文档中出现的事实。完成后简短说明 Blog 已生成。"""
 
@@ -1104,6 +1139,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
     fallback["_document_job"] = _DocumentJobContext(
         action=action,
         locale=locale,
+        language=language,
         source=source,
         workspace=str(workspace),
         recovered=recovered,
@@ -1405,6 +1441,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
             workspace = Path(document_job.workspace) if document_job else None
             action = document_job.action if document_job else ""
             locale = document_job.locale if document_job else ""
+            language = document_job.language if document_job else ""
             source = document_job.source if document_job else ""
             total = await asyncio.to_thread(_document_job_total, workspace, action) if workspace else 0
             reported_current = document_job.recovered if document_job else 0
@@ -1420,6 +1457,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         action=action,
                         status=status,
                         locale=locale,
+                        language=language,
                         source=source,
                         current=current,
                         total=total,
@@ -1433,6 +1471,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         action=action,
                         status=status,
                         locale=locale,
+                        language=language,
                         source=source,
                         current=current,
                         total=total,
@@ -1513,6 +1552,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                             locale,
                             source,
                             document_job.document_hash,
+                            language,
                         )
                         validation_error = None
                         await publish_job("completed", current=current, message="文档产物已保存")
@@ -1560,6 +1600,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         action=document_job.action,
                         status="cancelled",
                         locale=document_job.locale,
+                        language=document_job.language,
                         source=document_job.source,
                         current=0,
                         total=0,
@@ -1573,6 +1614,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         action=document_job.action,
                         status="cancelled",
                         locale=document_job.locale,
+                        language=document_job.language,
                         source=document_job.source,
                         message="文档操作已取消",
                     ),
@@ -1599,6 +1641,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         action=document_job.action,
                         status="failed",
                         locale=document_job.locale,
+                        language=document_job.language,
                         source=document_job.source,
                         current=0,
                         total=0,
@@ -1612,6 +1655,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         action=document_job.action,
                         status="failed",
                         locale=document_job.locale,
+                        language=document_job.language,
                         source=document_job.source,
                         message=str(exc),
                     ),

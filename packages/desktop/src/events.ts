@@ -498,6 +498,7 @@ export function applyGatewayEvent(
         text: event.message,
         action: event.action,
         locale: event.locale ?? previous?.locale,
+        language: event.language ?? previous?.language,
         source: event.source ?? previous?.source,
         current: event.current ?? previous?.current ?? 0,
         total: event.total ?? previous?.total ?? 0,

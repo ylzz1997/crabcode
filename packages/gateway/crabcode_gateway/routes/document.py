@@ -1116,6 +1116,7 @@ def _update_document_job_status(
     current: int,
     total: int,
     message: str,
+    language: str = "",
 ) -> None:
     with _manifest_lock(workspace):
         _update_document_job_status_unlocked(
@@ -1128,6 +1129,7 @@ def _update_document_job_status(
             current=current,
             total=total,
             message=message,
+            language=language,
         )
 
 
@@ -1142,6 +1144,7 @@ def _update_document_job_status_unlocked(
     current: int,
     total: int,
     message: str,
+    language: str = "",
 ) -> None:
     _managed_internal_directory(workspace)
     manifest = _read_manifest(workspace)
@@ -1152,6 +1155,7 @@ def _update_document_job_status_unlocked(
         "action": action,
         "status": status,
         "locale": locale,
+        "language": language,
         "source": source,
         "current": current,
         "total": total,
@@ -1196,10 +1200,13 @@ def _finalize_document_job_unlocked(
     locale: str,
     source: str,
     expected_document_hash: str = "",
+    language: str = "",
 ) -> tuple[int, int]:
     """Validate an Agent's staged artifact and publish it atomically."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", locale):
         raise ValueError("invalid document locale")
+    if language and not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", language):
+        raise ValueError("invalid Blog language")
     if expected_document_hash and _document_action_hash(workspace, source, locale) != expected_document_hash:
         raise ValueError("source document changed while the operation was running")
     internal = _managed_internal_directory(workspace)
@@ -1299,10 +1306,11 @@ def _finalize_document_job_unlocked(
             blog_existed = True
         os.replace(staged_blog, output)
         revision = _blog_revision(markdown)
+        blog_language = locale if language == "source" and source == "translation" else language
         manifest["blog"] = {
             "path": "blog.md",
             "revision": revision,
-            "language": locale if source == "translation" else "source",
+            "language": blog_language or (locale if source == "translation" else "source"),
             "source": source,
             "updated_at": now,
         }
@@ -1335,6 +1343,7 @@ def _finalize_document_job(
     locale: str,
     source: str,
     expected_document_hash: str = "",
+    language: str = "",
 ) -> tuple[int, int]:
     with _manifest_lock(workspace):
         return _finalize_document_job_unlocked(
@@ -1344,6 +1353,7 @@ def _finalize_document_job(
             locale,
             source,
             expected_document_hash,
+            language,
         )
 
 

@@ -250,6 +250,7 @@ class DocumentJobEvent:
     action: str
     status: str
     locale: str = ""
+    language: str = ""
     source: str = ""
     current: int = 0
     total: int = 0
