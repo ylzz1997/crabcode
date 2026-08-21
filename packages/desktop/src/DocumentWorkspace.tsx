@@ -1,7 +1,6 @@
 import {
   AlertTriangle,
   BookOpen,
-  Check,
   FileText,
   Languages,
   LoaderCircle,
@@ -270,11 +269,14 @@ async function loadPdf(data: ArrayBuffer): Promise<PDFDocumentProxy> {
   return pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
 }
 
-const DOCUMENT_LAYOUT_VERSION = "paragraph-v5";
+const DOCUMENT_LAYOUT_VERSION = "paragraph-v1";
 type TextBlock = DocumentPageLayout["blocks"][number];
+type TextBlockKind = "text" | "formula" | "graphic";
 
 interface TextLine {
   blocks: TextBlock[];
+  row: number;
+  kind: TextBlockKind;
   text: string;
   x: number;
   y: number;
@@ -319,7 +321,7 @@ function joinLineText(left: string, right: string): string {
   return `${left} ${right}`;
 }
 
-function makeTextLine(blocks: TextBlock[]): TextLine {
+function makeTextLine(blocks: TextBlock[], row: number): TextLine {
   const ordered = [...blocks].sort((left, right) => left.x - right.x);
   const x = Math.min(...ordered.map((block) => block.x));
   const y = Math.min(...ordered.map((block) => block.y));
@@ -342,6 +344,8 @@ function makeTextLine(blocks: TextBlock[]): TextLine {
   const dominant = [...ordered].sort((left, right) => right.width - left.width)[0];
   return {
     blocks: ordered,
+    row,
+    kind: "text",
     text: text.trim(),
     x,
     y,
@@ -380,8 +384,8 @@ function textRows(blocks: TextBlock[]): TextBlock[][] {
 
 function textLines(blocks: TextBlock[]): TextLine[] {
   const lines: TextLine[] = [];
-  for (const row of textRows(blocks)) {
-    const ordered = [...row].sort((left, right) => left.x - right.x);
+  for (const [rowIndex, rowBlocks] of textRows(blocks).entries()) {
+    const ordered = [...rowBlocks].sort((left, right) => left.x - right.x);
     const characterWidth = median(ordered.map((block) => (
       block.width / Math.max(1, Array.from(block.text.trim()).length)
     )));
@@ -390,14 +394,89 @@ function textLines(blocks: TextBlock[]): TextLine[] {
     for (const block of ordered) {
       const previous = segment.at(-1);
       if (previous && block.x - (previous.x + previous.width) > splitGap) {
-        lines.push(makeTextLine(segment));
+        lines.push(makeTextLine(segment, rowIndex));
         segment = [];
       }
       segment.push(block);
     }
-    if (segment.length > 0) lines.push(makeTextLine(segment));
+    if (segment.length > 0) lines.push(makeTextLine(segment, rowIndex));
   }
   return lines.sort((left, right) => left.y - right.y || left.x - right.x);
+}
+
+export function looksLikeFormulaText(value: string): boolean {
+  const text = value.trim();
+  if (!text) return false;
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) return true;
+  if (/^(?:sin|cos|tan|exp|log|max|min)$/i.test(text)) return true;
+  const proseWords = text.match(/\p{L}{4,}/gu)?.length ?? 0;
+  const operators = text.match(/[=+−*/<>≈≠≤≥∈∉∂∑∏√∞^_\\]/gu)?.length ?? 0;
+  const mathGlyphs = text.match(/[Α-Ͽℓ𝑎-𝑧𝛼-𝜛]/gu)?.length ?? 0;
+  if (/[=≈≠≤≥∈∉]/.test(text) && proseWords <= 3 && (operators > 0 || mathGlyphs > 0)) return true;
+  if (operators + mathGlyphs >= 3 && proseWords <= 2) return true;
+  return /^(?:sin|cos|tan|exp|log|max|min)\s*\(/i.test(text) && proseWords <= 2;
+}
+
+function dominantBodyFontSize(lines: Array<{ fontSize: number; text: string }>): number {
+  const buckets = new Map<number, number>();
+  for (const line of lines) {
+    const bucket = Math.round(line.fontSize * 2) / 2;
+    const weight = Math.max(1, Math.min(120, Array.from(line.text).length));
+    buckets.set(bucket, (buckets.get(bucket) ?? 0) + weight);
+  }
+  return [...buckets.entries()].sort((left, right) => right[1] - left[1])[0]?.[0]
+    ?? median(lines.map((line) => line.fontSize));
+}
+
+function classifyFormulaLines(lines: TextLine[]): TextLine[] {
+  const strongLines = lines.filter((line) => looksLikeFormulaText(line.text));
+  const formulaRows = new Set(strongLines.map((line) => line.row));
+  const typicalFontSize = median(lines.map((line) => line.fontSize));
+  return lines.map((line) => ({
+    ...line,
+    kind: (formulaRows.has(line.row) || (
+      /^\(?\d{1,3}\)?$/.test(line.text.trim())
+      && line.y >= .9
+      && line.width <= .05
+    ) || (
+      Array.from(line.text).length <= 12
+      && line.width <= .12
+      && (
+        line.fontSize < typicalFontSize * .85
+        || /[Α-Ͽℓ¯˜]/u.test(line.text)
+        || /^[A-Za-z]$/.test(line.text.trim())
+      )
+      && strongLines.some((formula) => {
+        const verticalGap = Math.max(0, Math.max(line.y, formula.y)
+          - Math.min(line.y + line.height, formula.y + formula.height));
+        const horizontalGap = Math.max(0, Math.max(line.x, formula.x)
+          - Math.min(line.x + line.width, formula.x + formula.width));
+        return verticalGap <= Math.max(line.height, formula.height) * .6 && horizontalGap <= .08;
+      })
+    )) ? "formula" as const : "text" as const,
+  }));
+}
+
+function classifyGraphicBlocks(blocks: TextBlock[]): TextBlock[] {
+  const textBlocks = blocks.filter((block) => block.kind === "text");
+  const bodyFontSize = dominantBodyFontSize(textBlocks);
+  const labelCandidates = textBlocks.filter((block) => (
+    Array.from(block.text).length <= 48
+    && block.width <= .28
+    && block.height <= .06
+    && block.fontSize <= bodyFontSize * .9
+  ));
+  return blocks.map((block) => {
+    if (block.kind !== "text" || !labelCandidates.includes(block)) return block;
+    const centerY = block.y + block.height / 2;
+    const nearbyLabels = labelCandidates.filter((candidate) => (
+      Math.abs(centerY - (candidate.y + candidate.height / 2)) <= .18
+    )).length;
+    return {
+      ...block,
+      kind: nearbyLabels >= 4 ? "graphic" as const : "text" as const,
+    };
+  });
 }
 
 function horizontalOverlap(left: TextLine, right: TextLine): number {
@@ -408,6 +487,7 @@ function horizontalOverlap(left: TextLine, right: TextLine): number {
 function canAppendLine(lines: TextLine[], line: TextLine): boolean {
   const previous = lines.at(-1);
   if (!previous) return false;
+  if (previous.kind !== line.kind) return false;
   const height = Math.max(previous.height, line.height);
   const verticalGap = line.y - (previous.y + previous.height);
   if (verticalGap < -height * .2 || verticalGap > height * .85) return false;
@@ -455,7 +535,11 @@ function paragraphAlignment(lines: TextLine[]): "left" | "center" | "right" {
 
 export function groupTextBlocksIntoParagraphs(blocks: TextBlock[], pageNumber: number): TextBlock[] {
   const paragraphs: TextLine[][] = [];
-  for (const line of textLines(blocks)) {
+  for (const line of classifyFormulaLines(textLines(blocks))) {
+    if (line.kind !== "text") {
+      paragraphs.push([line]);
+      continue;
+    }
     const candidates = paragraphs
       .map((lines, index) => ({ lines, index }))
       .filter(({ lines }) => canAppendLine(lines, line))
@@ -470,7 +554,7 @@ export function groupTextBlocksIntoParagraphs(blocks: TextBlock[], pageNumber: n
     else paragraphs.push([line]);
   }
 
-  return paragraphs
+  const grouped = paragraphs
     .sort((left, right) => left[0].y - right[0].y || left[0].x - right[0].x)
     .map((lines, index) => {
       const x = Math.min(...lines.map((line) => line.x));
@@ -488,9 +572,11 @@ export function groupTextBlocksIntoParagraphs(blocks: TextBlock[], pageNumber: n
         fontSize: median(lines.map((line) => line.fontSize)),
         fontFamily: dominant.fontFamily,
         direction: dominant.direction,
+        kind: lines[0].kind,
         textAlign: paragraphAlignment(lines),
       };
     });
+  return classifyGraphicBlocks(grouped);
 }
 
 async function extractLayout(pdf: PDFDocumentProxy): Promise<DocumentLayout> {
@@ -726,6 +812,7 @@ function PdfPage({
     }
     const next: Record<string, { background: string; color: string }> = {};
     for (const block of layout.blocks) {
+      if (block.kind && block.kind !== "text") continue;
       const box = translatedBox(block, rotation);
       const insetX = Math.min(box.width * .12, .004);
       const insetY = Math.min(box.height * .18, .004);
@@ -741,12 +828,16 @@ function PdfPage({
         1,
         1,
       ).data);
-      const [red, green, blue] = [0, 1, 2].map((channel) => Math.round(
-        samples.reduce((sum, sample) => sum + sample[channel], 0) / samples.length,
+      const brightest = samples.reduce((best, sample) => (
+        .2126 * sample[0] + .7152 * sample[1] + .0722 * sample[2]
+        > .2126 * best[0] + .7152 * best[1] + .0722 * best[2]
+          ? sample
+          : best
       ));
+      const [red, green, blue] = [brightest[0], brightest[1], brightest[2]];
       const luminance = .2126 * red + .7152 * green + .0722 * blue;
       next[block.id] = {
-        background: `rgba(${red}, ${green}, ${blue}, .97)`,
+        background: `rgb(${red}, ${green}, ${blue})`,
         color: luminance < 115 ? "#f7f8f8" : "#171a19",
       };
     }
@@ -765,6 +856,7 @@ function PdfPage({
       {showTranslation && layout && (
         <div className="document-translation-layer" aria-label={`第 ${pageNumber} 页译文`}>
           {layout.blocks.map((block) => {
+            if (block.kind && block.kind !== "text") return null;
             const text = translated.get(block.id);
             if (!text) return null;
             const box = translatedBox(block, rotation);
@@ -1187,7 +1279,7 @@ export default function DocumentWorkspace({
                 disabled={!translation}
                 onChange={(event) => setShowTranslation(event.target.checked)}
               />
-              {showTranslation ? <Check /> : null}显示译文
+              显示译文
             </label>
           </div>
         )}

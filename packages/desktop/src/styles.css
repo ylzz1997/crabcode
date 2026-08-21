@@ -5009,11 +5009,13 @@ html[data-theme="light"] .document-actions-separator {
   overflow: hidden;
   display: block;
   box-sizing: border-box;
-  padding: 0 2px;
-  background: rgba(255, 255, 255, .96);
+  padding: 0 1px;
+  background: #fff;
   color: #171a19;
-  font-family: system-ui, sans-serif;
-  line-height: 1.15;
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, serif;
+  line-height: 1.22;
+  letter-spacing: 0;
+  text-rendering: optimizeLegibility;
   overflow-wrap: break-word;
   word-break: normal;
 }

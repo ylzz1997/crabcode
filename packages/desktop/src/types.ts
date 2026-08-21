@@ -152,6 +152,7 @@ export interface DocumentTextBlock {
   fontSize: number;
   fontFamily: string;
   direction: string;
+  kind?: "text" | "formula" | "graphic";
   textAlign?: "left" | "center" | "right";
 }
 

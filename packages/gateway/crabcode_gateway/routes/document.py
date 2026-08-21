@@ -836,6 +836,35 @@ def _translation_source_pages(workspace: Path) -> list[list[tuple[str, str]]]:
     return pages
 
 
+def _translation_preserved_blocks(workspace: Path) -> dict[str, str]:
+    """Return fixed-layout blocks that must bypass model translation."""
+    try:
+        internal = _managed_internal_directory(workspace)
+        layout_path = internal / "layout.json"
+        if layout_path.is_symlink():
+            raise ValueError("document layout is invalid")
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        raw_pages = layout.get("pages")
+        if not isinstance(raw_pages, list):
+            raise ValueError("document layout is not ready")
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError) as exc:
+        raise ValueError("document layout is not ready") from exc
+
+    preserved: dict[str, str] = {}
+    for raw_page in raw_pages:
+        if not isinstance(raw_page, dict) or not isinstance(raw_page.get("blocks", []), list):
+            raise ValueError("document layout contains invalid pages")
+        for block in raw_page.get("blocks", []):
+            if not isinstance(block, dict) or block.get("kind") not in {"formula", "graphic"}:
+                continue
+            block_id = block.get("id")
+            text = block.get("text")
+            if not isinstance(block_id, str) or not block_id or not isinstance(text, str) or not text.strip():
+                raise ValueError("document layout contains invalid preserved blocks")
+            preserved[block_id] = text
+    return preserved
+
+
 def _validated_translation_file(
     workspace: Path,
     path: Path,

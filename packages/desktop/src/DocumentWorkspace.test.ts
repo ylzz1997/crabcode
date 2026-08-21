@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { clampDocumentZoom, groupTextBlocksIntoParagraphs, translatedBox } from "./DocumentWorkspace";
+import {
+  clampDocumentZoom,
+  groupTextBlocksIntoParagraphs,
+  looksLikeFormulaText,
+  translatedBox,
+} from "./DocumentWorkspace";
 import type { DocumentTextBlock } from "./types";
 
 const block: DocumentTextBlock = {
@@ -120,5 +125,50 @@ describe("document translation coordinates", () => {
 
     expect(grouped).toHaveLength(1);
     expect(grouped[0].text).toBe("∗ Corresponding author.");
+  });
+
+  it("keeps display formulas separate from surrounding prose", () => {
+    expect(looksLikeFormulaText("Spec-SnakeBeta(x)b,c,t,f = xb,c,t,f +")).toBe(true);
+    expect(looksLikeFormulaText("sin")).toBe(true);
+    expect(looksLikeFormulaText("(1)")).toBe(false);
+    expect(looksLikeFormulaText("The model is initialized in log space.")).toBe(false);
+
+    const grouped = groupTextBlocksIntoParagraphs([
+      textBlock("prose-1", "The parameters are initialized as follows:", .12, .30, .38),
+      textBlock("formula-1", "Spec-SnakeBeta(x)b,c,t,f = xb,c,t,f +", .22, .33, .32),
+      textBlock("formula-2", "sin", .60, .33, .025),
+      textBlock("formula-number", "(1)", .84, .33, .025),
+      textBlock("formula-subscript", "ℓ,f", .55, .341, .02, .007, 7),
+      textBlock("formula-symbol", "Fℓ", .48, .342, .02),
+      textBlock("prose-2", "We optimize both parameters in log space.", .12, .37, .40),
+    ], 1);
+
+    expect(grouped.filter((item) => item.kind === "formula").map((item) => item.text)).toEqual([
+      "Spec-SnakeBeta(x)b,c,t,f = xb,c,t,f +",
+      "sin",
+      "(1)",
+      "ℓ,f",
+      "Fℓ",
+    ]);
+    expect(grouped.filter((item) => item.kind === "text").map((item) => item.text)).toEqual([
+      "The parameters are initialized as follows:",
+      "We optimize both parameters in log space.",
+    ]);
+  });
+
+  it("leaves dense figure labels on the original PDF canvas", () => {
+    const grouped = groupTextBlocksIntoParagraphs([
+      textBlock("body", "The architecture is shown in the following figure.", .12, .55, .72),
+      textBlock("label-1", "Encoder", .18, .18, .08, .008, 7),
+      textBlock("label-2", "Decoder", .30, .20, .08, .008, 7),
+      textBlock("label-3", "High Freq", .42, .22, .09, .008, 7),
+      textBlock("label-4", "Mid Freq", .54, .24, .09, .008, 7),
+      textBlock("label-5", "Low Freq", .66, .26, .09, .008, 7),
+    ], 1);
+
+    expect(grouped.filter((item) => item.kind === "graphic")).toHaveLength(5);
+    expect(grouped.filter((item) => item.kind === "text").map((item) => item.text)).toEqual([
+      "The architecture is shown in the following figure.",
+    ]);
   });
 });

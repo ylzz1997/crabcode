@@ -297,6 +297,7 @@ async def _translate_document_batches(
     from crabcode_gateway.routes.document import (
         _store_translation_batch,
         _translation_job_blocks,
+        _translation_preserved_blocks,
         _translation_source_pages,
     )
 
@@ -347,14 +348,29 @@ async def _translate_document_batches(
             operation_id,
             locale,
         )
+        preserved = await asyncio.to_thread(_translation_preserved_blocks, workspace)
+        missing_preserved = {
+            block_id: text
+            for block_id, text in preserved.items()
+            if block_id not in translated
+        }
+        if missing_preserved:
+            current = await asyncio.to_thread(
+                _store_translation_batch,
+                workspace,
+                operation_id,
+                locale,
+                missing_preserved,
+            )
+            translated.update(missing_preserved)
+            await on_progress(current, "已保留固定版式内容")
         pending_batches: list[tuple[int, int, int, list[tuple[str, str]]]] = []
         for page_index, page in enumerate(pages, start=1):
             batches = _split_translation_page(page, batch_size)
             for batch_index, batch in enumerate(batches, start=1):
-                block_ids = [block_id for block_id, _ in batch]
-                if all(block_id in translated for block_id in block_ids):
-                    continue
-                pending_batches.append((page_index, batch_index, len(batches), batch))
+                pending = [(block_id, text) for block_id, text in batch if block_id not in translated]
+                if pending:
+                    pending_batches.append((page_index, batch_index, len(batches), pending))
 
         semaphore = asyncio.Semaphore(concurrency)
 
