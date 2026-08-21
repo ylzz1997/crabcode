@@ -31,7 +31,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { GatewayApi } from "./gateway";
@@ -48,6 +50,7 @@ import type {
   GatewayEvent,
   ProjectPreset,
 } from "./types";
+import { normalizeMarkdownMathDelimiters } from "./markdownMath";
 
 type DocumentView = "document" | "blog";
 
@@ -113,11 +116,20 @@ function BlogAssetImage({ api, workspace, src, alt }: {
   return <img src={objectUrl} alt={alt ?? ""} />;
 }
 
-function BlogPreview({ api, workspace, markdown }: { api: GatewayApi; workspace: string; markdown: string }) {
+export function BlogPreview({ api, workspace, markdown }: { api: GatewayApi; workspace: string; markdown: string }) {
   const components = useMemo<Components>(() => ({
     img: ({ src, alt }) => <BlogAssetImage api={api} workspace={workspace} src={src} alt={alt} />,
   }), [api, workspace]);
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{markdown}</ReactMarkdown>;
+  const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(markdown), [markdown]);
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={components}
+    >
+      {normalizedMarkdown}
+    </ReactMarkdown>
+  );
 }
 
 interface DocumentWorkspaceProps {

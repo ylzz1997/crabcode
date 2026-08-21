@@ -1095,7 +1095,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
         prompt = f"""[文档操作：生成 Blog]
 {source_instruction}
 基于整份文档生成结构清晰、事实忠实的 Markdown Blog，先写入 .crabcode/document/jobs/{operation_id}/blog.md，Gateway 校验成功后再原子发布。
-使用一个 H1 标题以及适量的 H2/H3、段落、列表、引用和代码块；如需配图，将图片放在 blog-assets/ 并使用相对路径引用。不要声称未在文档中出现的事实。完成后简短说明 Blog 已生成。"""
+使用一个 H1 标题以及适量的 H2/H3、段落、列表、引用和代码块；数学公式使用 KaTeX 兼容的 Markdown 定界符：行内公式使用 $...$，块级公式使用独占行的 $$...$$，不要使用 \\(...\\) 或 \\[...\\]；如需配图，将图片放在 blog-assets/ 并使用相对路径引用。不要声称未在文档中出现的事实。完成后简短说明 Blog 已生成。"""
 
     fallback = dict(msg)
     fallback["type"] = "send_message"

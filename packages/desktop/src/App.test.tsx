@@ -49,6 +49,26 @@ describe("MessageMarkdown", () => {
 
     act(() => root.unmount());
   });
+
+  it("renders persisted LaTeX-style delimiters after loading a session", () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    act(() => root.render(
+      <MessageMarkdown>{String.raw`Condition \(y\):
+
+\[
+s_\theta(x_t,y,t) \approx \nabla_{x_t}\log p_t(x_t\mid y)
+\]`}</MessageMarkdown>,
+    ));
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(2);
+    expect(container.querySelector(".katex-display")).not.toBeNull();
+    expect(container.textContent).not.toContain(String.raw`\[`);
+
+    act(() => root.unmount());
+  });
 });
 
 const job: ScheduleJobInfo = {

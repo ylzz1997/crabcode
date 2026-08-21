@@ -65,6 +65,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import DocumentWorkspace from "./DocumentWorkspace";
 import { applyGatewayEvent } from "./events";
+import { normalizeMarkdownMathDelimiters } from "./markdownMath";
 import {
   addFavoriteEntry,
   countFavoriteItems,
@@ -3960,12 +3961,13 @@ function ToolResultView({ toolName, result }: { toolName: string; result: unknow
 }
 
 export function MessageMarkdown({ children }: { children: string }) {
+  const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(children), [children]);
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex]}
     >
-      {children}
+      {normalizedMarkdown}
     </ReactMarkdown>
   );
 }

@@ -5507,6 +5507,11 @@ html[data-theme="light"] .document-actions-separator {
   margin-top: 1.8em;
 }
 
+.document-blog-preview .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .document-blog-preview img {
   max-width: 100%;
   height: auto;
