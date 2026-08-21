@@ -5445,6 +5445,8 @@ html[data-theme="light"] .document-actions-separator {
 .document-blog-shell {
   min-height: 0;
   flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow: auto;
   background: var(--bg);
 }
