@@ -1232,7 +1232,22 @@ export default function DocumentWorkspace({
         </div>
       ), document.body)}
 
-      {error && <div className="document-error"><AlertTriangle />{error}<button onClick={() => { setError(null); void refreshArtifacts(); }}><RefreshCw />重试</button></div>}
+      {error && (
+        <div className="document-error" role="alert">
+          <AlertTriangle aria-hidden="true" />
+          <span className="document-error-message">{error}</span>
+          <div className="document-error-actions">
+            <button type="button" onClick={() => { setError(null); void refreshArtifacts(); }}><RefreshCw />重试</button>
+            <button
+              className="icon-button tiny"
+              type="button"
+              title="关闭提示"
+              aria-label="关闭提示"
+              onClick={() => setError(null)}
+            ><X /></button>
+          </div>
+        </div>
+      )}
       {loading && <div className="document-loading"><LoaderCircle className="spin" />正在准备文档</div>}
       {!loading && view === "document" && (
         <div

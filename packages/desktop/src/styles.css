@@ -5041,8 +5041,21 @@ html[data-theme="light"] .document-actions-separator {
   border-radius: 0;
 }
 
-.document-error button {
+.document-error-message {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.document-error-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.document-error-actions > button:not(.icon-button) {
   display: flex;
   align-items: center;
   gap: 5px;
