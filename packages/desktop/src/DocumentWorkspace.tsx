@@ -176,6 +176,24 @@ interface SelectionTranslationState {
   message: string;
 }
 
+export function useDocumentSelectionListeners(
+  rootRef: { current: HTMLDivElement | null },
+  captureSelection: () => void,
+  active: boolean,
+) {
+  useEffect(() => {
+    const element = rootRef.current;
+    if (!element || !active) return undefined;
+    const finishSelection = () => window.requestAnimationFrame(captureSelection);
+    element.addEventListener("mouseup", finishSelection);
+    element.addEventListener("touchend", finishSelection);
+    return () => {
+      element.removeEventListener("mouseup", finishSelection);
+      element.removeEventListener("touchend", finishSelection);
+    };
+  }, [active, captureSelection, rootRef]);
+}
+
 export function unrotateSelectionBox(
   box: Pick<DocumentSelectionRect, "x" | "y" | "width" | "height">,
   rotation: number,
@@ -1625,17 +1643,7 @@ export default function DocumentWorkspace({
     setSelection((current) => current ? { ...current, bounds: positionSelection(current.rects) } : current);
   }, [positionSelection, rotation, selection?.rects, zoom]);
 
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!element) return undefined;
-    const finishSelection = () => window.requestAnimationFrame(captureSelection);
-    element.addEventListener("mouseup", finishSelection);
-    element.addEventListener("touchend", finishSelection);
-    return () => {
-      element.removeEventListener("mouseup", finishSelection);
-      element.removeEventListener("touchend", finishSelection);
-    };
-  }, [captureSelection]);
+  useDocumentSelectionListeners(scrollRef, captureSelection, !loading && view === "document");
 
   const startSelectionTranslation = useCallback((targetLocale: string) => {
     if (!selection || sessionBusy) return;
