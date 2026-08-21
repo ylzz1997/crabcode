@@ -56,4 +56,43 @@ s_\theta(x_t, y, t) \approx \nabla_{x_t} \log p_t(x_t \mid y)
 
     expect(normalizeMarkdownMathDelimiters(markdown)).toBe(markdown);
   });
+
+  it("renders same-line and multiline display delimiters", () => {
+    const markdown = String.raw`Same line: \[x^2 + y^2 = z^2\]
+
+\[
+\begin{aligned}
+s_\theta(x_t, y, t) &= \nabla_{x_t} \log p_t(x_t \mid y) \\
+&\quad + \lambda(t)\,c(x_t, y)
+\end{aligned}
+\]`;
+
+    act(() => root.render(
+      <BlogPreview api={{} as GatewayApi} workspace="/test" markdown={markdown} />,
+    ));
+
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(2);
+    expect(container.querySelector(".katex-error")).toBeNull();
+  });
+
+  it("normalizes standalone equation and align environments", () => {
+    const markdown = String.raw`\begin{equation}
+p(x) = \frac{e^{-x^2}}{Z}
+\end{equation}
+
+\begin{align}
+a &= b + c \\
+d &= e + f
+\end{align}`;
+
+    const normalized = normalizeMarkdownMathDelimiters(markdown);
+    expect(normalized.match(/^\$\$$/gm)).toHaveLength(4);
+
+    act(() => root.render(
+      <BlogPreview api={{} as GatewayApi} workspace="/test" markdown={markdown} />,
+    ));
+
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(2);
+    expect(container.querySelector(".katex-error")).toBeNull();
+  });
 });

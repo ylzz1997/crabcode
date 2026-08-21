@@ -2,7 +2,9 @@ import {
   AlertTriangle,
   BookOpen,
   Check,
+  Code2,
   Copy,
+  Eye,
   FileText,
   Highlighter,
   Languages,
@@ -53,6 +55,7 @@ import type {
 import { normalizeMarkdownMathDelimiters } from "./markdownMath";
 
 type DocumentView = "document" | "blog";
+type BlogView = "preview" | "raw";
 
 const DOCUMENT_ZOOM_MIN = .6;
 const DOCUMENT_ZOOM_MAX = 2.5;
@@ -119,12 +122,22 @@ function BlogAssetImage({ api, workspace, src, alt }: {
 export function BlogPreview({ api, workspace, markdown }: { api: GatewayApi; workspace: string; markdown: string }) {
   const components = useMemo<Components>(() => ({
     img: ({ src, alt }) => <BlogAssetImage api={api} workspace={workspace} src={src} alt={alt} />,
+    table: ({ children }) => <div className="document-blog-table-wrap"><table>{children}</table></div>,
   }), [api, workspace]);
   const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(markdown), [markdown]);
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
+      rehypePlugins={[[rehypeKatex, {
+        strict: "ignore",
+        throwOnError: false,
+        macros: {
+          "\\RR": "\\mathbb{R}",
+          "\\NN": "\\mathbb{N}",
+          "\\EE": "\\mathbb{E}",
+          "\\bm": "\\boldsymbol",
+        },
+      }]]}
       components={components}
     >
       {normalizedMarkdown}
@@ -1163,6 +1176,7 @@ export default function DocumentWorkspace({
   const [rotation, setRotation] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [view, setView] = useState<DocumentView>("document");
+  const [blogView, setBlogView] = useState<BlogView>("preview");
   const [blog, setBlog] = useState<DocumentBlog | null>(null);
   const [blogTouched, setBlogTouched] = useState(false);
   const [blogConflict, setBlogConflict] = useState<{ local: DocumentBlog; server: DocumentBlog } | null>(null);
@@ -1270,6 +1284,7 @@ export default function DocumentWorkspace({
     restoredProjectKeyRef.current = null;
     setRotation(0);
     setCurrentPage(1);
+    setBlogView("preview");
     setSelection(null);
     setSelectionTranslation(null);
     setSelectionLanguageOpen(false);
@@ -1793,6 +1808,7 @@ export default function DocumentWorkspace({
               onClear={() => setClearTranslationConfirm(true)}
               onGenerateBlog={() => {
                 setView("blog");
+                setBlogView("preview");
                 setPendingAction("generate_blog");
                 if (!onDocumentAction("generate_blog", { locale, source: showTranslation ? "translation" : "original" })) setPendingAction(null);
               }}
@@ -1806,6 +1822,24 @@ export default function DocumentWorkspace({
               />
               显示译文
             </label>
+          </div>
+        )}
+        {view === "blog" && blog && (
+          <div className="document-blog-view-tabs" role="tablist" aria-label="Blog 显示模式">
+            <button
+              className={blogView === "preview" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={blogView === "preview"}
+              onClick={() => setBlogView("preview")}
+            ><Eye />Preview</button>
+            <button
+              className={blogView === "raw" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={blogView === "raw"}
+              onClick={() => setBlogView("raw")}
+            ><Code2 />Raw</button>
           </div>
         )}
         <button className="icon-button document-agent-toggle" title="折叠 Agent" onClick={() => onAgentCollapsed(true)}>
@@ -1913,19 +1947,24 @@ export default function DocumentWorkspace({
           {pendingAction === "generate_blog" && !blog ? (
             <div className="document-blog-empty"><LoaderCircle className="spin" /><h2>Agent 正在生成 Blog</h2><p>生成完成后会自动载入这里。</p></div>
           ) : blog ? (
-            <div className="document-blog-columns">
-              <textarea
-                aria-label="Markdown Blog 编辑器"
-                className="document-blog-editor"
-                value={blog.markdown}
-                spellCheck
-                onChange={(event) => {
-                  setBlog({ ...blog, markdown: event.target.value });
-                  setBlogTouched(true);
-                }}
-              />
-              <article className="document-blog-preview"><BlogPreview api={api} workspace={project.path} markdown={blog.markdown} /></article>
-            </div>
+            blogView === "raw" ? (
+              <div className="document-blog-raw">
+                <textarea
+                  aria-label="Markdown Blog 编辑器"
+                  className="document-blog-editor"
+                  value={blog.markdown}
+                  spellCheck
+                  onChange={(event) => {
+                    setBlog({ ...blog, markdown: event.target.value });
+                    setBlogTouched(true);
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="document-blog-reader">
+                <article className="document-blog-preview"><BlogPreview api={api} workspace={project.path} markdown={blog.markdown} /></article>
+              </div>
+            )
           ) : (
             <div className="document-blog-empty"><BookOpen /><h2>还没有 Blog</h2><p>返回文档视图，选择原文或译文后生成。</p></div>
           )}
