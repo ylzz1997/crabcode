@@ -254,4 +254,29 @@ describe("Gateway event reducer", () => {
       durationMs: 3_723_000,
     });
   });
+
+  it("does not count a later background callback as part of the foreground turn", () => {
+    const current = applyGatewayEvent(state(), {
+      type: "session_history",
+      messages: [
+        { uuid: "user-1", role: "user", timestamp: "2026-08-20T00:00:00.000Z", content: "启动后台任务" },
+        { uuid: "assistant-1", role: "assistant", timestamp: "2026-08-20T00:00:10.000Z", content: "任务已启动" },
+        {
+          uuid: "notification-1",
+          role: "user",
+          origin: "task-notification",
+          timestamp: "2026-08-20T00:10:00.000Z",
+          content: "<monitor-event>internal</monitor-event>",
+        },
+        { uuid: "assistant-2", role: "assistant", timestamp: "2026-08-20T00:10:05.000Z", content: "后台任务已完成" },
+      ],
+    });
+    expect(current.items.map((item) => item.kind)).toEqual([
+      "user",
+      "assistant",
+      "turn_duration",
+      "assistant",
+    ]);
+    expect(current.items[2].durationMs).toBe(10_000);
+  });
 });

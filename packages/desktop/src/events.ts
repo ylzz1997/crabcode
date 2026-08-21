@@ -49,7 +49,14 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
     // Synthetic task callbacks are model input. Their user-facing result is
     // the assistant reply that follows, so replaying the raw envelope leaks
     // protocol markup that was never shown in the live conversation.
-    if (message.origin === "task-notification" || message.origin === "document-action") continue;
+    if (message.origin === "task-notification") {
+      finishTurn();
+      turnStartedAt = null;
+      turnCompletedAt = null;
+      turnDurationId = "";
+      continue;
+    }
+    if (message.origin === "document-action") continue;
 
     const baseId = String(message.uuid ?? crypto.randomUUID());
     const messageTimestamp = timestampMs(message.timestamp);

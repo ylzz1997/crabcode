@@ -114,6 +114,7 @@ describe("settings search", () => {
     expect(filterSettingsSections("Dock 图标").map((section) => section.id)).toEqual(["appearance"]);
     expect(filterSettingsSections("字体平滑").map((section) => section.id)).toEqual(["appearance"]);
     expect(filterSettingsSections("对比度").map((section) => section.id)).toEqual(["appearance"]);
+    expect(filterSettingsSections("处理用时").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("不存在")).toEqual([]);
   });
 });
@@ -213,13 +214,13 @@ describe("SettingsView", () => {
       />,
     ));
 
-    act(() => container.querySelector<HTMLButtonElement>('[aria-label="显示处理用时"]')!.click());
     const seconds = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="处理用时格式"] button'))
       .find((button) => button.textContent?.includes("仅秒数"))!;
     act(() => seconds.click());
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="显示处理用时"]')!.click());
 
-    expect(handlers.onConversationChange).toHaveBeenNthCalledWith(1, { show_turn_duration: false });
-    expect(handlers.onConversationChange).toHaveBeenNthCalledWith(2, { turn_duration_format: "seconds" });
+    expect(handlers.onConversationChange).toHaveBeenNthCalledWith(1, { turn_duration_format: "seconds" });
+    expect(handlers.onConversationChange).toHaveBeenNthCalledWith(2, { show_turn_duration: false });
   });
 
   it("exposes connection actions but never offers to delete the local connection", () => {

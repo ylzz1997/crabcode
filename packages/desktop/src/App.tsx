@@ -3884,7 +3884,7 @@ export function MessageMarkdown({ children }: { children: string }) {
   );
 }
 
-function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
+export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
   item: ChatItem;
   now: number;
   showTurnDuration: boolean;
@@ -3899,7 +3899,7 @@ function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermi
   const durationLabel = durationMs === null ? null : formatElapsed(durationMs);
   if (item.kind === "turn_duration") {
     if (!showTurnDuration || durationMs === null) return null;
-    const label = `已处理 ${formatTurnDuration(durationMs, turnDurationFormat)}`;
+    const label = `已处理：${formatTurnDuration(durationMs, turnDurationFormat)}`;
     return <div className="turn-duration-divider" role="separator" aria-label={label}><span>{label}</span></div>;
   }
   if (item.kind === "user") {

@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ChatItemView,
   collectFavoriteSessions,
   defaultProjectDirectory,
   FavoritesView,
@@ -21,7 +22,7 @@ import {
 } from "./App";
 import type { GatewayApi } from "./gateway";
 import { favoriteEntries, resolveFavoriteEntries } from "./favorites";
-import type { BackgroundTaskInfo, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
+import type { BackgroundTaskInfo, ChatItem, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
 
 const documentCapabilities = {
   supported_extensions: [".pdf", ".docx"],
@@ -663,7 +664,34 @@ describe("turn duration formatting", () => {
     expect(formatTurnDuration(3_723_000, "seconds")).toBe("3723秒");
     expect(formatTurnDuration(3_723_000, "hms")).toBe("1时2分3秒");
     expect(formatTurnDuration(63_000, "hms")).toBe("1分3秒");
+    expect(formatTurnDuration(3_603_000, "hms")).toBe("1时3秒");
     expect(formatTurnDuration(3_000, "hms")).toBe("3秒");
+  });
+
+  it("renders the completion divider only when enabled", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const item: ChatItem = { id: "duration-1", kind: "turn_duration", durationMs: 63_000 };
+    const renderDivider = (showTurnDuration: boolean) => act(() => root.render(
+      <ChatItemView
+        item={item}
+        now={0}
+        showTurnDuration={showTurnDuration}
+        turnDurationFormat="hms"
+        onPermission={vi.fn()}
+        onToggleChoice={vi.fn()}
+        onSubmitChoice={vi.fn()}
+        onPlan={vi.fn()}
+      />,
+    ));
+
+    renderDivider(true);
+    expect(container.querySelector('[role="separator"]')?.textContent).toBe("已处理：1分3秒");
+    renderDivider(false);
+    expect(container.querySelector('[role="separator"]')).toBeNull();
+    act(() => root.unmount());
+    container.remove();
   });
 });
 

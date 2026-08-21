@@ -8238,7 +8238,7 @@ body {
 }
 
 .general-options-group .settings-row+.settings-row {
-  border-top: 1px solid #20373a;
+  border-top: 1px solid var(--border-soft);
 }
 
 .settings-switch {
