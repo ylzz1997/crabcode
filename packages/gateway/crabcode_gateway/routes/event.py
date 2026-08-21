@@ -614,6 +614,8 @@ async def websocket_endpoint(ws: WebSocket):
                     await _handle_send_message(ws, msg)
                 elif msg_type == "document_action":
                     await _handle_document_action(ws, msg)
+                elif msg_type == "document_selection_translate":
+                    await _handle_document_selection_translate(ws, msg)
                 elif msg_type == "steer_message":
                     await _handle_steer_message(ws, msg)
                 elif msg_type == "new_session":
@@ -1127,6 +1129,159 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
                 )
                 return
     await _handle_send_message(ws, fallback)
+
+
+async def _translate_selected_text(session: Any, locale: str, text: str) -> tuple[str, dict[str, int]]:
+    from crabcode_core.api import create_adapter
+
+    initialize = getattr(session, "initialize", None)
+    if callable(initialize):
+        await initialize()
+    settings = getattr(session, "settings", None)
+    if settings is None or not hasattr(settings, "get_api_config"):
+        raise _DocumentTranslationError("active session has no model configuration")
+    current_model = getattr(session, "_current_model_name", None)
+    active_config = settings.get_api_config(current_model)
+    api_config = active_config.model_copy(deep=True) if hasattr(active_config, "model_copy") else active_config
+    if not getattr(api_config, "model", None):
+        raise _DocumentTranslationError("active session model is not configured")
+    try:
+        adapter = create_adapter(api_config)
+    except Exception as exc:
+        raise _DocumentTranslationError(f"unable to initialize translation model: {exc}") from exc
+    try:
+        translations, usage = await _request_translation_batch(adapter, api_config, locale, [text])
+        return translations[0], usage
+    finally:
+        await _close_translation_adapter(adapter)
+
+
+async def _handle_document_selection_translate(ws: WebSocket, msg: dict) -> None:
+    """Translate one visible PDF selection with the active session model."""
+    import re
+    from pathlib import Path
+
+    text = msg.get("text")
+    locale = msg.get("locale") or "zh-CN"
+    requested_operation_id = msg.get("operation_id")
+    if not isinstance(text, str) or not text.strip():
+        await _send_ws_command_error(
+            ws,
+            "selected document text is required",
+            command="document_selection_translate",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
+    text = text.strip()
+    if len(text) > 12_000:
+        await _send_ws_command_error(
+            ws,
+            "selected document text exceeds 12000 characters",
+            command="document_selection_translate",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
+    if not isinstance(locale, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", locale):
+        await _send_ws_command_error(
+            ws,
+            "invalid document locale",
+            command="document_selection_translate",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
+    operation_id = requested_operation_id if isinstance(requested_operation_id, str) else uuid.uuid4().hex
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", operation_id):
+        await _send_ws_command_error(
+            ws,
+            "invalid document operation id",
+            command="document_selection_translate",
+            request=msg,
+            error_type="invalid_request",
+        )
+        return
+    session = _resolve_session(ws, msg)
+    manifest_path = Path(getattr(session, "cwd", "")) / ".crabcode" / "document" / "manifest.json" if session else None
+    if session is None or manifest_path is None or not manifest_path.is_file():
+        await _send_ws_command_error(
+            ws,
+            "active session is not a document project",
+            command="document_selection_translate",
+            request=msg,
+            operation_id=operation_id,
+            error_type="invalid_document_project",
+        )
+        return
+    if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
+        _set_active_session(ws, session.session_id)
+
+    async def publish(status: str, translated_text: str = "", message: str = "") -> None:
+        from crabcode_core.types.event import DocumentSelectionTranslationEvent
+
+        await ws.app.state.event_bus.publish(
+            session.session_id,
+            DocumentSelectionTranslationEvent(
+                operation_id=operation_id,
+                locale=locale,
+                source_text=text,
+                translated_text=translated_text,
+                status=status,
+                message=message,
+            ),
+            source=session,
+            operation_id=operation_id,
+            operation_scope="document-selection",
+        )
+
+    async def run() -> None:
+        await publish("running")
+        try:
+            translated_text, _usage = await _translate_selected_text(session, locale, text)
+            await publish("completed", translated_text=translated_text)
+        except asyncio.CancelledError:
+            await publish("cancelled", message="选区翻译已取消")
+            raise
+        except Exception as exc:
+            logger.exception("document selection translation failed session=%s", session.session_id)
+            await publish("failed", message=str(exc))
+
+    duplicate_operation = False
+    async with get_session_lock(ws.app.state):
+        if (
+            getattr(ws.app.state, "gateway_closing", False)
+            or ws.app.state.sessions.get(session.session_id) is not session
+            or session.session_id in getattr(ws.app.state, "closing_sessions", set())
+        ):
+            task = None
+        elif operation_is_registered(ws.app.state, session.session_id, operation_id):
+            duplicate_operation = True
+            task = None
+        else:
+            task = asyncio.create_task(run())
+            track_task(
+                ws.app.state,
+                session.session_id,
+                task,
+                owner_tasks=ws.scope[_WS_TASKS_KEY],
+                owner_sessions=ws.scope[_WS_TASK_SESSIONS_KEY],
+                operation_id=operation_id,
+                operation_scope="document-selection",
+            )
+    if task is None:
+        await _send_ws_command_error(
+            ws,
+            f"operation already active: {operation_id}" if duplicate_operation else "session is closing",
+            command="document_selection_translate",
+            request=msg,
+            session_id=session.session_id,
+            operation_id=operation_id,
+            error_type="operation_conflict" if duplicate_operation else "session_closing",
+        )
 
 
 async def _handle_send_message(ws: WebSocket, msg: dict) -> None:

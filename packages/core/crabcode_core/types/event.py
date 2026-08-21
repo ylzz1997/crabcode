@@ -256,6 +256,17 @@ class DocumentJobEvent:
     message: str = ""
 
 
+@dataclass
+class DocumentSelectionTranslationEvent:
+    """Translation result for a user-selected document excerpt."""
+    operation_id: str
+    locale: str
+    source_text: str
+    translated_text: str = ""
+    status: str = "completed"
+    message: str = ""
+
+
 CoreEvent = Union[
     StreamTextEvent,
     ThinkingEvent,
@@ -280,4 +291,5 @@ CoreEvent = Union[
     RevertEvent,
     ScheduleRunEvent,
     DocumentJobEvent,
+    DocumentSelectionTranslationEvent,
 ]

@@ -1,7 +1,10 @@
 import {
   AlertTriangle,
   BookOpen,
+  Check,
+  Copy,
   FileText,
+  Highlighter,
   Languages,
   LoaderCircle,
   Minus,
@@ -9,8 +12,10 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  Quote,
   RefreshCw,
   RotateCw,
+  Search,
   Sparkles,
   Trash2,
   X,
@@ -32,11 +37,15 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { GatewayApi } from "./gateway";
 import type {
   DocumentBlog,
+  DocumentAnnotation,
   DocumentLayout,
   DocumentManifest,
   DocumentPageLayout,
+  DocumentReference,
+  DocumentSelectionRect,
   DocumentTranslation,
   DocumentViewState,
+  GatewayEvent,
   ProjectPreset,
 } from "./types";
 
@@ -97,6 +106,7 @@ interface DocumentWorkspaceProps {
   translationBatchSize: number;
   sessionBusy: boolean;
   sessionError: string | null;
+  selectionTranslationEvent: GatewayEvent | null;
   onAgentWidth: (width: number) => void;
   onAgentCollapsed: (collapsed: boolean) => void;
   onDocumentViewState: (connectionId: string, projectId: string, state: DocumentViewState) => void;
@@ -109,6 +119,8 @@ interface DocumentWorkspaceProps {
       translation_batch_size?: number;
     },
   ) => boolean;
+  onDocumentReference: (reference: DocumentReference) => void;
+  onTranslateSelection: (text: string, locale: string) => string | null;
 }
 
 const TARGET_LANGUAGES = [
@@ -120,6 +132,43 @@ const TARGET_LANGUAGES = [
   ["de", "Deutsch"],
   ["es", "Español"],
 ] as const;
+
+type SelectionBox = { left: number; top: number; width: number; height: number };
+
+interface DocumentSelection {
+  text: string;
+  rects: DocumentSelectionRect[];
+  bounds: SelectionBox | null;
+}
+
+interface SelectionTranslationState {
+  operationId: string;
+  sourceText: string;
+  locale: string;
+  translatedText: string;
+  status: "running" | "completed" | "failed";
+  message: string;
+}
+
+export function unrotateSelectionBox(
+  box: Pick<DocumentSelectionRect, "x" | "y" | "width" | "height">,
+  rotation: number,
+) {
+  return rotation === 90
+    ? { x: box.y, y: 1 - box.x - box.width, width: box.height, height: box.width }
+    : rotation === 180
+      ? { x: 1 - box.x - box.width, y: 1 - box.y - box.height, width: box.width, height: box.height }
+      : rotation === 270
+        ? { x: 1 - box.y - box.height, y: box.x, width: box.height, height: box.width }
+        : box;
+}
+
+function pageLabel(rects: DocumentSelectionRect[]): string {
+  const pages = [...new Set(rects.map((rect) => rect.page))].sort((left, right) => left - right);
+  if (pages.length === 0) return "";
+  if (pages.length === 1) return `第 ${pages[0]} 页`;
+  return `第 ${pages[0]}–${pages.at(-1)} 页`;
+}
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && /\b404\b|not found/i.test(error.message);
@@ -620,7 +669,10 @@ async function extractLayout(pdf: PDFDocumentProxy): Promise<DocumentLayout> {
   return { fingerprint, page_count: pdf.numPages, pages };
 }
 
-export function translatedBox(block: DocumentPageLayout["blocks"][number], rotation: number) {
+export function translatedBox(
+  block: Pick<DocumentPageLayout["blocks"][number], "x" | "y" | "width" | "height">,
+  rotation: number,
+) {
   return rotation === 90
     ? { x: 1 - block.y - block.height, y: block.x, width: block.height, height: block.width }
     : rotation === 180
@@ -698,6 +750,8 @@ function PdfPage({
   showOriginalText,
   showTranslation,
   rotation,
+  annotations,
+  selectionRects,
   onCurrent,
 }: {
   pdf: PDFDocumentProxy;
@@ -708,6 +762,8 @@ function PdfPage({
   showOriginalText: boolean;
   showTranslation: boolean;
   rotation: number;
+  annotations: DocumentAnnotation[];
+  selectionRects: DocumentSelectionRect[];
   onCurrent: (page: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -845,7 +901,7 @@ function PdfPage({
   }, [layout, renderVersion, rotation, showTranslation]);
 
   return (
-    <div className="document-pdf-page" ref={rootRef} style={{ width: size.width, height: size.height }}>
+    <div className="document-pdf-page" data-page-number={pageNumber} ref={rootRef} style={{ width: size.width, height: size.height }}>
       <canvas ref={canvasRef} aria-label={`第 ${pageNumber} 页`} />
       <div
         ref={textLayerRef}
@@ -875,8 +931,149 @@ function PdfPage({
           })}
         </div>
       )}
+      <div className="document-annotation-layer" aria-hidden="true">
+        {annotations.flatMap((annotation) => annotation.rects
+          .filter((rect) => rect.page === pageNumber)
+          .map((rect, index) => {
+            const box = translatedBox(rect, rotation);
+            return (
+              <span
+                key={`${annotation.id}-${index}`}
+                className={index === 0 ? "has-label" : undefined}
+                data-label={index === 0 ? annotation.label || "标注" : undefined}
+                title={[annotation.label, annotation.note].filter(Boolean).join(" · ")}
+                style={{
+                  left: `${box.x * 100}%`,
+                  top: `${box.y * 100}%`,
+                  width: `${box.width * 100}%`,
+                  height: `${box.height * 100}%`,
+                }}
+              />
+            );
+          }))}
+      </div>
+      <div className="document-active-selection-layer" aria-hidden="true">
+        {selectionRects.filter((rect) => rect.page === pageNumber).map((rect, index) => {
+          const box = translatedBox(rect, rotation);
+          return (
+            <span
+              key={index}
+              style={{
+                left: `${box.x * 100}%`,
+                top: `${box.y * 100}%`,
+                width: `${box.width * 100}%`,
+                height: `${box.height * 100}%`,
+              }}
+            />
+          );
+        })}
+      </div>
       <span className="document-page-number">{pageNumber}</span>
     </div>
+  );
+}
+
+function SelectionLanguageMenu({
+  locale,
+  onLocale,
+  onClose,
+}: {
+  locale: string;
+  onLocale: (locale: string) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const choices = TARGET_LANGUAGES.filter(([value, label]) => (
+    !query.trim() || `${value} ${label}`.toLowerCase().includes(query.trim().toLowerCase())
+  ));
+  return (
+    <div className="document-selection-language-menu" role="menu" aria-label="翻译语言">
+      <label><Search /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索语言" /></label>
+      <div>
+        {choices.map(([value, label]) => (
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={locale === value}
+            key={value}
+            onClick={() => {
+              onLocale(value);
+              onClose();
+            }}
+          >
+            <span>{label}</span>{locale === value && <Check />}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SelectionToolbar({
+  position,
+  copied,
+  translateBusy,
+  onCopy,
+  onReference,
+  onTranslate,
+  onAnnotate,
+}: {
+  position: SelectionBox;
+  copied: boolean;
+  translateBusy: boolean;
+  onCopy: () => void;
+  onReference: () => void;
+  onTranslate: () => void;
+  onAnnotate: () => void;
+}) {
+  return createPortal(
+    <div
+      className="document-selection-toolbar"
+      role="toolbar"
+      aria-label="选中文本操作"
+      style={{ left: position.left, top: position.top }}
+      onPointerDown={(event) => event.preventDefault()}
+    >
+      <button type="button" title="复制" onClick={onCopy}>{copied ? <Check /> : <Copy />}<span>复制</span></button>
+      <button type="button" title="引用到 Agent" onClick={onReference}><Quote /><span>引用</span></button>
+      <button type="button" title="翻译" disabled={translateBusy} onClick={onTranslate}>{translateBusy ? <LoaderCircle className="spin" /> : <Languages />}<span>翻译</span></button>
+      <button type="button" title="添加标注" onClick={onAnnotate}><Highlighter /><span>标注</span></button>
+    </div>,
+    document.body,
+  );
+}
+
+function AnnotationModal({
+  selection,
+  saving,
+  onClose,
+  onSave,
+}: {
+  selection: DocumentSelection;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (label: string, note: string) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [note, setNote] = useState("");
+  return createPortal(
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+      <section className="modal document-annotation-modal" role="dialog" aria-modal="true" aria-label="添加文档标注">
+        <header><h2>添加标注</h2><button className="icon-button" title="关闭" disabled={saving} onClick={onClose}><X /></button></header>
+        <div className="modal-body">
+          <blockquote>{selection.text}</blockquote>
+          <label><span>Label</span><input autoFocus maxLength={100} value={label} onChange={(event) => setLabel(event.target.value)} placeholder="例如：重点、待确认、灵感" /></label>
+          <label><span>记录</span><textarea rows={5} maxLength={20_000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="写下你的理解、问题或后续动作" /></label>
+          <div className="modal-actions">
+            <button type="button" disabled={saving} onClick={onClose}>取消</button>
+            <button className="primary" type="button" disabled={saving || (!label.trim() && !note.trim())} onClick={() => onSave(label.trim(), note.trim())}>
+              {saving ? <LoaderCircle className="spin" /> : <Highlighter />}保存标注
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>,
+    document.body,
   );
 }
 
@@ -892,10 +1089,13 @@ export default function DocumentWorkspace({
   translationBatchSize,
   sessionBusy,
   sessionError,
+  selectionTranslationEvent,
   onAgentWidth,
   onAgentCollapsed,
   onDocumentViewState,
   onDocumentAction,
+  onDocumentReference,
+  onTranslateSelection,
 }: DocumentWorkspaceProps) {
   const [manifest, setManifest] = useState<DocumentManifest | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -913,6 +1113,14 @@ export default function DocumentWorkspace({
   const [pendingAction, setPendingAction] = useState<"translate" | "generate_blog" | null>(null);
   const [clearTranslationConfirm, setClearTranslationConfirm] = useState(false);
   const [clearingTranslation, setClearingTranslation] = useState(false);
+  const [selection, setSelection] = useState<DocumentSelection | null>(null);
+  const [selectionLocale, setSelectionLocale] = useState("zh-CN");
+  const [selectionLanguageOpen, setSelectionLanguageOpen] = useState(false);
+  const [selectionTranslation, setSelectionTranslation] = useState<SelectionTranslationState | null>(null);
+  const [copiedSelection, setCopiedSelection] = useState(false);
+  const [annotations, setAnnotations] = useState<DocumentAnnotation[]>([]);
+  const [annotationModal, setAnnotationModal] = useState(false);
+  const [savingAnnotation, setSavingAnnotation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const previousBusy = useRef(sessionBusy);
@@ -997,6 +1205,10 @@ export default function DocumentWorkspace({
     restoredProjectKeyRef.current = null;
     setRotation(0);
     setCurrentPage(1);
+    setSelection(null);
+    setSelectionTranslation(null);
+    setSelectionLanguageOpen(false);
+    setAnnotationModal(false);
   }, [connectionId, documentView, persistViewState, project.id, projectKey]);
 
   useLayoutEffect(() => {
@@ -1125,6 +1337,19 @@ export default function DocumentWorkspace({
   }, [api, project.id, project.path]);
 
   useEffect(() => {
+    let cancelled = false;
+    setAnnotations([]);
+    void api.documentAnnotations(project.path).then((next) => {
+      if (!cancelled) setAnnotations(next);
+    }).catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, project.id, project.path]);
+
+  useEffect(() => {
     setShowTranslation(false);
     setTranslation(null);
     if (!layout) return;
@@ -1154,6 +1379,33 @@ export default function DocumentWorkspace({
     setPendingAction(null);
     setError(sessionError);
   }, [pendingAction, sessionBusy, sessionError]);
+
+  useEffect(() => {
+    if (!selectionTranslationEvent) return;
+    if (
+      selectionTranslationEvent.type === "error"
+      && selectionTranslationEvent.command === "document_selection_translate"
+    ) {
+      setSelectionTranslation((current) => current && selectionTranslationEvent.operation_id === current.operationId ? {
+        ...current,
+        status: "failed",
+        message: selectionTranslationEvent.message ?? "选区翻译失败",
+      } : current);
+      return;
+    }
+    if (selectionTranslationEvent.type !== "document_selection_translation") return;
+    const status = selectionTranslationEvent.status === "failed" || selectionTranslationEvent.status === "cancelled"
+      ? "failed"
+      : selectionTranslationEvent.status === "completed"
+        ? "completed"
+        : "running";
+    setSelectionTranslation((current) => current && selectionTranslationEvent.operation_id === current.operationId ? {
+      ...current,
+      status,
+      translatedText: selectionTranslationEvent.translated_text ?? current.translatedText,
+      message: selectionTranslationEvent.message ?? "",
+    } : current);
+  }, [selectionTranslationEvent]);
 
   useEffect(() => {
     if (!blog || !blogTouched) return;
@@ -1199,6 +1451,155 @@ export default function DocumentWorkspace({
     });
   }, [changeZoom]);
 
+  const positionSelection = useCallback((rects: DocumentSelectionRect[]): SelectionBox | null => {
+    const clientRects = rects.flatMap((rect) => {
+      const page = scrollRef.current?.querySelector<HTMLElement>(`.document-pdf-page[data-page-number="${rect.page}"]`);
+      if (!page) return [];
+      const pageBounds = page.getBoundingClientRect();
+      const box = translatedBox(rect, rotation);
+      return [{
+        left: pageBounds.left + box.x * pageBounds.width,
+        top: pageBounds.top + box.y * pageBounds.height,
+        width: box.width * pageBounds.width,
+        height: box.height * pageBounds.height,
+      }];
+    });
+    if (clientRects.length === 0) return null;
+    const left = Math.min(...clientRects.map((rect) => rect.left));
+    const top = Math.min(...clientRects.map((rect) => rect.top));
+    const right = Math.max(...clientRects.map((rect) => rect.left + rect.width));
+    const bottom = Math.max(...clientRects.map((rect) => rect.top + rect.height));
+    const viewportPadding = 8;
+    const toolbarHalfWidth = 132;
+    const center = Math.min(
+      window.innerWidth - viewportPadding - toolbarHalfWidth,
+      Math.max(viewportPadding + toolbarHalfWidth, (left + right) / 2),
+    );
+    const toolbarTop = bottom + 10 + 44 <= window.innerHeight - viewportPadding
+      ? bottom + 10
+      : Math.max(viewportPadding, top - 54);
+    return { left: center, top: toolbarTop, width: right - left, height: bottom - top };
+  }, [rotation]);
+
+  const captureSelection = useCallback(() => {
+    const nativeSelection = window.getSelection();
+    const root = scrollRef.current;
+    if (!nativeSelection || nativeSelection.rangeCount === 0 || nativeSelection.isCollapsed || !root) {
+      setSelection(null);
+      setSelectionLanguageOpen(false);
+      return;
+    }
+    const range = nativeSelection.getRangeAt(0);
+    if (!root.contains(range.commonAncestorContainer)) return;
+    const text = nativeSelection.toString().replace(/[\t ]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    if (!text) return;
+    const pages = Array.from(root.querySelectorAll<HTMLElement>(".document-pdf-page"));
+    const rects = Array.from(range.getClientRects()).flatMap((clientRect) => {
+      if (clientRect.width < .5 || clientRect.height < .5) return [];
+      const centerX = clientRect.left + clientRect.width / 2;
+      const centerY = clientRect.top + clientRect.height / 2;
+      const page = pages.find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return centerX >= bounds.left && centerX <= bounds.right && centerY >= bounds.top && centerY <= bounds.bottom;
+      });
+      if (!page) return [];
+      const pageBounds = page.getBoundingClientRect();
+      const displayed = {
+        x: Math.max(0, (clientRect.left - pageBounds.left) / pageBounds.width),
+        y: Math.max(0, (clientRect.top - pageBounds.top) / pageBounds.height),
+        width: Math.min(1, clientRect.width / pageBounds.width),
+        height: Math.min(1, clientRect.height / pageBounds.height),
+      };
+      const base = unrotateSelectionBox(displayed, rotation);
+      const pageNumber = Number(page.dataset.pageNumber);
+      return Number.isFinite(pageNumber) ? [{ page: pageNumber, ...base }] : [];
+    }).slice(0, 1_000);
+    if (rects.length === 0) return;
+    nativeSelection.removeAllRanges();
+    setCopiedSelection(false);
+    setSelectionLanguageOpen(false);
+    setSelection({ text, rects, bounds: positionSelection(rects) });
+  }, [positionSelection, rotation]);
+
+  useEffect(() => {
+    if (!selection) return undefined;
+    const update = () => setSelection((current) => current ? { ...current, bounds: positionSelection(current.rects) } : current);
+    const scroll = scrollRef.current;
+    window.addEventListener("resize", update);
+    scroll?.addEventListener("scroll", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      scroll?.removeEventListener("scroll", update);
+    };
+  }, [positionSelection, selection?.rects]);
+
+  useEffect(() => {
+    if (!selection) return;
+    setSelection((current) => current ? { ...current, bounds: positionSelection(current.rects) } : current);
+  }, [positionSelection, rotation, selection?.rects, zoom]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return undefined;
+    const finishSelection = () => window.requestAnimationFrame(captureSelection);
+    element.addEventListener("mouseup", finishSelection);
+    element.addEventListener("touchend", finishSelection);
+    return () => {
+      element.removeEventListener("mouseup", finishSelection);
+      element.removeEventListener("touchend", finishSelection);
+    };
+  }, [captureSelection]);
+
+  const startSelectionTranslation = useCallback((targetLocale: string) => {
+    if (!selection || sessionBusy) return;
+    const operationId = onTranslateSelection(selection.text, targetLocale);
+    if (!operationId) return;
+    setSelectionLocale(targetLocale);
+    setSelectionTranslation({
+      operationId,
+      sourceText: selection.text,
+      locale: targetLocale,
+      translatedText: "",
+      status: "running",
+      message: "",
+    });
+  }, [onTranslateSelection, selection, sessionBusy]);
+
+  const copySelection = useCallback(async () => {
+    if (!selection) return;
+    try {
+      await navigator.clipboard.writeText(selection.text);
+      setCopiedSelection(true);
+      window.setTimeout(() => setCopiedSelection(false), 1400);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法复制选中文本");
+    }
+  }, [selection]);
+
+  const saveAnnotation = useCallback(async (label: string, note: string) => {
+    if (!selection) return;
+    setSavingAnnotation(true);
+    setError(null);
+    try {
+      const saved = await api.saveDocumentAnnotation(project.path, {
+        id: crypto.randomUUID(),
+        label,
+        note,
+        text: selection.text,
+        rects: selection.rects,
+        created_at: "",
+        updated_at: "",
+      });
+      setAnnotations((current) => [...current, saved]);
+      setAnnotationModal(false);
+      setSelection(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSavingAnnotation(false);
+    }
+  }, [api, project.path, selection]);
+
   const clearTranslationCache = useCallback(async () => {
     setClearingTranslation(true);
     setError(null);
@@ -1228,6 +1629,23 @@ export default function DocumentWorkspace({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
   };
+
+  const selectionReference = selection && {
+    id: crypto.randomUUID(),
+    project_id: project.id,
+    document_name: manifest?.source.name ?? project.name,
+    page_label: pageLabel(selection.rects),
+    text: selection.text,
+  };
+  const selectionMenuPosition = selection?.bounds
+    ? { left: selection.bounds.left, top: selection.bounds.top, width: 0, height: 0 }
+    : null;
+  const translationCardPosition = selection?.bounds
+    ? {
+        left: Math.max(12, Math.min(window.innerWidth - 392, selection.bounds.left - 12)),
+        top: Math.min(window.innerHeight - 180, selection.bounds.top + 54),
+      }
+    : null;
 
   return (
     <section className="document-workspace" aria-label={`${project.name} 文档工作区`}>
@@ -1362,6 +1780,8 @@ export default function DocumentWorkspace({
               showOriginalText={showOriginalText}
               showTranslation={showTranslation}
               rotation={rotation}
+              annotations={annotations}
+              selectionRects={selection?.rects ?? []}
               onCurrent={selectCurrentPage}
             />
           ))}
@@ -1411,6 +1831,62 @@ export default function DocumentWorkspace({
         <button className="document-agent-rail" title="展开 Agent" onClick={() => onAgentCollapsed(false)}>
           <PanelRightOpen /><span>Agent</span>
         </button>
+      )}
+      {selection && selectionMenuPosition && (
+        <>
+          <SelectionToolbar
+            position={selectionMenuPosition}
+            copied={copiedSelection}
+            translateBusy={selectionTranslation?.status === "running"}
+            onCopy={() => void copySelection()}
+            onReference={() => {
+              if (!selectionReference) return;
+              onDocumentReference(selectionReference);
+              setSelection(null);
+            }}
+            onTranslate={() => setSelectionLanguageOpen((current) => !current)}
+            onAnnotate={() => setAnnotationModal(true)}
+          />
+          {selectionLanguageOpen && createPortal(
+            <div
+              className="document-selection-language-anchor"
+              style={{ left: selectionMenuPosition.left, top: selectionMenuPosition.top + 48 }}
+            >
+              <SelectionLanguageMenu
+                locale={selectionLocale}
+                onLocale={(nextLocale) => startSelectionTranslation(nextLocale)}
+                onClose={() => setSelectionLanguageOpen(false)}
+              />
+            </div>,
+            document.body,
+          )}
+          {selectionTranslation && translationCardPosition && (
+            <div className="document-selection-translation-card" style={translationCardPosition} role="status">
+              <header>
+                <span><Languages />{TARGET_LANGUAGES.find(([value]) => value === selectionTranslation.locale)?.[1] ?? selectionTranslation.locale}</span>
+                <button className="icon-button tiny" title="关闭翻译" onClick={() => setSelectionTranslation(null)}><X /></button>
+              </header>
+              {selectionTranslation.status === "running" ? (
+                <div className="document-selection-translation-loading"><LoaderCircle className="spin" />正在翻译…</div>
+              ) : selectionTranslation.status === "failed" ? (
+                <p className="danger">{selectionTranslation.message || "翻译失败"}</p>
+              ) : (
+                <p>{selectionTranslation.translatedText}</p>
+              )}
+              {selectionTranslation.status === "completed" && (
+                <footer><button type="button" onClick={() => void navigator.clipboard.writeText(selectionTranslation.translatedText)}><Copy />复制译文</button></footer>
+              )}
+            </div>
+          )}
+        </>
+      )}
+      {annotationModal && selection && (
+        <AnnotationModal
+          selection={selection}
+          saving={savingAnnotation}
+          onClose={() => setAnnotationModal(false)}
+          onSave={(label, note) => void saveAnnotation(label, note)}
+        />
       )}
     </section>
   );

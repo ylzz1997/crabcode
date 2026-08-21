@@ -4,6 +4,7 @@ import type {
   BackgroundTaskInfo,
   ConnectionPreset,
   DocumentBlog,
+  DocumentAnnotation,
   DocumentCapabilities,
   DocumentLayout,
   DocumentManifest,
@@ -184,6 +185,23 @@ export class GatewayApi {
     return this.request(`/document/layout?${new URLSearchParams({ workspace })}`, {
       method: "PUT",
       body: JSON.stringify(layout),
+    });
+  }
+
+  documentAnnotations(workspace: string): Promise<DocumentAnnotation[]> {
+    return this.request(`/document/annotations?${new URLSearchParams({ workspace })}`);
+  }
+
+  saveDocumentAnnotation(workspace: string, annotation: DocumentAnnotation): Promise<DocumentAnnotation> {
+    return this.request(`/document/annotations?${new URLSearchParams({ workspace })}`, {
+      method: "PUT",
+      body: JSON.stringify(annotation),
+    });
+  }
+
+  deleteDocumentAnnotation(workspace: string, annotationId: string): Promise<void> {
+    return this.request(`/document/annotations/${encodeURIComponent(annotationId)}?${new URLSearchParams({ workspace })}`, {
+      method: "DELETE",
     });
   }
 
@@ -483,6 +501,18 @@ export class SessionChannel {
       source: options.source,
       translation_concurrency: options.translation_concurrency,
       translation_batch_size: options.translation_batch_size,
+      session_id: this.sessionId,
+      operation_id: operationId,
+    });
+    return operationId;
+  }
+
+  translateDocumentSelection(text: string, locale: string): string {
+    const operationId = crypto.randomUUID();
+    this.sendRaw({
+      type: "document_selection_translate",
+      text,
+      locale,
       session_id: this.sessionId,
       operation_id: operationId,
     });

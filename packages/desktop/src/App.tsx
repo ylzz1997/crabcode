@@ -35,6 +35,7 @@ import {
   Play,
   Plus,
   Puzzle,
+  Quote,
   RefreshCw,
   RotateCcw,
   Search,
@@ -103,6 +104,7 @@ import type {
   ConnectionPreset,
   DesktopSettings,
   DocumentCapabilities,
+  DocumentReference,
   FavoriteEntry,
   FavoriteFolder,
   GatewayEvent,
@@ -406,6 +408,8 @@ function App() {
     dataUrl: string;
   }>>([]);
   const [pendingFolders, setPendingFolders] = useState<string[]>([]);
+  const [pendingDocumentReferences, setPendingDocumentReferences] = useState<DocumentReference[]>([]);
+  const [selectionTranslationEvents, setSelectionTranslationEvents] = useState<Record<string, GatewayEvent | null>>({});
   const [projectModal, setProjectModal] = useState<ProjectPreset | "new" | null>(null);
   const [projectTypeModal, setProjectTypeModal] = useState(false);
   const [documentProjectModal, setDocumentProjectModal] = useState(false);
@@ -844,6 +848,12 @@ function App() {
             [key]: normalizePermissionMode(event.permission_mode),
           }));
         }
+        if (
+          event.type === "document_selection_translation"
+          || (event.type === "error" && event.command === "document_selection_translate")
+        ) {
+          setSelectionTranslationEvents((current) => ({ ...current, [key]: event }));
+        }
         setSessions((current) => {
           const state = current[key];
           return state ? { ...current, [key]: applyGatewayEvent(state, event) } : current;
@@ -1241,6 +1251,7 @@ function App() {
     }
     setWorkspaceView("chat");
     setSearch("");
+    setPendingDocumentReferences([]);
     updateConnection(activeConnection.id, (connection) => ({
       ...connection,
       last_project_path: project.path,
@@ -1323,13 +1334,16 @@ function App() {
   const sendMessage = async () => {
     const text = composer.trim();
     if (
-      (!text && pendingImages.length === 0 && pendingFolders.length === 0)
+      (!text && pendingImages.length === 0 && pendingFolders.length === 0 && pendingDocumentReferences.length === 0)
       || !activeChannel
       || !activeSessionKey
       || !activeSession
     ) return;
     const folderContext = pendingFolders.map((path) => `<folder>\n${path}\n</folder>`).join("\n");
-    const messageText = [folderContext, text].filter(Boolean).join("\n\n");
+    const documentContext = pendingDocumentReferences.map((reference) => (
+      `<document-reference>\n文档：${reference.document_name}\n位置：${reference.page_label}\n\n${reference.text}\n</document-reference>`
+    )).join("\n\n");
+    const messageText = [folderContext, documentContext, text].filter(Boolean).join("\n\n");
     const now = Date.now();
     try {
       if (activeSession.busy && activeSession.operationId) {
@@ -1341,6 +1355,7 @@ function App() {
         const attachmentLine = [
           ...pendingImages.map((image) => `[图片：${image.name}]`),
           ...pendingFolders.map((path) => `[文件夹：${path}]`),
+          ...pendingDocumentReferences.map((reference) => `[文档引用：${reference.page_label}]`),
         ].join(" ");
         setSessions((current) => ({
           ...current,
@@ -1366,6 +1381,7 @@ function App() {
         const attachmentLine = [
           ...pendingImages.map((image) => `[图片：${image.name}]`),
           ...pendingFolders.map((path) => `[文件夹：${path}]`),
+          ...pendingDocumentReferences.map((reference) => `[文档引用：${reference.page_label}]`),
         ].join(" ");
         setSessions((current) => ({
           ...current,
@@ -1389,6 +1405,7 @@ function App() {
       setComposer("");
       setPendingImages([]);
       setPendingFolders([]);
+      setPendingDocumentReferences([]);
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error));
     }
@@ -2088,6 +2105,7 @@ function App() {
               translationBatchSize={settings.document_translation_batch_size}
               sessionBusy={Boolean(activeSession?.busy)}
               sessionError={activeSession?.error ?? null}
+              selectionTranslationEvent={activeSessionKey ? selectionTranslationEvents[activeSessionKey] ?? null : null}
               onAgentWidth={(width) => commitSettings((current) => ({ ...current, document_agent_width: width }))}
               onAgentCollapsed={(collapsed) => commitSettings((current) => ({ ...current, document_agent_collapsed: collapsed }))}
               onDocumentViewState={(connectionId, projectId, state) => updateConnection(connectionId, (connection) => ({
@@ -2140,6 +2158,23 @@ function App() {
                 } catch (reason) {
                   setGlobalError(reason instanceof Error ? reason.message : String(reason));
                   return false;
+                }
+              }}
+              onDocumentReference={(reference) => setPendingDocumentReferences((current) => (
+                current.some((item) => item.text === reference.text && item.project_id === reference.project_id)
+                  ? current
+                  : [...current, reference]
+              ))}
+              onTranslateSelection={(text, locale) => {
+                if (!activeChannel || !activeSession?.connected) {
+                  setGlobalError("Agent 会话尚未就绪，请稍后重试");
+                  return null;
+                }
+                try {
+                  return activeChannel.translateDocumentSelection(text, locale);
+                } catch (reason) {
+                  setGlobalError(reason instanceof Error ? reason.message : String(reason));
+                  return null;
                 }
               }}
             />
@@ -2320,7 +2355,7 @@ function App() {
                   )}
                 </div>
                 <div className={`composer-box ${activeSession.status?.ultra_mode ? "ultra-mode" : ""}`}>
-                  {(pendingImages.length > 0 || pendingFolders.length > 0) && (
+                  {(pendingImages.length > 0 || pendingFolders.length > 0 || pendingDocumentReferences.length > 0) && (
                     <div className="attachment-strip">
                       {pendingImages.map((image, index) => (
                         <div className="attachment-thumb" key={`${image.name}-${index}`}>
@@ -2340,6 +2375,17 @@ function App() {
                             type="button"
                             title="移除文件夹引用"
                             onClick={() => setPendingFolders((current) => current.filter((item) => item !== path))}
+                          ><X /></button>
+                        </div>
+                      ))}
+                      {pendingDocumentReferences.map((reference) => (
+                        <div className="document-reference-attachment" key={reference.id} title={reference.text}>
+                          <Quote />
+                          <span><strong>文档引用</strong><small>{reference.page_label}</small></span>
+                          <button
+                            type="button"
+                            title="移除文档引用"
+                            onClick={() => setPendingDocumentReferences((current) => current.filter((item) => item.id !== reference.id))}
                           ><X /></button>
                         </div>
                       ))}
@@ -2426,6 +2472,7 @@ function App() {
                             !composer.trim()
                             && pendingImages.length === 0
                             && pendingFolders.length === 0
+                            && pendingDocumentReferences.length === 0
                           ) || !activeSession.connected}
                           onClick={() => void sendMessage()}
                         >

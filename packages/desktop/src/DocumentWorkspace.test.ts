@@ -4,6 +4,7 @@ import {
   groupTextBlocksIntoParagraphs,
   looksLikeFormulaText,
   translatedBox,
+  unrotateSelectionBox,
 } from "./DocumentWorkspace";
 import type { DocumentTextBlock } from "./types";
 
@@ -61,6 +62,17 @@ describe("document translation coordinates", () => {
       expect(result.y).toBeCloseTo(y);
       expect(result.width).toBeCloseTo(width);
       expect(result.height).toBeCloseTo(height);
+    }
+  });
+
+  it("converts selected display rectangles back to stable page coordinates", () => {
+    for (const rotation of [0, 90, 180, 270]) {
+      const displayed = translatedBox(block, rotation);
+      const result = unrotateSelectionBox(displayed, rotation);
+      expect(result.x).toBeCloseTo(block.x);
+      expect(result.y).toBeCloseTo(block.y);
+      expect(result.width).toBeCloseTo(block.width);
+      expect(result.height).toBeCloseTo(block.height);
     }
   });
 

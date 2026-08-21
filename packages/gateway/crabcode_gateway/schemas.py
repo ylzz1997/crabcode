@@ -975,6 +975,16 @@ class DocumentJobPayload(BaseModel):
     message: str = ""
 
 
+class DocumentSelectionTranslationPayload(BaseModel):
+    type: Literal["document_selection_translation"] = "document_selection_translation"
+    operation_id: str
+    locale: str
+    source_text: str
+    translated_text: str
+    status: str = "completed"
+    message: str = ""
+
+
 class AgentStatePayload(BaseModel):
     type: Literal["agent_state"] = "agent_state"
     agent_id: str
@@ -1142,6 +1152,7 @@ EventPayload = Union[
     StreamModePayload,
     SteeringAppliedPayload,
     DocumentJobPayload,
+    DocumentSelectionTranslationPayload,
     AgentStatePayload,
     AgentOutputPayload,
     ModeChangePayload,
@@ -1173,6 +1184,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
         ChoiceResponseEvent,
         CompactEvent,
         DocumentJobEvent,
+        DocumentSelectionTranslationEvent,
         ErrorEvent,
         ModeChangeEvent,
         PermissionRequestEvent,
@@ -1283,6 +1295,15 @@ def core_event_to_payload(event: Any) -> EventPayload:
             source=event.source,
             current=event.current,
             total=event.total,
+            message=event.message,
+        )
+    if isinstance(event, DocumentSelectionTranslationEvent):
+        return DocumentSelectionTranslationPayload(
+            operation_id=event.operation_id,
+            locale=event.locale,
+            source_text=event.source_text,
+            translated_text=event.translated_text,
+            status=event.status,
             message=event.message,
         )
     if isinstance(event, AgentStateEvent):

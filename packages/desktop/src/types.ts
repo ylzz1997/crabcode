@@ -175,6 +175,32 @@ export interface DocumentTranslation {
   blocks: Array<{ id: string; translated_text: string }>;
 }
 
+export interface DocumentSelectionRect {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DocumentAnnotation {
+  id: string;
+  label: string;
+  note: string;
+  text: string;
+  rects: DocumentSelectionRect[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocumentReference {
+  id: string;
+  project_id: string;
+  document_name: string;
+  page_label: string;
+  text: string;
+}
+
 export interface DocumentBlog {
   markdown: string;
   revision: string | null;
@@ -435,6 +461,7 @@ export interface GatewayEvent {
   source?: string;
   current?: number;
   total?: number;
+  translated_text?: string;
   diff?: string | null;
   mode?: "agent" | "plan";
   model_profile?: string;

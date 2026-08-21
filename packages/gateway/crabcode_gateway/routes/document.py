@@ -78,6 +78,24 @@ class DocumentBlogWriteRequest(BaseModel):
     language: str = Field(default="", max_length=50)
 
 
+class DocumentAnnotationRect(BaseModel):
+    page: int = Field(ge=1, le=100_000)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+
+class DocumentAnnotationWriteRequest(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,100}$")
+    label: str = Field(default="", max_length=100)
+    note: str = Field(default="", max_length=20_000)
+    text: str = Field(min_length=1, max_length=50_000)
+    rects: list[DocumentAnnotationRect] = Field(min_length=1, max_length=1_000)
+    created_at: str = Field(default="", max_length=100)
+    updated_at: str = Field(default="", max_length=100)
+
+
 @contextmanager
 def _manifest_lock(workspace: Path):
     key = os.path.normcase(str(workspace.resolve(strict=False)))
@@ -598,6 +616,78 @@ async def save_document_layout(req: DocumentLayoutRequest, workspace: str, reque
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     with _manifest_lock(root):
         return _save_document_layout_locked(root, internal, req)
+
+
+def _document_annotations_path(root: Path) -> Path:
+    try:
+        internal = _managed_internal_directory(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    path = internal / "annotations.json"
+    if path.is_symlink():
+        raise HTTPException(status_code=403, detail="Document annotations path is invalid")
+    return path
+
+
+def _read_document_annotations_locked(root: Path) -> list[dict[str, Any]]:
+    path = _document_annotations_path(root)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail="Document annotations are invalid") from exc
+    if not isinstance(value, list):
+        raise HTTPException(status_code=500, detail="Document annotations are invalid")
+    try:
+        return [DocumentAnnotationWriteRequest.model_validate(item).model_dump() for item in value]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Document annotations are invalid") from exc
+
+
+@router.get("/annotations")
+async def read_document_annotations(workspace: str, request: Request) -> list[dict[str, Any]]:
+    root = _validated_workspace(workspace, _workspace_roots(request))
+    with _manifest_lock(root):
+        return _read_document_annotations_locked(root)
+
+
+@router.put("/annotations")
+async def write_document_annotation(
+    req: DocumentAnnotationWriteRequest,
+    workspace: str,
+    request: Request,
+) -> dict[str, Any]:
+    root = _validated_workspace(workspace, _workspace_roots(request))
+    with _manifest_lock(root):
+        annotations = _read_document_annotations_locked(root)
+        now = datetime.now(timezone.utc).isoformat()
+        previous = next((item for item in annotations if item["id"] == req.id), None)
+        annotation = req.model_dump()
+        annotation["created_at"] = previous.get("created_at") if previous else now
+        annotation["updated_at"] = now
+        next_annotations = [item for item in annotations if item["id"] != req.id]
+        next_annotations.append(annotation)
+        _json_write(_document_annotations_path(root), next_annotations)
+        return annotation
+
+
+@router.delete("/annotations/{annotation_id}", status_code=204)
+async def delete_document_annotation(
+    annotation_id: str,
+    workspace: str,
+    request: Request,
+) -> Response:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", annotation_id):
+        raise HTTPException(status_code=400, detail="Invalid annotation id")
+    root = _validated_workspace(workspace, _workspace_roots(request))
+    with _manifest_lock(root):
+        annotations = _read_document_annotations_locked(root)
+        next_annotations = [item for item in annotations if item["id"] != annotation_id]
+        if len(next_annotations) == len(annotations):
+            raise HTTPException(status_code=404, detail="Document annotation not found")
+        _json_write(_document_annotations_path(root), next_annotations)
+    return Response(status_code=204)
 
 
 def _save_document_layout_locked(
