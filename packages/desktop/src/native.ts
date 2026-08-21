@@ -46,7 +46,7 @@ const DEFAULT_DARK_THEME: ThemeProfile = {
 };
 
 const DEFAULT_SETTINGS: DesktopSettings = {
-  schema_version: 2,
+  schema_version: 3,
   active_connection_id: "local",
   connection_order: ["local"],
   connections: [{
@@ -56,6 +56,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
     credential_ref: null,
     allow_insecure_remote: false,
     last_model_profile: null,
+    document_workspace_root: null,
     projects: [],
     favorite_items: [],
     last_project_path: null,
@@ -63,6 +64,8 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   }],
   python_path: null,
   sidebar_width: 280,
+  document_agent_width: 400,
+  document_agent_collapsed: false,
   theme_mode: "system",
   light_theme: DEFAULT_LIGHT_THEME,
   dark_theme: DEFAULT_DARK_THEME,
@@ -155,7 +158,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
   const turnDurationFormat: TurnDurationFormat = raw.turn_duration_format === "seconds" ? "seconds" : "hms";
   return {
     ...raw,
-    schema_version: 2,
+    schema_version: 3,
     theme_mode: themeMode,
     light_theme: normalizeThemeProfile(raw.light_theme, DEFAULT_LIGHT_THEME, legacy),
     dark_theme: normalizeThemeProfile(raw.dark_theme, DEFAULT_DARK_THEME, legacy),
@@ -167,6 +170,8 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     show_turn_duration: raw.show_turn_duration !== false,
     turn_duration_format: turnDurationFormat,
     dock_icon: dockIcon,
+    document_agent_width: clampInteger(raw.document_agent_width, 320, 720, 400),
+    document_agent_collapsed: raw.document_agent_collapsed === true,
     connections: (raw.connections ?? []).map((connection) => {
       const projects = (connection.projects ?? []).map((project, index) => {
         const legacyPath = typeof project.path === "string" ? project.path : "";
@@ -175,6 +180,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
           : legacyPath ? [legacyPath] : [];
         return {
           ...project,
+          kind: project.kind === "document" ? "document" as const : "project" as const,
           id: project.id || legacyPath || crypto.randomUUID(),
           path: directories[0] || legacyPath || "",
           directories,
@@ -190,6 +196,10 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
         : legacyFavoriteEntries({ projects });
       return {
         ...connection,
+        document_workspace_root: typeof connection.document_workspace_root === "string"
+          && connection.document_workspace_root.trim().length > 0
+          ? connection.document_workspace_root
+          : null,
         last_model_profile: typeof connection.last_model_profile === "string"
           && connection.last_model_profile.trim().length > 0
           ? connection.last_model_profile

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -52,6 +53,16 @@ _WS_TASK_SESSIONS_KEY = "crabcode_background_task_sessions"
 _PLAN_TASKS_KEY = "plan_tasks"
 
 router = APIRouter(tags=["events"])
+
+
+@dataclass(frozen=True)
+class _DocumentJobContext:
+    action: str
+    locale: str
+    source: str
+    workspace: str
+    recovered: int = 0
+    document_hash: str = ""
 
 
 class _ManagedEventSourceResponse(EventSourceResponse):
@@ -246,6 +257,8 @@ async def websocket_endpoint(ws: WebSocket):
                     await _handle_choice_response(ws, msg)
                 elif msg_type == "send_message":
                     await _handle_send_message(ws, msg)
+                elif msg_type == "document_action":
+                    await _handle_document_action(ws, msg)
                 elif msg_type == "steer_message":
                     await _handle_steer_message(ws, msg)
                 elif msg_type == "new_session":
@@ -460,6 +473,36 @@ async def _handle_permission_response(ws: WebSocket, msg: dict) -> None:
             request=msg,
         )
         return
+
+    workspace = manifest_path.parent.parent.parent.resolve()
+    recovered = 0
+    from crabcode_gateway.routes.document import _document_action_hash
+    try:
+        document_hash = await asyncio.to_thread(_document_action_hash, workspace, source, locale)
+    except ValueError as exc:
+        await _send_ws_command_error(
+            ws,
+            str(exc),
+            command="document_action",
+            request=msg,
+            operation_id=operation_id,
+            error_type="document_layout_not_ready",
+        )
+        return
+    if action == "translate":
+        from crabcode_gateway.routes.document import _recover_translation_job
+        try:
+            recovered = await asyncio.to_thread(_recover_translation_job, workspace, operation_id, locale)
+        except ValueError as exc:
+            await _send_ws_command_error(
+                ws,
+                str(exc),
+                command="document_action",
+                request=msg,
+                operation_id=operation_id,
+                error_type="document_layout_not_ready",
+            )
+            return
     if isinstance(msg.get("session_id"), str) and msg.get("session_id"):
         _set_active_session(ws, session.session_id)
 
@@ -591,6 +634,103 @@ async def _handle_choice_response(ws: WebSocket, msg: dict) -> None:
     await ws.send_text(json.dumps(payload))
 
 
+async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
+    """Turn a typed document command into a bounded, visible agent turn."""
+    import re
+    from pathlib import Path
+
+    action = msg.get("action")
+    locale = msg.get("locale") or "zh-CN"
+    source = msg.get("source") or "original"
+    requested_operation_id = msg.get("operation_id")
+    operation_id = requested_operation_id if isinstance(requested_operation_id, str) else uuid.uuid4().hex
+    if action not in {"translate", "generate_blog"}:
+        await _send_ws_command_error(
+            ws,
+            "unknown document action",
+            command="document_action",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
+    if not isinstance(locale, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", locale):
+        await _send_ws_command_error(
+            ws,
+            "invalid document locale",
+            command="document_action",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
+    if source not in {"original", "translation"}:
+        await _send_ws_command_error(
+            ws,
+            "invalid document source",
+            command="document_action",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
+    if action == "translate":
+        source = "original"
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", operation_id):
+        await _send_ws_command_error(
+            ws,
+            "invalid document operation id",
+            command="document_action",
+            request=msg,
+            error_type="invalid_request",
+        )
+        return
+    session = _resolve_session(ws, msg)
+    manifest_path = Path(getattr(session, "cwd", "")) / ".crabcode" / "document" / "manifest.json" if session else None
+    if session is None or manifest_path is None or not manifest_path.is_file():
+        await _send_ws_command_error(
+            ws,
+            "active session is not a document project",
+            command="document_action",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_document_project",
+        )
+        return
+
+    if action == "translate":
+        prompt = f"""[文档操作：翻译为 {locale}]
+请执行结构化文档翻译。读取 .crabcode/document/manifest.json 和 layout.json，翻译 layout.pages[*].blocks 中每个非空 text。
+必须保持每个 block 的 id 原样且一一对应，将结果暂存到 .crabcode/document/jobs/{operation_id}/translation.json，格式严格为：
+{{"locale":"{locale}","source_sha256":"<manifest source sha256>","layout_fingerprint":"<manifest layout fingerprint>","blocks":[{{"id":"<原 id>","translated_text":"<译文>"}}]}}
+不要直接写 translations 目录，不要修改原文、坐标或 rendered.pdf。长文档应按 token 预算分批，每完成一批就原子更新上述暂存 JSON；若文件中已有 {recovered} 个合法 block，请保留它们并只补齐缺失项。最后校验没有缺失、重复或新增 id。完成后简短说明翻译块数。"""
+    else:
+        source_instruction = (
+            f"优先读取 .crabcode/document/translations/{locale}.json，并按 layout.json 的 id 顺序还原内容；Blog 必须使用该译文的语言。"
+            if source == "translation"
+            else "读取 .crabcode/document/content.md 作为原文；Blog 必须保持原文的主要语言。"
+        )
+        prompt = f"""[文档操作：生成 Blog]
+{source_instruction}
+基于整份文档生成结构清晰、事实忠实的 Markdown Blog，先写入 .crabcode/document/jobs/{operation_id}/blog.md，Gateway 校验成功后再原子发布。
+使用一个 H1 标题以及适量的 H2/H3、段落、列表、引用和代码块；如需配图，将图片放在 blog-assets/ 并使用相对路径引用。不要声称未在文档中出现的事实。完成后简短说明 Blog 已生成。"""
+
+    fallback = dict(msg)
+    fallback["type"] = "send_message"
+    fallback["text"] = prompt
+    fallback["operation_id"] = operation_id
+    fallback["_document_job"] = _DocumentJobContext(
+        action=action,
+        locale=locale,
+        source=source,
+        workspace=str(workspace),
+        recovered=recovered,
+        document_hash=document_hash,
+    )
+    fallback.setdefault("max_turns", 0)
+    await _handle_send_message(ws, fallback)
+
+
 async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
     """Start a query loop from a WebSocket message."""
     event_bus: EventBus = ws.app.state.event_bus
@@ -598,6 +738,8 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
     max_turns = msg.get("max_turns", 0)
     raw_images = msg.get("images")  # Optional list of {media_type, data} dicts
     requested_operation_id = msg.get("operation_id")
+    document_job = msg.get("_document_job") if isinstance(msg.get("_document_job"), _DocumentJobContext) else None
+    message_origin = "document-action" if document_job else None
 
     if not isinstance(text, str):
         await _send_ws_command_error(
@@ -698,33 +840,129 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
 
     async def _run():
         try:
-            from crabcode_core.types.event import TurnCompleteEvent
+            from pathlib import Path
+            from crabcode_core.types.event import DocumentJobEvent, ErrorEvent, ToolResultEvent, TurnCompleteEvent
+            from crabcode_gateway.routes.document import (
+                _cleanup_document_job,
+                _document_job_total,
+                _finalize_document_job,
+                _translation_job_progress,
+                _update_document_job_status,
+            )
 
-            kwargs = {"max_turns": max_turns}
-            if images:
-                kwargs["images"] = images
-            pending_terminal: TurnCompleteEvent | None = None
-            async for event in session.send_message(text, **kwargs):
-                if isinstance(event, TurnCompleteEvent):
-                    # Core can continue the same foreground operation when a
-                    # steering message lands just after query_loop generated
-                    # its terminal.  Hold that candidate until the generator
-                    # actually ends; any following event invalidates it.
-                    pending_terminal = event
-                    continue
-                pending_terminal = None
+            workspace = Path(document_job.workspace) if document_job else None
+            action = document_job.action if document_job else ""
+            locale = document_job.locale if document_job else ""
+            source = document_job.source if document_job else ""
+            total = await asyncio.to_thread(_document_job_total, workspace, action) if workspace else 0
+            reported_current = document_job.recovered if document_job else 0
+
+            async def publish_job(status: str, current: int = 0, message: str = "") -> None:
+                if not document_job:
+                    return
+                try:
+                    await asyncio.to_thread(
+                        _update_document_job_status,
+                        workspace,
+                        operation_id,
+                        action=action,
+                        status=status,
+                        locale=locale,
+                        source=source,
+                        current=current,
+                        total=total,
+                        message=message,
+                    )
+                except Exception:
+                    logger.warning("Failed to persist document job status", exc_info=True)
                 await event_bus.publish(
                     session.session_id,
-                    event,
+                    DocumentJobEvent(
+                        action=action,
+                        status=status,
+                        locale=locale,
+                        source=source,
+                        current=current,
+                        total=total,
+                        message=message,
+                    ),
                     source=session,
                     operation_id=operation_id,
                     operation_scope="foreground",
                 )
-            if pending_terminal is None:
-                # Core normally emits TurnCompleteEvent, but a custom/older
-                # session adapter may end its generator after an ErrorEvent.
-                # Keep every foreground transport on one explicit terminal
-                # contract so clients never remain busy indefinitely.
+
+            await publish_job("running", current=reported_current, message="正在准备文档内容")
+            attempts = 3 if action == "translate" else 1
+            current_text = text
+            pending_terminal: TurnCompleteEvent | None = None
+            validation_error: Exception | None = None
+            for attempt in range(attempts):
+                kwargs: dict[str, Any] = {"max_turns": max_turns}
+                if images:
+                    kwargs["images"] = images
+                if message_origin:
+                    kwargs["message_origin"] = message_origin
+                pending_terminal = None
+                async for event in session.send_message(current_text, **kwargs):
+                    if isinstance(event, TurnCompleteEvent):
+                        # Hold the terminal until the staged artifact passes
+                        # Gateway validation and has been atomically published.
+                        pending_terminal = event
+                        continue
+                    pending_terminal = None
+                    await event_bus.publish(
+                        session.session_id,
+                        event,
+                        source=session,
+                        operation_id=operation_id,
+                        operation_scope="foreground",
+                    )
+                    if action == "translate" and isinstance(event, ToolResultEvent):
+                        progress = await asyncio.to_thread(_translation_job_progress, workspace, operation_id)
+                        if progress > reported_current:
+                            reported_current = progress
+                            await publish_job("running", current=progress, message="已保存一个翻译批次")
+                if pending_terminal is None:
+                    pending_terminal = TurnCompleteEvent(reason="error")
+                if not document_job or pending_terminal.reason == "error":
+                    break
+                try:
+                    current, total = await asyncio.to_thread(
+                        _finalize_document_job,
+                        workspace,
+                        operation_id,
+                        action,
+                        locale,
+                        source,
+                        document_job.document_hash,
+                    )
+                    validation_error = None
+                    await publish_job("completed", current=current, message="文档产物已保存")
+                    break
+                except ValueError as exc:
+                    validation_error = exc
+                    if attempt + 1 >= attempts:
+                        break
+                    await publish_job(
+                        "retrying",
+                        message=f"校验失败，正在重试（{attempt + 2}/{attempts}）：{exc}",
+                    )
+                    current_text = f"""[文档操作修复：第 {attempt + 2}/{attempts} 次]
+上一次暂存结果未通过 Gateway 校验：{exc}
+请重新读取 manifest.json 与 layout.json，修复并覆盖 .crabcode/document/jobs/{operation_id}/translation.json。必须包含每一个且仅包含一个原始 block id，并保持 source_sha256、layout_fingerprint 完全一致。不要改动其他文档产物。"""
+
+            if document_job and (validation_error is not None or pending_terminal.reason == "error"):
+                failure = str(validation_error) if validation_error is not None else "Agent 未能完成文档操作"
+                if action != "translate":
+                    await asyncio.to_thread(_cleanup_document_job, workspace, operation_id)
+                await publish_job("failed", message=failure)
+                await event_bus.publish(
+                    session.session_id,
+                    ErrorEvent(message=failure, recoverable=True, error_type="document_job"),
+                    source=session,
+                    operation_id=operation_id,
+                    operation_scope="foreground",
+                )
                 pending_terminal = TurnCompleteEvent(reason="error")
             await event_bus.publish(
                 session.session_id,
@@ -738,10 +976,81 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                 setattr(current, "_crabcode_terminal_published", True)
             logger.info("ws send_message completed session=%s", session.session_id)
         except asyncio.CancelledError:
+            if document_job:
+                from pathlib import Path
+                from crabcode_core.types.event import DocumentJobEvent
+                from crabcode_gateway.routes.document import _cleanup_document_job
+                workspace = Path(document_job.workspace)
+                if document_job.action != "translate":
+                    await asyncio.to_thread(_cleanup_document_job, workspace, operation_id)
+                from crabcode_gateway.routes.document import _update_document_job_status
+                try:
+                    await asyncio.to_thread(
+                        _update_document_job_status,
+                        workspace,
+                        operation_id,
+                        action=document_job.action,
+                        status="cancelled",
+                        locale=document_job.locale,
+                        source=document_job.source,
+                        current=0,
+                        total=0,
+                        message="文档操作已取消",
+                    )
+                except Exception:
+                    logger.warning("Failed to persist cancelled document job", exc_info=True)
+                await event_bus.publish(
+                    session.session_id,
+                    DocumentJobEvent(
+                        action=document_job.action,
+                        status="cancelled",
+                        locale=document_job.locale,
+                        source=document_job.source,
+                        message="文档操作已取消",
+                    ),
+                    source=session,
+                    operation_id=operation_id,
+                    operation_scope="foreground",
+                )
             raise
         except Exception as exc:
             logger.exception("ws send_message failed session=%s", session.session_id)
-            from crabcode_core.types.event import ErrorEvent, TurnCompleteEvent
+            from crabcode_core.types.event import DocumentJobEvent, ErrorEvent, TurnCompleteEvent
+            if document_job:
+                from pathlib import Path
+                from crabcode_gateway.routes.document import _cleanup_document_job
+                workspace = Path(document_job.workspace)
+                if document_job.action != "translate":
+                    await asyncio.to_thread(_cleanup_document_job, workspace, operation_id)
+                from crabcode_gateway.routes.document import _update_document_job_status
+                try:
+                    await asyncio.to_thread(
+                        _update_document_job_status,
+                        workspace,
+                        operation_id,
+                        action=document_job.action,
+                        status="failed",
+                        locale=document_job.locale,
+                        source=document_job.source,
+                        current=0,
+                        total=0,
+                        message=str(exc),
+                    )
+                except Exception:
+                    logger.warning("Failed to persist failed document job", exc_info=True)
+                await event_bus.publish(
+                    session.session_id,
+                    DocumentJobEvent(
+                        action=document_job.action,
+                        status="failed",
+                        locale=document_job.locale,
+                        source=document_job.source,
+                        message=str(exc),
+                    ),
+                    source=session,
+                    operation_id=operation_id,
+                    operation_scope="foreground",
+                )
             await event_bus.publish(
                 session.session_id,
                 ErrorEvent(message=str(exc), recoverable=False, error_type="internal"),

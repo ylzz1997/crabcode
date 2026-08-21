@@ -540,6 +540,7 @@ class WorkspaceInfo(BaseModel):
     startup_cwd: str
     home: str
     browse_roots: list[str] = Field(default_factory=list)
+    documents_dir: str = ""
 
 
 class WorkspaceDirectoryEntry(BaseModel):
@@ -963,6 +964,17 @@ class SteeringAppliedPayload(BaseModel):
     count: int = 1
 
 
+class DocumentJobPayload(BaseModel):
+    type: Literal["document_job"] = "document_job"
+    action: str
+    status: str
+    locale: str = ""
+    source: str = ""
+    current: int = 0
+    total: int = 0
+    message: str = ""
+
+
 class AgentStatePayload(BaseModel):
     type: Literal["agent_state"] = "agent_state"
     agent_id: str
@@ -1129,6 +1141,7 @@ EventPayload = Union[
     TurnCompletePayload,
     StreamModePayload,
     SteeringAppliedPayload,
+    DocumentJobPayload,
     AgentStatePayload,
     AgentOutputPayload,
     ModeChangePayload,
@@ -1159,6 +1172,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
         ChoiceRequestEvent,
         ChoiceResponseEvent,
         CompactEvent,
+        DocumentJobEvent,
         ErrorEvent,
         ModeChangeEvent,
         PermissionRequestEvent,
@@ -1261,6 +1275,16 @@ def core_event_to_payload(event: Any) -> EventPayload:
         return StreamModePayload(mode=event.mode, agent_id=event.agent_id)
     if isinstance(event, SteeringAppliedEvent):
         return SteeringAppliedPayload(count=event.count)
+    if isinstance(event, DocumentJobEvent):
+        return DocumentJobPayload(
+            action=event.action,
+            status=event.status,
+            locale=event.locale,
+            source=event.source,
+            current=event.current,
+            total=event.total,
+            message=event.message,
+        )
     if isinstance(event, AgentStateEvent):
         return AgentStatePayload(
             agent_id=event.agent_id,

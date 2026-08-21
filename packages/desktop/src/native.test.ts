@@ -43,7 +43,7 @@ describe("desktop settings migration", () => {
 
     const migrated = normalizeSettings(legacy);
 
-    expect(migrated.schema_version).toBe(2);
+    expect(migrated.schema_version).toBe(3);
     expect(migrated.theme_mode).toBe("system");
     expect(migrated.dock_icon).toBe("dark");
     expect(migrated).toMatchObject({
@@ -56,8 +56,11 @@ describe("desktop settings migration", () => {
       font_smoothing: true,
       show_turn_duration: true,
       turn_duration_format: "hms",
+      document_agent_width: 400,
+      document_agent_collapsed: false,
     });
     expect(migrated.connections[0].projects[0]).toMatchObject({
+      kind: "project",
       id: "/work/crab",
       path: "/work/crab",
       directories: ["/work/crab"],
@@ -66,6 +69,7 @@ describe("desktop settings migration", () => {
     });
     expect(migrated.connections[0].favorite_items).toEqual([]);
     expect(migrated.connections[0].last_model_profile).toBeNull();
+    expect(migrated.connections[0].document_workspace_root).toBeNull();
     expect(migrated.connections[0].last_project_id).toBe("/work/crab");
   });
 
@@ -157,7 +161,7 @@ describe("desktop settings migration", () => {
       show_turn_duration: false,
       turn_duration_format: "seconds",
       dock_icon: "light",
-    } as DesktopSettings;
+    } as unknown as DesktopSettings;
 
     const normalized = normalizeSettings(configured);
 

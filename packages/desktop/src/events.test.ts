@@ -136,6 +136,12 @@ describe("Gateway event reducer", () => {
           origin: "task-notification",
           content: "<monitor-event>internal</monitor-event>",
         },
+        {
+          uuid: "document-action-1",
+          role: "user",
+          origin: "document-action",
+          content: "[文档操作：内部提示词]",
+        },
         { uuid: "assistant-2", role: "assistant", content: [{ type: "text", text: "后台任务已完成" }] },
       ],
     });
@@ -153,6 +159,46 @@ describe("Gateway event reducer", () => {
       status: "complete",
     });
     expect(current.items.some((item) => item.text?.includes("monitor-event"))).toBe(false);
+    expect(current.items.some((item) => item.text?.includes("内部提示词"))).toBe(false);
+  });
+
+  it("updates one document operation card through retry and completion", () => {
+    let current = applyGatewayEvent(state(), {
+      type: "document_job",
+      operation_id: "operation-1",
+      action: "translate",
+      status: "running",
+      locale: "zh-CN",
+      current: 0,
+      total: 12,
+      message: "正在准备",
+    });
+    current = applyGatewayEvent(current, {
+      type: "document_job",
+      operation_id: "operation-1",
+      action: "translate",
+      status: "retrying",
+      current: 0,
+      total: 12,
+      message: "校验后重试",
+    });
+    current = applyGatewayEvent(current, {
+      type: "document_job",
+      operation_id: "operation-1",
+      action: "translate",
+      status: "completed",
+      current: 12,
+      total: 12,
+      message: "已保存",
+    });
+    expect(current.items).toHaveLength(1);
+    expect(current.items[0]).toMatchObject({
+      kind: "document_job",
+      status: "complete",
+      current: 12,
+      total: 12,
+      locale: "zh-CN",
+    });
   });
 
   it("keeps an active turn running when a command fails", () => {

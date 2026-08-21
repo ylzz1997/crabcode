@@ -49,7 +49,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
     // Synthetic task callbacks are model input. Their user-facing result is
     // the assistant reply that follows, so replaying the raw envelope leaks
     // protocol markup that was never shown in the live conversation.
-    if (message.origin === "task-notification") continue;
+    if (message.origin === "task-notification" || message.origin === "document-action") continue;
 
     const baseId = String(message.uuid ?? crypto.randomUUID());
     const messageTimestamp = timestampMs(message.timestamp);
@@ -472,6 +472,48 @@ export function applyGatewayEvent(
           },
         ],
       };
+    case "document_job": {
+      const id = `${event.operation_id ?? event.action ?? "document"}:document-job`;
+      const previous = state.items.find((item) => item.id === id);
+      const status: NonNullable<ChatItem["status"]> = event.status === "completed"
+        ? "complete"
+        : event.status === "failed"
+          ? "failed"
+          : event.status === "cancelled"
+            ? "cancelled"
+            : event.status === "retrying"
+              ? "retrying"
+              : "running";
+      const nextItem = {
+        id,
+        kind: "document_job" as const,
+        title: event.action === "translate" ? "翻译文档" : "生成 Blog",
+        text: event.message,
+        action: event.action,
+        locale: event.locale ?? previous?.locale,
+        source: event.source ?? previous?.source,
+        current: event.current ?? previous?.current ?? 0,
+        total: event.total ?? previous?.total ?? 0,
+        status,
+        startedAt: previous?.startedAt ?? now,
+        ...(status === "complete" || status === "failed" || status === "cancelled"
+          ? { completedAt: now }
+          : {}),
+      };
+      const found = state.items.some((item) => item.id === id);
+      return {
+        ...state,
+        operationId: event.operation_id ?? state.operationId,
+        busy: status === "running" || status === "retrying" ? true : state.busy,
+        runStartedAt: state.runStartedAt ?? now,
+        currentStep: status === "running" || status === "retrying"
+          ? { kind: "document", label: nextItem.title, startedAt: nextItem.startedAt }
+          : state.currentStep,
+        items: found
+          ? state.items.map((item) => item.id === id ? { ...item, ...nextItem } : item)
+          : [...completeRunning(state.items, now), nextItem],
+      };
+    }
     case "mode_change":
       return state.status
         ? { ...state, status: { ...state.status, mode: event.mode ?? state.status.mode } }
@@ -500,6 +542,7 @@ export function applyGatewayEvent(
       return {
         ...state,
         error: event.message ?? "Gateway error",
+        operationId: event.command_error && event.command === "document_action" ? null : state.operationId,
         // Gateway guarantees a turn_complete boundary after foreground errors.
         // Keep live cards and timers running until that boundary arrives.
         items: event.command_error

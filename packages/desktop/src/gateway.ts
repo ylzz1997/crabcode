@@ -3,6 +3,11 @@ import type {
   CheckpointInfo,
   BackgroundTaskInfo,
   ConnectionPreset,
+  DocumentBlog,
+  DocumentCapabilities,
+  DocumentLayout,
+  DocumentManifest,
+  DocumentTranslation,
   GatewayEvent,
   GatewayModel,
   GoalState,
@@ -67,7 +72,9 @@ export class GatewayApi {
     await this.authenticate();
     const headers = new Headers(init.headers);
     if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
-    if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
     const response = await fetch(new URL(path.replace(/^\//, ""), this.baseUrl), {
       ...init,
       headers,
@@ -103,6 +110,95 @@ export class GatewayApi {
     return this.request("/workspace/directories/create", {
       method: "POST",
       body: JSON.stringify({ path }),
+    });
+  }
+
+  documentCapabilities(): Promise<DocumentCapabilities> {
+    return this.request("/document/capabilities");
+  }
+
+  uploadDocument(input: {
+    workspacePath: string;
+    projectId: string;
+    projectName: string;
+    file: File;
+  }): Promise<DocumentManifest> {
+    const form = new FormData();
+    form.set("workspace_path", input.workspacePath);
+    form.set("project_id", input.projectId);
+    form.set("project_name", input.projectName);
+    form.set("file", input.file, input.file.name);
+    return this.request("/document/import/upload", { method: "POST", body: form });
+  }
+
+  importDocumentUrl(input: {
+    workspacePath: string;
+    projectId: string;
+    projectName: string;
+    url: string;
+  }): Promise<DocumentManifest> {
+    return this.request("/document/import/url", {
+      method: "POST",
+      body: JSON.stringify({
+        workspace_path: input.workspacePath,
+        project_id: input.projectId,
+        project_name: input.projectName,
+        url: input.url,
+      }),
+    });
+  }
+
+  documentManifest(workspace: string): Promise<DocumentManifest> {
+    return this.request(`/document/manifest?${new URLSearchParams({ workspace })}`);
+  }
+
+  async documentAsset(workspace: string, kind: "pdf" | "source" = "pdf", retry = true): Promise<ArrayBuffer> {
+    await this.authenticate();
+    const headers = new Headers();
+    if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+    const query = new URLSearchParams({ workspace, kind });
+    const response = await fetch(new URL(`document/asset?${query}`, this.baseUrl), { headers });
+    if (response.status === 401 && retry) {
+      await this.authenticate(true);
+      return this.documentAsset(workspace, kind, false);
+    }
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response.arrayBuffer();
+  }
+
+  async documentBlogAsset(workspace: string, path: string, retry = true): Promise<Blob> {
+    await this.authenticate();
+    const headers = new Headers();
+    if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+    const query = new URLSearchParams({ workspace, path });
+    const response = await fetch(new URL(`document/blog-asset?${query}`, this.baseUrl), { headers });
+    if (response.status === 401 && retry) {
+      await this.authenticate(true);
+      return this.documentBlogAsset(workspace, path, false);
+    }
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response.blob();
+  }
+
+  saveDocumentLayout(workspace: string, layout: DocumentLayout): Promise<unknown> {
+    return this.request(`/document/layout?${new URLSearchParams({ workspace })}`, {
+      method: "PUT",
+      body: JSON.stringify(layout),
+    });
+  }
+
+  documentTranslation(workspace: string, locale: string): Promise<DocumentTranslation> {
+    return this.request(`/document/translation?${new URLSearchParams({ workspace, locale })}`);
+  }
+
+  documentBlog(workspace: string): Promise<DocumentBlog> {
+    return this.request(`/document/blog?${new URLSearchParams({ workspace })}`);
+  }
+
+  saveDocumentBlog(workspace: string, blog: DocumentBlog): Promise<DocumentBlog> {
+    return this.request(`/document/blog?${new URLSearchParams({ workspace })}`, {
+      method: "PUT",
+      body: JSON.stringify(blog),
     });
   }
 
@@ -354,6 +450,22 @@ export class SessionChannel {
       text,
       images,
       max_turns: 0,
+      session_id: this.sessionId,
+      operation_id: operationId,
+    });
+    return operationId;
+  }
+
+  documentAction(
+    action: "translate" | "generate_blog",
+    options: { locale?: string; source?: "original" | "translation" } = {},
+  ): string {
+    const operationId = crypto.randomUUID();
+    this.sendRaw({
+      type: "document_action",
+      action,
+      locale: options.locale,
+      source: options.source,
       session_id: this.sessionId,
       operation_id: operationId,
     });

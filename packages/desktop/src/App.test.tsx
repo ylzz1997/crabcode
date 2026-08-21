@@ -12,6 +12,8 @@ import {
   ProjectActionsMenu,
   ProjectDeleteModal,
   ProjectModal,
+  ProjectTypeModal,
+  DocumentProjectModal,
   resolveDefaultProjectId,
   resolveRememberedModel,
   ScheduleDeleteModal,
@@ -20,6 +22,15 @@ import {
 import type { GatewayApi } from "./gateway";
 import { favoriteEntries, resolveFavoriteEntries } from "./favorites";
 import type { BackgroundTaskInfo, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
+
+const documentCapabilities = {
+  supported_extensions: [".pdf", ".docx"],
+  available_extensions: [".pdf"],
+  max_bytes: 100 * 1024 * 1024,
+  documents_dir: "/Users/test/Documents/CrabCode",
+  libreoffice: { available: false, executable: null },
+  ocr: { available: false },
+};
 
 describe("MessageMarkdown", () => {
   it("renders inline and display math with KaTeX", () => {
@@ -236,6 +247,7 @@ describe("ProjectDeleteModal", () => {
       <ProjectDeleteModal
         project={{
           id: "trial",
+          kind: "project",
           name: "试试新项目",
           path: "/Users/hyl/试试新项目",
           directories: ["/Users/hyl/试试新项目"],
@@ -264,6 +276,7 @@ describe("automation deck tabs", () => {
     const root = createRoot(container);
     const project = {
       id: "project-1",
+      kind: "project" as const,
       path: "/work/crabcode",
       name: "CrabCode",
       directories: ["/work/crabcode"],
@@ -339,11 +352,116 @@ describe("automation deck tabs", () => {
   });
 });
 
+describe("project creation types", () => {
+  it("defaults to a regular project and can select document mode", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onSelect = vi.fn();
+    act(() => root.render(
+      <ProjectTypeModal capabilities={documentCapabilities} onClose={vi.fn()} onSelect={onSelect} />,
+    ));
+
+    const project = container.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')!;
+    expect(project.textContent).toContain("项目");
+    const documentButton = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="radio"]'))
+      .find((button) => button.textContent?.includes("文档"))!;
+    act(() => documentButton.click());
+    expect(documentButton.getAttribute("aria-checked")).toBe("true");
+    const next = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("下一步"))!;
+    act(() => next.click());
+    expect(onSelect).toHaveBeenCalledWith("document");
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("imports a local PDF into a managed document project", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const uploadDocument = vi.fn().mockResolvedValue({
+      workspace: "/Users/test/Documents/CrabCode/Paper",
+    });
+    const onSave = vi.fn();
+    act(() => root.render(
+      <DocumentProjectModal
+        api={{ uploadDocument } as unknown as GatewayApi}
+        capabilities={documentCapabilities}
+        defaultRoot="/Users/test/Documents/CrabCode"
+        onClose={vi.fn()}
+        onSave={onSave}
+      />,
+    ));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const file = new File(["%PDF-1.7\n"], "Paper.pdf", { type: "application/pdf" });
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    const create = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("创建文档"))!;
+    await act(async () => create.click());
+
+    expect(uploadDocument).toHaveBeenCalledWith(expect.objectContaining({
+      workspacePath: "/Users/test/Documents/CrabCode/Paper",
+      projectName: "Paper",
+      file,
+    }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "document",
+      path: "/Users/test/Documents/CrabCode/Paper",
+      directories: ["/Users/test/Documents/CrabCode/Paper"],
+    }));
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("validates and imports a direct HTTP document URL", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const importDocumentUrl = vi.fn().mockResolvedValue({
+      workspace: "/Users/test/Documents/CrabCode/Guide",
+    });
+    const onSave = vi.fn();
+    act(() => root.render(
+      <DocumentProjectModal
+        api={{ importDocumentUrl } as unknown as GatewayApi}
+        capabilities={documentCapabilities}
+        defaultRoot="/Users/test/Documents/CrabCode"
+        onClose={vi.fn()}
+        onSave={onSave}
+      />,
+    ));
+    const urlTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".document-source-tabs button"))
+      .find((button) => button.textContent === "网络地址")!;
+    act(() => urlTab.click());
+    const urlInput = container.querySelector<HTMLInputElement>('input[type="url"]')!;
+    act(() => changeInput(urlInput, "ftp://example.com/guide.pdf"));
+    const create = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("创建文档"))!;
+    await act(async () => create.click());
+    expect(container.textContent).toContain("有效的 HTTP 或 HTTPS");
+    expect(importDocumentUrl).not.toHaveBeenCalled();
+
+    act(() => changeInput(urlInput, "https://example.com/guide.pdf"));
+    await act(async () => create.click());
+    expect(importDocumentUrl).toHaveBeenCalledWith(expect.objectContaining({
+      url: "https://example.com/guide.pdf",
+      projectName: "guide",
+      workspacePath: "/Users/test/Documents/CrabCode/guide",
+    }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ kind: "document" }));
+    act(() => root.unmount());
+    container.remove();
+  });
+});
+
 describe("project defaults", () => {
   it("protects only the first startup project when legacy projects share its path", () => {
     const projects = [
       {
         id: "home",
+        kind: "project" as const,
         name: "hyl",
         path: "/Users/hyl",
         directories: ["/Users/hyl"],
@@ -351,6 +469,7 @@ describe("project defaults", () => {
       },
       {
         id: "trial",
+        kind: "project" as const,
         name: "试试新项目",
         path: "/Users/hyl",
         directories: [],
@@ -476,6 +595,7 @@ describe("project defaults", () => {
         roots={["/Users/test"]}
         project={{
           id: "existing",
+          kind: "project",
           name: "已有项目",
           path: "/Users/test/已有项目",
           directories: ["/Users/test/已有项目", "/Users/test/附加目录"],
@@ -512,6 +632,7 @@ describe("project defaults", () => {
         project={null}
         projects={[{
           id: "existing",
+          kind: "project",
           name: "已有项目",
           path: "/Users/test/重复",
           directories: ["/Users/test/重复"],

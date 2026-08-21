@@ -2603,6 +2603,7 @@ class CoreSession:
         text: str,
         max_turns: int = 0,
         images: list[dict[str, Any]] | None = None,
+        message_origin: str | None = None,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Serialize turns and settle a queued manual compact at a safe boundary."""
         await self.initialize()
@@ -2638,6 +2639,7 @@ class CoreSession:
                 text,
                 max_turns=max_turns,
                 images=images,
+                message_origin=message_origin,
             )
             try:
                 while True:

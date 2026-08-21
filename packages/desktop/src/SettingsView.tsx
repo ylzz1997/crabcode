@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRightLeft,
   Check,
+  FileText,
   FolderCog,
   Image as ImageIcon,
   Minus,
@@ -164,6 +165,7 @@ interface SettingsViewProps {
   onDeleteConnection: (id: string) => void;
   onNewProject: () => void;
   onEditProject: (project: ProjectPreset) => void;
+  onDocumentWorkspaceRoot?: (connectionId: string, path: string | null) => void;
 }
 
 export type AppearanceSettingsUpdate = Partial<Pick<DesktopSettings,
@@ -315,6 +317,7 @@ export function SettingsView({
   onDeleteConnection,
   onNewProject,
   onEditProject,
+  onDocumentWorkspaceRoot,
 }: SettingsViewProps) {
   const [query, setQuery] = useState("");
   const [pythonPath, setPythonPath] = useState(settings.python_path ?? "");
@@ -863,10 +866,28 @@ export function SettingsView({
                   </div>
                 )}
 
+                <div className="settings-context-row document-root-setting">
+                  <label htmlFor="settings-document-root">文档项目默认位置</label>
+                  <input
+                    id="settings-document-root"
+                    value={activeConnection?.document_workspace_root
+                      ?? activeGateway?.workspace?.documents_dir
+                      ?? ""}
+                    placeholder={activeGateway?.workspace?.documents_dir ?? "连接 Gateway 后自动检测"}
+                    disabled={!activeConnection || !canManageProjects || !onDocumentWorkspaceRoot}
+                    onChange={(event) => activeConnection
+                      && onDocumentWorkspaceRoot?.(
+                        activeConnection.id,
+                        event.target.value.trim() ? event.target.value : null,
+                      )}
+                  />
+                  <small>只影响之后创建的文档项目，不移动已有工作区。</small>
+                </div>
+
                 <div className="settings-group settings-entity-list">
                   {activeConnection?.projects.map((project) => (
                     <div className="settings-entity-row" key={project.id}>
-                      <span className="settings-entity-icon project"><FolderCog /></span>
+                      <span className="settings-entity-icon project">{project.kind === "document" ? <FileText /> : <FolderCog />}</span>
                       <span className="settings-entity-copy">
                         <strong>{project.name}</strong>
                         <small title={projectDirectorySummary(project)}>{projectDirectorySummary(project)}</small>

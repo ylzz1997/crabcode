@@ -30,7 +30,7 @@ fn dock_icon_bytes(choice: &str) -> Result<Vec<u8>, String> {
 
 fn default_settings() -> Value {
     json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "active_connection_id": "local",
         "connection_order": ["local"],
         "connections": [{
@@ -40,6 +40,7 @@ fn default_settings() -> Value {
             "credential_ref": null,
             "allow_insecure_remote": false,
             "last_model_profile": null,
+            "document_workspace_root": null,
             "projects": [],
             "favorite_items": [],
             "last_project_path": null,
@@ -47,6 +48,8 @@ fn default_settings() -> Value {
         }],
         "python_path": null,
         "sidebar_width": 280,
+        "document_agent_width": 400,
+        "document_agent_collapsed": false,
         "theme_mode": "system",
         "light_theme": {
             "accent_color": "#e75f4b",

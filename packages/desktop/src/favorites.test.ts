@@ -15,6 +15,7 @@ import type { ConnectionPreset, FavoriteEntry, GatewayViewState } from "./types"
 
 const project = {
   id: "project-1",
+  kind: "project" as const,
   path: "/work/crab",
   name: "CrabCode",
   directories: ["/work/crab"],
@@ -109,6 +110,7 @@ describe("favorite tree", () => {
       base_url: "http://127.0.0.1:4096",
       credential_ref: null,
       allow_insecure_remote: false,
+      document_workspace_root: null,
       projects: [project],
       favorite_items: [{
         id: "folder",

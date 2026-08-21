@@ -62,6 +62,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import DocumentWorkspace from "./DocumentWorkspace";
 import { applyGatewayEvent } from "./events";
 import {
   addFavoriteEntry,
@@ -101,6 +102,7 @@ import type {
   ChatItem,
   ConnectionPreset,
   DesktopSettings,
+  DocumentCapabilities,
   FavoriteEntry,
   FavoriteFolder,
   GatewayEvent,
@@ -405,6 +407,9 @@ function App() {
   }>>([]);
   const [pendingFolders, setPendingFolders] = useState<string[]>([]);
   const [projectModal, setProjectModal] = useState<ProjectPreset | "new" | null>(null);
+  const [projectTypeModal, setProjectTypeModal] = useState(false);
+  const [documentProjectModal, setDocumentProjectModal] = useState(false);
+  const [documentCapabilities, setDocumentCapabilities] = useState<DocumentCapabilities | null | undefined>(undefined);
   const [referenceDirectoryModal, setReferenceDirectoryModal] = useState(false);
   const [goalModal, setGoalModal] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -417,6 +422,7 @@ function App() {
   const connectedRef = useRef(new Set<string>());
   const deletingSessionIdsRef = useRef(new Set<string>());
   const sessionRefreshVersionRef = useRef(new Map<string, number>());
+  const autoOpeningDocumentRef = useRef<string | null>(null);
   const focusedSessionRef = useRef<FocusedSessionSnapshot | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -948,6 +954,7 @@ function App() {
         ? connection.projects
         : [{
           id: crypto.randomUUID(),
+          kind: "project" as const,
           path: workspace.startup_cwd,
           name: basename(workspace.startup_cwd),
           directories: [workspace.startup_cwd],
@@ -1133,6 +1140,32 @@ function App() {
   ]);
 
   useEffect(() => {
+    if (activeSessionKey) {
+      autoOpeningDocumentRef.current = null;
+      return;
+    }
+    if (
+      !activeConnection
+      || !activeProject
+      || activeProject.kind !== "document"
+      || activeGateway?.status !== "online"
+    ) return;
+    const target = `${activeConnection.id}:${activeProject.id}`;
+    if (autoOpeningDocumentRef.current === target) return;
+    autoOpeningDocumentRef.current = target;
+    const preferred = activeList.find((item) => item.session_id === activeProject.last_session_id)
+      ?? activeList[0];
+    openSession(activeConnection, activeProject, preferred);
+  }, [
+    activeConnection,
+    activeGateway?.status,
+    activeList,
+    activeProject,
+    activeSessionKey,
+    openSession,
+  ]);
+
+  useEffect(() => {
     messageEndRef.current?.scrollIntoView({ block: "end" });
   }, [activeSession?.items.length, activeSession?.items.at(-1)?.text]);
 
@@ -1152,6 +1185,15 @@ function App() {
   const openSettings = () => {
     setSettingsSection("general");
     setSettingsOpen(true);
+  };
+
+  const beginNewProject = () => {
+    setDocumentCapabilities(undefined);
+    setProjectTypeModal(true);
+    if (!activeConnection) return;
+    void apiRef.current.get(activeConnection.id)?.documentCapabilities()
+      .then(setDocumentCapabilities)
+      .catch(() => setDocumentCapabilities(null));
   };
 
   const deleteConnection = useCallback(async (id: string) => {
@@ -1214,6 +1256,10 @@ function App() {
         openSession(activeConnection, project, info);
         return;
       }
+    }
+    if (project.kind === "document") {
+      openSession(activeConnection, project);
+      return;
     }
     setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
   };
@@ -1583,6 +1629,7 @@ function App() {
   const activePermissionMode = activeSessionKey
     ? permissionSelections[activeSessionKey] || normalizePermissionMode(activeSession?.status?.permission_mode)
     : "default";
+  const documentMode = workspaceView === "chat" && activeProject?.kind === "document";
 
   useEffect(() => {
     if (!activeSession?.busy) return;
@@ -1698,8 +1745,12 @@ function App() {
           onNewConnection={() => setConnectionModal("new")}
           onEditConnection={setConnectionModal}
           onDeleteConnection={(id) => void deleteConnection(id)}
-          onNewProject={() => setProjectModal("new")}
+          onNewProject={beginNewProject}
           onEditProject={setProjectModal}
+          onDocumentWorkspaceRoot={(connectionId, path) => updateConnection(connectionId, (connection) => ({
+            ...connection,
+            document_workspace_root: path,
+          }))}
         />
       ) : (
       <>
@@ -1844,7 +1895,7 @@ function App() {
                     className="icon-button tiny"
                     title="添加项目"
                     disabled={activeGateway?.status !== "online"}
-                    onClick={() => setProjectModal("new")}
+                    onClick={beginNewProject}
                   >
                     <Plus />
                   </button>
@@ -1874,7 +1925,9 @@ function App() {
                           onClick={() => switchProject(project)}
                           onDoubleClick={() => setProjectModal(project)}
                         >
-                          {activeProject?.id === project.id ? <FolderOpen /> : <Folder />}
+                          {project.kind === "document"
+                            ? <FileText />
+                            : activeProject?.id === project.id ? <FolderOpen /> : <Folder />}
                           <span>{project.name}</span>
                           {projectFavorite && <Star className="project-favorite" fill="currentColor" />}
                         </button>
@@ -2013,7 +2066,45 @@ function App() {
           </div>
         </aside>
 
-        <main className="main-panel">
+        <main
+          className={`main-panel ${documentMode ? "document-mode" : ""} ${settings.document_agent_collapsed ? "document-agent-collapsed" : ""}`}
+          style={documentMode ? {
+            gridTemplateColumns: `minmax(0, 1fr) ${settings.document_agent_collapsed ? 44 : settings.document_agent_width ?? 400}px`,
+          } : undefined}
+        >
+          {documentMode && activeProject && activeConnection && apiRef.current.get(activeConnection.id) && (
+            <DocumentWorkspace
+              api={apiRef.current.get(activeConnection.id)!}
+              project={activeProject}
+              agentWidth={settings.document_agent_width ?? 400}
+              agentCollapsed={settings.document_agent_collapsed === true}
+              sessionBusy={Boolean(activeSession?.busy)}
+              sessionError={activeSession?.error ?? null}
+              onAgentWidth={(width) => commitSettings((current) => ({ ...current, document_agent_width: width }))}
+              onAgentCollapsed={(collapsed) => commitSettings((current) => ({ ...current, document_agent_collapsed: collapsed }))}
+              onDocumentAction={(action, options) => {
+                if (!activeChannel) {
+                  setGlobalError("Agent 会话尚未就绪，请稍后重试");
+                  return false;
+                }
+                try {
+                  const operationId = activeChannel.documentAction(action, options);
+                  if (activeSessionKey) {
+                    setSessions((current) => current[activeSessionKey]
+                      ? {
+                          ...current,
+                          [activeSessionKey]: { ...current[activeSessionKey], operationId, error: null },
+                        }
+                      : current);
+                  }
+                  return true;
+                } catch (reason) {
+                  setGlobalError(reason instanceof Error ? reason.message : String(reason));
+                  return false;
+                }
+              }}
+            />
+          )}
           {workspaceView === "scheduled" ? (
             <ScheduledTasksView
               tab={automationTab}
@@ -2348,6 +2439,42 @@ function App() {
             connectedRef.current.add(connection.id);
             await connectGateway(connection, settings.python_path);
             setConnectionModal(null);
+          }}
+        />
+      )}
+
+      {projectTypeModal && (
+        <ProjectTypeModal
+          capabilities={documentCapabilities}
+          onClose={() => setProjectTypeModal(false)}
+          onSelect={(kind) => {
+            setProjectTypeModal(false);
+            if (kind === "document") setDocumentProjectModal(true);
+            else setProjectModal("new");
+          }}
+        />
+      )}
+
+      {documentProjectModal && activeConnection && activeGateway?.workspace && apiRef.current.get(activeConnection.id) && (
+        <DocumentProjectModal
+          api={apiRef.current.get(activeConnection.id)!}
+          capabilities={documentCapabilities}
+          defaultRoot={activeConnection.document_workspace_root
+            || activeGateway.workspace.documents_dir
+            || defaultProjectDirectory(defaultProjectDirectory(activeGateway.workspace.home, "Documents"), "CrabCode")}
+          onClose={() => setDocumentProjectModal(false)}
+          onSave={(project) => {
+            updateConnection(activeConnection.id, (connection) => ({
+              ...connection,
+              projects: [...connection.projects, project],
+              last_project_path: project.path,
+              last_project_id: project.id,
+            }));
+            setWorkspaceView("chat");
+            setSearch("");
+            void refreshProjectSessions(activeConnection.id, project.path);
+            openSession(activeConnection, project);
+            setDocumentProjectModal(false);
           }}
         />
       )}
@@ -3783,6 +3910,34 @@ function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermi
   }
   if (item.kind === "system") return <div className="system-line">{item.text}</div>;
   if (item.kind === "error") return <div className="error-line"><AlertTriangle />{item.text}</div>;
+  if (item.kind === "document_job") {
+    const progress = item.total ? Math.min(100, Math.round(((item.current ?? 0) / item.total) * 100)) : 0;
+    const statusLabel = item.status === "complete"
+      ? "完成"
+      : item.status === "failed"
+        ? "失败"
+        : item.status === "cancelled"
+          ? "已取消"
+          : item.status === "retrying"
+            ? "校验后重试"
+            : "运行中";
+    return (
+      <article className={`activity-card document-job-card is-${item.status ?? "running"}`}>
+        <div className="activity-header">
+          <i className="tool-glyph" aria-hidden="true">
+            {item.status === "running" || item.status === "retrying" ? <LoaderCircle className="spin" /> : item.action === "translate" ? <FileText /> : <Sparkles />}
+          </i>
+          <span>{item.title}</span>
+          {item.locale && <code>{item.locale}</code>}
+          <em className="tool-status">{statusLabel}</em>
+        </div>
+        <div className="document-job-body">
+          {(item.total ?? 0) > 1 && <div className="document-job-progress"><i style={{ width: `${progress}%` }} /><span>{item.current ?? 0} / {item.total}</span></div>}
+          {item.text && <p>{item.text}</p>}
+        </div>
+      </article>
+    );
+  }
   if (item.kind === "thinking") {
     return (
       <article className="activity-card thinking-card">
@@ -3994,6 +4149,7 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
             favorite_items: editingConnection?.favorite_items ?? [],
             last_project_path: editingConnection?.last_project_path ?? null,
             last_project_id: editingConnection?.last_project_id ?? null,
+            document_workspace_root: editingConnection?.document_workspace_root ?? null,
           }, password).catch((reason) => {
             setError(reason instanceof Error ? reason.message : String(reason));
             setBusy(false);
@@ -4023,6 +4179,249 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
   );
 }
 
+export function ProjectTypeModal({ capabilities, onClose, onSelect }: {
+  capabilities: DocumentCapabilities | null | undefined;
+  onClose: () => void;
+  onSelect: (kind: "project" | "document") => void;
+}) {
+  const [kind, setKind] = useState<"project" | "document">("project");
+  const documentDisabled = capabilities === null;
+  return (
+    <Modal title="创建项目" onClose={onClose} wide>
+      <div className="project-type-modal">
+        <h3>项目类型</h3>
+        <div className="project-type-grid" role="radiogroup" aria-label="项目类型">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={kind === "project"}
+            className={kind === "project" ? "selected" : ""}
+            onClick={() => setKind("project")}
+          >
+            <span className="project-type-check">{kind === "project" && <Check />}</span>
+            <Folder />
+            <strong>项目</strong>
+            <small>编辑、运行和测试本地或远程工作区中的文件</small>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={kind === "document"}
+            className={kind === "document" ? "selected" : ""}
+            disabled={documentDisabled}
+            onClick={() => setKind("document")}
+          >
+            <span className="project-type-check">{kind === "document" && <Check />}</span>
+            <FileText />
+            <strong>文档</strong>
+            <small>{documentDisabled ? "当前 Gateway 版本不支持文档项目" : "阅读、翻译文档并生成 Blog"}</small>
+          </button>
+        </div>
+        {capabilities === undefined && <p className="project-type-status"><LoaderCircle className="spin" />正在检查文档能力…</p>}
+      </div>
+      <div className="modal-actions">
+        <button type="button" onClick={onClose}>取消</button>
+        <button className="primary" type="button" onClick={() => onSelect(kind)}>下一步<ChevronRight /></button>
+      </div>
+    </Modal>
+  );
+}
+
+export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, onSave }: {
+  api: GatewayApi;
+  capabilities: DocumentCapabilities | null | undefined;
+  defaultRoot: string;
+  onClose: () => void;
+  onSave: (project: ProjectPreset) => void;
+}) {
+  const [projectId] = useState(() => crypto.randomUUID());
+  const [mode, setMode] = useState<"file" | "url">("file");
+  const [file, setFile] = useState<File | null>(null);
+  const [url, setUrl] = useState("");
+  const [name, setName] = useState("");
+  const [workspacePath, setWorkspacePath] = useState(() => defaultProjectDirectory(defaultRoot, "新文档"));
+  const [workspaceEdited, setWorkspaceEdited] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState<"upload" | "convert" | "parse" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const applySuggestedName = (value: string) => {
+    const filename = value.split(/[\\/]/).at(-1) || value;
+    const suggested = filename.replace(/\.[^.]+$/, "").trim() || "新文档";
+    setName((current) => current.trim() ? current : suggested);
+    if (!workspaceEdited) setWorkspacePath(defaultProjectDirectory(defaultRoot, suggested));
+  };
+  const updateName = (value: string) => {
+    setName(value);
+    if (!workspaceEdited) setWorkspacePath(defaultProjectDirectory(defaultRoot, value));
+  };
+  const selectedExtension = mode === "file"
+    ? file?.name.match(/\.[^.]+$/)?.[0]?.toLowerCase()
+    : (() => {
+        try { return new URL(url).pathname.match(/\.[^.]+$/)?.[0]?.toLowerCase(); } catch { return undefined; }
+      })();
+  const formatUnavailable = Boolean(
+    selectedExtension
+    && capabilities
+    && capabilities.supported_extensions.includes(selectedExtension)
+    && !capabilities.available_extensions.includes(selectedExtension),
+  );
+  const unsupportedFormat = Boolean(
+    mode === "file"
+    && capabilities
+    && (!selectedExtension || !capabilities.supported_extensions.includes(selectedExtension)),
+  );
+
+  const create = async () => {
+    if (busy) return;
+    const projectName = name.trim() || "新文档";
+    if (!workspacePath.trim()) {
+      setError("请输入文档工作目录");
+      return;
+    }
+    if (mode === "file" && !file) {
+      setError("请选择一个本地文档");
+      return;
+    }
+    if (file && capabilities && file.size > capabilities.max_bytes) {
+      setError(`文件不能超过 ${Math.round(capabilities.max_bytes / 1024 / 1024)} MiB`);
+      return;
+    }
+    if (unsupportedFormat) {
+      setError("请选择 PDF、Word、ODT、RTF、PPT、TXT、Markdown 或 HTML 文档");
+      return;
+    }
+    if (mode === "url") {
+      try {
+        const parsed = new URL(url);
+        if (!/^https?:$/.test(parsed.protocol)) throw new Error();
+      } catch {
+        setError("请输入有效的 HTTP 或 HTTPS 文档地址");
+        return;
+      }
+    }
+    if (formatUnavailable) {
+      setError("此格式需要 Gateway 安装 LibreOffice 后才能导入");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setStage("upload");
+    const stageTimer = window.setTimeout(() => setStage("convert"), 500);
+    try {
+      const manifest = mode === "file"
+        ? await api.uploadDocument({
+          workspacePath: workspacePath.trim(),
+          projectId,
+          projectName,
+          file: file!,
+        })
+        : await api.importDocumentUrl({
+          workspacePath: workspacePath.trim(),
+          projectId,
+          projectName,
+          url: url.trim(),
+        });
+      setStage("parse");
+      onSave({
+        id: projectId,
+        kind: "document",
+        path: manifest.workspace,
+        name: projectName,
+        directories: [manifest.workspace],
+        last_session_id: null,
+        favorite_session_ids: [],
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setBusy(false);
+      setStage(null);
+    } finally {
+      window.clearTimeout(stageTimer);
+    }
+  };
+
+  return (
+    <Modal title="创建文档项目" onClose={onClose} wide>
+      <div className="document-project-form">
+        <label className="project-name-field">
+          <FileText />
+          <input autoFocus value={name} disabled={busy} placeholder="文档项目名称" onChange={(event) => updateName(event.target.value)} />
+        </label>
+        <div className="document-source-tabs" role="tablist" aria-label="文档来源">
+          <button className={mode === "file" ? "active" : ""} onClick={() => setMode("file")}>本地文件</button>
+          <button className={mode === "url" ? "active" : ""} onClick={() => setMode("url")}>网络地址</button>
+        </div>
+        {mode === "file" ? (
+          <label className={`document-file-drop ${file ? "selected" : ""}`}>
+            <input
+              type="file"
+              disabled={busy}
+              accept={capabilities?.supported_extensions.join(",")}
+              onChange={(event) => {
+                const selected = event.target.files?.[0] ?? null;
+                setFile(selected);
+                if (selected) applySuggestedName(selected.name);
+                setError(null);
+              }}
+            />
+            <FileText />
+            <strong>{file?.name ?? "选择本地文档"}</strong>
+            <small>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MiB` : "PDF、Word、演示文稿及常见文本格式"}</small>
+          </label>
+        ) : (
+          <label className="document-url-field">
+            <span>直接文档地址</span>
+            <input
+              type="url"
+              disabled={busy}
+              value={url}
+              placeholder="https://example.com/document.pdf"
+              onChange={(event) => {
+                setUrl(event.target.value);
+                applySuggestedName(event.target.value);
+                setError(null);
+              }}
+            />
+            <small>仅下载直接返回文档文件的 HTTP/HTTPS 地址，不抓取普通网页或网盘分享页。</small>
+          </label>
+        )}
+        <label className="document-workspace-field">
+          <span>工作目录</span>
+          <input
+            value={workspacePath}
+            disabled={busy}
+            onChange={(event) => {
+              setWorkspaceEdited(true);
+              setWorkspacePath(event.target.value);
+            }}
+          />
+          <small>原文件、翻译数据和 Blog 会存放在这里；不会修改你选择的源文件。</small>
+        </label>
+        {capabilities && !capabilities.libreoffice.available && (
+          <div className="document-capability-warning"><AlertTriangle />当前 Gateway 未安装 LibreOffice，首版只能导入 PDF。</div>
+        )}
+        {formatUnavailable && <div className="form-error"><AlertTriangle />此格式需要先安装 LibreOffice。</div>}
+        {unsupportedFormat && <div className="form-error"><AlertTriangle />不支持这个文件格式。</div>}
+        {stage && (
+          <div className="document-import-progress">
+            {[["upload", "导入"], ["convert", "转换为 PDF"], ["parse", "准备文档"]].map(([value, label]) => (
+              <span className={stage === value ? "active" : ""} key={value}>{stage === value ? <LoaderCircle className="spin" /> : <Check />}{label}</span>
+            ))}
+          </div>
+        )}
+        {error && <div className="form-error"><AlertTriangle />{error}</div>}
+      </div>
+      <div className="modal-actions">
+        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button className="primary" type="button" disabled={busy || formatUnavailable || unsupportedFormat} onClick={() => void create()}>
+          {busy ? <LoaderCircle className="spin" /> : <FileText />}创建文档
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 export function ProjectModal({ api, home, roots, project, projects, protectPrimaryDirectory = false, onClose, onSave, onRemove }: {
   api: GatewayApi;
   home: string;
@@ -4045,7 +4444,8 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const suggestedName = directories[0] ? basename(directories[0]) : "新项目";
-  const protectedPrimaryDirectory = protectPrimaryDirectory
+  const documentProject = project?.kind === "document";
+  const protectedPrimaryDirectory = protectPrimaryDirectory || documentProject
     ? project?.directories[0] ?? project?.path ?? null
     : null;
 
@@ -4058,7 +4458,7 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
     }
     if (protectedPrimaryDirectory
       && comparablePath(nextDirectories[0] ?? "") !== comparablePath(protectedPrimaryDirectory)) {
-      setError("默认项目的原始主目录不能移除");
+      setError(documentProject ? "文档项目的托管工作目录不能修改" : "默认项目的原始主目录不能移除");
       return;
     }
     const shouldCreateDefaultDirectory = !editing && nextDirectories.length === 0;
@@ -4081,6 +4481,7 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
       const savedDirectories = [primaryPath, ...nextDirectories.slice(1)];
       onSave({
         id: project?.id ?? crypto.randomUUID(),
+        kind: project?.kind ?? "project",
         path: primaryPath,
         name: name.trim() || suggestedName,
         directories: savedDirectories,
@@ -4111,7 +4512,7 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
     );
   }
   return (
-    <Modal title={editing ? "编辑项目" : "新建项目"} onClose={onClose}>
+    <Modal title={documentProject ? "编辑文档项目" : editing ? "编辑项目" : "新建项目"} onClose={onClose}>
         <div className="project-form">
           <label className="project-name-field">
             <Folder />
@@ -4128,14 +4529,16 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
             <h3>{editing ? "项目目录" : "项目文件夹（可选）"}</h3>
             <div className={`project-directory-box ${directories.length === 0 ? "empty" : ""}`}>
               {directories.map((path, index) => {
-                const primaryDirectoryProtected = protectPrimaryDirectory && index === 0;
+                const primaryDirectoryProtected = Boolean(protectedPrimaryDirectory) && index === 0;
                 return (
                 <div className="project-directory-row" key={path} title={path}>
                   <Folder />
                   <span><strong>{basename(path)}</strong><small>{path}</small></span>
                   <button
                     className="icon-button small"
-                    title={primaryDirectoryProtected ? "默认项目的主目录不能移除" : `移除 ${basename(path)}`}
+                    title={primaryDirectoryProtected
+                      ? documentProject ? "文档项目的托管工作目录不能移除" : "默认项目的主目录不能移除"
+                      : `移除 ${basename(path)}`}
                     aria-label={`移除目录 ${path}`}
                     disabled={busy || primaryDirectoryProtected}
                     onClick={() => setDirectories((current) => current.filter((item) => item !== path))}
@@ -4150,6 +4553,7 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
                 <span>{directories.length === 0 ? "选择项目文件夹" : "继续加入目录"}</span>
               </button>
             </div>
+            {documentProject && <p>主目录由 CrabCode 托管；在这里可以补充供 Agent 参考的目录。</p>}
             {directories.length === 0 && (
               <p>{editing ? "每个项目都需要一个独立的主目录。" : "不选择时，将在用户主目录下自动创建同名文件夹。"}</p>
             )}

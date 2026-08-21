@@ -244,6 +244,18 @@ class ScheduleRunEvent:
     next_run: str | None = None
 
 
+@dataclass
+class DocumentJobEvent:
+    """Progress for a structured document translation or Blog operation."""
+    action: str
+    status: str
+    locale: str = ""
+    source: str = ""
+    current: int = 0
+    total: int = 0
+    message: str = ""
+
+
 CoreEvent = Union[
     StreamTextEvent,
     ThinkingEvent,
@@ -267,4 +279,5 @@ CoreEvent = Union[
     SnapshotEvent,
     RevertEvent,
     ScheduleRunEvent,
+    DocumentJobEvent,
 ]

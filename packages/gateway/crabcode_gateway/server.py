@@ -31,6 +31,7 @@ from crabcode_gateway.routes import (
     agent,
     auth,
     config,
+    document,
     event,
     health,
     peer,
@@ -196,6 +197,7 @@ class GatewayServer:
         app.include_router(peer.router)
         app.include_router(team.router)
         app.include_router(workspace.router)
+        app.include_router(document.router)
 
         self._app = app
         return app

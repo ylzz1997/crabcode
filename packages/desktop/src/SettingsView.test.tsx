@@ -11,7 +11,7 @@ import {
 import type { DesktopSettings, GatewayViewState } from "./types";
 
 const settings: DesktopSettings = {
-  schema_version: 2,
+  schema_version: 3,
   active_connection_id: "local",
   connection_order: ["local", "remote"],
   connections: [
@@ -21,8 +21,10 @@ const settings: DesktopSettings = {
       base_url: "http://127.0.0.1:4096",
       credential_ref: null,
       allow_insecure_remote: false,
+      document_workspace_root: null,
       projects: [{
         id: "crab",
+        kind: "project",
         path: "/work/crabcode",
         name: "CrabCode",
         directories: ["/work/crabcode", "/work/shared"],
@@ -37,6 +39,7 @@ const settings: DesktopSettings = {
       base_url: "https://build.example.com:4096",
       credential_ref: "gateway-remote",
       allow_insecure_remote: false,
+      document_workspace_root: null,
       projects: [],
       last_project_path: null,
       last_project_id: null,
@@ -44,6 +47,8 @@ const settings: DesktopSettings = {
   ],
   python_path: null,
   sidebar_width: 280,
+  document_agent_width: 400,
+  document_agent_collapsed: false,
   theme_mode: "system",
   light_theme: {
     accent_color: "#e75f4b",

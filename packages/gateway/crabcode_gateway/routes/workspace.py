@@ -93,7 +93,17 @@ def build_workspace_info(startup_cwd: str, configured_roots: list[str]) -> Works
         startup_cwd=str(cwd),
         home=str(home),
         browse_roots=[str(root) for root in roots],
+        documents_dir=str(_recommended_documents_dir(home)),
     )
+
+
+def _recommended_documents_dir(home: Path) -> Path:
+    """Return a visible, cross-platform document root without creating it."""
+    if os.name == "nt":
+        configured = os.environ.get("USERPROFILE")
+        base = Path(configured).expanduser() if configured else home
+        return base / "Documents" / "CrabCode"
+    return home / "Documents" / "CrabCode"
 
 
 def _workspace_roots(request: Request) -> tuple[Path, ...]:

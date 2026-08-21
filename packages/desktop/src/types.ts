@@ -1,5 +1,6 @@
 export interface ProjectPreset {
   id: string;
+  kind: "project" | "document";
   path: string;
   name: string;
   directories: string[];
@@ -37,6 +38,7 @@ export interface ConnectionPreset {
   credential_ref: string | null;
   allow_insecure_remote: boolean;
   last_model_profile?: string | null;
+  document_workspace_root: string | null;
   projects: ProjectPreset[];
   favorite_items?: FavoriteEntry[];
   last_project_path: string | null;
@@ -44,12 +46,14 @@ export interface ConnectionPreset {
 }
 
 export interface DesktopSettings {
-  schema_version: 2;
+  schema_version: 3;
   active_connection_id: string;
   connection_order: string[];
   connections: ConnectionPreset[];
   python_path: string | null;
   sidebar_width: number;
+  document_agent_width: number;
+  document_agent_collapsed: boolean;
   theme_mode: ThemeMode;
   light_theme: ThemeProfile;
   dark_theme: ThemeProfile;
@@ -84,6 +88,85 @@ export interface WorkspaceInfo {
   startup_cwd: string;
   home: string;
   browse_roots: string[];
+  documents_dir?: string;
+}
+
+export interface DocumentCapabilities {
+  supported_extensions: string[];
+  available_extensions: string[];
+  max_bytes: number;
+  documents_dir: string;
+  libreoffice: { available: boolean; executable: string | null };
+  ocr: { available: boolean };
+}
+
+export interface DocumentManifest {
+  schema_version: 1;
+  project_id: string;
+  project_name: string;
+  workspace: string;
+  source: {
+    origin: "upload" | "url";
+    name: string;
+    path: string;
+    url: string | null;
+    content_type: string;
+    size: number;
+    sha256: string;
+  };
+  pdf: { path: string; sha256: string; page_count: number };
+  layout: null | { path: string; fingerprint: string; text_pages: number; scanned_pages: number };
+  translations: Record<string, { path?: string; status?: string }>;
+  blog: null | { path: string; revision: string; language: string };
+  jobs: Record<string, {
+    action: "translate" | "generate_blog";
+    status: string;
+    locale: string;
+    source: string;
+    current: number;
+    total: number;
+    message: string;
+    updated_at: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocumentTextBlock {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  fontFamily: string;
+  direction: string;
+}
+
+export interface DocumentPageLayout {
+  width: number;
+  height: number;
+  blocks: DocumentTextBlock[];
+}
+
+export interface DocumentLayout {
+  fingerprint: string;
+  page_count: number;
+  pages: DocumentPageLayout[];
+}
+
+export interface DocumentTranslation {
+  locale: string;
+  source_sha256?: string;
+  layout_fingerprint?: string;
+  blocks: Array<{ id: string; translated_text: string }>;
+}
+
+export interface DocumentBlog {
+  markdown: string;
+  revision: string | null;
+  language: string;
 }
 
 export interface WorkspaceDirectoryEntry {
@@ -239,6 +322,7 @@ export type ChatItemKind =
   | "permission"
   | "choice"
   | "plan"
+  | "document_job"
   | "file_change"
   | "turn_duration"
   | "system"
@@ -253,7 +337,7 @@ export interface ChatItem {
   input?: Record<string, unknown>;
   result?: string;
   isError?: boolean;
-  status?: "pending" | "running" | "complete" | "allowed" | "denied" | "cancelled";
+  status?: "pending" | "running" | "retrying" | "complete" | "failed" | "allowed" | "denied" | "cancelled";
   tool_use_id?: string;
   agent_id?: string | null;
   options?: string[];
@@ -263,6 +347,10 @@ export interface ChatItem {
   diff?: string | null;
   path?: string;
   action?: string;
+  locale?: string;
+  source?: string;
+  current?: number;
+  total?: number;
   collapsed?: boolean;
   startedAt?: number;
   completedAt?: number;
@@ -270,7 +358,7 @@ export interface ChatItem {
 }
 
 export interface SessionCurrentStep {
-  kind: "response" | "thinking" | "tool" | "permission" | "choice";
+  kind: "response" | "thinking" | "tool" | "permission" | "choice" | "document";
   label: string;
   startedAt: number;
 }
@@ -330,6 +418,11 @@ export interface GatewayEvent {
   plan?: Record<string, unknown>;
   path?: string;
   action?: string;
+  status?: string;
+  locale?: string;
+  source?: string;
+  current?: number;
+  total?: number;
   diff?: string | null;
   mode?: "agent" | "plan";
   model_profile?: string;
