@@ -58,6 +58,9 @@ describe("desktop settings migration", () => {
       turn_duration_format: "hms",
       document_agent_width: 400,
       document_agent_collapsed: false,
+      document_show_original_text: false,
+      document_translation_concurrency: 3,
+      document_translation_batch_size: 200,
     });
     expect(migrated.connections[0].projects[0]).toMatchObject({
       kind: "project",
@@ -126,6 +129,38 @@ describe("desktop settings migration", () => {
     expect(normalizeSettings(configured).connections[0].last_model_profile).toBe("fast");
   });
 
+  it("normalizes remembered document zoom and scroll positions", () => {
+    const configured = {
+      schema_version: 3,
+      active_connection_id: "local",
+      connection_order: ["local"],
+      connections: [{
+        id: "local",
+        name: "Local",
+        base_url: "http://127.0.0.1:4096",
+        credential_ref: null,
+        allow_insecure_remote: false,
+        projects: [{
+          id: "document-1",
+          kind: "document",
+          path: "/work/paper",
+          name: "Paper",
+          directories: ["/work/paper"],
+          last_session_id: null,
+          document_view: { zoom: 9, scroll_top: -20, scroll_left: 180 },
+        }],
+        last_project_path: "/work/paper",
+        last_project_id: "document-1",
+      }],
+    } as unknown as DesktopSettings;
+
+    expect(normalizeSettings(configured).connections[0].projects[0].document_view).toEqual({
+      zoom: 2.5,
+      scroll_top: 0,
+      scroll_left: 180,
+    });
+  });
+
   it("preserves explicit appearance preferences", () => {
     const configured = {
       schema_version: 2,
@@ -161,6 +196,9 @@ describe("desktop settings migration", () => {
       show_turn_duration: false,
       turn_duration_format: "seconds",
       dock_icon: "light",
+      document_show_original_text: true,
+      document_translation_concurrency: 99,
+      document_translation_batch_size: 2,
     } as unknown as DesktopSettings;
 
     const normalized = normalizeSettings(configured);
@@ -184,6 +222,9 @@ describe("desktop settings migration", () => {
       font_smoothing: false,
       show_turn_duration: false,
       turn_duration_format: "seconds",
+      document_show_original_text: true,
+      document_translation_concurrency: 8,
+      document_translation_batch_size: 10,
     });
   });
 

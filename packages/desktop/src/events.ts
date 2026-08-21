@@ -545,20 +545,39 @@ export function applyGatewayEvent(
             },
           }
         : state;
-    case "error":
+    case "error": {
+      const documentItemId = event.operation_id ? `${event.operation_id}:document-job` : null;
+      const documentCommandError = Boolean(
+        event.command_error
+        && documentItemId
+        && state.items.some((item) => item.id === documentItemId),
+      );
       return {
         ...state,
         error: event.message ?? "Gateway error",
-        operationId: event.command_error && event.command === "document_action" ? null : state.operationId,
+        busy: documentCommandError ? false : state.busy,
+        operationId: documentCommandError ? null : state.operationId,
+        runStartedAt: documentCommandError ? null : state.runStartedAt,
+        currentStep: documentCommandError ? null : state.currentStep,
         // Gateway guarantees a turn_complete boundary after foreground errors.
         // Keep live cards and timers running until that boundary arrives.
-        items: event.command_error
-          ? state.items
+        items: documentCommandError && documentItemId
+          ? state.items.map((item) => item.id === documentItemId
+            ? {
+                ...item,
+                text: event.message ?? "文档操作未能开始",
+                status: "failed" as const,
+                completedAt: now,
+              }
+            : item)
+          : event.command_error
+            ? state.items
           : [
               ...state.items,
               { id: crypto.randomUUID(), kind: "error", text: event.message ?? "Gateway error" },
             ],
       };
+    }
     case "turn_complete":
       return {
         ...state,

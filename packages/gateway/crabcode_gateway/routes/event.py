@@ -52,9 +52,14 @@ _WS_TASK_SESSIONS_KEY = "crabcode_background_task_sessions"
 # Keep the historical app-state name so embedding integrations that inspect
 # plan_tasks continue to observe the active session claim.
 _PLAN_TASKS_KEY = "plan_tasks"
-_TRANSLATION_BATCH_MAX_BLOCKS = 200
+_TRANSLATION_BATCH_DEFAULT_BLOCKS = 200
+_TRANSLATION_BATCH_MIN_BLOCKS = 10
+_TRANSLATION_BATCH_MAX_BLOCKS = 400
 _TRANSLATION_BATCH_MAX_CHARS = 6_000
 _TRANSLATION_BATCH_ATTEMPTS = 3
+_TRANSLATION_CONCURRENCY_DEFAULT = 3
+_TRANSLATION_CONCURRENCY_MIN = 1
+_TRANSLATION_CONCURRENCY_MAX = 8
 
 router = APIRouter(tags=["events"])
 
@@ -67,6 +72,8 @@ class _DocumentJobContext:
     workspace: str
     recovered: int = 0
     document_hash: str = ""
+    translation_concurrency: int = _TRANSLATION_CONCURRENCY_DEFAULT
+    translation_batch_size: int = _TRANSLATION_BATCH_DEFAULT_BLOCKS
 
 
 class _DocumentTranslationError(RuntimeError):
@@ -75,6 +82,7 @@ class _DocumentTranslationError(RuntimeError):
 
 def _split_translation_page(
     page: list[tuple[str, str]],
+    max_blocks: int = _TRANSLATION_BATCH_DEFAULT_BLOCKS,
 ) -> list[list[tuple[str, str]]]:
     batches: list[list[tuple[str, str]]] = []
     current: list[tuple[str, str]] = []
@@ -82,7 +90,7 @@ def _split_translation_page(
     for block in page:
         block_chars = len(block[1])
         if current and (
-            len(current) >= _TRANSLATION_BATCH_MAX_BLOCKS
+            len(current) >= max_blocks
             or current_chars + block_chars > _TRANSLATION_BATCH_MAX_CHARS
         ):
             batches.append(current)
@@ -168,6 +176,23 @@ def _merge_usage(total: dict[str, int], current: dict[str, Any]) -> None:
         except (TypeError, ValueError):
             continue
         total[key] = total.get(key, 0) + amount
+
+
+def _translation_option(
+    value: Any,
+    *,
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
 
 
 async def _request_translation_batch(
@@ -264,6 +289,9 @@ async def _translate_document_batches(
     operation_id: str,
     locale: str,
     on_progress: Callable[[int, str], Awaitable[None]],
+    *,
+    concurrency: int = _TRANSLATION_CONCURRENCY_DEFAULT,
+    batch_size: int = _TRANSLATION_BATCH_DEFAULT_BLOCKS,
 ) -> dict[str, int]:
     from crabcode_core.api import create_adapter
     from crabcode_gateway.routes.document import (
@@ -271,6 +299,24 @@ async def _translate_document_batches(
         _translation_job_blocks,
         _translation_source_pages,
     )
+
+    try:
+        concurrency = _translation_option(
+            concurrency,
+            name="translation_concurrency",
+            default=_TRANSLATION_CONCURRENCY_DEFAULT,
+            minimum=_TRANSLATION_CONCURRENCY_MIN,
+            maximum=_TRANSLATION_CONCURRENCY_MAX,
+        )
+        batch_size = _translation_option(
+            batch_size,
+            name="translation_batch_size",
+            default=_TRANSLATION_BATCH_DEFAULT_BLOCKS,
+            minimum=_TRANSLATION_BATCH_MIN_BLOCKS,
+            maximum=_TRANSLATION_BATCH_MAX_BLOCKS,
+        )
+    except ValueError as exc:
+        raise _DocumentTranslationError(str(exc)) from exc
 
     initialize = getattr(session, "initialize", None)
     if callable(initialize):
@@ -301,20 +347,39 @@ async def _translate_document_batches(
             operation_id,
             locale,
         )
+        pending_batches: list[tuple[int, int, int, list[tuple[str, str]]]] = []
         for page_index, page in enumerate(pages, start=1):
-            batches = _split_translation_page(page)
+            batches = _split_translation_page(page, batch_size)
             for batch_index, batch in enumerate(batches, start=1):
                 block_ids = [block_id for block_id, _ in batch]
                 if all(block_id in translated for block_id in block_ids):
                     continue
+                pending_batches.append((page_index, batch_index, len(batches), batch))
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def request_batch(
+            spec: tuple[int, int, int, list[tuple[str, str]]],
+        ) -> tuple[tuple[int, int, int, list[tuple[str, str]]], list[str], dict[str, int]]:
+            async with semaphore:
                 translations, usage = await _request_translation_batch(
                     adapter,
                     api_config,
                     locale,
-                    [text for _, text in batch],
+                    [text for _, text in spec[3]],
                 )
+                return spec, translations, usage
+
+        tasks = [asyncio.create_task(request_batch(spec)) for spec in pending_batches]
+        try:
+            for completed in asyncio.as_completed(tasks):
+                spec, translations, usage = await completed
+                page_index, batch_index, page_batch_count, batch = spec
                 _merge_usage(usage_total, usage)
+                block_ids = [block_id for block_id, _ in batch]
                 batch_mapping = dict(zip(block_ids, translations, strict=True))
+                # Cache persistence is a read-modify-write operation. Keep it
+                # serialized even though model requests run concurrently.
                 current = await asyncio.to_thread(
                     _store_translation_batch,
                     workspace,
@@ -326,8 +391,14 @@ async def _translate_document_batches(
                 await on_progress(
                     current,
                     f"已完成第 {page_index}/{len(pages)} 页"
-                    + (f"，批次 {batch_index}/{len(batches)}" if len(batches) > 1 else ""),
+                    + (f"，批次 {batch_index}/{page_batch_count}" if page_batch_count > 1 else ""),
                 )
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         return usage_total
     finally:
         await _close_translation_adapter(adapter)
@@ -882,6 +953,31 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
     locale = msg.get("locale") or "zh-CN"
     source = msg.get("source") or "original"
     requested_operation_id = msg.get("operation_id")
+    try:
+        translation_concurrency = _translation_option(
+            msg.get("translation_concurrency"),
+            name="translation_concurrency",
+            default=_TRANSLATION_CONCURRENCY_DEFAULT,
+            minimum=_TRANSLATION_CONCURRENCY_MIN,
+            maximum=_TRANSLATION_CONCURRENCY_MAX,
+        )
+        translation_batch_size = _translation_option(
+            msg.get("translation_batch_size"),
+            name="translation_batch_size",
+            default=_TRANSLATION_BATCH_DEFAULT_BLOCKS,
+            minimum=_TRANSLATION_BATCH_MIN_BLOCKS,
+            maximum=_TRANSLATION_BATCH_MAX_BLOCKS,
+        )
+    except ValueError as exc:
+        await _send_ws_command_error(
+            ws,
+            str(exc),
+            command="document_action",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
     operation_id = requested_operation_id if isinstance(requested_operation_id, str) else uuid.uuid4().hex
     if action not in {"translate", "generate_blog"}:
         await _send_ws_command_error(
@@ -994,8 +1090,26 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
         workspace=str(workspace),
         recovered=recovered,
         document_hash=document_hash,
+        translation_concurrency=translation_concurrency,
+        translation_batch_size=translation_batch_size,
     )
     fallback.setdefault("max_turns", 0)
+    if action == "translate":
+        record_external_activity = getattr(session, "record_external_activity", None)
+        if callable(record_external_activity):
+            try:
+                await record_external_activity(f"翻译文档 {locale}")
+            except Exception as exc:
+                await _send_ws_command_error(
+                    ws,
+                    f"unable to persist document session activity: {exc}",
+                    command="document_action",
+                    request=msg,
+                    session_id=session.session_id,
+                    operation_id=operation_id,
+                    error_type="session_storage",
+                )
+                return
     await _handle_send_message(ws, fallback)
 
 
@@ -1174,6 +1288,8 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         operation_id,
                         locale,
                         publish_translation_progress,
+                        concurrency=document_job.translation_concurrency,
+                        batch_size=document_job.translation_batch_size,
                     )
                     current, total = await asyncio.to_thread(
                         _finalize_document_job,

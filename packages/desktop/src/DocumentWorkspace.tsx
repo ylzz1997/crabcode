@@ -16,7 +16,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -29,10 +37,19 @@ import type {
   DocumentManifest,
   DocumentPageLayout,
   DocumentTranslation,
+  DocumentViewState,
   ProjectPreset,
 } from "./types";
 
 type DocumentView = "document" | "blog";
+
+const DOCUMENT_ZOOM_MIN = .6;
+const DOCUMENT_ZOOM_MAX = 2.5;
+const DOCUMENT_ZOOM_STEP = .1;
+
+export function clampDocumentZoom(value: number): number {
+  return Math.round(Math.min(DOCUMENT_ZOOM_MAX, Math.max(DOCUMENT_ZOOM_MIN, value)) * 10) / 10;
+}
 
 function BlogAssetImage({ api, workspace, src, alt }: {
   api: GatewayApi;
@@ -71,16 +88,27 @@ function BlogPreview({ api, workspace, markdown }: { api: GatewayApi; workspace:
 
 interface DocumentWorkspaceProps {
   api: GatewayApi;
+  connectionId: string;
   project: ProjectPreset;
+  documentView?: DocumentViewState;
   agentWidth: number;
   agentCollapsed: boolean;
+  showOriginalText: boolean;
+  translationConcurrency: number;
+  translationBatchSize: number;
   sessionBusy: boolean;
   sessionError: string | null;
   onAgentWidth: (width: number) => void;
   onAgentCollapsed: (collapsed: boolean) => void;
+  onDocumentViewState: (connectionId: string, projectId: string, state: DocumentViewState) => void;
   onDocumentAction: (
     action: "translate" | "generate_blog",
-    options: { locale?: string; source?: "original" | "translation" },
+    options: {
+      locale?: string;
+      source?: "original" | "translation";
+      translation_concurrency?: number;
+      translation_batch_size?: number;
+    },
   ) => boolean;
 }
 
@@ -242,6 +270,229 @@ async function loadPdf(data: ArrayBuffer): Promise<PDFDocumentProxy> {
   return pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
 }
 
+const DOCUMENT_LAYOUT_VERSION = "paragraph-v5";
+type TextBlock = DocumentPageLayout["blocks"][number];
+
+interface TextLine {
+  blocks: TextBlock[];
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  fontFamily: string;
+  direction: string;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function range(values: number[]): number {
+  return values.length === 0 ? 0 : Math.max(...values) - Math.min(...values);
+}
+
+function joinInlineText(left: string, right: string, gap: number, characterWidth: number): string {
+  if (!left) return right;
+  if (!right) return left;
+  if (/\s$/.test(left) || /^\s/.test(right)) return `${left}${right}`;
+  if (/^[=<>≈≠≤≥±×÷∼∝]/.test(right)) return `${left} ${right}`;
+  if (/[=<>≈≠≤≥±×÷∼∝]$/.test(left)) {
+    return /^\d/.test(right) ? `${left}${right}` : `${left} ${right}`;
+  }
+  if (/[*∗†‡]$/.test(left) && /^\p{L}/u.test(right)) return `${left} ${right}`;
+  if (/^[,.;:!?%)}\]]/.test(right) || /[({\[]$/.test(left)) return `${left}${right}`;
+  return gap <= characterWidth * .45 ? `${left}${right}` : `${left} ${right}`;
+}
+
+function joinLineText(left: string, right: string): string {
+  if (!left) return right;
+  if (!right) return left;
+  if (/-$/.test(left) && /^\p{L}/u.test(right)) return `${left}${right}`;
+  if (/[/({\[]$/.test(left) || /^[,.;:!?%)}\]]/.test(right)) return `${left}${right}`;
+  return `${left} ${right}`;
+}
+
+function makeTextLine(blocks: TextBlock[]): TextLine {
+  const ordered = [...blocks].sort((left, right) => left.x - right.x);
+  const x = Math.min(...ordered.map((block) => block.x));
+  const y = Math.min(...ordered.map((block) => block.y));
+  const right = Math.max(...ordered.map((block) => block.x + block.width));
+  const bottom = Math.max(...ordered.map((block) => block.y + block.height));
+  const characterWidth = median(ordered.map((block) => (
+    block.width / Math.max(1, Array.from(block.text.trim()).length)
+  )));
+  let text = "";
+  let previous: TextBlock | null = null;
+  for (const block of ordered) {
+    text = joinInlineText(
+      text,
+      block.text,
+      previous ? block.x - (previous.x + previous.width) : 0,
+      characterWidth,
+    );
+    previous = block;
+  }
+  const dominant = [...ordered].sort((left, right) => right.width - left.width)[0];
+  return {
+    blocks: ordered,
+    text: text.trim(),
+    x,
+    y,
+    width: right - x,
+    height: bottom - y,
+    fontSize: Math.max(...ordered.map((block) => block.fontSize)),
+    fontFamily: dominant?.fontFamily || "sans-serif",
+    direction: dominant?.direction || "ltr",
+  };
+}
+
+function textRows(blocks: TextBlock[]): TextBlock[][] {
+  const rows: TextBlock[][] = [];
+  for (const block of [...blocks].sort((left, right) => (
+    left.y - right.y || left.x - right.x
+  ))) {
+    const bottom = block.y + block.height;
+    let best: TextBlock[] | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const row of rows) {
+      const rowBottom = median(row.map((item) => item.y + item.height));
+      const rowHeight = median(row.map((item) => item.height));
+      const distance = Math.abs(bottom - rowBottom);
+      if (distance <= Math.max(block.height, rowHeight) * .45 && distance < bestDistance) {
+        best = row;
+        bestDistance = distance;
+      }
+    }
+    if (best) best.push(block);
+    else rows.push([block]);
+  }
+  return rows.sort((left, right) => (
+    Math.min(...left.map((block) => block.y)) - Math.min(...right.map((block) => block.y))
+  ));
+}
+
+function textLines(blocks: TextBlock[]): TextLine[] {
+  const lines: TextLine[] = [];
+  for (const row of textRows(blocks)) {
+    const ordered = [...row].sort((left, right) => left.x - right.x);
+    const characterWidth = median(ordered.map((block) => (
+      block.width / Math.max(1, Array.from(block.text.trim()).length)
+    )));
+    const splitGap = Math.max(.012, Math.min(.03, characterWidth * 2.5));
+    let segment: TextBlock[] = [];
+    for (const block of ordered) {
+      const previous = segment.at(-1);
+      if (previous && block.x - (previous.x + previous.width) > splitGap) {
+        lines.push(makeTextLine(segment));
+        segment = [];
+      }
+      segment.push(block);
+    }
+    if (segment.length > 0) lines.push(makeTextLine(segment));
+  }
+  return lines.sort((left, right) => left.y - right.y || left.x - right.x);
+}
+
+function horizontalOverlap(left: TextLine, right: TextLine): number {
+  const overlap = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+  return overlap / Math.max(.0001, Math.min(left.width, right.width));
+}
+
+function canAppendLine(lines: TextLine[], line: TextLine): boolean {
+  const previous = lines.at(-1);
+  if (!previous) return false;
+  const height = Math.max(previous.height, line.height);
+  const verticalGap = line.y - (previous.y + previous.height);
+  if (verticalGap < -height * .2 || verticalGap > height * .85) return false;
+  const fontRatio = Math.max(previous.fontSize, line.fontSize) / Math.max(1, Math.min(previous.fontSize, line.fontSize));
+  if (fontRatio > 1.38) return false;
+
+  const centerDistance = Math.abs(
+    (previous.x + previous.width / 2) - (line.x + line.width / 2),
+  );
+  if (
+    horizontalOverlap(previous, line) < .5
+    && Math.abs(previous.x - line.x) > .035
+    && centerDistance > .035
+  ) return false;
+
+  const widthRatio = Math.min(previous.width, line.width) / Math.max(previous.width, line.width);
+  if (
+    lines.length === 1
+    && widthRatio < .4
+    && !(centerDistance <= .025 && Math.max(previous.width, line.width) < .35)
+  ) return false;
+
+  if (lines.length >= 2) {
+    const typicalWidth = median(lines.map((item) => item.width));
+    const typicalLeft = median(lines.map((item) => item.x));
+    const typicalFontSize = median(lines.map((item) => item.fontSize));
+    if (previous.width < typicalWidth * .68 && line.x <= typicalLeft + .03) return false;
+    if (line.width < typicalWidth * .45 && line.fontSize < typicalFontSize * .94) return false;
+    if (line.x > typicalLeft + .035 && previous.width > typicalWidth * .8) return false;
+  }
+  return true;
+}
+
+function paragraphAlignment(lines: TextLine[]): "left" | "center" | "right" {
+  const lefts = lines.map((line) => line.x);
+  const rights = lines.map((line) => line.x + line.width);
+  const centers = lines.map((line) => line.x + line.width / 2);
+  if (lines.length === 1) {
+    return Math.abs(centers[0] - .5) <= .04 && lines[0].width < .7 ? "center" : "left";
+  }
+  if (range(centers) <= .035 && range(lefts) >= .018) return "center";
+  if (range(rights) <= .018 && range(lefts) >= .025) return "right";
+  return "left";
+}
+
+export function groupTextBlocksIntoParagraphs(blocks: TextBlock[], pageNumber: number): TextBlock[] {
+  const paragraphs: TextLine[][] = [];
+  for (const line of textLines(blocks)) {
+    const candidates = paragraphs
+      .map((lines, index) => ({ lines, index }))
+      .filter(({ lines }) => canAppendLine(lines, line))
+      .sort((left, right) => {
+        const leftLast = left.lines.at(-1)!;
+        const rightLast = right.lines.at(-1)!;
+        const leftScore = Math.abs(line.y - (leftLast.y + leftLast.height)) + Math.abs(line.x - leftLast.x) * .2;
+        const rightScore = Math.abs(line.y - (rightLast.y + rightLast.height)) + Math.abs(line.x - rightLast.x) * .2;
+        return leftScore - rightScore;
+      });
+    if (candidates.length > 0) candidates[0].lines.push(line);
+    else paragraphs.push([line]);
+  }
+
+  return paragraphs
+    .sort((left, right) => left[0].y - right[0].y || left[0].x - right[0].x)
+    .map((lines, index) => {
+      const x = Math.min(...lines.map((line) => line.x));
+      const y = Math.min(...lines.map((line) => line.y));
+      const right = Math.max(...lines.map((line) => line.x + line.width));
+      const bottom = Math.max(...lines.map((line) => line.y + line.height));
+      const dominant = [...lines].sort((left, right) => right.width - left.width)[0];
+      return {
+        id: `p${pageNumber}-${DOCUMENT_LAYOUT_VERSION}-b${index}`,
+        text: lines.reduce((text, line) => joinLineText(text, line.text), ""),
+        x,
+        y,
+        width: right - x,
+        height: bottom - y,
+        fontSize: median(lines.map((line) => line.fontSize)),
+        fontFamily: dominant.fontFamily,
+        direction: dominant.direction,
+        textAlign: paragraphAlignment(lines),
+      };
+    });
+}
+
 async function extractLayout(pdf: PDFDocumentProxy): Promise<DocumentLayout> {
   const pdfjs = await import("pdfjs-dist");
   const pages: DocumentPageLayout[] = [];
@@ -249,7 +500,7 @@ async function extractLayout(pdf: PDFDocumentProxy): Promise<DocumentLayout> {
     const page = await pdf.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
-    const blocks = content.items.flatMap((raw, index) => {
+    const rawBlocks = content.items.flatMap((raw, index) => {
       if (!("str" in raw) || !raw.str.trim()) return [];
       const item = raw as typeof raw & {
         str: string;
@@ -260,6 +511,7 @@ async function extractLayout(pdf: PDFDocumentProxy): Promise<DocumentLayout> {
         dir: string;
       };
       const transform = pdfjs.Util.transform(viewport.transform, item.transform);
+      if (Math.abs(transform[1]) > Math.abs(transform[0]) * .25) return [];
       const height = Math.max(Math.abs(item.height), Math.hypot(transform[2], transform[3]), 1);
       const width = Math.max(Math.abs(item.width), 1);
       return [{
@@ -274,9 +526,11 @@ async function extractLayout(pdf: PDFDocumentProxy): Promise<DocumentLayout> {
         direction: item.dir || "ltr",
       }];
     });
+    const blocks = groupTextBlocksIntoParagraphs(rawBlocks, pageNumber);
     pages.push({ width: viewport.width, height: viewport.height, blocks });
   }
-  const fingerprint = pdf.fingerprints[0] || `${pdf.numPages}-${Date.now()}`;
+  const sourceFingerprint = pdf.fingerprints[0] || `${pdf.numPages}-${Date.now()}`;
+  const fingerprint = `${sourceFingerprint}:${DOCUMENT_LAYOUT_VERSION}`;
   return { fingerprint, page_count: pdf.numPages, pages };
 }
 
@@ -290,12 +544,72 @@ export function translatedBox(block: DocumentPageLayout["blocks"][number], rotat
         : block;
 }
 
+function TranslationOverlayBlock({
+  block,
+  text,
+  box,
+  zoom,
+  pageWidth,
+  pageHeight,
+  colors,
+}: {
+  block: TextBlock;
+  text: string;
+  box: { x: number; y: number; width: number; height: number };
+  zoom: number;
+  pageWidth: number;
+  pageHeight: number;
+  colors?: { background: string; color: string };
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const maximum = Math.max(5, block.fontSize * zoom * .94);
+    const minimum = Math.min(maximum, Math.max(3.5, maximum * .38));
+    const fits = () => (
+      node.scrollWidth <= node.clientWidth + 1
+      && node.scrollHeight <= node.clientHeight + 1
+    );
+    node.style.fontSize = `${maximum}px`;
+    if (fits()) return;
+    let low = minimum;
+    let high = maximum;
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const candidate = (low + high) / 2;
+      node.style.fontSize = `${candidate}px`;
+      if (fits()) low = candidate;
+      else high = candidate;
+    }
+    node.style.fontSize = `${low}px`;
+  }, [block.fontSize, block.id, pageHeight, pageWidth, text, zoom]);
+
+  return (
+    <span
+      ref={ref}
+      title={text}
+      dir={block.direction === "rtl" ? "rtl" : "ltr"}
+      style={{
+        left: `${box.x * 100}%`,
+        top: `${box.y * 100}%`,
+        width: `${box.width * 100}%`,
+        height: `${Math.max(box.height * 100, 1.2)}%`,
+        background: colors?.background,
+        color: colors?.color,
+        textAlign: block.textAlign ?? "left",
+      }}
+    >{text}</span>
+  );
+}
+
 function PdfPage({
   pdf,
   pageNumber,
   zoom,
   layout,
   translated,
+  showOriginalText,
   showTranslation,
   rotation,
   onCurrent,
@@ -305,11 +619,13 @@ function PdfPage({
   zoom: number;
   layout: DocumentPageLayout | undefined;
   translated: Map<string, string>;
+  showOriginalText: boolean;
   showTranslation: boolean;
   rotation: number;
   onCurrent: (page: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(pageNumber <= 2);
   const [size, setSize] = useState({ width: (layout?.width ?? 612) * zoom, height: (layout?.height ?? 792) * zoom });
@@ -374,6 +690,34 @@ function PdfPage({
   }, [pageNumber, pdf, rotation, visible, zoom]);
 
   useEffect(() => {
+    const container = textLayerRef.current;
+    if (!visible || !container) {
+      container?.replaceChildren();
+      return undefined;
+    }
+    let cancelled = false;
+    let textLayer: { cancel: () => void; render: () => Promise<unknown> } | null = null;
+    container.replaceChildren();
+    void Promise.all([pdf.getPage(pageNumber), import("pdfjs-dist")]).then(async ([page, pdfjs]) => {
+      if (cancelled) return;
+      const viewport = page.getViewport({ scale: zoom, rotation: page.rotate + rotation });
+      textLayer = new pdfjs.TextLayer({
+        textContentSource: page.streamTextContent(),
+        container,
+        viewport,
+      });
+      await textLayer.render();
+    }).catch((reason) => {
+      if (!cancelled && reason?.name !== "AbortException") container.replaceChildren();
+    });
+    return () => {
+      cancelled = true;
+      textLayer?.cancel();
+      container.replaceChildren();
+    };
+  }, [pageNumber, pdf, rotation, visible, zoom]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d", { willReadFrequently: true });
     if (!showTranslation || !canvas || !context || !layout || renderVersion === 0) {
@@ -412,49 +756,29 @@ function PdfPage({
   return (
     <div className="document-pdf-page" ref={rootRef} style={{ width: size.width, height: size.height }}>
       <canvas ref={canvasRef} aria-label={`第 ${pageNumber} 页`} />
-      {layout && (
-        <div className="document-original-text-layer" aria-hidden="true">
-          {layout.blocks.map((block) => {
-            const box = translatedBox(block, rotation);
-            return (
-              <span
-                key={block.id}
-                dir={block.direction === "rtl" ? "rtl" : "ltr"}
-                style={{
-                  left: `${box.x * 100}%`,
-                  top: `${box.y * 100}%`,
-                  width: `${box.width * 100}%`,
-                  height: `${Math.max(box.height * 100, 1.2)}%`,
-                  fontSize: `${Math.max(2, block.fontSize * zoom)}px`,
-                }}
-              >{block.text}</span>
-            );
-          })}
-        </div>
-      )}
+      <div
+        ref={textLayerRef}
+        className={`document-original-text-layer ${showOriginalText ? "show-text" : ""}`}
+        aria-hidden="true"
+        style={{ "--scale-factor": zoom } as CSSProperties}
+      />
       {showTranslation && layout && (
         <div className="document-translation-layer" aria-label={`第 ${pageNumber} 页译文`}>
           {layout.blocks.map((block) => {
             const text = translated.get(block.id);
             if (!text) return null;
             const box = translatedBox(block, rotation);
-            const expansion = text.length / Math.max(1, block.text.length);
-            const fittedFontSize = block.fontSize * zoom * .82 / Math.max(1, Math.sqrt(expansion));
             return (
-              <span
+              <TranslationOverlayBlock
                 key={block.id}
-                title={text}
-                dir={block.direction === "rtl" ? "rtl" : "ltr"}
-                style={{
-                  left: `${box.x * 100}%`,
-                  top: `${box.y * 100}%`,
-                  width: `${box.width * 100}%`,
-                  height: `${Math.max(box.height * 100, 1.2)}%`,
-                  fontSize: `${Math.max(7, fittedFontSize)}px`,
-                  background: blockColors[block.id]?.background,
-                  color: blockColors[block.id]?.color,
-                }}
-              >{text}</span>
+                block={block}
+                text={text}
+                box={box}
+                zoom={zoom}
+                pageWidth={size.width}
+                pageHeight={size.height}
+                colors={blockColors[block.id]}
+              />
             );
           })}
         </div>
@@ -466,13 +790,19 @@ function PdfPage({
 
 export default function DocumentWorkspace({
   api,
+  connectionId,
   project,
+  documentView,
   agentWidth,
   agentCollapsed,
+  showOriginalText,
+  translationConcurrency,
+  translationBatchSize,
   sessionBusy,
   sessionError,
   onAgentWidth,
   onAgentCollapsed,
+  onDocumentViewState,
   onDocumentAction,
 }: DocumentWorkspaceProps) {
   const [manifest, setManifest] = useState<DocumentManifest | null>(null);
@@ -481,7 +811,7 @@ export default function DocumentWorkspace({
   const [translation, setTranslation] = useState<DocumentTranslation | null>(null);
   const [locale, setLocale] = useState("zh-CN");
   const [showTranslation, setShowTranslation] = useState(false);
-  const [zoom, setZoom] = useState(1.2);
+  const [zoom, setZoom] = useState(() => clampDocumentZoom(documentView?.zoom ?? 1.2));
   const [rotation, setRotation] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [view, setView] = useState<DocumentView>("document");
@@ -494,6 +824,136 @@ export default function DocumentWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const previousBusy = useRef(sessionBusy);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(zoom);
+  const projectKey = `${connectionId}:${project.id}:${project.path}`;
+  const projectKeyRef = useRef(projectKey);
+  const viewIdentityRef = useRef({ connectionId, projectId: project.id });
+  const restoredProjectKeyRef = useRef<string | null>(null);
+  const restoreFrameRef = useRef<number>(0);
+  const persistTimerRef = useRef<number | null>(null);
+  const latestScrollRef = useRef({
+    top: Math.max(0, documentView?.scroll_top ?? 0),
+    left: Math.max(0, documentView?.scroll_left ?? 0),
+  });
+  const onDocumentViewStateRef = useRef(onDocumentViewState);
+  onDocumentViewStateRef.current = onDocumentViewState;
+
+  const persistViewState = useCallback((immediate = false) => {
+    const commit = () => {
+      persistTimerRef.current = null;
+      const element = scrollRef.current;
+      const top = Math.max(0, element?.scrollTop ?? latestScrollRef.current.top);
+      const left = Math.max(0, element?.scrollLeft ?? latestScrollRef.current.left);
+      latestScrollRef.current = { top, left };
+      const identity = viewIdentityRef.current;
+      onDocumentViewStateRef.current(identity.connectionId, identity.projectId, {
+        zoom: zoomRef.current,
+        scroll_top: top,
+        scroll_left: left,
+      });
+    };
+    if (immediate) {
+      if (persistTimerRef.current !== null) window.clearTimeout(persistTimerRef.current);
+      commit();
+      return;
+    }
+    if (persistTimerRef.current !== null) window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(commit, 250);
+  }, []);
+
+  const changeZoom = useCallback((delta: number, anchor?: { clientX: number; clientY: number }) => {
+    const previousZoom = zoomRef.current;
+    const nextZoom = clampDocumentZoom(previousZoom + delta);
+    if (nextZoom === previousZoom) return;
+    const element = scrollRef.current;
+    const rect = element?.getBoundingClientRect();
+    const anchorX = anchor?.clientX ?? (rect ? rect.left + rect.width / 2 : 0);
+    const anchorY = anchor?.clientY ?? (rect ? rect.top + rect.height / 2 : 0);
+    const relativeX = rect ? anchorX - rect.left : 0;
+    const relativeY = rect ? anchorY - rect.top : 0;
+    const contentX = (element?.scrollLeft ?? 0) + relativeX;
+    const contentY = (element?.scrollTop ?? 0) + relativeY;
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    persistViewState();
+    // Keep the point under the cursor stable while the page dimensions catch up.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const current = scrollRef.current;
+        if (!current) return;
+        const ratio = nextZoom / previousZoom;
+        current.scrollLeft = Math.max(0, contentX * ratio - relativeX);
+        current.scrollTop = Math.max(0, contentY * ratio - relativeY);
+        persistViewState(true);
+      });
+    });
+  }, [persistViewState]);
+
+  useLayoutEffect(() => {
+    if (projectKeyRef.current === projectKey) return;
+    persistViewState(true);
+    projectKeyRef.current = projectKey;
+    viewIdentityRef.current = { connectionId, projectId: project.id };
+    const nextZoom = clampDocumentZoom(documentView?.zoom ?? 1.2);
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    latestScrollRef.current = {
+      top: Math.max(0, documentView?.scroll_top ?? 0),
+      left: Math.max(0, documentView?.scroll_left ?? 0),
+    };
+    restoredProjectKeyRef.current = null;
+    setRotation(0);
+    setCurrentPage(1);
+  }, [connectionId, documentView, persistViewState, project.id, projectKey]);
+
+  useLayoutEffect(() => {
+    if (loading || !pdf || view !== "document" || restoredProjectKeyRef.current === projectKey) return undefined;
+    const element = scrollRef.current;
+    if (!element) return undefined;
+    restoredProjectKeyRef.current = projectKey;
+    const firstFrame = window.requestAnimationFrame(() => {
+      const secondFrame = window.requestAnimationFrame(() => {
+        const current = scrollRef.current;
+        if (!current) return;
+        current.scrollTop = latestScrollRef.current.top;
+        current.scrollLeft = latestScrollRef.current.left;
+        persistViewState(true);
+      });
+      restoreFrameRef.current = secondFrame;
+    });
+    restoreFrameRef.current = firstFrame;
+    return () => {
+      window.cancelAnimationFrame(restoreFrameRef.current);
+    };
+  }, [layout, loading, pdf, persistViewState, projectKey, view]);
+
+  useEffect(() => () => {
+    if (persistTimerRef.current !== null) window.clearTimeout(persistTimerRef.current);
+    persistViewState(true);
+  }, [persistViewState]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (view !== "document" || !event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (
+        target.isContentEditable
+        || target.tagName === "INPUT"
+        || target.tagName === "TEXTAREA"
+        || target.tagName === "SELECT"
+      )) return;
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        changeZoom(DOCUMENT_ZOOM_STEP);
+      } else if (event.key === "-" || event.key === "_") {
+        event.preventDefault();
+        changeZoom(-DOCUMENT_ZOOM_STEP);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [changeZoom, view]);
 
   const refreshArtifacts = useCallback(async () => {
     try {
@@ -542,18 +1002,20 @@ export default function DocumentWorkspace({
       const nextPdf = await loadPdf(data);
       loadedPdf = nextPdf;
       const nextLayout = await extractLayout(nextPdf);
+      let resolvedManifest = nextManifest;
+      if (!nextManifest.layout || nextManifest.layout.fingerprint !== nextLayout.fingerprint) {
+        await api.saveDocumentLayout(project.path, nextLayout);
+        resolvedManifest = await api.documentManifest(project.path);
+      }
       if (cancelled) {
         await nextPdf.destroy();
         loadedPdf = null;
         return;
       }
-      setManifest(nextManifest);
+      setManifest(resolvedManifest);
       setPdf(nextPdf);
       setLayout(nextLayout);
       if (sourceLooksChinese(nextLayout)) setLocale("en");
-      if (!nextManifest.layout || nextManifest.layout.fingerprint !== nextLayout.fingerprint) {
-        await api.saveDocumentLayout(project.path, nextLayout);
-      }
       try {
         setBlog(await api.documentBlog(project.path));
       } catch (reason) {
@@ -573,10 +1035,17 @@ export default function DocumentWorkspace({
   useEffect(() => {
     setShowTranslation(false);
     setTranslation(null);
-    void api.documentTranslation(project.path, locale).then(setTranslation).catch((reason) => {
+    if (!layout) return;
+    void api.documentTranslation(project.path, locale).then((nextTranslation) => {
+      if (
+        nextTranslation.layout_fingerprint
+        && nextTranslation.layout_fingerprint !== layout.fingerprint
+      ) return;
+      setTranslation(nextTranslation);
+    }).catch((reason) => {
       if (!isMissing(reason)) setError(reason instanceof Error ? reason.message : String(reason));
     });
-  }, [api, locale, project.path]);
+  }, [api, layout, locale, project.path]);
 
   useEffect(() => {
     const completed = previousBusy.current && !sessionBusy;
@@ -624,6 +1093,19 @@ export default function DocumentWorkspace({
   ), [translation]);
   const scannedPages = layout?.pages.filter((page) => page.blocks.length === 0).length ?? 0;
   const selectCurrentPage = useCallback((page: number) => setCurrentPage(page), []);
+  const handlePdfScroll = useCallback(() => {
+    const element = scrollRef.current;
+    if (element) latestScrollRef.current = { top: element.scrollTop, left: element.scrollLeft };
+    persistViewState();
+  }, [persistViewState]);
+  const handlePdfWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    if (!event.altKey || event.deltaY === 0) return;
+    event.preventDefault();
+    changeZoom(event.deltaY < 0 ? DOCUMENT_ZOOM_STEP : -DOCUMENT_ZOOM_STEP, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+  }, [changeZoom]);
 
   const clearTranslationCache = useCallback(async () => {
     setClearingTranslation(true);
@@ -669,9 +1151,9 @@ export default function DocumentWorkspace({
         {view === "document" && (
           <div className="document-tools">
             <span className="document-page-indicator">{currentPage} / {pdf?.numPages ?? manifest?.pdf.page_count ?? "–"}</span>
-            <button className="icon-button small" title="缩小" onClick={() => setZoom((value) => Math.max(.6, value - .1))}><Minus /></button>
+            <button className="icon-button small" title="缩小 (Alt+-)" aria-label="缩小" onClick={() => changeZoom(-DOCUMENT_ZOOM_STEP)}><Minus /></button>
             <span className="document-zoom">{Math.round(zoom * 100)}%</span>
-            <button className="icon-button small" title="放大" onClick={() => setZoom((value) => Math.min(2.5, value + .1))}><Plus /></button>
+            <button className="icon-button small" title="放大 (Alt++)" aria-label="放大" onClick={() => changeZoom(DOCUMENT_ZOOM_STEP)}><Plus /></button>
             <button className="icon-button small" title="顺时针旋转" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
             <DocumentActionsMenu
               locale={locale}
@@ -685,7 +1167,11 @@ export default function DocumentWorkspace({
               onLocale={setLocale}
               onTranslate={() => {
                 setPendingAction("translate");
-                if (!onDocumentAction("translate", { locale })) setPendingAction(null);
+                if (!onDocumentAction("translate", {
+                  locale,
+                  translation_concurrency: translationConcurrency,
+                  translation_batch_size: translationBatchSize,
+                })) setPendingAction(null);
               }}
               onClear={() => setClearTranslationConfirm(true)}
               onGenerateBlog={() => {
@@ -749,7 +1235,12 @@ export default function DocumentWorkspace({
       {error && <div className="document-error"><AlertTriangle />{error}<button onClick={() => { setError(null); void refreshArtifacts(); }}><RefreshCw />重试</button></div>}
       {loading && <div className="document-loading"><LoaderCircle className="spin" />正在准备文档</div>}
       {!loading && view === "document" && (
-        <div className="document-pdf-scroll">
+        <div
+          ref={scrollRef}
+          className="document-pdf-scroll"
+          onScroll={handlePdfScroll}
+          onWheel={handlePdfWheel}
+        >
           {scannedPages > 0 && (
             <div className="document-scan-warning"><AlertTriangle />检测到 {scannedPages} 个无文本页面，可阅读但暂不能原位翻译。</div>
           )}
@@ -761,6 +1252,7 @@ export default function DocumentWorkspace({
               zoom={zoom}
               layout={layout?.pages[index]}
               translated={translated}
+              showOriginalText={showOriginalText}
               showTranslation={showTranslation}
               rotation={rotation}
               onCurrent={selectCurrentPage}

@@ -221,6 +221,35 @@ describe("Gateway event reducer", () => {
     expect(current.items).toEqual(running.items);
   });
 
+  it("settles an optimistic document card when document action is rejected", () => {
+    const running = {
+      ...state(),
+      busy: true,
+      operationId: "operation-1",
+      runStartedAt: 1_000,
+      currentStep: { kind: "document" as const, label: "翻译文档", startedAt: 1_000 },
+      items: [{
+        id: "operation-1:document-job",
+        kind: "document_job" as const,
+        title: "翻译文档",
+        status: "running" as const,
+        action: "translate" as const,
+        startedAt: 1_000,
+      }],
+    };
+    const current = applyGatewayEvent(running, {
+      type: "error",
+      message: "invalid translation batch size",
+      command: "document_action",
+      command_error: true,
+      operation_id: "operation-1",
+    });
+
+    expect(current.busy).toBe(false);
+    expect(current.operationId).toBeNull();
+    expect(current.items[0]).toMatchObject({ status: "failed", text: "invalid translation batch size" });
+  });
+
   it("finishes the active session state", () => {
     const current = applyGatewayEvent(
       { ...state(), busy: true, runStartedAt: 1_000 },

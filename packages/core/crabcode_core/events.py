@@ -1803,6 +1803,22 @@ class CoreSession:
                 callback_epoch=completion.callback_epoch,
             )
 
+    async def record_external_activity(self, title: str) -> None:
+        """Persist non-chat work so the session remains visible after restart."""
+        await self.initialize()
+        self._ensure_session_storage()
+        storage = self._session_storage
+        if storage is None:
+            return
+        if not storage.meta.get("first_user_message"):
+            storage.write_meta(first_user_message=title.strip() or "External activity")
+        try:
+            message_count = int(storage.meta.get("message_count", 0) or 0)
+        except (TypeError, ValueError):
+            message_count = 0
+        if message_count < 1:
+            storage.record_message_count(1)
+
     def _ensure_session_storage(self) -> None:
         """Lazily create session storage on first real use.
 

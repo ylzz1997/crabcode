@@ -2792,6 +2792,7 @@ html[data-theme="light"] .settings-nav>button.active {
 
 html[data-theme="light"] .settings-search,
 html[data-theme="light"] .settings-input-control input,
+html[data-theme="light"] .settings-number-input,
 html[data-theme="light"] .settings-context-row select {
   border-color: #c6d3ce;
   background: #fff;
@@ -2802,6 +2803,7 @@ html[data-theme="light"] .settings-nav-heading,
 html[data-theme="light"] .settings-page-header p,
 html[data-theme="light"] .settings-section-heading p,
 html[data-theme="light"] .appearance-subheading p,
+html[data-theme="light"] .settings-section-description,
 html[data-theme="light"] .settings-row-copy span,
 html[data-theme="light"] .settings-entity-copy small,
 html[data-theme="light"] .theme-choice-label small,
@@ -4956,32 +4958,64 @@ html[data-theme="light"] .document-actions-separator {
 .document-original-text-layer {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  overflow: clip;
+  color: transparent;
+  forced-color-adjust: none;
+  line-height: 1;
+  text-align: initial;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  transform-origin: 0 0;
   user-select: text;
 }
 
-.document-original-text-layer>span {
+.document-original-text-layer :is(span, br) {
   position: absolute;
-  overflow: hidden;
   color: transparent;
-  font-family: sans-serif;
-  line-height: 1;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
   white-space: pre;
   cursor: text;
+  transform-origin: 0 0;
+}
+
+.document-original-text-layer ::selection {
+  background: rgba(0, 0, 255, .25);
+  background: color-mix(in srgb, AccentColor, transparent 75%);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
+}
+
+.document-original-text-layer.show-text ::selection {
+  background: #6f8fb4;
+  color: #101615;
+  -webkit-text-fill-color: #101615;
+}
+
+.document-original-text-layer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.document-original-text-layer span[role="img"] {
+  cursor: default;
+  user-select: none;
 }
 
 .document-translation-layer>span {
   position: absolute;
   z-index: 1;
   overflow: hidden;
-  display: flex;
-  align-items: flex-start;
-  padding: 0 1px;
+  display: block;
+  box-sizing: border-box;
+  padding: 0 2px;
   background: rgba(255, 255, 255, .96);
   color: #171a19;
   font-family: system-ui, sans-serif;
-  line-height: 1.05;
-  overflow-wrap: anywhere;
+  line-height: 1.15;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .document-scan-warning,
@@ -7818,6 +7852,32 @@ html[data-theme="light"] .document-actions-separator {
 .settings-input-control .icon-button {
   flex: 0 0 30px;
   color: #78928c;
+}
+
+.settings-number-input {
+  width: 88px;
+  height: 34px;
+  flex: 0 0 88px;
+  padding: 0 9px;
+  border: 1px solid #2b484b;
+  border-radius: 5px;
+  outline: 0;
+  background: #0c1719;
+  color: #e9f0ec;
+  font-size: 12px;
+  text-align: right;
+}
+
+.settings-number-input:focus {
+  border-color: #53736e;
+  box-shadow: 0 0 0 3px rgba(91, 212, 177, .06);
+}
+
+.settings-section-description {
+  margin: -8px 0 16px;
+  color: #718a84;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .settings-value {

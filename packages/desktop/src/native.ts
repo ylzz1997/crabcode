@@ -5,6 +5,7 @@ import type {
   DesktopSettings,
   DiffMarkerStyle,
   DockIconChoice,
+  DocumentViewState,
   ThemeMode,
   ThemeProfile,
   TurnDurationFormat,
@@ -66,6 +67,9 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   sidebar_width: 280,
   document_agent_width: 400,
   document_agent_collapsed: false,
+  document_show_original_text: false,
+  document_translation_concurrency: 3,
+  document_translation_batch_size: 200,
   theme_mode: "system",
   light_theme: DEFAULT_LIGHT_THEME,
   dark_theme: DEFAULT_DARK_THEME,
@@ -86,6 +90,20 @@ function validHexColor(value: unknown): value is string {
 function clampInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.min(maximum, Math.max(minimum, Math.round(value)));
+}
+
+function clampNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeDocumentView(raw: Partial<DocumentViewState> | undefined): DocumentViewState | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  return {
+    zoom: Math.round(clampNumber(raw.zoom, .6, 2.5, 1.2) * 10) / 10,
+    scroll_top: clampNumber(raw.scroll_top, 0, Number.MAX_SAFE_INTEGER, 0),
+    scroll_left: clampNumber(raw.scroll_left, 0, Number.MAX_SAFE_INTEGER, 0),
+  };
 }
 
 interface LegacyAppearanceSettings {
@@ -172,6 +190,9 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     dock_icon: dockIcon,
     document_agent_width: clampInteger(raw.document_agent_width, 320, 720, 400),
     document_agent_collapsed: raw.document_agent_collapsed === true,
+    document_show_original_text: raw.document_show_original_text === true,
+    document_translation_concurrency: clampInteger(raw.document_translation_concurrency, 1, 8, 3),
+    document_translation_batch_size: clampInteger(raw.document_translation_batch_size, 10, 400, 200),
     connections: (raw.connections ?? []).map((connection) => {
       const projects = (connection.projects ?? []).map((project, index) => {
         const legacyPath = typeof project.path === "string" ? project.path : "";
@@ -189,6 +210,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
           favorite_session_ids: Array.isArray(project.favorite_session_ids)
             ? [...new Set(project.favorite_session_ids.filter((id): id is string => typeof id === "string" && id.length > 0))]
             : [],
+          document_view: normalizeDocumentView(project.document_view),
         };
       });
       const favoriteItems = Array.isArray(connection.favorite_items)

@@ -49,6 +49,9 @@ const settings: DesktopSettings = {
   sidebar_width: 280,
   document_agent_width: 400,
   document_agent_collapsed: false,
+  document_show_original_text: false,
+  document_translation_concurrency: 3,
+  document_translation_batch_size: 200,
   theme_mode: "system",
   light_theme: {
     accent_color: "#e75f4b",
@@ -115,6 +118,8 @@ describe("settings search", () => {
     expect(filterSettingsSections("字体平滑").map((section) => section.id)).toEqual(["appearance"]);
     expect(filterSettingsSections("对比度").map((section) => section.id)).toEqual(["appearance"]);
     expect(filterSettingsSections("处理用时").map((section) => section.id)).toEqual(["general"]);
+    expect(filterSettingsSections("并行请求").map((section) => section.id)).toEqual(["document"]);
+    expect(filterSettingsSections("显示原文").map((section) => section.id)).toEqual(["document"]);
     expect(filterSettingsSections("不存在")).toEqual([]);
   });
 });
@@ -140,6 +145,7 @@ describe("SettingsView", () => {
     onBack: vi.fn(),
     onSavePythonPath: vi.fn(),
     onConversationChange: vi.fn(),
+    onDocumentChange: vi.fn(),
     onThemeModeChange: vi.fn(),
     onThemeProfileChange: vi.fn(),
     onAppearanceChange: vi.fn(),
@@ -221,6 +227,40 @@ describe("SettingsView", () => {
 
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(1, { turn_duration_format: "seconds" });
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(2, { show_turn_duration: false });
+  });
+
+  it("shows document translation controls and updates their values", () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="document"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    const navigation = Array.from(container.querySelectorAll(".settings-nav button"))
+      .map((button) => button.textContent);
+    expect(navigation.indexOf("文档")).toBe(navigation.indexOf("外观") + 1);
+    expect(container.querySelector(".settings-section h2")?.textContent).toBe("翻译");
+    expect(Array.from(container.querySelectorAll(".settings-section h2")).map((heading) => heading.textContent))
+      .toEqual(["翻译", "选择"]);
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="显示原文"]')!.click());
+    const concurrency = container.querySelector<HTMLInputElement>('[aria-label="翻译并行请求数"]')!;
+    const batchSize = container.querySelector<HTMLInputElement>('[aria-label="翻译单批 Block 数"]')!;
+    act(() => changeInput(concurrency, "4"));
+    act(() => concurrency.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    act(() => changeInput(batchSize, "120"));
+    act(() => batchSize.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+
+    expect(handlers.onDocumentChange).toHaveBeenCalledWith({ document_show_original_text: true });
+    expect(handlers.onDocumentChange).toHaveBeenCalledWith({ document_translation_concurrency: 4 });
+    expect(handlers.onDocumentChange).toHaveBeenCalledWith({ document_translation_batch_size: 120 });
   });
 
   it("exposes connection actions but never offers to delete the local connection", () => {

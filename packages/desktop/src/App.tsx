@@ -1724,6 +1724,9 @@ function App() {
           onConversationChange={(changes) => {
             commitSettings((current) => ({ ...current, ...changes }));
           }}
+          onDocumentChange={(changes) => {
+            commitSettings((current) => ({ ...current, ...changes }));
+          }}
           onThemeModeChange={(mode) => {
             commitSettings((current) => ({ ...current, theme_mode: mode }));
           }}
@@ -2075,13 +2078,24 @@ function App() {
           {documentMode && activeProject && activeConnection && apiRef.current.get(activeConnection.id) && (
             <DocumentWorkspace
               api={apiRef.current.get(activeConnection.id)!}
+              connectionId={activeConnection.id}
               project={activeProject}
+              documentView={activeProject.document_view}
               agentWidth={settings.document_agent_width ?? 400}
               agentCollapsed={settings.document_agent_collapsed === true}
+              showOriginalText={settings.document_show_original_text === true}
+              translationConcurrency={settings.document_translation_concurrency}
+              translationBatchSize={settings.document_translation_batch_size}
               sessionBusy={Boolean(activeSession?.busy)}
               sessionError={activeSession?.error ?? null}
               onAgentWidth={(width) => commitSettings((current) => ({ ...current, document_agent_width: width }))}
               onAgentCollapsed={(collapsed) => commitSettings((current) => ({ ...current, document_agent_collapsed: collapsed }))}
+              onDocumentViewState={(connectionId, projectId, state) => updateConnection(connectionId, (connection) => ({
+                ...connection,
+                projects: connection.projects.map((project) => project.id === projectId
+                  ? { ...project, document_view: state }
+                  : project),
+              }))}
               onDocumentAction={(action, options) => {
                 if (!activeChannel) {
                   setGlobalError("Agent 会话尚未就绪，请稍后重试");
@@ -2090,10 +2104,35 @@ function App() {
                 try {
                   const operationId = activeChannel.documentAction(action, options);
                   if (activeSessionKey) {
+                    const startedAt = Date.now();
+                    const title = action === "translate" ? "翻译文档" : "生成 Blog";
                     setSessions((current) => current[activeSessionKey]
                       ? {
                           ...current,
-                          [activeSessionKey]: { ...current[activeSessionKey], operationId, error: null },
+                          [activeSessionKey]: {
+                            ...current[activeSessionKey],
+                            busy: true,
+                            operationId,
+                            error: null,
+                            runStartedAt: current[activeSessionKey].runStartedAt ?? startedAt,
+                            currentStep: { kind: "document", label: title, startedAt },
+                            items: [
+                              ...current[activeSessionKey].items,
+                              {
+                                id: `${operationId}:document-job`,
+                                kind: "document_job" as const,
+                                title,
+                                text: "正在准备文档内容",
+                                action,
+                                locale: options.locale,
+                                source: options.source,
+                                current: 0,
+                                total: 0,
+                                status: "running" as const,
+                                startedAt,
+                              },
+                            ],
+                          },
                         }
                       : current);
                   }

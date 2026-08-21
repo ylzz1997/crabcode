@@ -34,7 +34,7 @@ import type {
   UiFontFamily,
 } from "./types";
 
-export type SettingsSectionId = "general" | "appearance" | "connections" | "projects";
+export type SettingsSectionId = "general" | "appearance" | "document" | "connections" | "projects";
 
 interface SettingsSectionDefinition {
   id: SettingsSectionId;
@@ -55,6 +55,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     title: "外观",
     description: "主题、颜色、字体与应用图标",
     searchText: "外观 主题 系统 跟随系统 浅色 深色 强调色 背景色 前景色 界面字体 代码字体 半透明侧栏 对比度 指针光标 字号 Diff 标记 加号 减号 字体平滑 Dock 图标 螃蟹 自定义 上传",
+  },
+  {
+    id: "document",
+    title: "文档",
+    description: "文档翻译请求与批处理设置",
+    searchText: "文档 翻译 原文 显示原文 复制 并行请求 并行 请求 批次 Block 数 单次请求 批大小",
   },
   {
     id: "connections",
@@ -83,6 +89,7 @@ export function filterSettingsSections(query: string): SettingsSectionDefinition
 const SECTION_ICONS = {
   general: SlidersHorizontal,
   appearance: Paintbrush,
+  document: FileText,
   connections: Server,
   projects: FolderCog,
 } satisfies Record<SettingsSectionId, typeof Settings>;
@@ -155,6 +162,7 @@ interface SettingsViewProps {
   onBack: () => void;
   onSavePythonPath: (path: string) => void;
   onConversationChange: (changes: ConversationSettingsUpdate) => void;
+  onDocumentChange: (changes: DocumentSettingsUpdate) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onThemeProfileChange: (scheme: "light" | "dark", changes: Partial<ThemeProfile>) => void;
   onAppearanceChange: (changes: AppearanceSettingsUpdate) => void;
@@ -180,6 +188,59 @@ export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
   | "show_turn_duration"
   | "turn_duration_format"
 >>;
+
+export type DocumentSettingsUpdate = Partial<Pick<DesktopSettings,
+  | "document_show_original_text"
+  | "document_translation_concurrency"
+  | "document_translation_batch_size"
+>>;
+
+function NumberSettingInput({
+  label,
+  value,
+  minimum,
+  maximum,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  minimum: number;
+  maximum: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number(draft);
+    const next = Number.isFinite(parsed)
+      ? Math.min(maximum, Math.max(minimum, Math.round(parsed)))
+      : value;
+    setDraft(String(next));
+    if (next !== value) onChange(next);
+  };
+
+  return (
+    <input
+      className="settings-number-input"
+      aria-label={label}
+      type="number"
+      min={minimum}
+      max={maximum}
+      step={step}
+      value={draft}
+      onBlur={commit}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") setDraft(String(value));
+      }}
+    />
+  );
+}
 
 interface ThemeColorRowProps {
   schemeLabel: string;
@@ -307,6 +368,7 @@ export function SettingsView({
   onBack,
   onSavePythonPath,
   onConversationChange,
+  onDocumentChange,
   onThemeModeChange,
   onThemeProfileChange,
   onAppearanceChange,
@@ -754,6 +816,69 @@ export function SettingsView({
                 </div>
                 {!isDesktopShell() && <div className="appearance-hint">Dock 图标仅在桌面应用中可更改。</div>}
                 {appearanceError && <div className="appearance-error">{appearanceError}</div>}
+              </section>
+            )}
+
+            {activeSection === "document" && (
+              <section className="settings-section" aria-labelledby="document-settings-title">
+                <h2 id="document-settings-title">翻译</h2>
+                <p className="settings-section-description">使用当前会话选择的模型翻译文档。请求会并行执行，译文缓存按批次安全保存。</p>
+                <div className="settings-group">
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>并行请求数</strong>
+                      <span>同时发送给模型的翻译请求数量，范围 1–8。</span>
+                    </div>
+                    <NumberSettingInput
+                      label="翻译并行请求数"
+                      value={settings.document_translation_concurrency}
+                      minimum={1}
+                      maximum={8}
+                      step={1}
+                      onChange={(value) => onDocumentChange({
+                        document_translation_concurrency: value,
+                      })}
+                    />
+                  </div>
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>单批 Block 数</strong>
+                      <span>每次请求携带的文本 Block 数量，范围 10–400；过大的文本仍受字符上限约束。</span>
+                    </div>
+                    <NumberSettingInput
+                      label="翻译单批 Block 数"
+                      value={settings.document_translation_batch_size}
+                      minimum={10}
+                      maximum={400}
+                      step={10}
+                      onChange={(value) => onDocumentChange({
+                        document_translation_batch_size: value,
+                      })}
+                    />
+                  </div>
+                </div>
+
+                <div className="settings-section-heading general-spaced-heading">
+                  <div><h2>选择</h2><p>控制 PDF 页面中的原文选择行为。</p></div>
+                </div>
+                <div className="settings-group">
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>显示原文</strong>
+                      <span>框选 PDF 文字时显示所选原文；关闭后仍可复制。</span>
+                    </div>
+                    <button
+                      className={`settings-switch ${settings.document_show_original_text ? "on" : ""}`}
+                      type="button"
+                      role="switch"
+                      aria-checked={settings.document_show_original_text}
+                      aria-label="显示原文"
+                      onClick={() => onDocumentChange({
+                        document_show_original_text: !settings.document_show_original_text,
+                      })}
+                    ><span /></button>
+                  </div>
+                </div>
               </section>
             )}
 

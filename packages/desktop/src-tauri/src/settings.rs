@@ -50,6 +50,9 @@ fn default_settings() -> Value {
         "sidebar_width": 280,
         "document_agent_width": 400,
         "document_agent_collapsed": false,
+        "document_show_original_text": false,
+        "document_translation_concurrency": 3,
+        "document_translation_batch_size": 200,
         "theme_mode": "system",
         "light_theme": {
             "accent_color": "#e75f4b",

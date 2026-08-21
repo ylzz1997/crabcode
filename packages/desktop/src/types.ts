@@ -7,6 +7,13 @@ export interface ProjectPreset {
   is_default?: boolean;
   last_session_id: string | null;
   favorite_session_ids?: string[];
+  document_view?: DocumentViewState;
+}
+
+export interface DocumentViewState {
+  zoom: number;
+  scroll_top: number;
+  scroll_left: number;
 }
 
 export interface FavoriteFolder {
@@ -54,6 +61,9 @@ export interface DesktopSettings {
   sidebar_width: number;
   document_agent_width: number;
   document_agent_collapsed: boolean;
+  document_show_original_text: boolean;
+  document_translation_concurrency: number;
+  document_translation_batch_size: number;
   theme_mode: ThemeMode;
   light_theme: ThemeProfile;
   dark_theme: ThemeProfile;
@@ -142,6 +152,7 @@ export interface DocumentTextBlock {
   fontSize: number;
   fontFamily: string;
   direction: string;
+  textAlign?: "left" | "center" | "right";
 }
 
 export interface DocumentPageLayout {

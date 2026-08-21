@@ -468,7 +468,12 @@ export class SessionChannel {
 
   documentAction(
     action: "translate" | "generate_blog",
-    options: { locale?: string; source?: "original" | "translation" } = {},
+    options: {
+      locale?: string;
+      source?: "original" | "translation";
+      translation_concurrency?: number;
+      translation_batch_size?: number;
+    } = {},
   ): string {
     const operationId = crypto.randomUUID();
     this.sendRaw({
@@ -476,6 +481,8 @@ export class SessionChannel {
       action,
       locale: options.locale,
       source: options.source,
+      translation_concurrency: options.translation_concurrency,
+      translation_batch_size: options.translation_batch_size,
       session_id: this.sessionId,
       operation_id: operationId,
     });
