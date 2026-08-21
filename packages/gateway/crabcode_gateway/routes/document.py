@@ -656,6 +656,19 @@ async def document_translation(workspace: str, locale: str, request: Request) ->
         return _read_document_translation_locked(root, internal, locale)
 
 
+@router.delete("/translation")
+async def clear_document_translation(workspace: str, locale: str, request: Request) -> dict[str, Any]:
+    root = _validated_workspace(workspace, _workspace_roots(request))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", locale):
+        raise HTTPException(status_code=400, detail="Invalid translation locale")
+    try:
+        internal = _managed_internal_directory(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    with _manifest_lock(root):
+        return _clear_document_translation_locked(root, internal, locale)
+
+
 def _read_document_translation_locked(root: Path, internal: Path, locale: str) -> dict[str, Any]:
     translations = internal / "translations"
     if translations.is_symlink():
@@ -677,6 +690,77 @@ def _read_document_translation_locked(root: Path, internal: Path, locale: str) -
     if value.get("layout_fingerprint") != (manifest.get("layout") or {}).get("fingerprint"):
         raise HTTPException(status_code=409, detail="Translation is stale for the current document layout")
     return value
+
+
+def _clear_document_translation_locked(root: Path, internal: Path, locale: str) -> dict[str, Any]:
+    manifest = _read_manifest(root)
+    jobs = manifest.get("jobs")
+    if not isinstance(jobs, dict):
+        jobs = {}
+    matching_job_ids = {
+        operation_id
+        for operation_id, job in jobs.items()
+        if isinstance(operation_id, str)
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", operation_id)
+        and isinstance(job, dict)
+        and job.get("action") == "translate"
+        and job.get("locale") == locale
+    }
+    if any(
+        isinstance(job, dict)
+        and job.get("action") == "translate"
+        and job.get("locale") == locale
+        and job.get("status") == "running"
+        for job in jobs.values()
+    ):
+        raise HTTPException(status_code=409, detail="Translation is still running")
+
+    jobs_dir = internal / "jobs"
+    if jobs_dir.is_symlink() or (jobs_dir.exists() and not jobs_dir.is_dir()):
+        raise HTTPException(status_code=403, detail="Managed document jobs directory is invalid")
+    if jobs_dir.is_dir():
+        for job_dir in jobs_dir.iterdir():
+            if job_dir.is_symlink() or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", job_dir.name):
+                continue
+            staged = job_dir / "translation.json"
+            if not staged.is_file() or staged.is_symlink():
+                continue
+            try:
+                value = json.loads(staged.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict) and value.get("locale") == locale:
+                matching_job_ids.add(job_dir.name)
+
+    translations_dir = internal / "translations"
+    if translations_dir.is_symlink() or (translations_dir.exists() and not translations_dir.is_dir()):
+        raise HTTPException(status_code=403, detail="Managed translations directory is invalid")
+    translation_path = translations_dir / f"{locale}.json"
+    if translation_path.is_symlink() or (translation_path.exists() and not translation_path.is_file()):
+        raise HTTPException(status_code=403, detail="Translation path is invalid")
+    removed_translation = translation_path.is_file()
+    translation_path.unlink(missing_ok=True)
+
+    for operation_id in matching_job_ids:
+        _cleanup_document_job(root, operation_id)
+
+    translations = manifest.get("translations")
+    if not isinstance(translations, dict):
+        translations = {}
+    translations.pop(locale, None)
+    manifest["translations"] = translations
+    manifest["jobs"] = {
+        operation_id: job
+        for operation_id, job in jobs.items()
+        if operation_id not in matching_job_ids
+    }
+    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _json_write(root / MANIFEST_RELATIVE_PATH, manifest)
+    return {
+        "locale": locale,
+        "removed_translation": removed_translation,
+        "removed_jobs": len(matching_job_ids),
+    }
 
 
 def _blog_revision(markdown: str) -> str:
@@ -714,17 +798,143 @@ def _document_job_directory(workspace: Path, operation_id: str) -> Path:
 def _document_job_total(workspace: Path, action: str) -> int:
     if action != "translate":
         return 1
+    return sum(len(page) for page in _translation_source_pages(workspace))
+
+
+def _translation_source_pages(workspace: Path) -> list[list[tuple[str, str]]]:
+    """Return exact non-empty layout blocks grouped by page."""
     try:
         internal = _managed_internal_directory(workspace)
-        layout = json.loads((internal / "layout.json").read_text(encoding="utf-8"))
-        return sum(
-            1
-            for page in layout.get("pages", [])
-            for block in page.get("blocks", [])
-            if isinstance(block, dict) and str(block.get("text", "")).strip()
-        )
+        layout_path = internal / "layout.json"
+        if layout_path.is_symlink():
+            raise ValueError("document layout is invalid")
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        raw_pages = layout.get("pages")
+        if not isinstance(raw_pages, list):
+            raise ValueError("document layout is not ready")
     except (OSError, json.JSONDecodeError, AttributeError, TypeError) as exc:
         raise ValueError("document layout is not ready") from exc
+
+    pages: list[list[tuple[str, str]]] = []
+    seen: set[str] = set()
+    for raw_page in raw_pages:
+        if not isinstance(raw_page, dict) or not isinstance(raw_page.get("blocks", []), list):
+            raise ValueError("document layout contains invalid pages")
+        page: list[tuple[str, str]] = []
+        for block in raw_page.get("blocks", []):
+            if not isinstance(block, dict):
+                raise ValueError("document layout contains invalid blocks")
+            text = block.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            block_id = block.get("id")
+            if not isinstance(block_id, str) or not block_id or block_id in seen:
+                raise ValueError("document layout contains invalid or duplicate block ids")
+            seen.add(block_id)
+            page.append((block_id, text))
+        pages.append(page)
+    return pages
+
+
+def _validated_translation_file(
+    workspace: Path,
+    path: Path,
+    locale: str | None,
+) -> dict[str, str]:
+    if path.is_symlink() or path.parent.is_symlink():
+        raise ValueError("translation job file is invalid")
+    try:
+        staged = json.loads(path.read_text(encoding="utf-8"))
+        manifest = _read_manifest(workspace)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("translation job file is invalid") from exc
+    if not isinstance(staged, dict):
+        raise ValueError("translation job file is invalid")
+    staged_locale = staged.get("locale")
+    if locale is not None and staged_locale is not None and staged_locale != locale:
+        raise ValueError("translation job locale does not match")
+    if staged.get("source_sha256") != manifest.get("source", {}).get("sha256"):
+        raise ValueError("translation was generated for a different source document")
+    if staged.get("layout_fingerprint") != (manifest.get("layout") or {}).get("fingerprint"):
+        raise ValueError("translation was generated for a different document layout")
+    blocks = staged.get("blocks")
+    if not isinstance(blocks, list):
+        raise ValueError("translation JSON is missing blocks")
+
+    expected_ids = {
+        block_id
+        for page in _translation_source_pages(workspace)
+        for block_id, _ in page
+    }
+    translated: dict[str, str] = {}
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError("translation blocks must contain id and translated_text")
+        block_id = block.get("id")
+        translated_text = block.get("translated_text")
+        if not isinstance(block_id, str) or not isinstance(translated_text, str):
+            raise ValueError("translation blocks must contain id and translated_text")
+        if not translated_text.strip():
+            raise ValueError(f"translation is empty for block id: {block_id}")
+        if block_id in translated:
+            raise ValueError(f"translation contains duplicate block id: {block_id}")
+        if block_id not in expected_ids:
+            raise ValueError(f"translation contains unknown block id: {block_id}")
+        translated[block_id] = translated_text
+    return translated
+
+
+def _write_translation_mapping(
+    workspace: Path,
+    operation_id: str,
+    locale: str,
+    translated: dict[str, str],
+) -> int:
+    pages = _translation_source_pages(workspace)
+    expected_ids = [block_id for page in pages for block_id, _ in page]
+    expected = set(expected_ids)
+    if not set(translated).issubset(expected):
+        raise ValueError("translation contains unknown block ids")
+    if any(not isinstance(text, str) or not text.strip() for text in translated.values()):
+        raise ValueError("translation contains empty text")
+    manifest = _read_manifest(workspace)
+    target = _document_job_directory(workspace, operation_id) / "translation.json"
+    if target.is_symlink() or target.parent.is_symlink():
+        raise ValueError("translation job file is invalid")
+    _json_write(target, {
+        "locale": locale,
+        "source_sha256": manifest.get("source", {}).get("sha256"),
+        "layout_fingerprint": (manifest.get("layout") or {}).get("fingerprint"),
+        "blocks": [
+            {"id": block_id, "translated_text": translated[block_id]}
+            for block_id in expected_ids
+            if block_id in translated
+        ],
+    })
+    return len(translated)
+
+
+def _translation_job_blocks(
+    workspace: Path,
+    operation_id: str,
+    locale: str,
+) -> dict[str, str]:
+    target = _document_job_directory(workspace, operation_id) / "translation.json"
+    if not target.is_file():
+        return {}
+    return _validated_translation_file(workspace, target, locale)
+
+
+def _store_translation_batch(
+    workspace: Path,
+    operation_id: str,
+    locale: str,
+    batch: dict[str, str],
+) -> int:
+    """Validate and atomically merge one model-produced translation batch."""
+    translated = _translation_job_blocks(workspace, operation_id, locale)
+    translated.update(batch)
+    return _write_translation_mapping(workspace, operation_id, locale, translated)
 
 
 def _cleanup_document_job(workspace: Path, operation_id: str) -> None:
@@ -740,35 +950,12 @@ def _cleanup_document_job(workspace: Path, operation_id: str) -> None:
 
 def _translation_job_progress(workspace: Path, operation_id: str) -> int:
     path = _document_job_directory(workspace, operation_id) / "translation.json"
-    if path.is_symlink():
+    if not path.is_file() or path.is_symlink():
         return 0
     try:
-        staged = json.loads(path.read_text(encoding="utf-8"))
-        manifest = _read_manifest(workspace)
-        layout = json.loads((_managed_internal_directory(workspace) / "layout.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        return len(_validated_translation_file(workspace, path, None))
+    except ValueError:
         return 0
-    if not isinstance(staged, dict) or staged.get("source_sha256") != manifest.get("source", {}).get("sha256"):
-        return 0
-    if staged.get("layout_fingerprint") != (manifest.get("layout") or {}).get("fingerprint"):
-        return 0
-    blocks = staged.get("blocks")
-    if not isinstance(blocks, list):
-        return 0
-    expected_ids = {
-        str(block["id"])
-        for page in layout.get("pages", [])
-        for block in page.get("blocks", [])
-        if isinstance(block, dict) and str(block.get("text", "")).strip() and isinstance(block.get("id"), str)
-    }
-    valid: set[str] = set()
-    for block in blocks:
-        if not isinstance(block, dict) or not isinstance(block.get("id"), str) or not isinstance(block.get("translated_text"), str):
-            return 0
-        if block["id"] in valid or block["id"] not in expected_ids:
-            return 0
-        valid.add(block["id"])
-    return len(valid)
 
 
 def _recover_translation_job(workspace: Path, operation_id: str, locale: str) -> int:
@@ -779,19 +966,7 @@ def _recover_translation_job(workspace: Path, operation_id: str, locale: str) ->
         raise ValueError("document jobs directory is invalid")
     target = _document_job_directory(workspace, operation_id)
     target.mkdir(parents=True, exist_ok=True)
-    try:
-        layout = json.loads((internal / "layout.json").read_text(encoding="utf-8"))
-        manifest = _read_manifest(workspace)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("document layout is not ready") from exc
-    expected_ids = {
-        str(block["id"])
-        for page in layout.get("pages", [])
-        for block in page.get("blocks", [])
-        if isinstance(block, dict) and str(block.get("text", "")).strip() and isinstance(block.get("id"), str)
-    }
-    source_sha256 = manifest.get("source", {}).get("sha256")
-    layout_fingerprint = (manifest.get("layout") or {}).get("fingerprint")
+    _translation_source_pages(workspace)
     candidates_with_time: list[tuple[float, Path]] = []
     for path in jobs.glob("*/translation.json"):
         if path.parent.name == operation_id or path.is_symlink() or path.parent.is_symlink():
@@ -803,32 +978,11 @@ def _recover_translation_job(workspace: Path, operation_id: str, locale: str) ->
     candidates = [path for _, path in sorted(candidates_with_time, reverse=True)]
     for candidate in candidates:
         try:
-            staged = json.loads(candidate.read_text(encoding="utf-8"))
-            blocks = staged.get("blocks") if isinstance(staged, dict) else None
-            if (
-                staged.get("locale", locale) != locale
-                or staged.get("source_sha256") != source_sha256
-                or staged.get("layout_fingerprint") != layout_fingerprint
-                or not isinstance(blocks, list)
-            ):
-                continue
-            translated: dict[str, str] = {}
-            for block in blocks:
-                if not isinstance(block, dict) or not isinstance(block.get("id"), str) or not isinstance(block.get("translated_text"), str):
-                    raise ValueError
-                if block["id"] in translated or block["id"] not in expected_ids:
-                    raise ValueError
-                translated[block["id"]] = block["translated_text"]
-        except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+            translated = _validated_translation_file(workspace, candidate, locale)
+        except ValueError:
             continue
         if translated:
-            _json_write(target / "translation.json", {
-                "locale": locale,
-                "source_sha256": source_sha256,
-                "layout_fingerprint": layout_fingerprint,
-                "blocks": [{"id": block_id, "translated_text": text} for block_id, text in translated.items()],
-            })
-            return len(translated)
+            return _write_translation_mapping(workspace, operation_id, locale, translated)
     return 0
 
 
@@ -947,24 +1101,26 @@ def _finalize_document_job_unlocked(
             staged_path = job / "translation.json"
             if layout_path.is_symlink() or staged_path.is_symlink():
                 raise ValueError("document translation inputs cannot be symlinks")
-            layout = json.loads(layout_path.read_text(encoding="utf-8"))
             staged = json.loads(staged_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("Agent did not produce valid translation JSON") from exc
         expected_ids = [
-            str(block["id"])
-            for page in layout.get("pages", [])
-            for block in page.get("blocks", [])
-            if isinstance(block, dict) and str(block.get("text", "")).strip() and isinstance(block.get("id"), str)
+            block_id
+            for page in _translation_source_pages(workspace)
+            for block_id, _ in page
         ]
         blocks = staged.get("blocks") if isinstance(staged, dict) else None
         if not isinstance(blocks, list):
             raise ValueError("translation JSON is missing blocks")
+        if staged.get("locale") not in {None, locale}:
+            raise ValueError("translation job locale does not match")
         translated: dict[str, str] = {}
         for block in blocks:
             if not isinstance(block, dict) or not isinstance(block.get("id"), str) or not isinstance(block.get("translated_text"), str):
                 raise ValueError("translation blocks must contain id and translated_text")
             block_id = block["id"]
+            if not block["translated_text"].strip():
+                raise ValueError(f"translation is empty for block id: {block_id}")
             if block_id in translated:
                 raise ValueError(f"translation contains duplicate block id: {block_id}")
             translated[block_id] = block["translated_text"]

@@ -6,14 +6,18 @@ import {
   Languages,
   LoaderCircle,
   Minus,
+  MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   RefreshCw,
   RotateCw,
   Sparkles,
+  Trash2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -99,6 +103,137 @@ function sourceLooksChinese(layout: DocumentLayout): boolean {
   const letters = sample.match(/[\p{L}]/gu)?.length ?? 0;
   const chinese = sample.match(/[\p{Script=Han}]/gu)?.length ?? 0;
   return letters > 0 && chinese / letters > 0.35;
+}
+
+function DocumentActionsMenu({
+  locale,
+  sessionBusy,
+  translating,
+  clearing,
+  generatingBlog,
+  translateDisabled,
+  clearDisabled,
+  blogDisabled,
+  onLocale,
+  onTranslate,
+  onClear,
+  onGenerateBlog,
+}: {
+  locale: string;
+  sessionBusy: boolean;
+  translating: boolean;
+  clearing: boolean;
+  generatingBlog: boolean;
+  translateDisabled: boolean;
+  clearDisabled: boolean;
+  blogDisabled: boolean;
+  onLocale: (locale: string) => void;
+  onTranslate: () => void;
+  onClear: () => void;
+  onGenerateBlog: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const placeMenu = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const viewportPadding = 8;
+    const menuWidth = Math.min(236, window.innerWidth - viewportPadding * 2);
+    const menuHeight = 205;
+    setPosition({
+      top: Math.min(rect.bottom + 7, Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding)),
+      left: Math.max(viewportPadding, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding)),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const onViewportChange = () => placeMenu();
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, placeMenu]);
+
+  const choose = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+  const pending = translating || clearing || generatingBlog;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        className="icon-button small document-actions-trigger"
+        type="button"
+        title="文档操作"
+        aria-label="文档操作"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) placeMenu();
+          setOpen((value) => !value);
+        }}
+      >
+        {pending ? <LoaderCircle className="spin" /> : <MoreHorizontal />}
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="document-actions-menu"
+          role="menu"
+          aria-label="文档操作"
+          style={position}
+        >
+          <label className="document-actions-locale">
+            <Languages />
+            <span>目标语言</span>
+            <select
+              aria-label="翻译目标语言"
+              value={locale}
+              disabled={sessionBusy}
+              onChange={(event) => onLocale(event.target.value)}
+            >
+              {TARGET_LANGUAGES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+            </select>
+          </label>
+          <button type="button" role="menuitem" disabled={translateDisabled} onClick={() => choose(onTranslate)}>
+            {translating ? <LoaderCircle className="spin" /> : <Languages />}
+            <span>翻译文档</span>
+          </button>
+          <button className="danger" type="button" role="menuitem" disabled={clearDisabled} onClick={() => choose(onClear)}>
+            {clearing ? <LoaderCircle className="spin" /> : <Trash2 />}
+            <span>清空翻译缓存</span>
+          </button>
+          <div className="document-actions-separator" role="separator" />
+          <button className="blog" type="button" role="menuitem" disabled={blogDisabled} onClick={() => choose(onGenerateBlog)}>
+            {generatingBlog ? <LoaderCircle className="spin" /> : <Sparkles />}
+            <span>生成 Blog</span>
+          </button>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 async function loadPdf(data: ArrayBuffer): Promise<PDFDocumentProxy> {
@@ -354,6 +489,8 @@ export default function DocumentWorkspace({
   const [blogTouched, setBlogTouched] = useState(false);
   const [blogConflict, setBlogConflict] = useState<{ local: DocumentBlog; server: DocumentBlog } | null>(null);
   const [pendingAction, setPendingAction] = useState<"translate" | "generate_blog" | null>(null);
+  const [clearTranslationConfirm, setClearTranslationConfirm] = useState(false);
+  const [clearingTranslation, setClearingTranslation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const previousBusy = useRef(sessionBusy);
@@ -488,6 +625,23 @@ export default function DocumentWorkspace({
   const scannedPages = layout?.pages.filter((page) => page.blocks.length === 0).length ?? 0;
   const selectCurrentPage = useCallback((page: number) => setCurrentPage(page), []);
 
+  const clearTranslationCache = useCallback(async () => {
+    setClearingTranslation(true);
+    setError(null);
+    try {
+      await api.clearDocumentTranslation(project.path, locale);
+      setTranslation(null);
+      setShowTranslation(false);
+      setPendingAction(null);
+      setManifest(await api.documentManifest(project.path));
+      setClearTranslationConfirm(false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setClearingTranslation(false);
+    }
+  }, [api, locale, project.path]);
+
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
     const startX = event.clientX;
@@ -519,17 +673,27 @@ export default function DocumentWorkspace({
             <span className="document-zoom">{Math.round(zoom * 100)}%</span>
             <button className="icon-button small" title="放大" onClick={() => setZoom((value) => Math.min(2.5, value + .1))}><Plus /></button>
             <button className="icon-button small" title="顺时针旋转" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
-            <select aria-label="翻译目标语言" value={locale} onChange={(event) => setLocale(event.target.value)}>
-              {TARGET_LANGUAGES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
-            </select>
-            <button
-              className="document-action-button"
-              disabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
-              onClick={() => {
+            <DocumentActionsMenu
+              locale={locale}
+              sessionBusy={sessionBusy}
+              translating={pendingAction === "translate"}
+              clearing={clearingTranslation}
+              generatingBlog={pendingAction === "generate_blog"}
+              translateDisabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
+              clearDisabled={sessionBusy || clearingTranslation}
+              blogDisabled={!layout || sessionBusy || (showTranslation && !translation)}
+              onLocale={setLocale}
+              onTranslate={() => {
                 setPendingAction("translate");
                 if (!onDocumentAction("translate", { locale })) setPendingAction(null);
               }}
-            >{pendingAction === "translate" || (sessionBusy && !translation) ? <LoaderCircle className="spin" /> : <Languages />}翻译</button>
+              onClear={() => setClearTranslationConfirm(true)}
+              onGenerateBlog={() => {
+                setView("blog");
+                setPendingAction("generate_blog");
+                if (!onDocumentAction("generate_blog", { locale, source: showTranslation ? "translation" : "original" })) setPendingAction(null);
+              }}
+            />
             <label className={`document-translation-toggle ${translation ? "ready" : ""}`}>
               <input
                 type="checkbox"
@@ -539,21 +703,48 @@ export default function DocumentWorkspace({
               />
               {showTranslation ? <Check /> : null}显示译文
             </label>
-            <button
-              className="document-action-button blog"
-              disabled={!layout || sessionBusy || (showTranslation && !translation)}
-              onClick={() => {
-                setView("blog");
-                setPendingAction("generate_blog");
-                if (!onDocumentAction("generate_blog", { locale, source: showTranslation ? "translation" : "original" })) setPendingAction(null);
-              }}
-            ><Sparkles />生成 Blog</button>
           </div>
         )}
         <button className="icon-button document-agent-toggle" title="折叠 Agent" onClick={() => onAgentCollapsed(true)}>
           <PanelRightClose />
         </button>
       </header>
+
+      {clearTranslationConfirm && createPortal((
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => event.target === event.currentTarget && !clearingTranslation && setClearTranslationConfirm(false)}
+        >
+          <section className="modal" role="dialog" aria-modal="true" aria-label="清空翻译缓存">
+            <header>
+              <h2>清空翻译缓存</h2>
+              <button
+                className="icon-button"
+                type="button"
+                title="关闭"
+                disabled={clearingTranslation}
+                onClick={() => setClearTranslationConfirm(false)}
+              ><X /></button>
+            </header>
+            <div className="modal-body">
+              <div className="confirm-dialog-copy">
+                <Trash2 />
+                <div>
+                  <strong>清空{TARGET_LANGUAGES.find(([value]) => value === locale)?.[1] ?? locale}译文？</strong>
+                  <p>已生成译文和未完成的翻译进度都会删除。原文和 Blog 不受影响。</p>
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button type="button" disabled={clearingTranslation} onClick={() => setClearTranslationConfirm(false)}>取消</button>
+                <button className="confirm-danger" type="button" disabled={clearingTranslation} onClick={() => void clearTranslationCache()}>
+                  {clearingTranslation ? <LoaderCircle className="spin" /> : <Trash2 />}清空
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ), document.body)}
 
       {error && <div className="document-error"><AlertTriangle />{error}<button onClick={() => { setError(null); void refreshArtifacts(); }}><RefreshCw />重试</button></div>}
       {loading && <div className="document-loading"><LoaderCircle className="spin" />正在准备文档</div>}

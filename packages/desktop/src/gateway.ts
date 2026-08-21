@@ -191,6 +191,16 @@ export class GatewayApi {
     return this.request(`/document/translation?${new URLSearchParams({ workspace, locale })}`);
   }
 
+  clearDocumentTranslation(workspace: string, locale: string): Promise<{
+    locale: string;
+    removed_translation: boolean;
+    removed_jobs: number;
+  }> {
+    return this.request(`/document/translation?${new URLSearchParams({ workspace, locale })}`, {
+      method: "DELETE",
+    });
+  }
+
   documentBlog(workspace: string): Promise<DocumentBlog> {
     return this.request(`/document/blog?${new URLSearchParams({ workspace })}`);
   }

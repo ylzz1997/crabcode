@@ -4255,11 +4255,20 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
     setName(value);
     if (!workspaceEdited) setWorkspacePath(defaultProjectDirectory(defaultRoot, value));
   };
+  const urlExtension = (() => {
+    try {
+      const filename = new URL(url).pathname.split("/").at(-1) ?? "";
+      // Numeric suffixes are common in document routes (for example arXiv's
+      // /pdf/2608.19843) and are not file extensions.
+      return filename.match(/\.[A-Za-z][A-Za-z0-9]{0,9}$/)?.[0].toLowerCase();
+    } catch {
+      return undefined;
+    }
+  })();
   const selectedExtension = mode === "file"
     ? file?.name.match(/\.[^.]+$/)?.[0]?.toLowerCase()
-    : (() => {
-        try { return new URL(url).pathname.match(/\.[^.]+$/)?.[0]?.toLowerCase(); } catch { return undefined; }
-      })();
+    : urlExtension;
+  const knownConversion = Boolean(selectedExtension && selectedExtension !== ".pdf");
   const formatUnavailable = Boolean(
     selectedExtension
     && capabilities
@@ -4307,7 +4316,10 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
     setBusy(true);
     setError(null);
     setStage("upload");
-    const stageTimer = window.setTimeout(() => setStage("convert"), 500);
+    // PDF URLs are downloaded and copied directly by the Gateway. Only show
+    // conversion for an explicitly non-PDF source; extensionless direct URLs
+    // (such as arXiv PDF links) stay in download state until the response.
+    const stageTimer = knownConversion ? window.setTimeout(() => setStage("convert"), 500) : undefined;
     try {
       const manifest = mode === "file"
         ? await api.uploadDocument({
@@ -4337,7 +4349,7 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
       setBusy(false);
       setStage(null);
     } finally {
-      window.clearTimeout(stageTimer);
+      if (stageTimer !== undefined) window.clearTimeout(stageTimer);
     }
   };
 
@@ -4405,7 +4417,11 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
         {unsupportedFormat && <div className="form-error"><AlertTriangle />不支持这个文件格式。</div>}
         {stage && (
           <div className="document-import-progress">
-            {[["upload", "导入"], ["convert", "转换为 PDF"], ["parse", "准备文档"]].map(([value, label]) => (
+            {[
+              ["upload", mode === "url" ? "下载" : "导入"],
+              ...(knownConversion ? [["convert", "转换为 PDF"]] : []),
+              ["parse", "准备文档"],
+            ].map(([value, label]) => (
               <span className={stage === value ? "active" : ""} key={value}>{stage === value ? <LoaderCircle className="spin" /> : <Check />}{label}</span>
             ))}
           </div>

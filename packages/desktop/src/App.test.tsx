@@ -354,6 +354,8 @@ describe("automation deck tabs", () => {
 });
 
 describe("project creation types", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("defaults to a regular project and can select document mode", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -452,6 +454,41 @@ describe("project creation types", () => {
       workspacePath: "/Users/test/Documents/CrabCode/guide",
     }));
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ kind: "document" }));
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("keeps an extensionless direct URL in the download stage", async () => {
+    vi.useFakeTimers();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const importDocumentUrl = vi.fn(() => new Promise<never>(() => {}));
+    act(() => root.render(
+      <DocumentProjectModal
+        api={{ importDocumentUrl } as unknown as GatewayApi}
+        capabilities={documentCapabilities}
+        defaultRoot="/Users/test/Documents/CrabCode"
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    ));
+    const urlTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".document-source-tabs button"))
+      .find((button) => button.textContent === "网络地址")!;
+    act(() => urlTab.click());
+    const urlInput = container.querySelector<HTMLInputElement>('input[type="url"]')!;
+    act(() => changeInput(urlInput, "https://arxiv.org/pdf/2608.19843"));
+    const create = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("创建文档"))!;
+    act(() => create.click());
+
+    expect(container.querySelector(".document-import-progress .active")?.textContent).toContain("下载");
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(container.querySelector(".document-import-progress .active")?.textContent).toContain("下载");
+    expect(container.querySelector(".document-import-progress")?.textContent).not.toContain("转换为 PDF");
+
     act(() => root.unmount());
     container.remove();
   });

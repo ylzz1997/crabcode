@@ -4697,15 +4697,6 @@ body {
   gap: 5px;
 }
 
-.document-tools select {
-  height: 30px;
-  max-width: 118px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text);
-}
-
 .document-zoom {
   width: 40px;
   color: var(--muted);
@@ -4720,7 +4711,6 @@ body {
   text-align: center;
 }
 
-.document-action-button,
 .document-translation-toggle {
   height: 30px;
   display: inline-flex;
@@ -4734,26 +4724,10 @@ body {
   font-size: 11px;
 }
 
-.document-action-button {
-  cursor: pointer;
-}
-
-.document-action-button:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--surface-hover);
-}
-
-.document-action-button.blog {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  color: var(--accent-strong);
-}
-
-.document-action-button:disabled,
 .document-translation-toggle:not(.ready) {
   opacity: .46;
 }
 
-.document-action-button svg,
 .document-translation-toggle svg {
   width: 14px;
 }
@@ -4762,6 +4736,135 @@ body {
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
+}
+
+.document-actions-menu {
+  position: fixed;
+  z-index: 90;
+  width: min(236px, calc(100vw - 16px));
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 8px;
+  background: rgba(24, 31, 30, .98);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, .46), inset 0 1px rgba(255, 255, 255, .055);
+  -webkit-backdrop-filter: blur(24px) saturate(130%);
+  backdrop-filter: blur(24px) saturate(130%);
+  animation: composer-menu-in 150ms ease-out both;
+}
+
+.document-actions-locale,
+.document-actions-menu>button {
+  width: 100%;
+  min-height: 39px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #d7ded9;
+}
+
+.document-actions-locale>svg,
+.document-actions-menu>button>svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: #aebbb5;
+}
+
+.document-actions-locale>span,
+.document-actions-menu>button>span {
+  font-size: 13px;
+  font-weight: 540;
+}
+
+.document-actions-locale>span {
+  white-space: nowrap;
+}
+
+.document-actions-locale select {
+  min-width: 0;
+  height: 28px;
+  flex: 1;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .045);
+  color: inherit;
+  font-size: 12px;
+}
+
+.document-actions-menu>button {
+  text-align: left;
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.document-actions-menu>button:hover:not(:disabled),
+.document-actions-menu>button:focus-visible {
+  background: rgba(255, 255, 255, .075);
+  color: #f4f7f5;
+}
+
+.document-actions-menu>button:disabled,
+.document-actions-locale select:disabled {
+  opacity: .38;
+  cursor: default;
+}
+
+.document-actions-menu>button.danger,
+.document-actions-menu>button.danger>svg {
+  color: #ff8585;
+}
+
+.document-actions-menu>button.blog,
+.document-actions-menu>button.blog>svg {
+  color: #ff9b8a;
+}
+
+.document-actions-separator {
+  height: 1px;
+  margin: 5px 8px;
+  background: rgba(255, 255, 255, .11);
+}
+
+html[data-theme="light"] .document-actions-menu {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 18px 52px rgba(43, 55, 50, .2), inset 0 1px rgba(255, 255, 255, .8);
+}
+
+html[data-theme="light"] .document-actions-locale,
+html[data-theme="light"] .document-actions-menu>button {
+  color: var(--text);
+}
+
+html[data-theme="light"] .document-actions-locale select {
+  border-color: var(--border);
+  background: var(--surface-active);
+}
+
+html[data-theme="light"] .document-actions-menu>button:hover:not(:disabled),
+html[data-theme="light"] .document-actions-menu>button:focus-visible {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+html[data-theme="light"] .document-actions-menu>button.danger,
+html[data-theme="light"] .document-actions-menu>button.danger>svg {
+  color: var(--red);
+}
+
+html[data-theme="light"] .document-actions-menu>button.blog,
+html[data-theme="light"] .document-actions-menu>button.blog>svg {
+  color: var(--accent-strong);
+}
+
+html[data-theme="light"] .document-actions-separator {
+  background: var(--border-soft);
 }
 
 .document-agent-toggle {
@@ -5096,6 +5199,10 @@ body {
   .document-tools>.icon-button,
   .document-translation-toggle {
     display: none;
+  }
+
+  .document-tools>.document-actions-trigger {
+    display: inline-flex;
   }
 
   .document-pdf-scroll {
