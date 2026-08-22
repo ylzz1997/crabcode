@@ -9059,11 +9059,84 @@ html[data-theme="light"] .document-actions-separator {
   color: var(--red);
 }
 
+.document-engine-install {
+  min-width: 0;
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .document-engine-command {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.document-engine-install .document-engine-command code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-engine-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.document-engine-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.document-engine-progress-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-engine-progress-copy strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.document-engine-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-soft);
+}
+
+.document-engine-progress-track i {
+  position: relative;
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width .3s ease;
+}
+
+.document-engine-progress-track i::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .42), transparent);
+  animation: document-engine-progress-shimmer 1.4s linear infinite;
+  transform: translateX(-100%);
+}
+
+@keyframes document-engine-progress-shimmer {
+  to { transform: translateX(100%); }
 }
 
 .document-engine-command.remote {
@@ -9085,6 +9158,19 @@ html[data-theme="light"] .document-actions-separator {
 .document-engine-command small {
   color: #708983;
   font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  .document-engine-install,
+  .document-engine-command {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-engine-progress-track i::after {
+    animation: none;
+  }
 }
 
 .general-spaced-heading {

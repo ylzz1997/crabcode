@@ -1879,9 +1879,9 @@ function App() {
             && activeConnection
             && isLoopbackUrl(activeConnection.base_url)
           )}
-          onInstallDocumentEngine={async () => {
+          onInstallDocumentEngine={async (onProgress) => {
             try {
-              await installDocumentEngine(settings.python_path);
+              await installDocumentEngine(settings.python_path, null, onProgress);
             } finally {
               if (activeConnection) {
                 try {

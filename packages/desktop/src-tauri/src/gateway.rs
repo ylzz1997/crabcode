@@ -3,11 +3,13 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read};
 use std::net::{IpAddr, ToSocketAddrs};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 use url::Url;
 
 const MIN_PYTHON_MAJOR: u32 = 3;
@@ -265,9 +267,20 @@ fn run_document_engine_command(
         .args(arguments)
         .output()
         .map_err(|error| format!("Unable to start document engine manager: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_document_engine_output(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+fn parse_document_engine_output(
+    succeeded: bool,
+    stdout: &str,
+    stderr: &str,
+) -> Result<Value, String> {
     let parsed = serde_json::from_str::<Value>(stdout.trim()).ok();
-    if output.status.success() {
+    if succeeded {
         return parsed.ok_or_else(|| "Document engine manager returned invalid JSON.".to_string());
     }
     if let Some(detail) = parsed
@@ -277,12 +290,122 @@ fn run_document_engine_command(
     {
         return Err(detail.to_string());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = stderr.trim().to_string();
     Err(if stderr.is_empty() {
         "Document engine manager failed.".to_string()
     } else {
         stderr
     })
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentEngineInstallProgress {
+    operation_id: String,
+    stage: String,
+    detail: String,
+    percent: u8,
+}
+
+fn install_progress(operation_id: &str, detail: &str) -> DocumentEngineInstallProgress {
+    let (stage, percent) = if detail.contains("启用") {
+        ("activating", 96)
+    } else if detail.contains("下载并校验") {
+        ("downloading_assets", 68)
+    } else if detail.contains("校验") {
+        ("verifying", 88)
+    } else if detail.contains("安装程序与依赖") || detail.contains("正在安装") {
+        ("installing", 36)
+    } else if detail.contains("创建独立 Python 环境") {
+        ("creating_environment", 15)
+    } else {
+        ("preparing", 5)
+    };
+    DocumentEngineInstallProgress {
+        operation_id: operation_id.to_string(),
+        stage: stage.to_string(),
+        detail: detail.to_string(),
+        percent,
+    }
+}
+
+fn run_document_engine_install_command(
+    app: AppHandle,
+    operation_id: String,
+    python_path: Option<String>,
+    bundle: Option<String>,
+) -> Result<Value, String> {
+    let python = detect_document_engine_python(python_path.as_deref())?;
+    let mut command = Command::new(&python);
+    command
+        .args(["-m", "crabcode_cli", "document-engine", "install", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(path) = bundle.as_deref().filter(|value| !value.trim().is_empty()) {
+        command.args(["--bundle", path]);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Unable to start document engine manager: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Unable to read document engine manager output.".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Unable to read document engine manager progress.".to_string())?;
+
+    let stdout_thread = thread::spawn(move || {
+        let mut output = String::new();
+        let mut reader = BufReader::new(stdout);
+        reader
+            .read_to_string(&mut output)
+            .map(|_| output)
+            .map_err(|error| format!("Unable to read document engine manager output: {error}"))
+    });
+    let progress_app = app.clone();
+    let progress_operation_id = operation_id.clone();
+    let stderr_thread = thread::spawn(move || {
+        let mut captured = Vec::new();
+        for line in BufReader::new(stderr).lines() {
+            let line = line.map_err(|error| {
+                format!("Unable to read document engine manager progress: {error}")
+            })?;
+            if line.starts_with("正在") {
+                let _ = progress_app.emit(
+                    "document-engine-install-progress",
+                    install_progress(&progress_operation_id, &line),
+                );
+            }
+            captured.push(line);
+        }
+        Ok::<String, String>(captured.join("\n"))
+    });
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("Unable to wait for document engine manager: {error}"))?;
+    let stdout = stdout_thread
+        .join()
+        .map_err(|_| "Document engine output reader stopped unexpectedly.".to_string())??;
+    let stderr = stderr_thread
+        .join()
+        .map_err(|_| "Document engine progress reader stopped unexpectedly.".to_string())??;
+    let result = parse_document_engine_output(status.success(), &stdout, &stderr);
+    if result.is_ok() {
+        let _ = app.emit(
+            "document-engine-install-progress",
+            DocumentEngineInstallProgress {
+                operation_id,
+                stage: "complete".to_string(),
+                detail: "高精度 PDF 引擎安装完成".to_string(),
+                percent: 100,
+            },
+        );
+    }
+    result
 }
 
 #[tauri::command]
@@ -291,15 +414,17 @@ pub fn document_engine_status(python_path: Option<String>) -> Result<Value, Stri
 }
 
 #[tauri::command]
-pub fn install_document_engine(
+pub async fn install_document_engine(
+    app: AppHandle,
     python_path: Option<String>,
     bundle: Option<String>,
+    operation_id: String,
 ) -> Result<Value, String> {
-    let mut arguments = vec!["install", "--json"];
-    if let Some(path) = bundle.as_deref().filter(|value| !value.trim().is_empty()) {
-        arguments.extend(["--bundle", path]);
-    }
-    run_document_engine_command(python_path.as_deref(), &arguments)
+    tauri::async_runtime::spawn_blocking(move || {
+        run_document_engine_install_command(app, operation_id, python_path, bundle)
+    })
+    .await
+    .map_err(|error| format!("Document engine installer task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -473,5 +598,20 @@ mod tests {
             "https://example.com:4096/"
         );
         assert!(parse_base_url("ws://localhost:4096").is_err());
+    }
+
+    #[test]
+    fn maps_document_engine_install_stages_to_monotonic_progress() {
+        let messages = [
+            "正在下载高精度 PDF 引擎",
+            "正在创建独立 Python 环境",
+            "正在从 BabelDOC 官方源安装程序与依赖",
+            "正在下载并校验 BabelDOC 官方模型与字体",
+            "正在校验高精度 PDF 引擎",
+            "正在启用高精度 PDF 引擎",
+        ];
+        let progress = messages.map(|message| install_progress("test", message).percent);
+        assert_eq!(progress, [5, 15, 36, 68, 88, 96]);
+        assert!(progress.windows(2).all(|pair| pair[0] < pair[1]));
     }
 }

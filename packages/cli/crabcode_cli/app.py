@@ -57,8 +57,9 @@ def document_engine_install_cmd(
     from crabcode_gateway.document_engine import install_document_engine
 
     def progress(message: str) -> None:
-        if not json_output:
-            typer.echo(message)
+        # Keep stdout as a single machine-readable result in JSON mode while
+        # still allowing desktop callers to stream installation progress.
+        typer.echo(message, err=json_output)
 
     try:
         status = install_document_engine(bundle, progress=progress)

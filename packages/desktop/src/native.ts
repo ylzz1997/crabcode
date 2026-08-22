@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { legacyFavoriteEntries, normalizeFavoriteEntries } from "./favorites";
 import type {
   CodeFontFamily,
@@ -334,9 +335,31 @@ export async function shutdownGateway(connectionId: string): Promise<boolean> {
 export async function installDocumentEngine(
   pythonPath: string | null,
   bundle: string | null = null,
+  onProgress?: (progress: DocumentEngineInstallProgress) => void,
 ): Promise<Record<string, unknown>> {
   if (!isDesktopShell()) throw new Error("高精度 PDF 引擎只能由桌面应用安装");
-  return invoke<Record<string, unknown>>("install_document_engine", { pythonPath, bundle });
+  const operationId = crypto.randomUUID();
+  const unlisten = onProgress
+    ? await listen<DocumentEngineInstallProgress>("document-engine-install-progress", (event) => {
+        if (event.payload.operationId === operationId) onProgress(event.payload);
+      })
+    : null;
+  try {
+    return await invoke<Record<string, unknown>>("install_document_engine", {
+      pythonPath,
+      bundle,
+      operationId,
+    });
+  } finally {
+    unlisten?.();
+  }
+}
+
+export interface DocumentEngineInstallProgress {
+  operationId: string;
+  stage: string;
+  detail: string;
+  percent: number;
 }
 
 export async function getDocumentEngineStatus(

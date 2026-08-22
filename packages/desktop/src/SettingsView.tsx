@@ -20,7 +20,11 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isDesktopShell, loadCustomDockIcon } from "./native";
+import {
+  isDesktopShell,
+  loadCustomDockIcon,
+  type DocumentEngineInstallProgress,
+} from "./native";
 import type {
   CodeFontFamily,
   ConnectionPreset,
@@ -178,7 +182,9 @@ interface SettingsViewProps {
   onDocumentWorkspaceRoot?: (connectionId: string, path: string | null) => void;
   documentCapabilities?: DocumentCapabilities | null;
   canManageDocumentEngine?: boolean;
-  onInstallDocumentEngine?: () => Promise<void>;
+  onInstallDocumentEngine?: (
+    onProgress: (progress: DocumentEngineInstallProgress) => void,
+  ) => Promise<void>;
   onRemoveDocumentEngine?: () => Promise<void>;
 }
 
@@ -397,6 +403,7 @@ export function SettingsView({
   const [dockIconBusy, setDockIconBusy] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
   const [documentEngineBusy, setDocumentEngineBusy] = useState<"install" | "remove" | null>(null);
+  const [documentEngineProgress, setDocumentEngineProgress] = useState<DocumentEngineInstallProgress | null>(null);
   const [documentEngineError, setDocumentEngineError] = useState<string | null>(null);
   const customIconInputRef = useRef<HTMLInputElement>(null);
   const matchingSections = useMemo(() => filterSettingsSections(query), [query]);
@@ -440,13 +447,25 @@ export function SettingsView({
   const manageDocumentEngine = async (action: "install" | "remove") => {
     setDocumentEngineBusy(action);
     setDocumentEngineError(null);
+    setDocumentEngineProgress(action === "install" ? {
+      operationId: "pending",
+      stage: "preparing",
+      detail: "正在准备安装高精度 PDF 引擎",
+      percent: 3,
+    } : null);
     try {
-      if (action === "install") await onInstallDocumentEngine();
+      if (action === "install") await onInstallDocumentEngine((progress) => {
+        setDocumentEngineProgress({
+          ...progress,
+          percent: Math.max(0, Math.min(100, progress.percent)),
+        });
+      });
       else await onRemoveDocumentEngine();
     } catch (reason) {
       setDocumentEngineError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setDocumentEngineBusy(null);
+      setDocumentEngineProgress(null);
     }
   };
 
@@ -880,15 +899,36 @@ export function SettingsView({
                           onClick={() => void manageDocumentEngine("remove")}
                         ><Trash2 />{documentEngineBusy === "remove" ? "正在删除…" : "删除引擎"}</button>
                       ) : (
-                        <div className="document-engine-command">
-                          <code>{documentEngineInstallCommand}</code>
-                          <button
-                            className="settings-command primary"
-                            type="button"
-                            title={`执行 ${documentEngineInstallCommand}`}
-                            disabled={documentEngineBusy !== null || documentCapabilities === undefined}
-                            onClick={() => void manageDocumentEngine("install")}
-                          ><Terminal />{documentEngineBusy === "install" ? "正在执行…" : preciseEngine?.status === "upgrade_required" ? "执行升级" : "执行安装"}</button>
+                        <div className="document-engine-install">
+                          <div className="document-engine-command">
+                            <code>{documentEngineInstallCommand}</code>
+                            <button
+                              className="settings-command primary"
+                              type="button"
+                              title={`执行 ${documentEngineInstallCommand}`}
+                              disabled={documentEngineBusy !== null || documentCapabilities === undefined}
+                              onClick={() => void manageDocumentEngine("install")}
+                            ><Terminal />{documentEngineBusy === "install" ? "正在安装…" : preciseEngine?.status === "upgrade_required" ? "执行升级" : "执行安装"}</button>
+                          </div>
+                          {documentEngineBusy === "install" && documentEngineProgress && (
+                            <div
+                              className="document-engine-progress"
+                              role="progressbar"
+                              aria-label="高精度 PDF 引擎安装进度"
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={documentEngineProgress.percent}
+                              aria-valuetext={documentEngineProgress.detail}
+                            >
+                              <div className="document-engine-progress-copy">
+                                <span>{documentEngineProgress.detail}</span>
+                                <strong>{documentEngineProgress.percent}%</strong>
+                              </div>
+                              <div className="document-engine-progress-track">
+                                <i style={{ width: `${documentEngineProgress.percent}%` }} />
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )
                     ) : (
