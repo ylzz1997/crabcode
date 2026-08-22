@@ -750,6 +750,41 @@ describe("turn duration formatting", () => {
     act(() => root.unmount());
     container.remove();
   });
+
+  it("offers an explicit legacy retry only for failed precise document jobs", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onCompatibilityRetry = vi.fn();
+    act(() => root.render(
+      <ChatItemView
+        item={{
+          id: "precise-failure",
+          kind: "document_job",
+          action: "translate",
+          title: "翻译文档",
+          engine: "precise",
+          status: "failed",
+          text: "高精度 PDF 引擎暂不支持扫描件",
+        }}
+        now={0}
+        showTurnDuration
+        turnDurationFormat="hms"
+        onPermission={vi.fn()}
+        onToggleChoice={vi.fn()}
+        onSubmitChoice={vi.fn()}
+        onPlan={vi.fn()}
+        onCompatibilityRetry={onCompatibilityRetry}
+      />,
+    ));
+    const retry = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("使用兼容模式重试"));
+    expect(retry).toBeTruthy();
+    act(() => retry!.click());
+    expect(onCompatibilityRetry).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+    container.remove();
+  });
 });
 
 describe("favorite sessions", () => {

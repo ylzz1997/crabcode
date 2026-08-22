@@ -255,6 +255,7 @@ class DocumentJobEvent:
     current: int = 0
     total: int = 0
     message: str = ""
+    engine: str = "legacy"
 
 
 @dataclass

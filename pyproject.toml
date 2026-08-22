@@ -41,8 +41,11 @@ gateway = [
     "python-multipart>=0.0.9",
     "pypdf>=4.0.0",
 ]
+document-translate = [
+    "BabelDOC==0.6.4",
+]
 all = [
-    "crabcode[search,browser,debugger,bedrock,vertex,gateway]",
+    "crabcode[search,browser,debugger,bedrock,vertex,gateway,document-translate]",
 ]
 
 [project.scripts]

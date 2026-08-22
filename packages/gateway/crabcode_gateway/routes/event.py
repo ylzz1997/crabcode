@@ -7,8 +7,11 @@ plus a WebSocket endpoint for bidirectional communication.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
+import os
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -75,10 +78,13 @@ class _DocumentJobContext:
     document_hash: str = ""
     translation_concurrency: int = _TRANSLATION_CONCURRENCY_DEFAULT
     translation_batch_size: int = _TRANSLATION_BATCH_DEFAULT_BLOCKS
+    engine: str = "legacy"
 
 
 class _DocumentTranslationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: str = "translation_failed") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _split_translation_page(
@@ -108,6 +114,7 @@ def _translation_batch_prompt(
     locale: str,
     texts: list[str],
     validation_feedback: str = "",
+    preserve_placeholders: bool = False,
 ) -> str:
     items = [
         {"index": index, "source_text": text}
@@ -119,11 +126,18 @@ def _translation_batch_prompt(
         if validation_feedback
         else ""
     )
+    placeholder_instruction = (
+        "Tokens shaped like <b12> or </b12> are protected layout placeholders. "
+        "Return every such token exactly once in the corresponding translated_text; never alter, translate, or invent one.\n"
+        if preserve_placeholders
+        else ""
+    )
     return (
         f"Translate every source_text into locale {locale}.\n"
         "Use neighboring entries as context, but return exactly one translation for each input index. "
         "Do not merge, split, omit, or reorder entries. Preserve formulas, citations, URLs, code, numbers, "
         "and symbols when they do not require translation.\n"
+        f"{placeholder_instruction}"
         "Return JSON only in this exact shape: "
         '{"translations":[{"index":0,"translated_text":"..."}]}.'
         " Every translated_text must be a non-empty string."
@@ -201,6 +215,8 @@ async def _request_translation_batch(
     api_config: Any,
     locale: str,
     texts: list[str],
+    *,
+    preserve_placeholders: bool = False,
 ) -> tuple[list[str], dict[str, int]]:
     from crabcode_core.api import ModelConfig
     from crabcode_core.types.message import create_user_message
@@ -209,7 +225,12 @@ async def _request_translation_batch(
     feedback = ""
     last_error: Exception | None = None
     for attempt in range(_TRANSLATION_BATCH_ATTEMPTS):
-        prompt = _translation_batch_prompt(locale, texts, feedback)
+        prompt = _translation_batch_prompt(
+            locale,
+            texts,
+            feedback,
+            preserve_placeholders=preserve_placeholders,
+        )
         response_parts: list[str] = []
         request_usage: dict[str, int] = {}
         config = ModelConfig(
@@ -250,10 +271,18 @@ async def _request_translation_batch(
                     except (TypeError, ValueError):
                         continue
             _merge_usage(usage_total, request_usage)
-            return _parse_translation_batch_response(
+            translated_texts = _parse_translation_batch_response(
                 "".join(response_parts),
                 len(texts),
-            ), usage_total
+            )
+            if preserve_placeholders:
+                placeholder_pattern = re.compile(r"</?b\d+>")
+                for index, (source_text, translated_text) in enumerate(zip(texts, translated_texts, strict=True)):
+                    source_tokens = sorted(placeholder_pattern.findall(source_text))
+                    translated_tokens = sorted(placeholder_pattern.findall(translated_text))
+                    if source_tokens != translated_tokens:
+                        raise ValueError(f"translation entry {index} changed protected placeholders")
+            return translated_texts, usage_total
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -418,6 +447,264 @@ async def _translate_document_batches(
             raise
         return usage_total
     finally:
+        await _close_translation_adapter(adapter)
+
+
+async def _translate_document_precise(
+    session: Any,
+    workspace: Any,
+    operation_id: str,
+    locale: str,
+    on_progress: Callable[[int, str], Awaitable[None]],
+    *,
+    concurrency: int = _TRANSLATION_CONCURRENCY_DEFAULT,
+) -> dict[str, int]:
+    """Run BabelDOC out-of-process while translating through the active model."""
+    from crabcode_core.api import create_adapter
+    from crabcode_gateway.document_engine import BABELDOC_VERSION
+    from crabcode_gateway.document_engine import document_engine_root
+    from crabcode_gateway.document_engine import document_engine_worker_command
+    from crabcode_gateway.routes.document import _document_job_directory
+    from crabcode_gateway.routes.document import _document_pdf_path
+    from crabcode_gateway.routes.document import _json_write
+    from crabcode_gateway.routes.document import _read_json_file
+    from crabcode_gateway.routes.document import _read_manifest
+
+    try:
+        concurrency = _translation_option(
+            concurrency,
+            name="translation_concurrency",
+            default=_TRANSLATION_CONCURRENCY_DEFAULT,
+            minimum=_TRANSLATION_CONCURRENCY_MIN,
+            maximum=_TRANSLATION_CONCURRENCY_MAX,
+        )
+        worker_command = document_engine_worker_command()
+    except (ValueError, RuntimeError) as exc:
+        raise _DocumentTranslationError(str(exc), code="engine_not_ready") from exc
+
+    initialize = getattr(session, "initialize", None)
+    if callable(initialize):
+        await initialize()
+    settings = getattr(session, "settings", None)
+    if settings is None or not hasattr(settings, "get_api_config"):
+        raise _DocumentTranslationError("active session has no model configuration")
+    current_model = getattr(session, "_current_model_name", None)
+    active_config = settings.get_api_config(current_model)
+    api_config = active_config.model_copy(deep=True) if hasattr(active_config, "model_copy") else active_config
+    if not getattr(api_config, "model", None):
+        raise _DocumentTranslationError("active session model is not configured")
+    try:
+        adapter = create_adapter(api_config)
+    except Exception as exc:
+        raise _DocumentTranslationError(f"unable to initialize translation model: {exc}") from exc
+
+    job_dir = await asyncio.to_thread(_document_job_directory, workspace, operation_id)
+    await asyncio.to_thread(job_dir.mkdir, parents=True, exist_ok=True)
+    manifest = await asyncio.to_thread(_read_manifest, workspace)
+    source_sha256 = str(manifest.get("source", {}).get("sha256") or "")
+    input_path = await asyncio.to_thread(_document_pdf_path, workspace)
+    cache_path = job_dir / "precise-cache.json"
+    cache = await asyncio.to_thread(_read_json_file, cache_path)
+    if not (
+        isinstance(cache, dict)
+        and cache.get("locale") == locale
+        and cache.get("source_sha256") == source_sha256
+        and cache.get("engine_version") == BABELDOC_VERSION
+        and isinstance(cache.get("entries"), dict)
+    ):
+        cache = {
+            "schema_version": 1,
+            "locale": locale,
+            "source_sha256": source_sha256,
+            "engine_version": BABELDOC_VERSION,
+            "entries": {},
+        }
+    entries: dict[str, str] = {
+        str(key): str(value)
+        for key, value in cache["entries"].items()
+        if isinstance(key, str) and isinstance(value, str) and value.strip()
+    }
+    cache["entries"] = entries
+    cache_lock = asyncio.Lock()
+    write_lock = asyncio.Lock()
+    usage_total: dict[str, int] = {}
+
+    environment_allowlist = {
+        "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR",
+        "TMPDIR", "TEMP", "TMP", "LANG",
+    }
+    worker_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in environment_allowlist
+        or key.startswith("LC_")
+        or key.startswith("DYLD_")
+        or key.startswith("LD_")
+    }
+    worker_env["PYTHONIOENCODING"] = "utf-8"
+    process = await asyncio.create_subprocess_exec(
+        *worker_command,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=worker_env,
+    )
+    assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+
+    async def send(payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        async with write_lock:
+            process.stdin.write(encoded)
+            await process.stdin.drain()
+
+    start = {
+        "type": "start",
+        "engine_version": BABELDOC_VERSION,
+        "engine_root": str(document_engine_root()),
+        "input_path": str(input_path),
+        "job_dir": str(job_dir),
+        "locale": locale,
+        "source_sha256": source_sha256,
+        "concurrency": concurrency,
+    }
+    await send(start)
+    request_tasks: set[asyncio.Task[None]] = set()
+    request_errors: list[BaseException] = []
+
+    async def handle_request(message: dict[str, Any]) -> None:
+        request_id = message.get("request_id")
+        text = message.get("text")
+        if not isinstance(request_id, str) or not isinstance(text, str) or not text.strip():
+            return
+        cache_prompt = _translation_batch_prompt(
+            locale,
+            [text],
+            preserve_placeholders=True,
+        )
+        cache_key = hashlib.sha256(
+            f"{BABELDOC_VERSION}\0{cache_prompt}".encode("utf-8")
+        ).hexdigest()
+        cached = entries.get(cache_key)
+        if cached:
+            await send({
+                "type": "translation_response",
+                "request_id": request_id,
+                "translated_text": cached,
+                "cached": True,
+            })
+            return
+        try:
+            translated, usage = await _request_translation_batch(
+                adapter,
+                api_config,
+                locale,
+                [text],
+                preserve_placeholders=True,
+            )
+            _merge_usage(usage_total, usage)
+            value = translated[0]
+            async with cache_lock:
+                entries[cache_key] = value
+                await asyncio.to_thread(_json_write, cache_path, cache)
+            await send({
+                "type": "translation_response",
+                "request_id": request_id,
+                "translated_text": value,
+                "cached": False,
+            })
+        except BaseException as exc:
+            request_errors.append(exc)
+            try:
+                await send({
+                    "type": "translation_response",
+                    "request_id": request_id,
+                    "error": str(exc),
+                })
+            except Exception:
+                pass
+
+    stderr_task = asyncio.create_task(process.stderr.read())
+    completed = False
+    stage_labels = {
+        "Parse PDF and Create Intermediate Representation": "正在解析 PDF 内容流",
+        "DetectScannedFile": "正在检测扫描文档",
+        "Parse Page Layout": "正在分析页面版式",
+        "Parse Paragraphs": "正在识别段落",
+        "Parse Styles and Formulas": "正在保护样式与公式",
+        "Translate Paragraphs": "正在翻译段落",
+        "Typesetting": "正在重新排版",
+        "Generate PDF": "正在生成译后 PDF",
+    }
+    try:
+        while True:
+            raw = await process.stdout.readline()
+            if not raw:
+                break
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(message, dict):
+                continue
+            message_type = message.get("type")
+            if message_type == "translate_request":
+                task = asyncio.create_task(handle_request(message))
+                request_tasks.add(task)
+                task.add_done_callback(request_tasks.discard)
+            elif message_type == "progress":
+                progress = max(0, min(99, int(float(message.get("overall_progress") or 0))))
+                stage = str(message.get("stage") or "")
+                await on_progress(progress, stage_labels.get(stage, f"高精度排版：{stage}" if stage else "正在处理 PDF"))
+            elif message_type == "completed":
+                completed = True
+                break
+            elif message_type == "error":
+                code = str(message.get("code") or "precise_failed")
+                detail = str(message.get("message") or "high-fidelity PDF translation failed")
+                if code == "scanned_pdf_unsupported":
+                    detail = "高精度 PDF 引擎暂不支持扫描件"
+                raise _DocumentTranslationError(detail, code=code)
+        if request_tasks:
+            await asyncio.gather(*request_tasks, return_exceptions=True)
+        return_code = await process.wait()
+        stderr = (await stderr_task).decode("utf-8", errors="replace").strip()
+        if request_errors:
+            raise _DocumentTranslationError(str(request_errors[0])) from request_errors[0]
+        if not completed or return_code != 0:
+            raise _DocumentTranslationError(stderr[-1000:] or "high-fidelity PDF worker exited unexpectedly", code="precise_failed")
+        await on_progress(100, "译后 PDF 已生成")
+        return usage_total
+    except asyncio.CancelledError:
+        try:
+            await send({"type": "cancel"})
+        except Exception:
+            pass
+        if process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+        raise
+    finally:
+        for task in request_tasks:
+            task.cancel()
+        if request_tasks:
+            await asyncio.gather(*request_tasks, return_exceptions=True)
+        if process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3)
+            except (TimeoutError, ProcessLookupError):
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+        process.stdin.close()
+        if not stderr_task.done():
+            stderr_task.cancel()
         await _close_translation_adapter(adapter)
 
 
@@ -972,6 +1259,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
     locale = msg.get("locale") or "zh-CN"
     source = msg.get("source") or "original"
     requested_language = msg.get("language")
+    requested_engine = msg.get("translation_engine") or "auto"
     requested_operation_id = msg.get("operation_id")
     try:
         translation_concurrency = _translation_option(
@@ -1031,6 +1319,34 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
         return
     if action == "translate":
         source = "original"
+    if requested_engine not in {"auto", "legacy", "precise"}:
+        await _send_ws_command_error(
+            ws,
+            "invalid document translation engine",
+            command="document_action",
+            request=msg,
+            operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+            error_type="invalid_request",
+        )
+        return
+    engine = "legacy"
+    if action == "translate" and requested_engine != "legacy":
+        from crabcode_gateway.document_engine import document_engine_status
+        from crabcode_gateway.document_engine import select_document_translation_engine
+
+        precise_status = await asyncio.to_thread(document_engine_status)
+        try:
+            engine = select_document_translation_engine(requested_engine, precise_status)
+        except RuntimeError as exc:
+            await _send_ws_command_error(
+                ws,
+                str(exc),
+                command="document_action",
+                request=msg,
+                operation_id=requested_operation_id if isinstance(requested_operation_id, str) else None,
+                error_type="engine_not_ready",
+            )
+            return
     language = ""
     if action == "generate_blog":
         if requested_language is not None and not isinstance(requested_language, str):
@@ -1084,7 +1400,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
     recovered = 0
     from crabcode_gateway.routes.document import _document_action_hash
     try:
-        document_hash = await asyncio.to_thread(_document_action_hash, workspace, source, locale)
+        document_hash = await asyncio.to_thread(_document_action_hash, workspace, source, locale, engine)
     except ValueError as exc:
         await _send_ws_command_error(
             ws,
@@ -1098,7 +1414,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
     if action == "translate":
         from crabcode_gateway.routes.document import _recover_translation_job
         try:
-            recovered = await asyncio.to_thread(_recover_translation_job, workspace, operation_id, locale)
+            recovered = await asyncio.to_thread(_recover_translation_job, workspace, operation_id, locale, engine)
         except ValueError as exc:
             await _send_ws_command_error(
                 ws,
@@ -1113,11 +1429,15 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
     if action == "translate":
         prompt = (
             f"[文档操作：翻译为 {locale}]\n"
-            "Gateway 将按原始页面和 block 顺序调用当前会话模型，并负责校验与保存译文。"
+            + (
+                "Gateway 将使用本地高精度 PDF 引擎解析、保护公式、重新排版并生成原生译后 PDF；翻译仍由当前会话模型完成。"
+                if engine == "precise"
+                else "Gateway 将按原始页面和 block 顺序调用当前会话模型，并负责校验与保存译文。"
+            )
         )
     else:
         source_instruction = (
-            f"优先读取 .crabcode/document/translations/{locale}.json，并按 layout.json 的 id 顺序还原内容。"
+            f"读取 .crabcode/document/manifest.json 中 translations.{locale}：若 engine 为 precise，读取其 content_path；否则读取 path 指向的 JSON，并按 layout.json 的 id 顺序还原内容。"
             if source == "translation"
             else "读取 .crabcode/document/content.md 作为原文。"
         )
@@ -1146,6 +1466,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
         document_hash=document_hash,
         translation_concurrency=translation_concurrency,
         translation_batch_size=translation_batch_size,
+        engine=engine,
     )
     fallback.setdefault("max_turns", 0)
     if action == "translate":
@@ -1443,7 +1764,8 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
             locale = document_job.locale if document_job else ""
             language = document_job.language if document_job else ""
             source = document_job.source if document_job else ""
-            total = await asyncio.to_thread(_document_job_total, workspace, action) if workspace else 0
+            engine = document_job.engine if document_job else "legacy"
+            total = await asyncio.to_thread(_document_job_total, workspace, action, engine) if workspace else 0
             reported_current = document_job.recovered if document_job else 0
 
             async def publish_job(status: str, current: int = 0, message: str = "") -> None:
@@ -1462,6 +1784,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         current=current,
                         total=total,
                         message=message,
+                        engine=engine,
                     )
                 except Exception:
                     logger.warning("Failed to persist document job status", exc_info=True)
@@ -1476,6 +1799,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         current=current,
                         total=total,
                         message=message,
+                        engine=engine,
                     ),
                     source=session,
                     operation_id=operation_id,
@@ -1492,15 +1816,25 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         reported_current = current
                         await publish_job("running", current=current, message=message)
 
-                    usage = await _translate_document_batches(
-                        session,
-                        workspace,
-                        operation_id,
-                        locale,
-                        publish_translation_progress,
-                        concurrency=document_job.translation_concurrency,
-                        batch_size=document_job.translation_batch_size,
-                    )
+                    if engine == "precise":
+                        usage = await _translate_document_precise(
+                            session,
+                            workspace,
+                            operation_id,
+                            locale,
+                            publish_translation_progress,
+                            concurrency=document_job.translation_concurrency,
+                        )
+                    else:
+                        usage = await _translate_document_batches(
+                            session,
+                            workspace,
+                            operation_id,
+                            locale,
+                            publish_translation_progress,
+                            concurrency=document_job.translation_concurrency,
+                            batch_size=document_job.translation_batch_size,
+                        )
                     current, total = await asyncio.to_thread(
                         _finalize_document_job,
                         workspace,
@@ -1509,6 +1843,8 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         locale,
                         source,
                         document_job.document_hash,
+                        "",
+                        engine,
                     )
                     validation_error = None
                     await publish_job("completed", current=current, message="文档译文已保存")
@@ -1553,6 +1889,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                             source,
                             document_job.document_hash,
                             language,
+                            engine,
                         )
                         validation_error = None
                         await publish_job("completed", current=current, message="文档产物已保存")
@@ -1564,9 +1901,10 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                 if action != "translate":
                     await asyncio.to_thread(_cleanup_document_job, workspace, operation_id)
                 await publish_job("failed", message=failure)
+                error_code = validation_error.code if isinstance(validation_error, _DocumentTranslationError) else "document_job"
                 await event_bus.publish(
                     session.session_id,
-                    ErrorEvent(message=failure, recoverable=True, error_type="document_job"),
+                    ErrorEvent(message=failure, recoverable=True, error_type=error_code),
                     source=session,
                     operation_id=operation_id,
                     operation_scope="foreground",
@@ -1605,6 +1943,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         current=0,
                         total=0,
                         message="文档操作已取消",
+                        engine=document_job.engine,
                     )
                 except Exception:
                     logger.warning("Failed to persist cancelled document job", exc_info=True)
@@ -1617,6 +1956,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         language=document_job.language,
                         source=document_job.source,
                         message="文档操作已取消",
+                        engine=document_job.engine,
                     ),
                     source=session,
                     operation_id=operation_id,
@@ -1646,6 +1986,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         current=0,
                         total=0,
                         message=str(exc),
+                        engine=document_job.engine,
                     )
                 except Exception:
                     logger.warning("Failed to persist failed document job", exc_info=True)
@@ -1658,6 +1999,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                         language=document_job.language,
                         source=document_job.source,
                         message=str(exc),
+                        engine=document_job.engine,
                     ),
                     source=session,
                     operation_id=operation_id,

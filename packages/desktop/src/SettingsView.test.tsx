@@ -8,7 +8,7 @@ import {
   SettingsView,
   type SettingsSectionId,
 } from "./SettingsView";
-import type { DesktopSettings, GatewayViewState } from "./types";
+import type { DesktopSettings, DocumentCapabilities, GatewayViewState } from "./types";
 
 const settings: DesktopSettings = {
   schema_version: 3,
@@ -261,6 +261,99 @@ describe("SettingsView", () => {
     expect(handlers.onDocumentChange).toHaveBeenCalledWith({ document_show_original_text: true });
     expect(handlers.onDocumentChange).toHaveBeenCalledWith({ document_translation_concurrency: 4 });
     expect(handlers.onDocumentChange).toHaveBeenCalledWith({ document_translation_batch_size: 120 });
+  });
+
+  it("keeps the document engine and translation controls in one group", async () => {
+    const handlers = callbacks();
+    const install = vi.fn().mockResolvedValue(undefined);
+    const capabilities: DocumentCapabilities = {
+      supported_extensions: [".pdf"],
+      available_extensions: [".pdf"],
+      max_bytes: 100,
+      documents_dir: "/work/documents",
+      libreoffice: { available: false, executable: null },
+      ocr: { available: false },
+      translation_engines: {
+        default: "legacy",
+        legacy: { available: true, status: "ready" },
+        precise: {
+          available: false,
+          status: "not_installed",
+          version: "0.6.4",
+          detail: "高精度 PDF 引擎尚未安装",
+          install_command: "crabcode document-engine install",
+          remove_command: "crabcode document-engine remove --yes",
+        },
+      },
+    };
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="document"
+        onSectionChange={vi.fn()}
+        documentCapabilities={capabilities}
+        canManageDocumentEngine
+        onInstallDocumentEngine={install}
+      />,
+    ));
+
+    const group = container.querySelector(".document-translation-group")!;
+    expect(group.querySelectorAll(":scope > .settings-row")).toHaveLength(3);
+    expect(group.querySelectorAll(":scope > .document-engine-row")).toHaveLength(1);
+    expect(group.querySelector(".document-engine-command code")?.textContent)
+      .toBe("crabcode document-engine install");
+    await act(async () => {
+      Array.from(group.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("执行安装"))!
+        .click();
+      await Promise.resolve();
+    });
+    expect(install).toHaveBeenCalledOnce();
+  });
+
+  it("shows a host-side command instead of remote execution for remote gateways", () => {
+    const handlers = callbacks();
+    const capabilities: DocumentCapabilities = {
+      supported_extensions: [".pdf"],
+      available_extensions: [".pdf"],
+      max_bytes: 100,
+      documents_dir: "/work/documents",
+      libreoffice: { available: false, executable: null },
+      ocr: { available: false },
+      translation_engines: {
+        default: "legacy",
+        legacy: { available: true, status: "ready" },
+        precise: {
+          available: false,
+          status: "not_installed",
+          version: "0.6.4",
+          detail: "高精度 PDF 引擎尚未安装",
+          install_command: "crabcode document-engine install",
+          remove_command: "crabcode document-engine remove --yes",
+        },
+      },
+    };
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ remote: onlineGateway }}
+        activeConnection={{ ...settings.connections[0], id: "remote", name: "Remote" }}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="document"
+        onSectionChange={vi.fn()}
+        documentCapabilities={capabilities}
+      />,
+    ));
+
+    const command = container.querySelector(".document-engine-command.remote")!;
+    expect(command.textContent).toContain("请在 Gateway 主机运行");
+    expect(command.querySelector("code")?.textContent).toBe("crabcode document-engine install");
+    expect(command.querySelector("button")).toBeNull();
   });
 
   it("exposes connection actions but never offers to delete the local connection", () => {

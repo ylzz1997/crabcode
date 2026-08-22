@@ -261,6 +261,39 @@ Tauri 将不含敏感信息的 UI 状态写入
 
 直接执行 `! <cmd>` 被刻意限定为可信客户端能力：CLI 在本地进程中执行，VSCode 扩展发送到本地集成终端。Gateway 不提供该端点，因为这会形成绕过权限系统的远程 Shell。
 
+#### 高精度 PDF 引擎
+
+保留版式的 PDF 翻译由可选的 BabelDOC 0.6.4 独立环境提供。它要求
+Python 3.10–3.13，模型和字体约占用 550 MiB
+许可证。翻译请求仍使用当前 CrabCode 会话选择的模型；模型凭据不会传给
+BabelDOC Worker。
+
+桌面端的“文档”设置会显示安装命令。本地 Gateway 可通过“执行安装”按钮直接
+执行；对应的 CLI 命令如下：
+
+```bash
+# 查看、安装或删除托管引擎
+crabcode document-engine status
+crabcode document-engine install
+crabcode document-engine remove --yes
+```
+
+默认安装器会创建独立虚拟环境、安装 BabelDOC 官方包、下载并校验 BabelDOC
+上游运行资源，最后生成本地校验清单。安装完成后，文档处理阶段会禁用网络。
+删除引擎不会删除已经生成的译后 PDF。
+
+引擎就绪后，新的全文翻译会默认使用高精度链路并生成原生译后 PDF；阅读器可在
+原文 PDF 和译文 PDF 之间切换。如果高精度处理失败，界面会明确提供“使用兼容
+模式重试”，不会在任务执行中静默切换引擎。
+
+如果连接的是远程 Gateway，请在 Gateway 所在主机运行
+`crabcode document-engine install`。CrabCode 不会把引擎安装暴露成远程 Shell
+端点。无网络环境可以使用完成许可证审核的离线资源包：
+
+```bash
+crabcode document-engine install --bundle /path/to/crabcode-document-engine.zip
+```
+
 **gRPC** 在启用 `--grpc-port` 后可用，提供流式对话/事件，以及 `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto` 中定义的 agent、权限、选择、模型和模式 RPC。
 
 ### ACP（Agent Client Protocol）支持

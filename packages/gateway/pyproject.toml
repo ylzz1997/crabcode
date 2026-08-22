@@ -21,6 +21,11 @@ dependencies = [
     "pypdf>=4.0.0",
 ]
 
+[project.optional-dependencies]
+document-translate = [
+    "BabelDOC==0.6.4",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

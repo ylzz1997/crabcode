@@ -101,6 +101,20 @@ export interface WorkspaceInfo {
   documents_dir?: string;
 }
 
+export interface DocumentPreciseEngineStatus {
+  available: boolean;
+  status: "not_installed" | "downloading" | "installing" | "verifying" | "ready" | "broken" | "upgrade_required";
+  version: string;
+  installed_version?: string | null;
+  install_root?: string;
+  download_bytes?: number | null;
+  download_estimated?: boolean;
+  install_source?: "official" | "offline_bundle" | null;
+  detail: string;
+  install_command: string;
+  remove_command: string;
+}
+
 export interface DocumentCapabilities {
   supported_extensions: string[];
   available_extensions: string[];
@@ -108,6 +122,11 @@ export interface DocumentCapabilities {
   documents_dir: string;
   libreoffice: { available: boolean; executable: string | null };
   ocr: { available: boolean };
+  translation_engines?: {
+    default: "legacy" | "precise";
+    legacy: { available: true; status: "ready" };
+    precise: DocumentPreciseEngineStatus;
+  };
 }
 
 export interface DocumentManifest {
@@ -126,7 +145,18 @@ export interface DocumentManifest {
   };
   pdf: { path: string; sha256: string; page_count: number };
   layout: null | { path: string; fingerprint: string; text_pages: number; scanned_pages: number };
-  translations: Record<string, { path?: string; status?: string }>;
+  translations: Record<string, {
+    engine?: "legacy" | "precise";
+    path?: string;
+    content_path?: string;
+    status?: string;
+    source_sha256?: string;
+    sha256?: string;
+    pdf_sha256?: string;
+    page_count?: number;
+    engine_version?: string;
+    warnings?: string[];
+  }>;
   blog: null | { path: string; revision: string; language: string };
   jobs: Record<string, {
     action: "translate" | "generate_blog";
@@ -137,6 +167,7 @@ export interface DocumentManifest {
     current: number;
     total: number;
     message: string;
+    engine?: "legacy" | "precise";
     updated_at: string;
   }>;
   created_at: string;
@@ -169,12 +200,23 @@ export interface DocumentLayout {
   pages: DocumentPageLayout[];
 }
 
-export interface DocumentTranslation {
-  locale: string;
-  source_sha256?: string;
-  layout_fingerprint?: string;
-  blocks: Array<{ id: string; translated_text: string }>;
-}
+export type DocumentTranslation =
+  | {
+    engine: "legacy";
+    locale: string;
+    source_sha256?: string;
+    layout_fingerprint: string;
+    blocks: Array<{ id: string; translated_text: string }>;
+  }
+  | {
+    engine: "precise";
+    locale: string;
+    source_sha256: string;
+    pdf_sha256: string;
+    page_count: number;
+    engine_version: string;
+    warnings: string[];
+  };
 
 export interface DocumentSelectionRect {
   page: number;
@@ -389,6 +431,7 @@ export interface ChatItem {
   locale?: string;
   language?: string;
   source?: string;
+  engine?: "legacy" | "precise";
   current?: number;
   total?: number;
   collapsed?: boolean;
@@ -462,6 +505,7 @@ export interface GatewayEvent {
   locale?: string;
   language?: string;
   source?: string;
+  engine?: "legacy" | "precise";
   current?: number;
   total?: number;
   translated_text?: string;

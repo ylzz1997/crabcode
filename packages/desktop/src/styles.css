@@ -1100,6 +1100,24 @@ button.primary:hover,
   margin: 0;
 }
 
+.document-job-retry {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border-soft));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.document-job-retry svg {
+  width: 13px;
+  height: 13px;
+}
+
 .document-job-progress {
   position: relative;
   height: 5px;
@@ -4650,7 +4668,7 @@ body {
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border);
-  background: #101718;
+  background: var(--bg);
 }
 
 .document-mode>.conversation-header {
@@ -4706,7 +4724,7 @@ body {
   gap: 12px;
   padding: 8px 12px 8px 16px;
   border-bottom: 1px solid var(--border);
-  background: #101a1c;
+  background: var(--panel);
 }
 
 .document-title {
@@ -5002,7 +5020,7 @@ html[data-theme="light"] .document-actions-separator {
   padding-top: 18px;
   border: 0;
   border-left: 1px solid var(--border);
-  background: #101a1c;
+  background: var(--panel);
   color: var(--muted);
   cursor: pointer;
 }
@@ -5024,7 +5042,7 @@ html[data-theme="light"] .document-actions-separator {
   align-items: center;
   gap: 22px;
   padding: 28px 32px 70px;
-  background: #111718;
+  background: color-mix(in srgb, var(--bg) 88%, var(--panel));
 }
 
 .document-pdf-page {
@@ -8442,6 +8460,20 @@ html[data-theme="light"] .document-actions-separator {
   line-height: 1.45;
 }
 
+.settings-row-copy small {
+  max-width: 590px;
+  color: #607771;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.settings-row > code {
+  max-width: 310px;
+  overflow-wrap: anywhere;
+  color: #91aaa4;
+  font-size: 10px;
+}
+
 .settings-input-control {
   width: min(370px, 48%);
   flex: 0 0 auto;
@@ -9017,6 +9049,42 @@ html[data-theme="light"] .document-actions-separator {
 
 .settings-row.compact {
   min-height: 68px;
+}
+
+.document-translation-group .document-engine-row {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.settings-row-copy .document-engine-error {
+  color: var(--red);
+}
+
+.document-engine-command {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.document-engine-command.remote {
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.document-engine-command code {
+  padding: 6px 8px;
+  border: 1px solid #2c484b;
+  border-radius: 5px;
+  background: #0c1719;
+  color: #b8cbc4;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.document-engine-command small {
+  color: #708983;
+  font-size: 10px;
 }
 
 .general-spaced-heading {

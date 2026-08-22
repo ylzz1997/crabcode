@@ -14,6 +14,7 @@ import {
   Server,
   Settings,
   SlidersHorizontal,
+  Terminal,
   Trash2,
   Upload,
   WifiOff,
@@ -26,6 +27,7 @@ import type {
   DesktopSettings,
   DiffMarkerStyle,
   DockIconChoice,
+  DocumentCapabilities,
   GatewayViewState,
   ProjectPreset,
   ThemeMode,
@@ -174,6 +176,10 @@ interface SettingsViewProps {
   onNewProject: () => void;
   onEditProject: (project: ProjectPreset) => void;
   onDocumentWorkspaceRoot?: (connectionId: string, path: string | null) => void;
+  documentCapabilities?: DocumentCapabilities | null;
+  canManageDocumentEngine?: boolean;
+  onInstallDocumentEngine?: () => Promise<void>;
+  onRemoveDocumentEngine?: () => Promise<void>;
 }
 
 export type AppearanceSettingsUpdate = Partial<Pick<DesktopSettings,
@@ -380,12 +386,18 @@ export function SettingsView({
   onNewProject,
   onEditProject,
   onDocumentWorkspaceRoot,
+  documentCapabilities,
+  canManageDocumentEngine,
+  onInstallDocumentEngine = async () => undefined,
+  onRemoveDocumentEngine = async () => undefined,
 }: SettingsViewProps) {
   const [query, setQuery] = useState("");
   const [pythonPath, setPythonPath] = useState(settings.python_path ?? "");
   const [customIconPreview, setCustomIconPreview] = useState<string | null>(null);
   const [dockIconBusy, setDockIconBusy] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
+  const [documentEngineBusy, setDocumentEngineBusy] = useState<"install" | "remove" | null>(null);
+  const [documentEngineError, setDocumentEngineError] = useState<string | null>(null);
   const customIconInputRef = useRef<HTMLInputElement>(null);
   const matchingSections = useMemo(() => filterSettingsSections(query), [query]);
   const activeGateway = activeConnection ? gateways[activeConnection.id] : null;
@@ -422,6 +434,21 @@ export function SettingsView({
   };
 
   const activeDefinition = SETTINGS_SECTIONS.find((section) => section.id === activeSection)!;
+  const preciseEngine = documentCapabilities?.translation_engines?.precise;
+  const documentEngineInstallCommand = preciseEngine?.install_command ?? "crabcode document-engine install";
+
+  const manageDocumentEngine = async (action: "install" | "remove") => {
+    setDocumentEngineBusy(action);
+    setDocumentEngineError(null);
+    try {
+      if (action === "install") await onInstallDocumentEngine();
+      else await onRemoveDocumentEngine();
+    } catch (reason) {
+      setDocumentEngineError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDocumentEngineBusy(null);
+    }
+  };
 
   const selectDockIcon = async (choice: DockIconChoice, pngBytes?: Uint8Array) => {
     setDockIconBusy(true);
@@ -823,7 +850,54 @@ export function SettingsView({
               <section className="settings-section" aria-labelledby="document-settings-title">
                 <h2 id="document-settings-title">翻译</h2>
                 <p className="settings-section-description">使用当前会话选择的模型翻译文档。请求会并行执行，译文缓存按批次安全保存。</p>
-                <div className="settings-group">
+                <div className="settings-group document-translation-group">
+                  <div className="settings-row document-engine-row">
+                    <div className="settings-row-copy">
+                      <strong>高精度 PDF 引擎</strong>
+                      <span>
+                        {preciseEngine?.status === "ready"
+                          ? `BabelDOC ${preciseEngine.version} 已就绪；新的全文翻译会默认生成原生译后 PDF。`
+                          : preciseEngine?.detail ?? (documentCapabilities === undefined ? "正在读取当前 Gateway 的能力…" : "当前 Gateway 不支持高精度 PDF 引擎。")}
+                      </span>
+                      <small>
+                        本地解析与排版，不接收模型密钥
+                        {preciseEngine?.install_source === "offline_bundle"
+                          ? " · 已校验离线资源包"
+                          : " · 程序与资源来自 BabelDOC 官方源"}
+                        {preciseEngine ? ` · BabelDOC ${preciseEngine.version}` : ""}
+                        {preciseEngine?.download_bytes
+                          ? ` · ${preciseEngine.download_estimated ? "安装资源约 " : "资源 "}${Math.ceil(preciseEngine.download_bytes / 1024 / 1024)} MiB`
+                          : ""}
+                      </small>
+                      {documentEngineError && <small className="document-engine-error">{documentEngineError}</small>}
+                    </div>
+                    {canManageDocumentEngine ? (
+                      preciseEngine?.status === "ready" ? (
+                        <button
+                          className="settings-command"
+                          type="button"
+                          disabled={documentEngineBusy !== null}
+                          onClick={() => void manageDocumentEngine("remove")}
+                        ><Trash2 />{documentEngineBusy === "remove" ? "正在删除…" : "删除引擎"}</button>
+                      ) : (
+                        <div className="document-engine-command">
+                          <code>{documentEngineInstallCommand}</code>
+                          <button
+                            className="settings-command primary"
+                            type="button"
+                            title={`执行 ${documentEngineInstallCommand}`}
+                            disabled={documentEngineBusy !== null || documentCapabilities === undefined}
+                            onClick={() => void manageDocumentEngine("install")}
+                          ><Terminal />{documentEngineBusy === "install" ? "正在执行…" : preciseEngine?.status === "upgrade_required" ? "执行升级" : "执行安装"}</button>
+                        </div>
+                      )
+                    ) : (
+                      <div className="document-engine-command remote">
+                        <small>请在 Gateway 主机运行</small>
+                        <code>{documentEngineInstallCommand}</code>
+                      </div>
+                    )}
+                  </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
                       <strong>并行请求数</strong>
@@ -843,7 +917,7 @@ export function SettingsView({
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
                       <strong>单批 Block 数</strong>
-                      <span>每次请求携带的文本 Block 数量，范围 10–400；过大的文本仍受字符上限约束。</span>
+                      <span>仅兼容模式生效。每次请求携带的文本 Block 数量，范围 10–400；过大的文本仍受字符上限约束。</span>
                     </div>
                     <NumberSettingInput
                       label="翻译单批 Block 数"

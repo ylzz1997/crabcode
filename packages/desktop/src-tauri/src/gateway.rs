@@ -237,6 +237,76 @@ fn detect_python(configured: Option<&str>) -> Result<String, String> {
     Err("Python 3.10 or newer was not found. Install Python or set a Python path in Desktop settings.".to_string())
 }
 
+fn detect_document_engine_python(configured: Option<&str>) -> Result<String, String> {
+    let mut candidates = Vec::new();
+    if let Some(value) = configured.filter(|value| !value.trim().is_empty()) {
+        candidates.push(value.to_string());
+    }
+    candidates.extend(["python3".to_string(), "python".to_string()]);
+    #[cfg(target_os = "windows")]
+    candidates.push("py".to_string());
+    for candidate in candidates {
+        if python_version(&candidate)
+            .is_some_and(|(major, minor)| major == 3 && (10..=13).contains(&minor))
+        {
+            return Ok(candidate);
+        }
+    }
+    Err("The high-fidelity PDF engine requires Python 3.10 through 3.13.".to_string())
+}
+
+fn run_document_engine_command(
+    python_path: Option<&str>,
+    arguments: &[&str],
+) -> Result<Value, String> {
+    let python = detect_document_engine_python(python_path)?;
+    let output = Command::new(&python)
+        .args(["-m", "crabcode_cli", "document-engine"])
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("Unable to start document engine manager: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed = serde_json::from_str::<Value>(stdout.trim()).ok();
+    if output.status.success() {
+        return parsed.ok_or_else(|| "Document engine manager returned invalid JSON.".to_string());
+    }
+    if let Some(detail) = parsed
+        .as_ref()
+        .and_then(|value| value.get("detail"))
+        .and_then(Value::as_str)
+    {
+        return Err(detail.to_string());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        "Document engine manager failed.".to_string()
+    } else {
+        stderr
+    })
+}
+
+#[tauri::command]
+pub fn document_engine_status(python_path: Option<String>) -> Result<Value, String> {
+    run_document_engine_command(python_path.as_deref(), &["status", "--json"])
+}
+
+#[tauri::command]
+pub fn install_document_engine(
+    python_path: Option<String>,
+    bundle: Option<String>,
+) -> Result<Value, String> {
+    let mut arguments = vec!["install", "--json"];
+    if let Some(path) = bundle.as_deref().filter(|value| !value.trim().is_empty()) {
+        arguments.extend(["--bundle", path]);
+    }
+    run_document_engine_command(python_path.as_deref(), &arguments)
+}
+
+#[tauri::command]
+pub fn remove_document_engine(python_path: Option<String>) -> Result<Value, String> {
+    run_document_engine_command(python_path.as_deref(), &["remove", "--yes", "--json"])
+}
+
 fn installed_gateway_version(python: &str) -> Option<String> {
     let script = "import crabcode_gateway; print(getattr(crabcode_gateway, '__version__', ''))";
     let output = Command::new(python).args(["-c", script]).output().ok()?;

@@ -205,8 +205,25 @@ export class GatewayApi {
     });
   }
 
-  documentTranslation(workspace: string, locale: string): Promise<DocumentTranslation> {
-    return this.request(`/document/translation?${new URLSearchParams({ workspace, locale })}`);
+  async documentTranslation(workspace: string, locale: string): Promise<DocumentTranslation> {
+    const value = await this.request<DocumentTranslation | (Omit<Extract<DocumentTranslation, { engine: "legacy" }>, "engine"> & { engine?: undefined })>(
+      `/document/translation?${new URLSearchParams({ workspace, locale })}`,
+    );
+    return "engine" in value && value.engine ? value : { ...value, engine: "legacy" };
+  }
+
+  async documentTranslationAsset(workspace: string, locale: string, retry = true): Promise<ArrayBuffer> {
+    await this.authenticate();
+    const headers = new Headers();
+    if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+    const query = new URLSearchParams({ workspace, locale });
+    const response = await fetch(new URL(`document/translation/asset?${query}`, this.baseUrl), { headers });
+    if (response.status === 401 && retry) {
+      await this.authenticate(true);
+      return this.documentTranslationAsset(workspace, locale, false);
+    }
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response.arrayBuffer();
   }
 
   clearDocumentTranslation(workspace: string, locale: string): Promise<{
@@ -492,6 +509,7 @@ export class SessionChannel {
       source?: "original" | "translation";
       translation_concurrency?: number;
       translation_batch_size?: number;
+      translation_engine?: "auto" | "legacy" | "precise";
     } = {},
   ): string {
     const operationId = crypto.randomUUID();
@@ -503,6 +521,7 @@ export class SessionChannel {
       source: options.source,
       translation_concurrency: options.translation_concurrency,
       translation_batch_size: options.translation_batch_size,
+      translation_engine: options.translation_engine,
       session_id: this.sessionId,
       operation_id: operationId,
     });

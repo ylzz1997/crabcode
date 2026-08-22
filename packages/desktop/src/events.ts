@@ -500,6 +500,7 @@ export function applyGatewayEvent(
         locale: event.locale ?? previous?.locale,
         language: event.language ?? previous?.language,
         source: event.source ?? previous?.source,
+        engine: event.engine ?? previous?.engine,
         current: event.current ?? previous?.current ?? 0,
         total: event.total ?? previous?.total ?? 0,
         status,

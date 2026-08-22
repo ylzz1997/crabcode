@@ -18,6 +18,9 @@ pub fn run() {
             gateway::authenticate_connection,
             gateway::ensure_local_gateway,
             gateway::shutdown_gateway,
+            gateway::document_engine_status,
+            gateway::install_document_engine,
+            gateway::remove_document_engine,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Crab Desktop");

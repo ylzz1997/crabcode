@@ -483,7 +483,10 @@ async def _finish_import(
 
 @router.get("/capabilities")
 async def document_capabilities(request: Request) -> dict[str, Any]:
+    from crabcode_gateway.document_engine import document_engine_status
+
     converter = _converter()
+    precise = await asyncio.to_thread(document_engine_status)
     info: WorkspaceInfo = request.app.state.workspace_info
     available = [".pdf", *sorted(OFFICE_EXTENSIONS)] if converter else [".pdf"]
     return {
@@ -493,6 +496,11 @@ async def document_capabilities(request: Request) -> dict[str, Any]:
         "documents_dir": info.documents_dir,
         "libreoffice": {"available": bool(converter), "executable": converter},
         "ocr": {"available": False},
+        "translation_engines": {
+            "default": "precise" if precise["available"] else "legacy",
+            "legacy": {"available": True, "status": "ready"},
+            "precise": precise,
+        },
     }
 
 
@@ -716,10 +724,19 @@ def _save_document_layout_locked(
         translations = internal / "translations"
         if translations.is_symlink():
             translations.unlink(missing_ok=True)
-        else:
-            shutil.rmtree(translations, ignore_errors=True)
+        elif translations.is_dir():
+            # A browser layout change invalidates only legacy block overlays.
+            # Precise PDFs are derived from the source PDF and remain valid.
+            for legacy_path in translations.glob("*.json"):
+                if legacy_path.is_file() and not legacy_path.is_symlink():
+                    legacy_path.unlink(missing_ok=True)
         (root / "blog.md").unlink(missing_ok=True)
-        manifest["translations"] = {}
+        current_translations = manifest.get("translations")
+        manifest["translations"] = {
+            locale: entry
+            for locale, entry in (current_translations.items() if isinstance(current_translations, dict) else [])
+            if isinstance(entry, dict) and entry.get("engine") == "precise"
+        }
         manifest["blog"] = None
     manifest["layout"] = {
         "path": layout_path.relative_to(root).as_posix(),
@@ -763,6 +780,37 @@ def _read_document_translation_locked(root: Path, internal: Path, locale: str) -
     translations = internal / "translations"
     if translations.is_symlink():
         raise HTTPException(status_code=403, detail="Managed translations directory is invalid")
+    manifest = _read_manifest(root)
+    entries = manifest.get("translations")
+    entry = entries.get(locale) if isinstance(entries, dict) else None
+    if isinstance(entry, dict) and entry.get("engine") == "precise":
+        relative = entry.get("path")
+        if not isinstance(relative, str):
+            raise HTTPException(status_code=500, detail="Precise translation metadata is invalid")
+        candidate = root / relative
+        if candidate.is_symlink():
+            raise HTTPException(status_code=403, detail="Precise translation path is invalid")
+        try:
+            path = candidate.resolve(strict=True)
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(status_code=404, detail="Translation not found") from exc
+        if not _is_within(path, (root.resolve(strict=True),)) or not path.is_file():
+            raise HTTPException(status_code=403, detail="Precise translation path is invalid")
+        source_sha256 = str(entry.get("source_sha256") or "")
+        if source_sha256 != str(manifest.get("source", {}).get("sha256") or ""):
+            raise HTTPException(status_code=409, detail="Translation is stale for the current source document")
+        digest = str(entry.get("pdf_sha256") or entry.get("sha256") or "")
+        if digest and _sha256(path) != digest:
+            raise HTTPException(status_code=500, detail="Precise translation checksum failed")
+        return {
+            "engine": "precise",
+            "locale": locale,
+            "source_sha256": source_sha256,
+            "pdf_sha256": digest or _sha256(path),
+            "page_count": int(entry.get("page_count") or 0),
+            "engine_version": str(entry.get("engine_version") or ""),
+            "warnings": entry.get("warnings") if isinstance(entry.get("warnings"), list) else [],
+        }
     path = translations / f"{locale}.json"
     if path.is_symlink():
         raise HTTPException(status_code=403, detail="Translation path is invalid")
@@ -774,12 +822,47 @@ def _read_document_translation_locked(root: Path, internal: Path, locale: str) -
         raise HTTPException(status_code=500, detail="Translation is invalid") from exc
     if not isinstance(value, dict):
         raise HTTPException(status_code=500, detail="Translation is invalid")
-    manifest = _read_manifest(root)
     if value.get("source_sha256") != manifest.get("source", {}).get("sha256"):
         raise HTTPException(status_code=409, detail="Translation is stale for the current source document")
     if value.get("layout_fingerprint") != (manifest.get("layout") or {}).get("fingerprint"):
         raise HTTPException(status_code=409, detail="Translation is stale for the current document layout")
-    return value
+    return {**value, "engine": "legacy"}
+
+
+@router.get("/translation/asset")
+async def document_translation_asset(workspace: str, locale: str, request: Request) -> FileResponse:
+    root = _validated_workspace(workspace, _workspace_roots(request))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", locale):
+        raise HTTPException(status_code=400, detail="Invalid translation locale")
+    with _manifest_lock(root):
+        manifest = _read_manifest(root)
+        entries = manifest.get("translations")
+        entry = entries.get(locale) if isinstance(entries, dict) else None
+        if not isinstance(entry, dict) or entry.get("engine") != "precise":
+            raise HTTPException(status_code=404, detail="Precise translation not found")
+        if entry.get("source_sha256") != manifest.get("source", {}).get("sha256"):
+            raise HTTPException(status_code=409, detail="Translation is stale for the current source document")
+        relative = entry.get("path")
+        if not isinstance(relative, str):
+            raise HTTPException(status_code=500, detail="Precise translation metadata is invalid")
+        candidate = root / relative
+        if candidate.is_symlink():
+            raise HTTPException(status_code=403, detail="Precise translation path is invalid")
+        try:
+            path = candidate.resolve(strict=True)
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(status_code=404, detail="Precise translation not found") from exc
+        if not _is_within(path, (root.resolve(strict=True),)) or not path.is_file():
+            raise HTTPException(status_code=403, detail="Precise translation path is invalid")
+        actual_digest = _sha256(path)
+        digest = str(entry.get("pdf_sha256") or entry.get("sha256") or "")
+        if digest and digest != actual_digest:
+            raise HTTPException(status_code=500, detail="Precise translation checksum failed")
+        digest = digest or actual_digest
+    response = FileResponse(path, media_type="application/pdf", filename=f"translated-{locale}.pdf")
+    response.headers["Accept-Ranges"] = "bytes"
+    response.headers["ETag"] = f'"{digest}"'
+    return response
 
 
 def _clear_document_translation_locked(root: Path, internal: Path, locale: str) -> dict[str, Any]:
@@ -813,14 +896,14 @@ def _clear_document_translation_locked(root: Path, internal: Path, locale: str) 
             if job_dir.is_symlink() or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", job_dir.name):
                 continue
             staged = job_dir / "translation.json"
-            if not staged.is_file() or staged.is_symlink():
-                continue
-            try:
-                value = json.loads(staged.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if isinstance(value, dict) and value.get("locale") == locale:
-                matching_job_ids.add(job_dir.name)
+            precise_cache = job_dir / "precise-cache.json"
+            for candidate in (staged, precise_cache):
+                if not candidate.is_file() or candidate.is_symlink():
+                    continue
+                value = _read_json_file(candidate)
+                if isinstance(value, dict) and value.get("locale") == locale:
+                    matching_job_ids.add(job_dir.name)
+                    break
 
     translations_dir = internal / "translations"
     if translations_dir.is_symlink() or (translations_dir.exists() and not translations_dir.is_dir()):
@@ -828,8 +911,13 @@ def _clear_document_translation_locked(root: Path, internal: Path, locale: str) 
     translation_path = translations_dir / f"{locale}.json"
     if translation_path.is_symlink() or (translation_path.exists() and not translation_path.is_file()):
         raise HTTPException(status_code=403, detail="Translation path is invalid")
-    removed_translation = translation_path.is_file()
+    precise_path = translations_dir / locale
+    if precise_path.is_symlink() or (precise_path.exists() and not precise_path.is_dir()):
+        raise HTTPException(status_code=403, detail="Precise translation directory is invalid")
+    removed_translation = translation_path.is_file() or precise_path.is_dir()
     translation_path.unlink(missing_ok=True)
+    if precise_path.is_dir():
+        shutil.rmtree(precise_path)
 
     for operation_id in matching_job_ids:
         _cleanup_document_job(root, operation_id)
@@ -885,10 +973,29 @@ def _document_job_directory(workspace: Path, operation_id: str) -> Path:
     return jobs / operation_id
 
 
-def _document_job_total(workspace: Path, action: str) -> int:
+def _document_job_total(workspace: Path, action: str, engine: str = "legacy") -> int:
     if action != "translate":
         return 1
+    if engine == "precise":
+        return 100
     return sum(len(page) for page in _translation_source_pages(workspace))
+
+
+def _document_pdf_path(workspace: Path) -> Path:
+    manifest = _read_manifest(workspace)
+    relative = manifest.get("pdf", {}).get("path")
+    if not isinstance(relative, str):
+        raise ValueError("document PDF is unavailable")
+    candidate = workspace / relative
+    if candidate.is_symlink():
+        raise ValueError("document PDF path is invalid")
+    try:
+        path = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("document PDF is unavailable") from exc
+    if not path.is_file() or not _is_within(path, (workspace.resolve(strict=True),)):
+        raise ValueError("document PDF path is invalid")
+    return path
 
 
 def _translation_source_pages(workspace: Path) -> list[list[tuple[str, str]]]:
@@ -1077,7 +1184,12 @@ def _translation_job_progress(workspace: Path, operation_id: str) -> int:
         return 0
 
 
-def _recover_translation_job(workspace: Path, operation_id: str, locale: str) -> int:
+def _recover_translation_job(
+    workspace: Path,
+    operation_id: str,
+    locale: str,
+    engine: str = "legacy",
+) -> int:
     """Seed a new translation operation from the newest valid partial batch."""
     internal = _managed_internal_directory(workspace)
     jobs = internal / "jobs"
@@ -1085,6 +1197,31 @@ def _recover_translation_job(workspace: Path, operation_id: str, locale: str) ->
         raise ValueError("document jobs directory is invalid")
     target = _document_job_directory(workspace, operation_id)
     target.mkdir(parents=True, exist_ok=True)
+    if engine == "precise":
+        manifest = _read_manifest(workspace)
+        source_sha256 = str(manifest.get("source", {}).get("sha256") or "")
+        candidates_with_time: list[tuple[float, Path]] = []
+        for path in jobs.glob("*/precise-cache.json"):
+            if path.parent.name == operation_id or path.is_symlink() or path.parent.is_symlink():
+                continue
+            try:
+                candidates_with_time.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+        for _, candidate in sorted(candidates_with_time, reverse=True):
+            value = _read_json_file(candidate)
+            if (
+                isinstance(value, dict)
+                and value.get("locale") == locale
+                and value.get("source_sha256") == source_sha256
+                and value.get("engine_version") == "0.6.4"
+                and isinstance(value.get("entries"), dict)
+            ):
+                shutil.copy2(candidate, target / "precise-cache.json")
+                # Cached paragraph count is not a stable percentage because
+                # BabelDOC has not parsed this run yet.
+                return 0
+        return 0
     _translation_source_pages(workspace)
     candidates_with_time: list[tuple[float, Path]] = []
     for path in jobs.glob("*/translation.json"):
@@ -1105,6 +1242,14 @@ def _recover_translation_job(workspace: Path, operation_id: str, locale: str) ->
     return 0
 
 
+def _read_json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _update_document_job_status(
     workspace: Path,
     operation_id: str,
@@ -1117,6 +1262,7 @@ def _update_document_job_status(
     total: int,
     message: str,
     language: str = "",
+    engine: str = "legacy",
 ) -> None:
     with _manifest_lock(workspace):
         _update_document_job_status_unlocked(
@@ -1130,6 +1276,7 @@ def _update_document_job_status(
             total=total,
             message=message,
             language=language,
+            engine=engine,
         )
 
 
@@ -1145,6 +1292,7 @@ def _update_document_job_status_unlocked(
     total: int,
     message: str,
     language: str = "",
+    engine: str = "legacy",
 ) -> None:
     _managed_internal_directory(workspace)
     manifest = _read_manifest(workspace)
@@ -1157,6 +1305,7 @@ def _update_document_job_status_unlocked(
         "locale": locale,
         "language": language,
         "source": source,
+        "engine": engine,
         "current": current,
         "total": total,
         "message": message[:500],
@@ -1169,28 +1318,184 @@ def _update_document_job_status_unlocked(
     _json_write(workspace / MANIFEST_RELATIVE_PATH, manifest)
 
 
-def _document_action_hash(workspace: Path, source: str, locale: str) -> str:
+def _document_action_hash(
+    workspace: Path,
+    source: str,
+    locale: str,
+    engine: str = "legacy",
+) -> str:
     with _manifest_lock(workspace):
-        return _document_action_hash_unlocked(workspace, source, locale)
+        return _document_action_hash_unlocked(workspace, source, locale, engine)
 
 
-def _document_action_hash_unlocked(workspace: Path, source: str, locale: str) -> str:
+def _document_action_hash_unlocked(
+    workspace: Path,
+    source: str,
+    locale: str,
+    engine: str = "legacy",
+) -> str:
     internal = _managed_internal_directory(workspace)
     manifest = _read_manifest(workspace)
     source_hash = str(manifest.get("source", {}).get("sha256", ""))
     layout_hash = str((manifest.get("layout") or {}).get("fingerprint", ""))
-    if not source_hash or not layout_hash:
-        raise ValueError("document layout is not ready")
+    if not source_hash or (engine == "legacy" and not layout_hash):
+        raise ValueError("document layout is not ready" if engine == "legacy" else "document source is not ready")
     selected_hash = source_hash
     if source == "translation":
-        translations = internal / "translations"
-        if translations.is_symlink():
-            raise ValueError("managed translations directory is invalid")
-        translation = translations / f"{locale}.json"
-        if not translation.is_file() or translation.is_symlink():
+        entries = manifest.get("translations")
+        entry = entries.get(locale) if isinstance(entries, dict) else None
+        relative = entry.get("path") if isinstance(entry, dict) else None
+        translation = workspace / relative if isinstance(relative, str) else internal / "translations" / f"{locale}.json"
+        if not translation.is_file() or translation.is_symlink() or not _is_within(
+            translation.resolve(strict=True),
+            (workspace.resolve(strict=True),),
+        ):
             raise ValueError("selected translation is not available")
         selected_hash = _sha256(translation)
-    return hashlib.sha256(f"{source_hash}:{layout_hash}:{source}:{selected_hash}".encode("utf-8")).hexdigest()
+    engine_version = ""
+    if engine == "precise":
+        from crabcode_gateway.document_engine import BABELDOC_VERSION
+
+        engine_version = BABELDOC_VERSION
+    return hashlib.sha256(
+        f"{source_hash}:{layout_hash if engine == 'legacy' else ''}:{source}:{selected_hash}:{engine}:{engine_version}".encode("utf-8")
+    ).hexdigest()
+
+
+def _finalize_precise_translation_unlocked(
+    workspace: Path,
+    internal: Path,
+    job: Path,
+    manifest: dict[str, Any],
+    operation_id: str,
+    locale: str,
+    now: str,
+) -> tuple[int, int]:
+    from crabcode_gateway.document_engine import BABELDOC_VERSION
+
+    staged_pdf = job / "translated.pdf"
+    staged_content = job / "content.json"
+    staged_diagnostics = job / "diagnostics.json"
+    for path in (staged_pdf, staged_content, staged_diagnostics):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"precise translation is missing {path.name}")
+    if staged_pdf.stat().st_size <= 8 or staged_pdf.stat().st_size > MAX_DOCUMENT_BYTES * 4:
+        raise ValueError("precise translated PDF has an invalid size")
+    if staged_content.stat().st_size > 50 * 1024 * 1024 or staged_diagnostics.stat().st_size > 5 * 1024 * 1024:
+        raise ValueError("precise translation metadata is too large")
+    with staged_pdf.open("rb") as handle:
+        if b"%PDF-" not in handle.read(1024):
+            raise ValueError("precise translation did not produce a valid PDF")
+    diagnostics = _read_json_file(staged_diagnostics)
+    if diagnostics is None:
+        raise ValueError("precise translation diagnostics are invalid")
+    content = _read_json_file(staged_content)
+    content_pages = content.get("pages") if isinstance(content, dict) else None
+    if (
+        content is None
+        or content.get("schema_version") != 1
+        or content.get("engine") != "precise"
+        or not isinstance(content_pages, list)
+    ):
+        raise ValueError("precise translation content is invalid")
+    source_sha256 = str(manifest.get("source", {}).get("sha256") or "")
+    if diagnostics.get("source_sha256") != source_sha256:
+        raise ValueError("precise translation was generated for a different source document")
+    if diagnostics.get("engine_version") != BABELDOC_VERSION:
+        raise ValueError("precise translation engine version does not match")
+
+    source_pdf = _document_pdf_path(workspace)
+    try:
+        source_reader = PdfReader(str(source_pdf))
+        translated_reader = PdfReader(str(staged_pdf))
+    except Exception as exc:
+        raise ValueError("precise translated PDF cannot be opened") from exc
+    if len(source_reader.pages) != len(translated_reader.pages):
+        raise ValueError("precise translated PDF page count changed")
+    if len(content_pages) != len(translated_reader.pages):
+        raise ValueError("precise translation content page count changed")
+    source_has_text = any((page.extract_text() or "").strip() for page in source_reader.pages)
+    translated_has_text = any((page.extract_text() or "").strip() for page in translated_reader.pages)
+    if source_has_text and not translated_has_text:
+        raise ValueError("precise translated PDF has no selectable text")
+    for source_page, translated_page in zip(source_reader.pages, translated_reader.pages, strict=True):
+        for source_box, translated_box in (
+            (source_page.mediabox, translated_page.mediabox),
+            (source_page.cropbox, translated_page.cropbox),
+        ):
+            source_size = (float(source_box.width), float(source_box.height))
+            translated_size = (float(translated_box.width), float(translated_box.height))
+            if any(abs(left - right) > 0.5 for left, right in zip(source_size, translated_size, strict=True)):
+                raise ValueError("precise translated PDF page dimensions changed")
+        if int(source_page.get("/Rotate", 0) or 0) % 360 != int(translated_page.get("/Rotate", 0) or 0) % 360:
+            raise ValueError("precise translated PDF page rotation changed")
+
+    translations_dir = internal / "translations"
+    if translations_dir.is_symlink():
+        raise ValueError("managed translations directory is invalid")
+    translations_dir.mkdir(parents=True, exist_ok=True)
+    target = translations_dir / locale
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        raise ValueError("precise translation output directory is invalid")
+    stage = translations_dir / f".{locale}-stage-{uuid.uuid4().hex}"
+    backup = translations_dir / f".{locale}-backup-{uuid.uuid4().hex}"
+    stage.mkdir()
+    replaced = False
+    try:
+        shutil.copy2(staged_pdf, stage / "translated.pdf")
+        shutil.copy2(staged_content, stage / "content.json")
+        shutil.copy2(staged_diagnostics, stage / "diagnostics.json")
+        digest = _sha256(stage / "translated.pdf")
+        warnings = diagnostics.get("warnings") if isinstance(diagnostics.get("warnings"), list) else []
+        metadata = {
+            "schema_version": 1,
+            "engine": "precise",
+            "locale": locale,
+            "source_sha256": source_sha256,
+            "pdf_sha256": digest,
+            "page_count": len(translated_reader.pages),
+            "engine_version": BABELDOC_VERSION,
+            "warnings": [str(item)[:500] for item in warnings],
+            "updated_at": now,
+        }
+        _json_write(stage / "metadata.json", metadata)
+        if target.exists():
+            os.replace(target, backup)
+            replaced = True
+        os.replace(stage, target)
+        translations = manifest.get("translations")
+        if not isinstance(translations, dict):
+            translations = {}
+            manifest["translations"] = translations
+        translations[locale] = {
+            "engine": "precise",
+            "path": (target / "translated.pdf").relative_to(workspace).as_posix(),
+            "content_path": (target / "content.json").relative_to(workspace).as_posix(),
+            "diagnostics_path": (target / "diagnostics.json").relative_to(workspace).as_posix(),
+            "source_sha256": source_sha256,
+            "pdf_sha256": digest,
+            "page_count": len(translated_reader.pages),
+            "engine_version": BABELDOC_VERSION,
+            "warnings": metadata["warnings"],
+            "updated_at": now,
+        }
+        manifest["updated_at"] = now
+        try:
+            _json_write(workspace / MANIFEST_RELATIVE_PATH, manifest)
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            if replaced and backup.exists():
+                os.replace(backup, target)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+    except Exception:
+        if replaced and backup.exists() and not target.exists():
+            os.replace(backup, target)
+        raise
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+    _cleanup_document_job(workspace, operation_id)
+    return 100, 100
 
 
 def _finalize_document_job_unlocked(
@@ -1201,13 +1506,16 @@ def _finalize_document_job_unlocked(
     source: str,
     expected_document_hash: str = "",
     language: str = "",
+    engine: str = "legacy",
 ) -> tuple[int, int]:
     """Validate an Agent's staged artifact and publish it atomically."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", locale):
         raise ValueError("invalid document locale")
     if language and not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", language):
         raise ValueError("invalid Blog language")
-    if expected_document_hash and _document_action_hash(workspace, source, locale) != expected_document_hash:
+    if engine not in {"legacy", "precise"}:
+        raise ValueError("invalid document translation engine")
+    if expected_document_hash and _document_action_hash(workspace, source, locale, engine) != expected_document_hash:
         raise ValueError("source document changed while the operation was running")
     internal = _managed_internal_directory(workspace)
     job = _document_job_directory(workspace, operation_id)
@@ -1215,13 +1523,23 @@ def _finalize_document_job_unlocked(
         raise ValueError("document job directory cannot be a symlink")
     manifest = _read_manifest(workspace)
     now = datetime.now(timezone.utc).isoformat()
+    if action == "translate" and engine == "precise":
+        return _finalize_precise_translation_unlocked(
+            workspace,
+            internal,
+            job,
+            manifest,
+            operation_id,
+            locale,
+            now,
+        )
     blog_backup: bytes | None = None
     blog_existed = False
     translation_output: Path | None = None
     translation_backup: bytes | None = None
     translation_existed = False
     if action == "translate":
-        total = _document_job_total(workspace, action)
+        total = _document_job_total(workspace, action, engine)
         try:
             layout_path = internal / "layout.json"
             staged_path = job / "translation.json"
@@ -1261,6 +1579,7 @@ def _finalize_document_job_unlocked(
         if staged.get("layout_fingerprint") != layout_fingerprint:
             raise ValueError("translation was generated for a different document layout")
         canonical = {
+            "engine": "legacy",
             "locale": locale,
             "source_sha256": source_sha256,
             "layout_fingerprint": layout_fingerprint,
@@ -1282,6 +1601,7 @@ def _finalize_document_job_unlocked(
             translations = {}
             manifest["translations"] = translations
         translations[locale] = {
+            "engine": "legacy",
             "path": output.relative_to(workspace).as_posix(),
             "source_sha256": source_sha256,
             "blocks": total,
@@ -1344,6 +1664,7 @@ def _finalize_document_job(
     source: str,
     expected_document_hash: str = "",
     language: str = "",
+    engine: str = "legacy",
 ) -> tuple[int, int]:
     with _manifest_lock(workspace):
         return _finalize_document_job_unlocked(
@@ -1354,6 +1675,7 @@ def _finalize_document_job(
             source,
             expected_document_hash,
             language,
+            engine,
         )
 
 

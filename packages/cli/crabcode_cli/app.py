@@ -16,7 +16,81 @@ app = typer.Typer(
     add_completion=False,
 )
 
+document_engine_app = typer.Typer(
+    name="document-engine",
+    help="Manage the optional local high-fidelity PDF translation engine.",
+    add_completion=False,
+)
+app.add_typer(document_engine_app, name="document-engine")
+
 logger = get_logger(__name__)
+
+
+@document_engine_app.command("status")
+def document_engine_status_cmd(
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Show the optional BabelDOC engine status."""
+    import json
+
+    from crabcode_gateway.document_engine import document_engine_status
+
+    status = document_engine_status()
+    if json_output:
+        typer.echo(json.dumps(status, ensure_ascii=False))
+    else:
+        typer.echo(f"{status['status']}: {status['detail']}")
+
+
+@document_engine_app.command("install")
+def document_engine_install_cmd(
+    bundle: Optional[str] = typer.Option(
+        None,
+        "--bundle",
+        help="Use an offline bundle path or URL instead of the official BabelDOC source",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Install BabelDOC from its official source, or use an offline bundle."""
+    import json
+
+    from crabcode_gateway.document_engine import install_document_engine
+
+    def progress(message: str) -> None:
+        if not json_output:
+            typer.echo(message)
+
+    try:
+        status = install_document_engine(bundle, progress=progress)
+    except Exception as exc:
+        if json_output:
+            typer.echo(json.dumps({"status": "error", "detail": str(exc)}, ensure_ascii=False))
+        else:
+            typer.echo(f"安装失败：{exc}", err=True)
+        raise typer.Exit(1) from exc
+    if json_output:
+        typer.echo(json.dumps(status, ensure_ascii=False))
+    else:
+        typer.echo(status["detail"])
+
+
+@document_engine_app.command("remove")
+def document_engine_remove_cmd(
+    yes: bool = typer.Option(False, "--yes", help="Remove without confirmation"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Remove the managed engine without touching translated project PDFs."""
+    import json
+
+    from crabcode_gateway.document_engine import remove_document_engine
+
+    if not yes and not typer.confirm("删除本地高精度 PDF 引擎？已生成的译后 PDF 会保留。"):
+        raise typer.Abort()
+    status = remove_document_engine()
+    if json_output:
+        typer.echo(json.dumps(status, ensure_ascii=False))
+    else:
+        typer.echo(status["detail"])
 
 
 @app.command()
@@ -557,7 +631,7 @@ def stats(
 
 
 def entry() -> None:
-    known_subcommands = {"main", "sessions", "stats", "gateway", "acp"}
+    known_subcommands = {"main", "sessions", "stats", "gateway", "acp", "document-engine"}
     args = sys.argv[1:]
     # Preserve root --help so users can still discover all subcommands.
     if args and args[0] in ("--help", "-h"):

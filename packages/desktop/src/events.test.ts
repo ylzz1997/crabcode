@@ -172,6 +172,7 @@ describe("Gateway event reducer", () => {
       current: 0,
       total: 12,
       message: "正在准备",
+      engine: "precise",
     });
     current = applyGatewayEvent(current, {
       type: "document_job",
@@ -198,6 +199,7 @@ describe("Gateway event reducer", () => {
       current: 12,
       total: 12,
       locale: "zh-CN",
+      engine: "precise",
     });
   });
 

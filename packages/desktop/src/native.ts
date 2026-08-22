@@ -5,6 +5,7 @@ import type {
   DesktopSettings,
   DiffMarkerStyle,
   DockIconChoice,
+  DocumentPreciseEngineStatus,
   DocumentViewState,
   ThemeMode,
   ThemeProfile,
@@ -328,6 +329,26 @@ export async function ensureLocalGateway(
 export async function shutdownGateway(connectionId: string): Promise<boolean> {
   if (!isDesktopShell()) return false;
   return invoke<boolean>("shutdown_gateway", { connectionId });
+}
+
+export async function installDocumentEngine(
+  pythonPath: string | null,
+  bundle: string | null = null,
+): Promise<Record<string, unknown>> {
+  if (!isDesktopShell()) throw new Error("高精度 PDF 引擎只能由桌面应用安装");
+  return invoke<Record<string, unknown>>("install_document_engine", { pythonPath, bundle });
+}
+
+export async function getDocumentEngineStatus(
+  pythonPath: string | null,
+): Promise<DocumentPreciseEngineStatus> {
+  if (!isDesktopShell()) throw new Error("高精度 PDF 引擎状态只能在桌面应用中读取");
+  return invoke<DocumentPreciseEngineStatus>("document_engine_status", { pythonPath });
+}
+
+export async function removeDocumentEngine(pythonPath: string | null): Promise<Record<string, unknown>> {
+  if (!isDesktopShell()) throw new Error("高精度 PDF 引擎只能由桌面应用删除");
+  return invoke<Record<string, unknown>>("remove_document_engine", { pythonPath });
 }
 
 export function normalizeBaseUrl(raw: string): string {

@@ -90,11 +90,14 @@ import { getToolPresentation, parseChecklistResult, type ToolField } from "./too
 import {
   deleteCredential,
   ensureLocalGateway,
+  getDocumentEngineStatus,
+  installDocumentEngine,
   isDesktopShell,
   isInsecureRemoteUrl,
   isLoopbackUrl,
   loadSettings,
   normalizeBaseUrl,
+  removeDocumentEngine,
   saveSettings,
   setDockIcon,
   storeCredential,
@@ -1207,6 +1210,44 @@ function App() {
       .catch(() => setDocumentCapabilities(null));
   };
 
+  useEffect(() => {
+    if (!settingsOpen || !activeConnection || activeGateway?.status !== "online") return;
+    let cancelled = false;
+    setDocumentCapabilities(undefined);
+    void apiRef.current.get(activeConnection.id)?.documentCapabilities()
+      .then(async (capabilities) => {
+        if (
+          isDesktopShell()
+          && activeConnection.id === "local"
+          && isLoopbackUrl(activeConnection.base_url)
+        ) {
+          try {
+            const precise = await getDocumentEngineStatus(settings?.python_path ?? null);
+            return {
+              ...capabilities,
+              translation_engines: {
+                default: precise.available ? "precise" as const : "legacy" as const,
+                legacy: { available: true as const, status: "ready" as const },
+                precise,
+              },
+            };
+          } catch {
+            // A remote/older Gateway result is still useful if local CLI discovery fails.
+          }
+        }
+        return capabilities;
+      })
+      .then((capabilities) => {
+        if (!cancelled) setDocumentCapabilities(capabilities);
+      })
+      .catch(() => {
+        if (!cancelled) setDocumentCapabilities(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConnection?.id, activeConnection?.base_url, activeGateway?.status, settings?.python_path, settingsOpen]);
+
   const deleteConnection = useCallback(async (id: string) => {
     if (!settings) return;
     const connection = settings.connections.find((item) => item.id === id);
@@ -1721,6 +1762,65 @@ function App() {
     workspaceView,
   ]);
 
+  const startDocumentAction = (
+    action: "translate" | "generate_blog",
+    options: {
+      locale?: string;
+      language?: string;
+      source?: "original" | "translation";
+      translation_concurrency?: number;
+      translation_batch_size?: number;
+      translation_engine?: "auto" | "legacy" | "precise";
+    },
+  ): boolean => {
+    if (!activeChannel) {
+      setGlobalError("Agent 会话尚未就绪，请稍后重试");
+      return false;
+    }
+    try {
+      const operationId = activeChannel.documentAction(action, options);
+      if (activeSessionKey) {
+        const startedAt = Date.now();
+        const title = action === "translate" ? "翻译文档" : "生成 Blog";
+        setSessions((current) => current[activeSessionKey]
+          ? {
+              ...current,
+              [activeSessionKey]: {
+                ...current[activeSessionKey],
+                busy: true,
+                operationId,
+                error: null,
+                runStartedAt: current[activeSessionKey].runStartedAt ?? startedAt,
+                currentStep: { kind: "document", label: title, startedAt },
+                items: [
+                  ...current[activeSessionKey].items,
+                  {
+                    id: `${operationId}:document-job`,
+                    kind: "document_job" as const,
+                    title,
+                    text: "正在准备文档内容",
+                    action,
+                    locale: options.locale,
+                    language: options.language,
+                    source: options.source,
+                    engine: options.translation_engine === "legacy" ? "legacy" : undefined,
+                    current: 0,
+                    total: 0,
+                    status: "running" as const,
+                    startedAt,
+                  },
+                ],
+              },
+            }
+          : current);
+      }
+      return true;
+    } catch (reason) {
+      setGlobalError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    }
+  };
+
   if (!settings) {
     return <div className="boot"><LoaderCircle className="spin" />正在加载 Crab Desktop</div>;
   }
@@ -1772,6 +1872,65 @@ function App() {
             ...connection,
             document_workspace_root: path,
           }))}
+          documentCapabilities={documentCapabilities}
+          canManageDocumentEngine={Boolean(
+            isDesktopShell()
+            && activeConnection?.id === "local"
+            && activeConnection
+            && isLoopbackUrl(activeConnection.base_url)
+          )}
+          onInstallDocumentEngine={async () => {
+            try {
+              await installDocumentEngine(settings.python_path);
+            } finally {
+              if (activeConnection) {
+                try {
+                  const capabilities = await apiRef.current.get(activeConnection.id)?.documentCapabilities();
+                  if (!capabilities) {
+                    setDocumentCapabilities(null);
+                  } else {
+                    const precise = await getDocumentEngineStatus(settings.python_path);
+                    setDocumentCapabilities({
+                      ...capabilities,
+                      translation_engines: {
+                        default: precise.available ? "precise" : "legacy",
+                        legacy: { available: true, status: "ready" },
+                        precise,
+                      },
+                    });
+                  }
+                } catch {
+                  setDocumentCapabilities(null);
+                }
+              }
+            }
+          }}
+          onRemoveDocumentEngine={async () => {
+            try {
+              await removeDocumentEngine(settings.python_path);
+            } finally {
+              if (activeConnection) {
+                try {
+                  const capabilities = await apiRef.current.get(activeConnection.id)?.documentCapabilities();
+                  if (!capabilities) {
+                    setDocumentCapabilities(null);
+                  } else {
+                    const precise = await getDocumentEngineStatus(settings.python_path);
+                    setDocumentCapabilities({
+                      ...capabilities,
+                      translation_engines: {
+                        default: precise.available ? "precise" : "legacy",
+                        legacy: { available: true, status: "ready" },
+                        precise,
+                      },
+                    });
+                  }
+                } catch {
+                  setDocumentCapabilities(null);
+                }
+              }
+            }
+          }}
         />
       ) : (
       <>
@@ -2115,53 +2274,7 @@ function App() {
                   ? { ...project, document_view: state }
                   : project),
               }))}
-              onDocumentAction={(action, options) => {
-                if (!activeChannel) {
-                  setGlobalError("Agent 会话尚未就绪，请稍后重试");
-                  return false;
-                }
-                try {
-                  const operationId = activeChannel.documentAction(action, options);
-                  if (activeSessionKey) {
-                    const startedAt = Date.now();
-                    const title = action === "translate" ? "翻译文档" : "生成 Blog";
-                    setSessions((current) => current[activeSessionKey]
-                      ? {
-                          ...current,
-                          [activeSessionKey]: {
-                            ...current[activeSessionKey],
-                            busy: true,
-                            operationId,
-                            error: null,
-                            runStartedAt: current[activeSessionKey].runStartedAt ?? startedAt,
-                            currentStep: { kind: "document", label: title, startedAt },
-                            items: [
-                              ...current[activeSessionKey].items,
-                              {
-                                id: `${operationId}:document-job`,
-                                kind: "document_job" as const,
-                                title,
-                                text: "正在准备文档内容",
-                                action,
-                                locale: options.locale,
-                                language: options.language,
-                                source: options.source,
-                                current: 0,
-                                total: 0,
-                                status: "running" as const,
-                                startedAt,
-                              },
-                            ],
-                          },
-                        }
-                      : current);
-                  }
-                  return true;
-                } catch (reason) {
-                  setGlobalError(reason instanceof Error ? reason.message : String(reason));
-                  return false;
-                }
-              }}
+              onDocumentAction={startDocumentAction}
               onDocumentReference={(reference) => setPendingDocumentReferences((current) => (
                 current.some((item) => item.text === reference.text && item.project_id === reference.project_id)
                   ? current
@@ -2331,6 +2444,14 @@ function App() {
                       action,
                       item.detail && typeof item.detail === "object" ? item.detail as Record<string, unknown> : undefined,
                     )}
+                    onCompatibilityRetry={item.kind === "document_job" && item.engine === "precise" && item.status === "failed"
+                      ? () => startDocumentAction("translate", {
+                          locale: item.locale,
+                          translation_concurrency: settings.document_translation_concurrency,
+                          translation_batch_size: settings.document_translation_batch_size,
+                          translation_engine: "legacy",
+                        })
+                      : undefined}
                   />
                 ))}
                 {activeSession.busy && (
@@ -3973,7 +4094,7 @@ export function MessageMarkdown({ children }: { children: string }) {
   );
 }
 
-export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan }: {
+export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan, onCompatibilityRetry }: {
   item: ChatItem;
   now: number;
   showTurnDuration: boolean;
@@ -3982,6 +4103,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
   onToggleChoice: (item: ChatItem, option: string) => void;
   onSubmitChoice: (item: ChatItem) => void;
   onPlan: (action: "execute" | "revise" | "cancel") => void;
+  onCompatibilityRetry?: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(item.collapsed ?? false);
   const durationMs = item.durationMs ?? (item.startedAt ? Math.max(0, now - item.startedAt) : null);
@@ -4025,6 +4147,11 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
         <div className="document-job-body">
           {(item.total ?? 0) > 1 && <div className="document-job-progress"><i style={{ width: `${progress}%` }} /><span>{item.current ?? 0} / {item.total}</span></div>}
           {item.text && <p>{item.text}</p>}
+          {item.status === "failed" && item.engine === "precise" && onCompatibilityRetry && (
+            <button className="document-job-retry" type="button" onClick={onCompatibilityRetry}>
+              <RefreshCw />使用兼容模式重试
+            </button>
+          )}
         </div>
       </article>
     );

@@ -266,9 +266,48 @@ to an already-running Gateway and retains passwords only for the current tab.
 Tauri writes non-secret UI state to `~/.crabcode/settings_desktop.json`.
 Gateway model and tool settings continue to use the normal `settings.json`.
 
-Direct `! <cmd>` execution is intentionally a trusted-client feature: the CLI runs it in its local process and the VSCode extension sends it to a local integrated terminal. It is not exposed as a Gateway endpoint because doing so would create a permission-bypassing remote shell. 
+Direct `! <cmd>` execution is intentionally a trusted-client feature: the CLI runs it in its local process and the VSCode extension sends it to a local integrated terminal. It is not exposed as a Gateway endpoint because doing so would create a permission-bypassing remote shell.
 
-**gRPC** service is available when `--grpc-port` is set, with streaming conversation/event RPCs plus the typed agent, permission, choice, model, and mode RPCs defined in `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto`. 
+#### High-fidelity PDF engine
+
+Layout-preserving PDF translation is provided by an optional, isolated
+BabelDOC 0.6.4 environment. It requires Python 3.10–3.13, uses approximately
+550 MiB for its models and fonts.
+requests still use the model selected by the active CrabCode session; model
+credentials are never passed to the BabelDOC worker.
+
+The Desktop **Document** settings show the install command. For a local Gateway,
+the Tauri app can execute it directly with the **Run install** button. The
+equivalent CLI commands are:
+
+```bash
+# Inspect, install, or remove the managed engine
+crabcode document-engine status
+crabcode document-engine install
+crabcode document-engine remove --yes
+```
+
+The default installer creates a separate virtual environment, installs the
+official BabelDOC package, downloads and verifies BabelDOC's upstream runtime
+assets, then records a local checksum manifest. Document processing is
+network-disabled after installation. Removing the engine does not delete PDFs
+that have already been translated.
+
+When the engine is ready, new full-document translations default to the
+high-fidelity path and produce a native translated PDF. The reader can switch
+between the original and translated PDFs. If high-fidelity processing fails,
+the UI offers an explicit **Retry in compatibility mode** action instead of
+silently changing engines mid-job.
+
+For a remote Gateway, run `crabcode document-engine install` on the Gateway
+host. CrabCode deliberately does not expose engine installation as a remote
+shell endpoint. Air-gapped installations can use a reviewed offline bundle:
+
+```bash
+crabcode document-engine install --bundle /path/to/crabcode-document-engine.zip
+```
+
+**gRPC** service is available when `--grpc-port` is set, with streaming conversation/event RPCs plus the typed agent, permission, choice, model, and mode RPCs defined in `packages/gateway/crabcode_gateway/grpc/proto/crabcode.proto`.
 
 ### ACP (Agent Client Protocol) Support
 

@@ -169,6 +169,7 @@ interface DocumentWorkspaceProps {
       source?: "original" | "translation";
       translation_concurrency?: number;
       translation_batch_size?: number;
+      translation_engine?: "auto" | "legacy" | "precise";
     },
   ) => boolean;
   onDocumentReference: (reference: DocumentReference) => void;
@@ -261,6 +262,7 @@ function DocumentActionsMenu({
   blogLanguage,
   sessionBusy,
   translating,
+  translateLabel,
   clearing,
   generatingBlog,
   translateDisabled,
@@ -276,6 +278,7 @@ function DocumentActionsMenu({
   blogLanguage: string;
   sessionBusy: boolean;
   translating: boolean;
+  translateLabel: string;
   clearing: boolean;
   generatingBlog: boolean;
   translateDisabled: boolean;
@@ -373,7 +376,7 @@ function DocumentActionsMenu({
           </label>
           <button type="button" role="menuitem" disabled={translateDisabled} onClick={() => choose(onTranslate)}>
             {translating ? <LoaderCircle className="spin" /> : <Languages />}
-            <span>翻译文档</span>
+            <span>{translateLabel}</span>
           </button>
           <button className="danger" type="button" role="menuitem" disabled={clearDisabled} onClick={() => choose(onClear)}>
             {clearing ? <LoaderCircle className="spin" /> : <Trash2 />}
@@ -1190,8 +1193,10 @@ export default function DocumentWorkspace({
 }: DocumentWorkspaceProps) {
   const [manifest, setManifest] = useState<DocumentManifest | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
+  const [precisePdf, setPrecisePdf] = useState<PDFDocumentProxy | null>(null);
   const [layout, setLayout] = useState<DocumentLayout | null>(null);
   const [translation, setTranslation] = useState<DocumentTranslation | null>(null);
+  const [preciseAvailable, setPreciseAvailable] = useState(false);
   const [locale, setLocale] = useState("zh-CN");
   const [blogLanguage, setBlogLanguage] = useState("source");
   const [showTranslation, setShowTranslation] = useState(false);
@@ -1399,8 +1404,10 @@ export default function DocumentWorkspace({
     setLoading(true);
     setError(null);
     setPdf(null);
+    setPrecisePdf(null);
     setLayout(null);
     setTranslation(null);
+    setPreciseAvailable(false);
     setBlog(null);
     setBlogConflict(null);
     void Promise.all([api.documentManifest(project.path), api.documentAsset(project.path)]).then(async ([nextManifest, data]) => {
@@ -1439,6 +1446,18 @@ export default function DocumentWorkspace({
 
   useEffect(() => {
     let cancelled = false;
+    void api.documentCapabilities().then((capabilities) => {
+      if (!cancelled) setPreciseAvailable(capabilities.translation_engines?.precise.available === true);
+    }).catch(() => {
+      if (!cancelled) setPreciseAvailable(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, project.path]);
+
+  useEffect(() => {
+    let cancelled = false;
     setAnnotations([]);
     void api.documentAnnotations(project.path).then((next) => {
       if (!cancelled) setAnnotations(next);
@@ -1456,7 +1475,8 @@ export default function DocumentWorkspace({
     if (!layout) return;
     void api.documentTranslation(project.path, locale).then((nextTranslation) => {
       if (
-        nextTranslation.layout_fingerprint
+        nextTranslation.engine === "legacy"
+        && nextTranslation.layout_fingerprint
         && nextTranslation.layout_fingerprint !== layout.fingerprint
       ) return;
       setTranslation(nextTranslation);
@@ -1464,6 +1484,31 @@ export default function DocumentWorkspace({
       if (!isMissing(reason)) setError(reason instanceof Error ? reason.message : String(reason));
     });
   }, [api, layout, locale, project.path]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let loadedPdf: PDFDocumentProxy | null = null;
+    setPrecisePdf(null);
+    if (translation?.engine !== "precise") return undefined;
+    void api.documentTranslationAsset(project.path, locale).then(loadPdf).then((nextPdf) => {
+      loadedPdf = nextPdf;
+      if (cancelled) {
+        void nextPdf.destroy();
+        loadedPdf = null;
+        return;
+      }
+      if (nextPdf.numPages !== translation.page_count) {
+        throw new Error("高精度译文页数与元数据不一致");
+      }
+      setPrecisePdf(nextPdf);
+    }).catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+    });
+    return () => {
+      cancelled = true;
+      if (loadedPdf) void loadedPdf.destroy();
+    };
+  }, [api, locale, project.path, translation]);
 
   useEffect(() => {
     const completed = previousBusy.current && !sessionBusy;
@@ -1534,8 +1579,10 @@ export default function DocumentWorkspace({
   }, [api, blog, blogTouched, project.path]);
 
   const translated = useMemo(() => new Map(
-    (translation?.blocks ?? []).map((block) => [block.id, block.translated_text]),
+    (translation?.engine === "legacy" ? translation.blocks : []).map((block) => [block.id, block.translated_text]),
   ), [translation]);
+  const showingPreciseTranslation = Boolean(showTranslation && translation?.engine === "precise");
+  const activePdf = showingPreciseTranslation ? precisePdf : pdf;
   const scannedPages = layout?.pages.filter((page) => page.blocks.length === 0).length ?? 0;
   const selectCurrentPage = useCallback((page: number) => setCurrentPage(page), []);
   const handlePdfScroll = useCallback(() => {
@@ -1805,7 +1852,7 @@ export default function DocumentWorkspace({
         </div>
         {view === "document" && (
           <div className="document-tools">
-            <span className="document-page-indicator">{currentPage} / {pdf?.numPages ?? manifest?.pdf.page_count ?? "–"}</span>
+            <span className="document-page-indicator">{currentPage} / {activePdf?.numPages ?? manifest?.pdf.page_count ?? "–"}</span>
             <button className="icon-button small" title="缩小 (Alt+-)" aria-label="缩小" onClick={() => changeZoom(-DOCUMENT_ZOOM_STEP)}><Minus /></button>
             <span className="document-zoom">{Math.round(zoom * 100)}%</span>
             <button className="icon-button small" title="放大 (Alt++)" aria-label="放大" onClick={() => changeZoom(DOCUMENT_ZOOM_STEP)}><Plus /></button>
@@ -1815,6 +1862,7 @@ export default function DocumentWorkspace({
               blogLanguage={blogLanguage}
               sessionBusy={sessionBusy}
               translating={pendingAction === "translate"}
+              translateLabel={translation?.engine === "legacy" && preciseAvailable ? "升级为高精度 PDF" : "翻译文档"}
               clearing={clearingTranslation}
               generatingBlog={pendingAction === "generate_blog"}
               translateDisabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
@@ -1828,6 +1876,7 @@ export default function DocumentWorkspace({
                   locale,
                   translation_concurrency: translationConcurrency,
                   translation_batch_size: translationBatchSize,
+                  translation_engine: "auto",
                 })) setPendingAction(null);
               }}
               onClear={() => setClearTranslationConfirm(true)}
@@ -1846,10 +1895,13 @@ export default function DocumentWorkspace({
               <input
                 type="checkbox"
                 checked={showTranslation}
-                disabled={!translation}
-                onChange={(event) => setShowTranslation(event.target.checked)}
+                disabled={!translation || (translation.engine === "precise" && !precisePdf)}
+                onChange={(event) => {
+                  setSelection(null);
+                  setShowTranslation(event.target.checked);
+                }}
               />
-              显示译文
+              {translation?.engine === "precise" ? (showTranslation ? "译文 PDF" : "原文 PDF") : "显示译文"}
             </label>
           </div>
         )}
@@ -1938,18 +1990,18 @@ export default function DocumentWorkspace({
           {scannedPages > 0 && (
             <div className="document-scan-warning"><AlertTriangle />检测到 {scannedPages} 个无文本页面，可阅读但暂不能原位翻译。</div>
           )}
-          {pdf && Array.from({ length: pdf.numPages }, (_, index) => (
+          {activePdf && Array.from({ length: activePdf.numPages }, (_, index) => (
             <PdfPage
-              key={index + 1}
-              pdf={pdf}
+              key={`${showingPreciseTranslation ? "precise" : "source"}-${index + 1}`}
+              pdf={activePdf}
               pageNumber={index + 1}
               zoom={zoom}
-              layout={layout?.pages[index]}
+              layout={showingPreciseTranslation ? undefined : layout?.pages[index]}
               translated={translated}
               showOriginalText={showOriginalText}
-              showTranslation={showTranslation}
+              showTranslation={showTranslation && translation?.engine === "legacy"}
               rotation={rotation}
-              annotations={annotations}
+              annotations={showingPreciseTranslation ? [] : annotations}
               selectionRects={selection?.rects ?? []}
               onCurrent={selectCurrentPage}
             />
