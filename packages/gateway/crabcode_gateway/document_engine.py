@@ -206,9 +206,15 @@ def document_engine_python() -> Path:
 def document_engine_worker_command() -> list[str]:
     """Return the isolated worker command, including old bundle compatibility."""
     python = document_engine_python()
-    worker = _worker_path(document_engine_root())
-    if worker.is_file():
-        return [str(python), str(worker)]
+    # Keep BabelDOC and its assets in the managed virtual environment, but run
+    # the worker shipped with the current Gateway.  Worker-only fixes then take
+    # effect after an app update without downloading the engine again.
+    current_worker = Path(__file__).with_name("document_worker.py")
+    if current_worker.is_file():
+        return [str(python), str(current_worker)]
+    installed_worker = _worker_path(document_engine_root())
+    if installed_worker.is_file():
+        return [str(python), str(installed_worker)]
     return [str(python), "-m", "crabcode_gateway.document_worker"]
 
 

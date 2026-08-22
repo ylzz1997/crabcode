@@ -137,6 +137,48 @@ def _write_content_json(pdf_path: Path, output: Path) -> int:
     return len(pages)
 
 
+def _translate_with_progress(
+    config: Any,
+    bridge: _Bridge,
+    *,
+    translate: Any,
+    get_stages: Any,
+    progress_monitor_type: Any,
+) -> Any:
+    """Run BabelDOC synchronously while forwarding its progress callbacks.
+
+    BabelDOC 0.6.4's async wrapper waits for a separate finish event after the
+    executor has returned.  That event can be lost, leaving a completed PDF at
+    99% forever.  The synchronous API already returns the authoritative result,
+    so run it in our worker thread and use callbacks only for progress updates.
+    """
+
+    def progress_changed(**event: Any) -> None:
+        if event.get("type") not in {"progress_start", "progress_update", "progress_end"}:
+            return
+        _emit({
+            "type": "progress",
+            "stage": str(event.get("stage") or "processing"),
+            "overall_progress": float(event.get("overall_progress") or 0),
+        })
+
+    # ProgressMonitor.on_finish invokes its finish callback whenever a cancel
+    # event is supplied.  Translation errors and the returned result are
+    # propagated directly by do_translate, so this callback is intentionally a
+    # no-op rather than another completion channel.
+    def finished(**_event: Any) -> None:
+        return None
+
+    with progress_monitor_type(
+        get_stages(config),
+        progress_change_callback=progress_changed,
+        finish_callback=finished,
+        cancel_event=bridge.cancelled,
+        report_interval=config.report_interval,
+    ) as progress_monitor:
+        return translate(progress_monitor, config)
+
+
 async def _run(start: dict[str, Any], bridge: _Bridge) -> None:
     engine_root = Path(str(start["engine_root"])).resolve(strict=True)
     input_path = Path(str(start["input_path"])).resolve(strict=True)
@@ -150,9 +192,11 @@ async def _run(start: dict[str, Any], bridge: _Bridge) -> None:
     _disable_network()
 
     from babeldoc.docvision.base_doclayout import DocLayoutModel
-    from babeldoc.format.pdf.high_level import async_translate
+    from babeldoc.format.pdf.high_level import do_translate
+    from babeldoc.format.pdf.high_level import get_translation_stage
     from babeldoc.format.pdf.translation_config import TranslationConfig
     from babeldoc.format.pdf.translation_config import WatermarkOutputMode
+    from babeldoc.progress_monitor import ProgressMonitor
     from babeldoc.translator.translator import BaseTranslator
 
     class CrabCodeTranslator(BaseTranslator):
@@ -196,22 +240,14 @@ async def _run(start: dict[str, Any], bridge: _Bridge) -> None:
         save_auto_extracted_glossary=False,
         report_interval=0.1,
     )
-    result = None
-    async for event in async_translate(config):
-        if bridge.cancelled.is_set():
-            raise asyncio.CancelledError
-        event_type = event.get("type")
-        if event_type in {"progress_start", "progress_update", "progress_end"}:
-            _emit({
-                "type": "progress",
-                "stage": str(event.get("stage") or "processing"),
-                "overall_progress": float(event.get("overall_progress") or 0),
-            })
-        elif event_type == "finish":
-            result = event.get("translate_result")
-        elif event_type == "error":
-            error = event.get("error")
-            raise RuntimeError(str(error or "BabelDOC translation failed"))
+    result = await asyncio.to_thread(
+        _translate_with_progress,
+        config,
+        bridge,
+        translate=do_translate,
+        get_stages=get_translation_stage,
+        progress_monitor_type=ProgressMonitor,
+    )
     if result is None or result.mono_pdf_path is None:
         raise RuntimeError("BabelDOC did not produce a monolingual PDF")
 
