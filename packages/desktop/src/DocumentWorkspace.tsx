@@ -61,13 +61,15 @@ const DOCUMENT_ZOOM_MIN = .6;
 const DOCUMENT_ZOOM_MAX = 2.5;
 const DOCUMENT_ZOOM_STEP = .1;
 const DOCUMENT_PINCH_SENSITIVITY = .01;
+const DOCUMENT_ZOOM_RENDER_DELAY = 400;
 
 function boundDocumentZoom(value: number): number {
   return Math.min(DOCUMENT_ZOOM_MAX, Math.max(DOCUMENT_ZOOM_MIN, value));
 }
 
 export function clampDocumentZoom(value: number): number {
-  return Math.round(boundDocumentZoom(value) * 10) / 10;
+  if (!Number.isFinite(value)) return 1.2;
+  return Math.round(boundDocumentZoom(value) * 100) / 100;
 }
 
 export function documentZoomFromPinchWheel(currentZoom: number, deltaY: number, deltaMode = 0): number {
@@ -87,6 +89,106 @@ export function documentZoomDeltaForKeyboardEvent(
 
 export function documentTranslationToggleLabel(showTranslation: boolean): string {
   return showTranslation ? "查看原文" : "查看译文";
+}
+
+export function formatDocumentZoom(zoom: number): string {
+  return `${Math.round(clampDocumentZoom(zoom) * 100)}%`;
+}
+
+export function parseDocumentZoomInput(value: string, fallback: number): number {
+  const parsed = Number(value.trim().replace(/%$/, ""));
+  return Number.isFinite(parsed) && value.trim() ? clampDocumentZoom(parsed / 100) : fallback;
+}
+
+export function parseDocumentPageInput(value: string, totalPages: number, fallback: number): number {
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed) || !value.trim() || totalPages < 1) return fallback;
+  return Math.min(totalPages, Math.max(1, Math.round(parsed)));
+}
+
+export function DocumentToolbarNumberEditor({
+  ariaLabel,
+  className,
+  displayValue,
+  editValue,
+  min,
+  max,
+  step,
+  suffix,
+  onCommit,
+}: {
+  ariaLabel: string;
+  className: string;
+  displayValue: string;
+  editValue: string;
+  min: number;
+  max: number;
+  step: number;
+  suffix?: string;
+  onCommit: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(editValue);
+  const cancelledRef = useRef(false);
+  const beginEditing = () => {
+    cancelledRef.current = false;
+    setDraft(editValue);
+    setEditing(true);
+  };
+  if (!editing) {
+    return (
+      <span
+        className={`${className} document-toolbar-number`}
+        role="button"
+        tabIndex={0}
+        title={`双击编辑${ariaLabel}`}
+        aria-label={`${displayValue}，双击编辑${ariaLabel}`}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          beginEditing();
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== "F2") return;
+          event.preventDefault();
+          beginEditing();
+        }}
+      >
+        {displayValue}
+      </span>
+    );
+  }
+  return (
+    <span className={`${className} document-toolbar-number is-editing`}>
+      <input
+        autoFocus
+        type="number"
+        inputMode="decimal"
+        aria-label={ariaLabel}
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          if (!cancelledRef.current) onCommit(draft);
+          cancelledRef.current = false;
+          setEditing(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            cancelledRef.current = true;
+            setEditing(false);
+          }
+        }}
+      />
+      {suffix && <span aria-hidden="true">{suffix}</span>}
+    </span>
+  );
 }
 
 type WebKitGestureEvent = Event & {
@@ -843,6 +945,7 @@ function PdfPage({
   pdf,
   pageNumber,
   zoom,
+  renderZoom,
   layout,
   translated,
   showOriginalText,
@@ -855,6 +958,7 @@ function PdfPage({
   pdf: PDFDocumentProxy;
   pageNumber: number;
   zoom: number;
+  renderZoom: number;
   layout: DocumentPageLayout | undefined;
   translated: Map<string, string>;
   showOriginalText: boolean;
@@ -868,19 +972,30 @@ function PdfPage({
   const textLayerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(pageNumber <= 2);
-  const [size, setSize] = useState({ width: (layout?.width ?? 612) * zoom, height: (layout?.height ?? 792) * zoom });
+  const [baseSize, setBaseSize] = useState({ width: layout?.width ?? 612, height: layout?.height ?? 792 });
+  const [renderedZoom, setRenderedZoom] = useState(renderZoom);
   const [renderVersion, setRenderVersion] = useState(0);
   const [blockColors, setBlockColors] = useState<Record<string, { background: string; color: string }>>({});
+  const displaySize = {
+    width: baseSize.width * zoom,
+    height: baseSize.height * zoom,
+  };
+  const renderedSize = {
+    width: baseSize.width * renderedZoom,
+    height: baseSize.height * renderedZoom,
+  };
+  const previewScale = zoom / renderedZoom;
 
   useEffect(() => {
     const root = rootRef.current;
-    if (!root || visible || !("IntersectionObserver" in window)) return;
+    if (!root || !("IntersectionObserver" in window)) return;
+    const scrollRoot = root.closest(".document-pdf-scroll");
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) setVisible(true);
-    }, { rootMargin: "900px" });
+      setVisible(entries.some((entry) => entry.isIntersecting));
+    }, { root: scrollRoot, rootMargin: "900px" });
     observer.observe(root);
     return () => observer.disconnect();
-  }, [visible]);
+  }, []);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -898,23 +1013,31 @@ function PdfPage({
     if (!visible) return undefined;
     void pdf.getPage(pageNumber).then((page) => {
       if (cancelled || !canvasRef.current) return;
-      const viewport = page.getViewport({ scale: zoom, rotation: page.rotate + rotation });
+      const viewport = page.getViewport({ scale: renderZoom, rotation: page.rotate + rotation });
       const outputScale = window.devicePixelRatio || 1;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext("2d");
+      const stagingCanvas = document.createElement("canvas");
+      const context = stagingCanvas.getContext("2d");
       if (!context) return;
-      canvas.width = Math.floor(viewport.width * outputScale);
-      canvas.height = Math.floor(viewport.height * outputScale);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-      setSize({ width: viewport.width, height: viewport.height });
+      stagingCanvas.width = Math.floor(viewport.width * outputScale);
+      stagingCanvas.height = Math.floor(viewport.height * outputScale);
       renderTask = page.render({
         canvasContext: context,
         viewport,
         transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
       });
       return renderTask.promise.then(() => {
-        if (!cancelled) setRenderVersion((value) => value + 1);
+        const canvas = canvasRef.current;
+        if (cancelled || !canvas) return;
+        const visibleContext = canvas.getContext("2d", { willReadFrequently: true });
+        if (!visibleContext) return;
+        canvas.width = stagingCanvas.width;
+        canvas.height = stagingCanvas.height;
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
+        visibleContext.drawImage(stagingCanvas, 0, 0);
+        setBaseSize({ width: viewport.width / renderZoom, height: viewport.height / renderZoom });
+        setRenderedZoom(renderZoom);
+        setRenderVersion((value) => value + 1);
       });
     }).catch((error) => {
       // PDF.js rejects the render promise when a page is unmounted or a zoom
@@ -927,7 +1050,7 @@ function PdfPage({
       cancelled = true;
       renderTask?.cancel();
     };
-  }, [pageNumber, pdf, rotation, visible, zoom]);
+  }, [pageNumber, pdf, renderZoom, rotation, visible]);
 
   useEffect(() => {
     const container = textLayerRef.current;
@@ -940,7 +1063,7 @@ function PdfPage({
     container.replaceChildren();
     void Promise.all([pdf.getPage(pageNumber), import("pdfjs-dist")]).then(async ([page, pdfjs]) => {
       if (cancelled) return;
-      const viewport = page.getViewport({ scale: zoom, rotation: page.rotate + rotation });
+      const viewport = page.getViewport({ scale: renderedZoom, rotation: page.rotate + rotation });
       textLayer = new pdfjs.TextLayer({
         textContentSource: page.streamTextContent(),
         container,
@@ -955,7 +1078,7 @@ function PdfPage({
       textLayer?.cancel();
       container.replaceChildren();
     };
-  }, [pageNumber, pdf, rotation, visible, zoom]);
+  }, [pageNumber, pdf, renderedZoom, rotation, visible]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -999,47 +1122,76 @@ function PdfPage({
   }, [layout, renderVersion, rotation, showTranslation]);
 
   return (
-    <div className="document-pdf-page" data-page-number={pageNumber} ref={rootRef} style={{ width: size.width, height: size.height }}>
-      <canvas ref={canvasRef} aria-label={`第 ${pageNumber} 页`} />
+    <div
+      className="document-pdf-page"
+      data-page-number={pageNumber}
+      ref={rootRef}
+      style={{ width: displaySize.width, height: displaySize.height }}
+    >
       <div
-        ref={textLayerRef}
-        className={`document-original-text-layer ${showOriginalText ? "show-text" : ""}`}
-        aria-hidden="true"
-        style={{ "--scale-factor": zoom } as CSSProperties}
-      />
-      {showTranslation && layout && (
-        <div className="document-translation-layer" aria-label={`第 ${pageNumber} 页译文`}>
-          {layout.blocks.map((block) => {
-            if (block.kind && block.kind !== "text") return null;
-            const text = translated.get(block.id);
-            if (!text) return null;
-            const box = translatedBox(block, rotation);
-            return (
-              <TranslationOverlayBlock
-                key={block.id}
-                block={block}
-                text={text}
-                box={box}
-                zoom={zoom}
-                pageWidth={size.width}
-                pageHeight={size.height}
-                colors={blockColors[block.id]}
-              />
-            );
-          })}
+        className="document-pdf-page-content"
+        style={{
+          width: renderedSize.width,
+          height: renderedSize.height,
+          transform: `scale(${previewScale})`,
+        }}
+      >
+        <canvas ref={canvasRef} aria-label={`第 ${pageNumber} 页`} />
+        <div
+          ref={textLayerRef}
+          className={`document-original-text-layer ${showOriginalText ? "show-text" : ""}`}
+          aria-hidden="true"
+          style={{ "--scale-factor": renderedZoom } as CSSProperties}
+        />
+        {showTranslation && layout && (
+          <div className="document-translation-layer" aria-label={`第 ${pageNumber} 页译文`}>
+            {layout.blocks.map((block) => {
+              if (block.kind && block.kind !== "text") return null;
+              const text = translated.get(block.id);
+              if (!text) return null;
+              const box = translatedBox(block, rotation);
+              return (
+                <TranslationOverlayBlock
+                  key={block.id}
+                  block={block}
+                  text={text}
+                  box={box}
+                  zoom={renderedZoom}
+                  pageWidth={renderedSize.width}
+                  pageHeight={renderedSize.height}
+                  colors={blockColors[block.id]}
+                />
+              );
+            })}
+          </div>
+        )}
+        <div className="document-annotation-layer" aria-hidden="true">
+          {annotations.flatMap((annotation) => annotation.rects
+            .filter((rect) => rect.page === pageNumber)
+            .map((rect, index) => {
+              const box = translatedBox(rect, rotation);
+              return (
+                <span
+                  key={`${annotation.id}-${index}`}
+                  className={index === 0 ? "has-label" : undefined}
+                  data-label={index === 0 ? annotation.label || "标注" : undefined}
+                  title={[annotation.label, annotation.note].filter(Boolean).join(" · ")}
+                  style={{
+                    left: `${box.x * 100}%`,
+                    top: `${box.y * 100}%`,
+                    width: `${box.width * 100}%`,
+                    height: `${box.height * 100}%`,
+                  }}
+                />
+              );
+            }))}
         </div>
-      )}
-      <div className="document-annotation-layer" aria-hidden="true">
-        {annotations.flatMap((annotation) => annotation.rects
-          .filter((rect) => rect.page === pageNumber)
-          .map((rect, index) => {
+        <div className="document-active-selection-layer" aria-hidden="true">
+          {selectionRects.filter((rect) => rect.page === pageNumber).map((rect, index) => {
             const box = translatedBox(rect, rotation);
             return (
               <span
-                key={`${annotation.id}-${index}`}
-                className={index === 0 ? "has-label" : undefined}
-                data-label={index === 0 ? annotation.label || "标注" : undefined}
-                title={[annotation.label, annotation.note].filter(Boolean).join(" · ")}
+                key={index}
                 style={{
                   left: `${box.x * 100}%`,
                   top: `${box.y * 100}%`,
@@ -1048,23 +1200,8 @@ function PdfPage({
                 }}
               />
             );
-          }))}
-      </div>
-      <div className="document-active-selection-layer" aria-hidden="true">
-        {selectionRects.filter((rect) => rect.page === pageNumber).map((rect, index) => {
-          const box = translatedBox(rect, rotation);
-          return (
-            <span
-              key={index}
-              style={{
-                left: `${box.x * 100}%`,
-                top: `${box.y * 100}%`,
-                width: `${box.width * 100}%`,
-                height: `${box.height * 100}%`,
-              }}
-            />
-          );
-        })}
+          })}
+        </div>
       </div>
       <span className="document-page-number">{pageNumber}</span>
     </div>
@@ -1205,6 +1342,7 @@ export default function DocumentWorkspace({
   const [blogLanguage, setBlogLanguage] = useState("source");
   const [showTranslation, setShowTranslation] = useState(false);
   const [zoom, setZoom] = useState(() => clampDocumentZoom(documentView?.zoom ?? 1.2));
+  const [renderZoom, setRenderZoom] = useState(() => clampDocumentZoom(documentView?.zoom ?? 1.2));
   const [rotation, setRotation] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [view, setView] = useState<DocumentView>("document");
@@ -1229,7 +1367,20 @@ export default function DocumentWorkspace({
   const scrollRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(zoom);
   const pinchZoomTargetRef = useRef(zoom);
-  const pinchWheelEndTimerRef = useRef<number | null>(null);
+  const pinchZoomAnchorRef = useRef<{ clientX: number; clientY: number } | undefined>(undefined);
+  const pinchZoomFrameRef = useRef<number | null>(null);
+  const pinchRenderTimerRef = useRef<number | null>(null);
+  const zoomScrollAnchorRef = useRef<{
+    anchorX: number;
+    anchorY: number;
+    contentX: number;
+    contentY: number;
+    previousZoom: number;
+    nextZoom: number;
+    pageNumber?: string;
+    pageX?: number;
+    pageY?: number;
+  } | null>(null);
   const projectKey = `${connectionId}:${project.id}:${project.path}`;
   const projectKeyRef = useRef(projectKey);
   const viewIdentityRef = useRef({ connectionId, projectId: project.id });
@@ -1266,10 +1417,17 @@ export default function DocumentWorkspace({
     persistTimerRef.current = window.setTimeout(commit, 250);
   }, []);
 
-  const applyZoom = useCallback((requestedZoom: number, anchor?: { clientX: number; clientY: number }) => {
+  const applyZoom = useCallback((
+    requestedZoom: number,
+    anchor?: { clientX: number; clientY: number },
+    deferRender = false,
+  ) => {
     const previousZoom = zoomRef.current;
     const nextZoom = clampDocumentZoom(requestedZoom);
-    if (nextZoom === previousZoom) return;
+    if (nextZoom === previousZoom) {
+      if (!deferRender) setRenderZoom(nextZoom);
+      return;
+    }
     const element = scrollRef.current;
     const rect = element?.getBoundingClientRect();
     const anchorX = anchor?.clientX ?? (rect ? rect.left + rect.width / 2 : 0);
@@ -1278,26 +1436,78 @@ export default function DocumentWorkspace({
     const relativeY = rect ? anchorY - rect.top : 0;
     const contentX = (element?.scrollLeft ?? 0) + relativeX;
     const contentY = (element?.scrollTop ?? 0) + relativeY;
+    const hit = typeof document.elementFromPoint === "function"
+      ? document.elementFromPoint(anchorX, anchorY)
+      : null;
+    const page = hit instanceof Element ? hit.closest<HTMLElement>(".document-pdf-page") : null;
+    const pageRect = page?.getBoundingClientRect();
+    zoomScrollAnchorRef.current = {
+      anchorX,
+      anchorY,
+      contentX,
+      contentY,
+      previousZoom,
+      nextZoom,
+      pageNumber: page?.dataset.pageNumber,
+      pageX: pageRect && pageRect.width > 0 ? (anchorX - pageRect.left) / pageRect.width : undefined,
+      pageY: pageRect && pageRect.height > 0 ? (anchorY - pageRect.top) / pageRect.height : undefined,
+    };
     zoomRef.current = nextZoom;
     setZoom(nextZoom);
+    if (!deferRender) setRenderZoom(nextZoom);
     persistViewState();
-    // Keep the point under the cursor stable while the page dimensions catch up.
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const current = scrollRef.current;
-        if (!current) return;
-        const ratio = nextZoom / previousZoom;
-        current.scrollLeft = Math.max(0, contentX * ratio - relativeX);
-        current.scrollTop = Math.max(0, contentY * ratio - relativeY);
-        persistViewState(true);
-      });
-    });
   }, [persistViewState]);
+
+  useLayoutEffect(() => {
+    const pending = zoomScrollAnchorRef.current;
+    const current = scrollRef.current;
+    if (!pending || !current || pending.nextZoom !== zoom) return;
+    zoomScrollAnchorRef.current = null;
+    const page = pending.pageNumber
+      ? current.querySelector<HTMLElement>(`.document-pdf-page[data-page-number="${pending.pageNumber}"]`)
+      : null;
+    const pageRect = page?.getBoundingClientRect();
+    if (pageRect && pending.pageX !== undefined && pending.pageY !== undefined) {
+      current.scrollLeft = Math.max(0, current.scrollLeft + pageRect.left + pending.pageX * pageRect.width - pending.anchorX);
+      current.scrollTop = Math.max(0, current.scrollTop + pageRect.top + pending.pageY * pageRect.height - pending.anchorY);
+    } else {
+      const rect = current.getBoundingClientRect();
+      const relativeX = pending.anchorX - rect.left;
+      const relativeY = pending.anchorY - rect.top;
+      const ratio = pending.nextZoom / pending.previousZoom;
+      current.scrollLeft = Math.max(0, pending.contentX * ratio - relativeX);
+      current.scrollTop = Math.max(0, pending.contentY * ratio - relativeY);
+    }
+    latestScrollRef.current = { top: current.scrollTop, left: current.scrollLeft };
+    persistViewState(true);
+  }, [persistViewState, zoom]);
 
   const changeZoom = useCallback((delta: number, anchor?: { clientX: number; clientY: number }) => {
     const nextZoom = clampDocumentZoom(zoomRef.current + delta);
     pinchZoomTargetRef.current = nextZoom;
+    if (pinchRenderTimerRef.current !== null) {
+      window.clearTimeout(pinchRenderTimerRef.current);
+      pinchRenderTimerRef.current = null;
+    }
     applyZoom(nextZoom, anchor);
+  }, [applyZoom]);
+
+  const schedulePinchZoom = useCallback((nextZoom: number, anchor?: { clientX: number; clientY: number }) => {
+    // Preserve sub-percent movement between events so small trackpad deltas
+    // accumulate naturally, while applyZoom renders only on whole percentages.
+    pinchZoomTargetRef.current = boundDocumentZoom(nextZoom);
+    pinchZoomAnchorRef.current = anchor;
+    if (pinchRenderTimerRef.current !== null) window.clearTimeout(pinchRenderTimerRef.current);
+    pinchRenderTimerRef.current = window.setTimeout(() => {
+      pinchRenderTimerRef.current = null;
+      setRenderZoom(clampDocumentZoom(pinchZoomTargetRef.current));
+      if (pinchZoomFrameRef.current === null) pinchZoomTargetRef.current = zoomRef.current;
+    }, DOCUMENT_ZOOM_RENDER_DELAY);
+    if (pinchZoomFrameRef.current !== null) return;
+    pinchZoomFrameRef.current = window.requestAnimationFrame(() => {
+      pinchZoomFrameRef.current = null;
+      applyZoom(pinchZoomTargetRef.current, pinchZoomAnchorRef.current, true);
+    });
   }, [applyZoom]);
 
   useLayoutEffect(() => {
@@ -1306,9 +1516,11 @@ export default function DocumentWorkspace({
     projectKeyRef.current = projectKey;
     viewIdentityRef.current = { connectionId, projectId: project.id };
     const nextZoom = clampDocumentZoom(documentView?.zoom ?? 1.2);
+    zoomScrollAnchorRef.current = null;
     zoomRef.current = nextZoom;
     pinchZoomTargetRef.current = nextZoom;
     setZoom(nextZoom);
+    setRenderZoom(nextZoom);
     latestScrollRef.current = {
       top: Math.max(0, documentView?.scroll_top ?? 0),
       left: Math.max(0, documentView?.scroll_left ?? 0),
@@ -1346,7 +1558,8 @@ export default function DocumentWorkspace({
 
   useEffect(() => () => {
     if (persistTimerRef.current !== null) window.clearTimeout(persistTimerRef.current);
-    if (pinchWheelEndTimerRef.current !== null) window.clearTimeout(pinchWheelEndTimerRef.current);
+    if (pinchRenderTimerRef.current !== null) window.clearTimeout(pinchRenderTimerRef.current);
+    if (pinchZoomFrameRef.current !== null) window.cancelAnimationFrame(pinchZoomFrameRef.current);
     persistViewState(true);
   }, [persistViewState]);
 
@@ -1587,8 +1800,24 @@ export default function DocumentWorkspace({
   ), [translation]);
   const showingPreciseTranslation = Boolean(showTranslation && translation?.engine === "precise");
   const activePdf = showingPreciseTranslation ? precisePdf : pdf;
+  const totalPages = activePdf?.numPages ?? manifest?.pdf.page_count ?? 0;
   const scannedPages = layout?.pages.filter((page) => page.blocks.length === 0).length ?? 0;
   const selectCurrentPage = useCallback((page: number) => setCurrentPage(page), []);
+  const goToPage = useCallback((value: string) => {
+    const nextPage = parseDocumentPageInput(value, totalPages, currentPage);
+    setCurrentPage(nextPage);
+    const scroll = scrollRef.current;
+    const page = scroll?.querySelector<HTMLElement>(`.document-pdf-page[data-page-number="${nextPage}"]`);
+    if (!scroll || !page) return;
+    const scrollBounds = scroll.getBoundingClientRect();
+    const pageBounds = page.getBoundingClientRect();
+    scroll.scrollTop = Math.max(0, scroll.scrollTop + pageBounds.top - scrollBounds.top - 12);
+    latestScrollRef.current = { top: scroll.scrollTop, left: scroll.scrollLeft };
+    persistViewState(true);
+  }, [currentPage, persistViewState, totalPages]);
+  const setZoomFromInput = useCallback((value: string) => {
+    applyZoom(parseDocumentZoomInput(value, zoomRef.current));
+  }, [applyZoom]);
   const handlePdfScroll = useCallback(() => {
     const element = scrollRef.current;
     if (element) latestScrollRef.current = { top: element.scrollTop, left: element.scrollLeft };
@@ -1599,24 +1828,19 @@ export default function DocumentWorkspace({
     const anchor = { clientX: event.clientX, clientY: event.clientY };
     if (event.ctrlKey) {
       event.preventDefault();
-      if (pinchWheelEndTimerRef.current === null) pinchZoomTargetRef.current = zoomRef.current;
+      if (pinchRenderTimerRef.current === null) pinchZoomTargetRef.current = zoomRef.current;
       pinchZoomTargetRef.current = documentZoomFromPinchWheel(
         pinchZoomTargetRef.current,
         event.deltaY,
         event.deltaMode,
       );
-      applyZoom(pinchZoomTargetRef.current, anchor);
-      if (pinchWheelEndTimerRef.current !== null) window.clearTimeout(pinchWheelEndTimerRef.current);
-      pinchWheelEndTimerRef.current = window.setTimeout(() => {
-        pinchWheelEndTimerRef.current = null;
-        pinchZoomTargetRef.current = zoomRef.current;
-      }, 160);
+      schedulePinchZoom(pinchZoomTargetRef.current, anchor);
       return;
     }
     if (!event.altKey) return;
     event.preventDefault();
     changeZoom(event.deltaY < 0 ? DOCUMENT_ZOOM_STEP : -DOCUMENT_ZOOM_STEP, anchor);
-  }, [applyZoom, changeZoom]);
+  }, [changeZoom, schedulePinchZoom]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -1639,11 +1863,11 @@ export default function DocumentWorkspace({
       if (!Number.isFinite(event.scale) || event.scale! <= 0) return;
       event.preventDefault();
       const anchor = eventAnchor(event) ?? gestureAnchor;
-      applyZoom(gestureStartZoom * event.scale!, anchor);
+      schedulePinchZoom(gestureStartZoom * event.scale!, anchor);
     };
     const onGestureEnd = (rawEvent: Event) => {
       rawEvent.preventDefault();
-      pinchZoomTargetRef.current = zoomRef.current;
+      if (pinchZoomFrameRef.current === null) pinchZoomTargetRef.current = zoomRef.current;
     };
     element.addEventListener("wheel", handlePdfWheel, { passive: false });
     element.addEventListener("gesturestart", onGestureStart, { passive: false });
@@ -1655,7 +1879,7 @@ export default function DocumentWorkspace({
       element.removeEventListener("gesturechange", onGestureChange);
       element.removeEventListener("gestureend", onGestureEnd);
     };
-  }, [applyZoom, handlePdfWheel, loading, view]);
+  }, [handlePdfWheel, loading, schedulePinchZoom, view]);
 
   const positionSelection = useCallback((rects: DocumentSelectionRect[]): SelectionBox | null => {
     const clientRects = rects.flatMap((rect) => {
@@ -1856,9 +2080,29 @@ export default function DocumentWorkspace({
         </div>
         {view === "document" && (
           <div className="document-tools">
-            <span className="document-page-indicator">{currentPage} / {activePdf?.numPages ?? manifest?.pdf.page_count ?? "–"}</span>
+            <DocumentToolbarNumberEditor
+              ariaLabel="当前页"
+              className="document-page-indicator"
+              displayValue={`${currentPage} / ${totalPages || "–"}`}
+              editValue={String(currentPage)}
+              min={1}
+              max={Math.max(1, totalPages)}
+              step={1}
+              suffix={` / ${totalPages || "–"}`}
+              onCommit={goToPage}
+            />
             <button className="icon-button small" title="缩小 (Alt+-)" aria-label="缩小" onClick={() => changeZoom(-DOCUMENT_ZOOM_STEP)}><Minus /></button>
-            <span className="document-zoom">{Math.round(zoom * 100)}%</span>
+            <DocumentToolbarNumberEditor
+              ariaLabel="缩放百分比"
+              className="document-zoom"
+              displayValue={formatDocumentZoom(zoom)}
+              editValue={String(Math.round(zoom * 100))}
+              min={DOCUMENT_ZOOM_MIN * 100}
+              max={DOCUMENT_ZOOM_MAX * 100}
+              step={1}
+              suffix="%"
+              onCommit={setZoomFromInput}
+            />
             <button className="icon-button small" title="放大 (Alt++)" aria-label="放大" onClick={() => changeZoom(DOCUMENT_ZOOM_STEP)}><Plus /></button>
             <button className="icon-button small" title="顺时针旋转" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
             <DocumentActionsMenu
@@ -2001,6 +2245,7 @@ export default function DocumentWorkspace({
                 pdf={activePdf}
                 pageNumber={index + 1}
                 zoom={zoom}
+                renderZoom={renderZoom}
                 layout={showingPreciseTranslation ? undefined : layout?.pages[index]}
                 translated={translated}
                 showOriginalText={showOriginalText}

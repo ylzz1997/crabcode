@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   clampDocumentZoom,
   documentTranslationToggleLabel,
+  formatDocumentZoom,
+  parseDocumentPageInput,
+  parseDocumentZoomInput,
   documentZoomDeltaForKeyboardEvent,
   documentZoomFromPinchWheel,
   groupTextBlocksIntoParagraphs,
@@ -53,8 +56,20 @@ describe("document translation coordinates", () => {
 
   it("keeps zoom in the same range for buttons and keyboard shortcuts", () => {
     expect(clampDocumentZoom(.1)).toBe(.6);
-    expect(clampDocumentZoom(1.24)).toBe(1.2);
+    expect(clampDocumentZoom(1.24)).toBe(1.24);
+    expect(clampDocumentZoom(1.23456)).toBe(1.23);
     expect(clampDocumentZoom(2.9)).toBe(2.5);
+  });
+
+  it("formats and parses editable page and zoom values", () => {
+    expect(formatDocumentZoom(1.4)).toBe("140%");
+    expect(formatDocumentZoom(1.374)).toBe("137%");
+    expect(parseDocumentZoomInput("137.4%", 1.2)).toBe(1.37);
+    expect(parseDocumentZoomInput("900", 1.2)).toBe(2.5);
+    expect(parseDocumentZoomInput("invalid", 1.2)).toBe(1.2);
+    expect(parseDocumentPageInput("12", 25, 2)).toBe(12);
+    expect(parseDocumentPageInput("90", 25, 2)).toBe(25);
+    expect(parseDocumentPageInput("invalid", 25, 2)).toBe(2);
   });
 
   it("uses physical minus and equal keys for macOS Option shortcuts", () => {
@@ -77,7 +92,7 @@ describe("document translation coordinates", () => {
       targetZoom = documentZoomFromPinchWheel(targetZoom, -1);
     }
     expect(targetZoom).toBeGreaterThan(1.2);
-    expect(clampDocumentZoom(targetZoom)).toBe(1.3);
+    expect(clampDocumentZoom(targetZoom)).toBe(1.27);
 
     expect(documentZoomFromPinchWheel(1.2, 10)).toBeLessThan(1.2);
     expect(documentZoomFromPinchWheel(2.5, -10)).toBe(2.5);
