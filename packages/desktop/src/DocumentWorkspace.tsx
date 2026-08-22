@@ -1991,25 +1991,27 @@ export default function DocumentWorkspace({
           className="document-pdf-scroll"
           onScroll={handlePdfScroll}
         >
-          {scannedPages > 0 && (
-            <div className="document-scan-warning"><AlertTriangle />检测到 {scannedPages} 个无文本页面，可阅读但暂不能原位翻译。</div>
-          )}
-          {activePdf && Array.from({ length: activePdf.numPages }, (_, index) => (
-            <PdfPage
-              key={`${showingPreciseTranslation ? "precise" : "source"}-${index + 1}`}
-              pdf={activePdf}
-              pageNumber={index + 1}
-              zoom={zoom}
-              layout={showingPreciseTranslation ? undefined : layout?.pages[index]}
-              translated={translated}
-              showOriginalText={showOriginalText}
-              showTranslation={showTranslation && translation?.engine === "legacy"}
-              rotation={rotation}
-              annotations={showingPreciseTranslation ? [] : annotations}
-              selectionRects={selection?.rects ?? []}
-              onCurrent={selectCurrentPage}
-            />
-          ))}
+          <div className="document-pdf-pages">
+            {scannedPages > 0 && (
+              <div className="document-scan-warning"><AlertTriangle />检测到 {scannedPages} 个无文本页面，可阅读但暂不能原位翻译。</div>
+            )}
+            {activePdf && Array.from({ length: activePdf.numPages }, (_, index) => (
+              <PdfPage
+                key={`${showingPreciseTranslation ? "precise" : "source"}-${index + 1}`}
+                pdf={activePdf}
+                pageNumber={index + 1}
+                zoom={zoom}
+                layout={showingPreciseTranslation ? undefined : layout?.pages[index]}
+                translated={translated}
+                showOriginalText={showOriginalText}
+                showTranslation={showTranslation && translation?.engine === "legacy"}
+                rotation={rotation}
+                annotations={showingPreciseTranslation ? [] : annotations}
+                selectionRects={selection?.rects ?? []}
+                onCurrent={selectCurrentPage}
+              />
+            ))}
+          </div>
         </div>
       )}
       {!loading && view === "blog" && (

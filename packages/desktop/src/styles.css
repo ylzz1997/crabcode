@@ -5037,12 +5037,19 @@ html[data-theme="light"] .document-actions-separator {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  background: color-mix(in srgb, var(--bg) 88%, var(--panel));
+}
+
+.document-pdf-pages {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 22px;
   padding: 28px 32px 70px;
-  background: color-mix(in srgb, var(--bg) 88%, var(--panel));
 }
 
 .document-pdf-page {
@@ -5876,8 +5883,7 @@ html[data-theme="light"] .document-actions-separator {
     display: inline-flex;
   }
 
-  .document-pdf-scroll {
-    align-items: flex-start;
+  .document-pdf-pages {
     padding-inline: 16px;
   }
 }
