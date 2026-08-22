@@ -266,18 +266,7 @@ describe("SettingsView", () => {
 
   it("keeps the document engine and translation controls in one group", async () => {
     const handlers = callbacks();
-    let finishInstall: (() => void) | undefined;
-    const install = vi.fn((onProgress: (progress: DocumentEngineInstallProgress) => void) => {
-      onProgress({
-        operationId: "install-1",
-        stage: "installing",
-        detail: "正在从 BabelDOC 官方源安装程序与依赖",
-        percent: 36,
-      });
-      return new Promise<void>((resolve) => {
-        finishInstall = resolve;
-      });
-    });
+    const install = vi.fn().mockResolvedValue(undefined);
     const capabilities: DocumentCapabilities = {
       supported_extensions: [".pdf"],
       available_extensions: [".pdf"],
@@ -298,8 +287,13 @@ describe("SettingsView", () => {
         },
       },
     };
-    act(() => root.render(
+    const renderSettings = (
+      key: string,
+      documentEngineBusy: "install" | "remove" | null = null,
+      documentEngineProgress: DocumentEngineInstallProgress | null = null,
+    ) => root.render(
       <SettingsView
+        key={key}
         {...handlers}
         settings={settings}
         gateways={{ local: onlineGateway }}
@@ -309,9 +303,12 @@ describe("SettingsView", () => {
         onSectionChange={vi.fn()}
         documentCapabilities={capabilities}
         canManageDocumentEngine
+        documentEngineBusy={documentEngineBusy}
+        documentEngineProgress={documentEngineProgress}
         onInstallDocumentEngine={install}
       />,
-    ));
+    );
+    act(() => renderSettings("idle"));
 
     const group = container.querySelector(".document-translation-group")!;
     expect(group.querySelectorAll(":scope > .settings-row")).toHaveLength(3);
@@ -325,17 +322,23 @@ describe("SettingsView", () => {
       await Promise.resolve();
     });
     expect(install).toHaveBeenCalledOnce();
-    const progress = group.querySelector<HTMLElement>('[role="progressbar"]')!;
+
+    const installingProgress: DocumentEngineInstallProgress = {
+      operationId: "install-1",
+      stage: "installing",
+      detail: "正在从 BabelDOC 官方源安装程序与依赖",
+      percent: 36,
+    };
+    act(() => renderSettings("installing-first", "install", installingProgress));
+    const progress = container.querySelector<HTMLElement>('[role="progressbar"]')!;
     expect(progress.getAttribute("aria-valuenow")).toBe("36");
     expect(progress.getAttribute("aria-valuetext")).toContain("安装程序与依赖");
     expect(progress.querySelector<HTMLElement>(".document-engine-progress-track i")?.style.width).toBe("36%");
     expect(progress.textContent).toContain("36%");
 
-    await act(async () => {
-      finishInstall?.();
-      await Promise.resolve();
-    });
-    expect(group.querySelector('[role="progressbar"]')).toBeNull();
+    act(() => renderSettings("installing-remounted", "install", installingProgress));
+    expect(container.querySelector('[role="progressbar"]')?.textContent).toContain("36%");
+    expect(container.textContent).toContain("正在安装…");
   });
 
   it("shows a host-side command instead of remote execution for remote gateways", () => {

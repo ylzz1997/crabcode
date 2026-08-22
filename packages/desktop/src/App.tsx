@@ -101,6 +101,7 @@ import {
   saveSettings,
   setDockIcon,
   storeCredential,
+  type DocumentEngineInstallProgress,
 } from "./native";
 import type {
   BackgroundTaskInfo,
@@ -418,6 +419,9 @@ function App() {
   const [projectTypeModal, setProjectTypeModal] = useState(false);
   const [documentProjectModal, setDocumentProjectModal] = useState(false);
   const [documentCapabilities, setDocumentCapabilities] = useState<DocumentCapabilities | null | undefined>(undefined);
+  const [documentEngineBusy, setDocumentEngineBusy] = useState<"install" | "remove" | null>(null);
+  const [documentEngineProgress, setDocumentEngineProgress] = useState<DocumentEngineInstallProgress | null>(null);
+  const [documentEngineError, setDocumentEngineError] = useState<string | null>(null);
   const [referenceDirectoryModal, setReferenceDirectoryModal] = useState(false);
   const [goalModal, setGoalModal] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1873,15 +1877,34 @@ function App() {
             document_workspace_root: path,
           }))}
           documentCapabilities={documentCapabilities}
+          documentEngineBusy={documentEngineBusy}
+          documentEngineProgress={documentEngineProgress}
+          documentEngineError={documentEngineError}
           canManageDocumentEngine={Boolean(
             isDesktopShell()
             && activeConnection?.id === "local"
             && activeConnection
             && isLoopbackUrl(activeConnection.base_url)
           )}
-          onInstallDocumentEngine={async (onProgress) => {
+          onInstallDocumentEngine={async () => {
+            setDocumentEngineBusy("install");
+            setDocumentEngineError(null);
+            setDocumentEngineProgress({
+              operationId: "pending",
+              stage: "preparing",
+              detail: "正在准备安装高精度 PDF 引擎",
+              percent: 3,
+            });
             try {
-              await installDocumentEngine(settings.python_path, null, onProgress);
+              await installDocumentEngine(settings.python_path, null, (progress) => {
+                setDocumentEngineProgress({
+                  ...progress,
+                  percent: Math.max(0, Math.min(100, progress.percent)),
+                });
+              });
+            } catch (reason) {
+              setDocumentEngineError(reason instanceof Error ? reason.message : String(reason));
+              throw reason;
             } finally {
               if (activeConnection) {
                 try {
@@ -1903,11 +1926,19 @@ function App() {
                   setDocumentCapabilities(null);
                 }
               }
+              setDocumentEngineBusy(null);
+              setDocumentEngineProgress(null);
             }
           }}
           onRemoveDocumentEngine={async () => {
+            setDocumentEngineBusy("remove");
+            setDocumentEngineProgress(null);
+            setDocumentEngineError(null);
             try {
               await removeDocumentEngine(settings.python_path);
+            } catch (reason) {
+              setDocumentEngineError(reason instanceof Error ? reason.message : String(reason));
+              throw reason;
             } finally {
               if (activeConnection) {
                 try {
@@ -1929,6 +1960,7 @@ function App() {
                   setDocumentCapabilities(null);
                 }
               }
+              setDocumentEngineBusy(null);
             }
           }}
         />

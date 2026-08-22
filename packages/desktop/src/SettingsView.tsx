@@ -182,9 +182,10 @@ interface SettingsViewProps {
   onDocumentWorkspaceRoot?: (connectionId: string, path: string | null) => void;
   documentCapabilities?: DocumentCapabilities | null;
   canManageDocumentEngine?: boolean;
-  onInstallDocumentEngine?: (
-    onProgress: (progress: DocumentEngineInstallProgress) => void,
-  ) => Promise<void>;
+  documentEngineBusy?: "install" | "remove" | null;
+  documentEngineProgress?: DocumentEngineInstallProgress | null;
+  documentEngineError?: string | null;
+  onInstallDocumentEngine?: () => Promise<void>;
   onRemoveDocumentEngine?: () => Promise<void>;
 }
 
@@ -394,6 +395,9 @@ export function SettingsView({
   onDocumentWorkspaceRoot,
   documentCapabilities,
   canManageDocumentEngine,
+  documentEngineBusy = null,
+  documentEngineProgress = null,
+  documentEngineError = null,
   onInstallDocumentEngine = async () => undefined,
   onRemoveDocumentEngine = async () => undefined,
 }: SettingsViewProps) {
@@ -402,9 +406,6 @@ export function SettingsView({
   const [customIconPreview, setCustomIconPreview] = useState<string | null>(null);
   const [dockIconBusy, setDockIconBusy] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
-  const [documentEngineBusy, setDocumentEngineBusy] = useState<"install" | "remove" | null>(null);
-  const [documentEngineProgress, setDocumentEngineProgress] = useState<DocumentEngineInstallProgress | null>(null);
-  const [documentEngineError, setDocumentEngineError] = useState<string | null>(null);
   const customIconInputRef = useRef<HTMLInputElement>(null);
   const matchingSections = useMemo(() => filterSettingsSections(query), [query]);
   const activeGateway = activeConnection ? gateways[activeConnection.id] : null;
@@ -445,27 +446,11 @@ export function SettingsView({
   const documentEngineInstallCommand = preciseEngine?.install_command ?? "crabcode document-engine install";
 
   const manageDocumentEngine = async (action: "install" | "remove") => {
-    setDocumentEngineBusy(action);
-    setDocumentEngineError(null);
-    setDocumentEngineProgress(action === "install" ? {
-      operationId: "pending",
-      stage: "preparing",
-      detail: "正在准备安装高精度 PDF 引擎",
-      percent: 3,
-    } : null);
     try {
-      if (action === "install") await onInstallDocumentEngine((progress) => {
-        setDocumentEngineProgress({
-          ...progress,
-          percent: Math.max(0, Math.min(100, progress.percent)),
-        });
-      });
+      if (action === "install") await onInstallDocumentEngine();
       else await onRemoveDocumentEngine();
-    } catch (reason) {
-      setDocumentEngineError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setDocumentEngineBusy(null);
-      setDocumentEngineProgress(null);
+    } catch {
+      // The application-level task owner preserves and displays the error.
     }
   };
 
