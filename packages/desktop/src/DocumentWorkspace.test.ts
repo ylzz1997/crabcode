@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampDocumentZoom,
+  documentTranslationToggleLabel,
   documentZoomDeltaForKeyboardEvent,
   documentZoomFromPinchWheel,
   groupTextBlocksIntoParagraphs,
@@ -45,6 +46,11 @@ function textBlock(
 }
 
 describe("document translation coordinates", () => {
+  it("labels the PDF toggle with the action it will perform", () => {
+    expect(documentTranslationToggleLabel(false)).toBe("查看译文");
+    expect(documentTranslationToggleLabel(true)).toBe("查看原文");
+  });
+
   it("keeps zoom in the same range for buttons and keyboard shortcuts", () => {
     expect(clampDocumentZoom(.1)).toBe(.6);
     expect(clampDocumentZoom(1.24)).toBe(1.2);

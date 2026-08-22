@@ -85,6 +85,10 @@ export function documentZoomDeltaForKeyboardEvent(
   return 0;
 }
 
+export function documentTranslationToggleLabel(showTranslation: boolean): string {
+  return showTranslation ? "查看原文" : "查看译文";
+}
+
 type WebKitGestureEvent = Event & {
   scale?: number;
   clientX?: number;
@@ -1901,7 +1905,7 @@ export default function DocumentWorkspace({
                   setShowTranslation(event.target.checked);
                 }}
               />
-              {translation?.engine === "precise" ? (showTranslation ? "译文 PDF" : "原文 PDF") : "显示译文"}
+              {documentTranslationToggleLabel(showTranslation)}
             </label>
           </div>
         )}
