@@ -10,6 +10,135 @@ export type ComposerReferenceOption = {
   detail: string;
 };
 
+export type ComposerCommandOption = {
+  name: string;
+  description: string;
+  kind: "command" | "skill" | "subcommand";
+  children?: ComposerCommandOption[];
+};
+
+type SlashCompletion = {
+  title: string;
+  query: string;
+  parent: ComposerCommandOption | null;
+  items: ComposerCommandOption[];
+};
+
+const BUILTIN_COMMANDS: Array<Omit<ComposerCommandOption, "kind" | "children">> = [
+  { name: "/help", description: "显示帮助" },
+  { name: "/plan", description: "切换到计划模式（只读分析）" },
+  { name: "/agent", description: "切换到 Agent 模式 / 查看 Agent" },
+  { name: "/plan-status", description: "显示当前计划状态" },
+  { name: "/agents", description: "列出托管的 Agent" },
+  { name: "/agent-log", description: "查看 Agent transcript" },
+  { name: "/agent-send", description: "向 Agent 追加输入" },
+  { name: "/wait", description: "等待 Agent 完成" },
+  { name: "/cancel-agent", description: "取消 Agent" },
+  { name: "/spawn-agent", description: "启动后台 Agent（支持类型/名称/模型）" },
+  { name: "/goal", description: "设置或管理持久 Goal" },
+  { name: "/tasks", description: "列出、查看、停止后台任务" },
+  { name: "/peers", description: "列出其他 CrabCode 会话" },
+  { name: "/peer-send", description: "向其他会话发送消息" },
+  { name: "/status", description: "显示会话状态" },
+  { name: "/effort", description: "查看/设置推理强度" },
+  { name: "/ultra", description: "切换/设置 Ultra mode" },
+  { name: "/model", description: "显示/切换模型" },
+  { name: "/new", description: "开始新会话" },
+  { name: "/compact", description: "压缩对话上下文" },
+  { name: "/clear", description: "清除历史记录" },
+  { name: "/sessions", description: "列出所有会话" },
+  { name: "/recent", description: "列出最近的会话" },
+  { name: "/search", description: "搜索会话" },
+  { name: "/archive", description: "归档会话" },
+  { name: "/prune", description: "归档/清理过期会话" },
+  { name: "/export", description: "导出会话（md/json，可指定路径）" },
+  { name: "/stats", description: "使用统计" },
+  { name: "/checkpoint", description: "创建检查点（含文件快照）" },
+  { name: "/checkpoints", description: "列出检查点" },
+  { name: "/rollback", description: "回滚对话到检查点" },
+  { name: "/revert", description: "还原文件和对话到检查点" },
+  { name: "/undo", description: "撤销最后一个检查点" },
+  { name: "/resume", description: "恢复会话" },
+  { name: "/logs", description: "显示后台日志" },
+  { name: "/team", description: "团队管理（创建/协作/任务板）" },
+  { name: "/schedule", description: "定时任务管理（创建/执行/历史）" },
+  { name: "/image", description: "附加图片到下一条消息" },
+];
+
+function subcommands(items: Array<[string, string]>): ComposerCommandOption[] {
+  return items.map(([name, description]) => ({ name, description, kind: "subcommand" }));
+}
+
+const STATIC_SUBCOMMANDS: Record<string, ComposerCommandOption[]> = {
+  "/tasks": subcommands([
+    ["list", "列出后台任务"], ["show", "查看任务详情"], ["output", "查看任务输出"], ["stop", "停止后台任务"],
+  ]),
+  "/team": subcommands([
+    ["list", "列出 Team"], ["create", "创建 Team"], ["status", "查看 Team 状态"],
+    ["messages", "查看 Team 消息"], ["tasks", "查看 Team 任务板"], ["spawn", "添加 teammate"],
+    ["remove", "移除 teammate"], ["message", "发送 Team 消息"], ["broadcast", "广播 Team 消息"],
+    ["mark-read", "标记 Team 消息已读"], ["task-add", "添加 Team 任务"], ["task-claim", "认领 Team 任务"],
+    ["task-complete", "完成 Team 任务"], ["task-fail", "将 Team 任务标记失败"],
+    ["bridge", "设置跨 Team Bridge"], ["bridge-status", "查看跨 Team Bridge"],
+    ["cross-message", "发送跨 Team 消息"], ["shutdown", "关闭 Team"],
+  ]),
+  "/schedule": subcommands([
+    ["list", "列出定时任务"], ["show", "查看定时任务详情"], ["runs", "查看定时任务执行历史"],
+    ["create", "创建定时任务"], ["pause", "暂停定时任务"], ["resume", "恢复定时任务"],
+    ["run", "立即执行定时任务"], ["cancel", "删除定时任务"],
+  ]),
+};
+
+export function createComposerCommandOptions(
+  models: Array<{ name: string; description?: string }>,
+  skills: Array<{ name: string; description?: string }>,
+): ComposerCommandOption[] {
+  const builtins = BUILTIN_COMMANDS.map((command) => ({
+    ...command,
+    kind: "command" as const,
+    children: command.name === "/model"
+      ? models.map((model) => ({
+        name: model.name,
+        description: model.description || model.name,
+        kind: "subcommand" as const,
+      }))
+      : STATIC_SUBCOMMANDS[command.name],
+  }));
+  const builtinNames = new Set(builtins.map((command) => command.name.slice(1).toLocaleLowerCase()));
+  return [
+    ...builtins,
+    ...skills
+      .filter((skill) => !builtinNames.has(skill.name.toLocaleLowerCase()))
+      .map((skill) => ({
+        name: `/${skill.name}`,
+        description: skill.description || "Skill",
+        kind: "skill" as const,
+      })),
+  ];
+}
+
+export function resolveComposerCommandCompletion(
+  text: string,
+  commands: ComposerCommandOption[],
+): SlashCompletion | null {
+  if (!text.startsWith("/") || text.includes("\n")) return null;
+  const spaceIndex = text.indexOf(" ");
+  if (spaceIndex < 0) {
+    const query = text.slice(1).toLocaleLowerCase();
+    const items = commands.filter((command) => (
+      command.name.slice(1).toLocaleLowerCase().startsWith(query)
+      || command.description.toLocaleLowerCase().includes(query)
+    ));
+    return items.length > 0 ? { title: "快捷命令", query, parent: null, items } : null;
+  }
+  const commandName = text.slice(0, spaceIndex).toLocaleLowerCase();
+  const parent = commands.find((command) => command.name.toLocaleLowerCase() === commandName);
+  if (!parent?.children?.length) return null;
+  const query = text.slice(spaceIndex + 1).toLocaleLowerCase();
+  const items = parent.children.filter((child) => child.name.toLocaleLowerCase().startsWith(query));
+  return items.length > 0 ? { title: parent.name, query, parent, items } : null;
+}
+
 type MentionTrigger = {
   query: string;
   range: Range;
@@ -95,22 +224,27 @@ function createMention(option: ComposerReferenceOption): HTMLElement {
 export function ComposerEditor({
   value,
   references,
+  commands,
   placeholder,
   onChange,
   onSubmit,
 }: {
   value: string;
   references: ComposerReferenceOption[];
+  commands?: ComposerCommandOption[];
   placeholder: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const commandMenuRef = useRef<HTMLDivElement | null>(null);
   const lastEmittedRef = useRef("");
   const triggerRef = useRef<MentionTrigger | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [activeOption, setActiveOption] = useState(0);
   const [menuPosition, setMenuPosition] = useState({ left: 12, top: 42 });
+  const [slashCompletion, setSlashCompletion] = useState<SlashCompletion | null>(null);
+  const [activeCommandOption, setActiveCommandOption] = useState(0);
 
   const filteredReferences = useMemo(() => {
     const query = (mentionQuery ?? "").trim().toLocaleLowerCase();
@@ -120,12 +254,13 @@ export function ComposerEditor({
     ));
   }, [mentionQuery, references]);
 
-  const emitChange = useCallback(() => {
+  const emitChange = useCallback((): string => {
     const root = rootRef.current;
-    if (!root) return;
+    if (!root) return "";
     const next = extractComposerText(root);
     lastEmittedRef.current = next;
     onChange(next);
+    return next;
   }, [onChange]);
 
   const closeMentions = useCallback(() => {
@@ -155,6 +290,18 @@ export function ComposerEditor({
     }
   }, []);
 
+  const closeCommands = useCallback(() => {
+    setSlashCompletion(null);
+    setActiveCommandOption(0);
+  }, []);
+
+  const updateSlashCompletion = useCallback((text: string) => {
+    const next = resolveComposerCommandCompletion(text, commands ?? []);
+    setSlashCompletion(next);
+    setActiveCommandOption(0);
+    if (next) closeMentions();
+  }, [closeMentions, commands]);
+
   const removeMention = useCallback((pill: HTMLElement) => {
     const parent = pill.parentNode;
     const next = pill.nextSibling;
@@ -183,13 +330,30 @@ export function ComposerEditor({
     emitChange();
   }, [closeMentions, emitChange]);
 
+  const insertCommand = useCallback((option: ComposerCommandOption) => {
+    const root = rootRef.current;
+    if (!root || !slashCompletion) return;
+    const next = slashCompletion.parent
+      ? `${slashCompletion.parent.name} ${option.name} `
+      : `${option.name} `;
+    root.textContent = next;
+    root.focus();
+    setCaret(root, root.childNodes.length);
+    lastEmittedRef.current = next;
+    onChange(next);
+    const following = resolveComposerCommandCompletion(next, commands ?? []);
+    setSlashCompletion(following);
+    setActiveCommandOption(0);
+  }, [commands, onChange, slashCompletion]);
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root || value === lastEmittedRef.current) return;
     root.textContent = value;
     lastEmittedRef.current = value;
     closeMentions();
-  }, [closeMentions, value]);
+    closeCommands();
+  }, [closeCommands, closeMentions, value]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -208,6 +372,11 @@ export function ComposerEditor({
     });
     if (removed) emitChange();
   }, [emitChange, references]);
+
+  useEffect(() => {
+    const active = commandMenuRef.current?.querySelector<HTMLElement>("button.active");
+    active?.scrollIntoView?.({ block: "nearest" });
+  }, [activeCommandOption, slashCompletion]);
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
@@ -231,6 +400,28 @@ export function ComposerEditor({
       if (event.key === "Escape") {
         event.preventDefault();
         closeMentions();
+        return;
+      }
+    }
+    if (slashCompletion !== null) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveCommandOption((current) => (
+          (current + (event.key === "ArrowDown" ? 1 : -1) + slashCompletion.items.length)
+          % slashCompletion.items.length
+        ));
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const option = slashCompletion.items[activeCommandOption] ?? slashCompletion.items[0];
+        if (option) insertCommand(option);
+        else closeCommands();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCommands();
         return;
       }
     }
@@ -268,6 +459,7 @@ export function ComposerEditor({
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       closeMentions();
+      closeCommands();
       onSubmit();
     }
   };
@@ -293,8 +485,9 @@ export function ComposerEditor({
         data-placeholder={placeholder}
         suppressContentEditableWarning
         onInput={() => {
-          emitChange();
+          const next = emitChange();
           updateMentionTrigger();
+          updateSlashCompletion(next);
         }}
         onKeyDown={handleKeyDown}
         onKeyUp={(event) => {
@@ -311,10 +504,14 @@ export function ComposerEditor({
           const textNode = document.createTextNode(text);
           range.insertNode(textNode);
           setCaret(textNode, text.length);
-          emitChange();
+          const next = emitChange();
           updateMentionTrigger();
+          updateSlashCompletion(next);
         }}
-        onBlur={() => window.setTimeout(closeMentions, 100)}
+        onBlur={() => window.setTimeout(() => {
+          closeMentions();
+          closeCommands();
+        }, 100)}
       />
       {mentionQuery !== null && (
         <div
@@ -344,6 +541,35 @@ export function ComposerEditor({
               {references.length > 0 ? "没有匹配的引用" : "先通过左下角 + 添加图片、文件或文件夹"}
             </div>
           )}
+        </div>
+      )}
+      {slashCompletion !== null && (
+        <div ref={commandMenuRef} className="composer-command-menu" role="listbox" aria-label="快捷命令">
+          <div className="composer-command-heading">
+            <span>{slashCompletion.title}</span>
+            <small>↑↓ 选择 · Tab / Enter 补全</small>
+          </div>
+          {slashCompletion.items.map((command, index) => (
+            <button
+              key={`${slashCompletion.parent?.name ?? "root"}:${command.name}`}
+              type="button"
+              role="option"
+              aria-selected={index === activeCommandOption}
+              className={index === activeCommandOption ? "active" : ""}
+              onMouseEnter={() => setActiveCommandOption(index)}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                insertCommand(command);
+              }}
+            >
+              <span className="composer-command-symbol">/</span>
+              <span className="composer-command-copy">
+                <strong>{command.name}</strong>
+                <small>{command.description}</small>
+              </span>
+              {command.kind === "skill" && <span className="composer-command-badge">skill</span>}
+            </button>
+          ))}
         </div>
       )}
     </div>

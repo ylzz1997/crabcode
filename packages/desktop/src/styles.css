@@ -1644,6 +1644,109 @@ button.primary:hover,
   text-align: center;
 }
 
+.composer-command-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 9px);
+  left: 0;
+  z-index: 120;
+  max-height: min(360px, 48vh);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 9px;
+  background: rgba(38, 41, 39, .98);
+  box-shadow: 0 22px 64px rgba(0, 0, 0, .46), inset 0 1px rgba(255, 255, 255, .055);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+  backdrop-filter: blur(26px) saturate(135%);
+  animation: composer-menu-in 150ms ease-out both;
+}
+
+.composer-command-heading {
+  min-height: 31px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.composer-command-heading small {
+  color: var(--subtle);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.composer-command-menu>button {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #b9bdb6;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-command-menu>button:hover,
+.composer-command-menu>button.active {
+  background: rgba(255, 255, 255, .07);
+  color: #f0f2ed;
+}
+
+.composer-command-symbol {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .055);
+  color: var(--accent-strong);
+  font: 700 15px/1 var(--code-font-family);
+}
+
+.composer-command-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-command-copy strong,
+.composer-command-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-command-copy strong {
+  font: 600 11px/1.3 var(--code-font-family);
+}
+
+.composer-command-copy small {
+  color: var(--subtle);
+  font-size: 9.5px;
+}
+
+.composer-command-badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 8.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
 .folder-attachment>svg {
   width: 14px;
   color: var(--subtle);
@@ -3081,6 +3184,7 @@ html[data-theme="light"] .page-search:focus-within {
 
 html[data-theme="light"] .composer-add-menu,
 html[data-theme="light"] .composer-mention-menu,
+html[data-theme="light"] .composer-command-menu,
 html[data-theme="light"] .picker-menu,
 html[data-theme="light"] .context-popover {
   border-color: #cbd6d2;
@@ -3091,6 +3195,7 @@ html[data-theme="light"] .context-popover {
 
 html[data-theme="light"] .composer-add-menu>button,
 html[data-theme="light"] .composer-mention-menu>button,
+html[data-theme="light"] .composer-command-menu>button,
 html[data-theme="light"] .picker-option,
 html[data-theme="light"] .permission-option,
 html[data-theme="light"] .effort-option {
@@ -3100,6 +3205,8 @@ html[data-theme="light"] .effort-option {
 html[data-theme="light"] .composer-add-menu>button:hover,
 html[data-theme="light"] .composer-mention-menu>button:hover,
 html[data-theme="light"] .composer-mention-menu>button.active,
+html[data-theme="light"] .composer-command-menu>button:hover,
+html[data-theme="light"] .composer-command-menu>button.active,
 html[data-theme="light"] .picker-option:hover,
 html[data-theme="light"] .permission-option:hover,
 html[data-theme="light"] .effort-option:hover,

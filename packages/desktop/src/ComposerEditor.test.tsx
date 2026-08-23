@@ -3,7 +3,13 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ComposerEditor, extractComposerText, type ComposerReferenceOption } from "./ComposerEditor";
+import {
+  ComposerEditor,
+  createComposerCommandOptions,
+  extractComposerText,
+  resolveComposerCommandCompletion,
+  type ComposerReferenceOption,
+} from "./ComposerEditor";
 
 const references: ComposerReferenceOption[] = [
   { key: "file:1", kind: "file", label: "notes.md", detail: "文件 · 2 KB" },
@@ -88,5 +94,65 @@ describe("ComposerEditor mentions", () => {
 
     expect(editor.querySelector(".composer-inline-mention")).toBeNull();
     expect(extractComposerText(editor)).toBe("请看 ");
+  });
+});
+
+describe("ComposerEditor slash commands", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let onChange: ReturnType<typeof vi.fn>;
+  const commands = createComposerCommandOptions(
+    [{ name: "sonnet", description: "Fast model" }],
+    [{ name: "release", description: "Prepare a release" }],
+  );
+
+  beforeEach(() => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    onChange = vi.fn();
+    act(() => root.render(
+      <ComposerEditor
+        value=""
+        references={references}
+        commands={commands}
+        placeholder="输入任务"
+        onChange={onChange}
+        onSubmit={vi.fn()}
+      />,
+    ));
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function typeCommand(text: string) {
+    const editor = container.querySelector<HTMLElement>(".composer-editor-input")!;
+    editor.textContent = text;
+    placeCaretAtEnd(editor);
+    act(() => editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" })));
+    return editor;
+  }
+
+  it("includes dynamic models and skills in completion sources", () => {
+    expect(resolveComposerCommandCompletion("/rel", commands)?.items.map((item) => item.name)).toEqual(["/release"]);
+    expect(resolveComposerCommandCompletion("/model so", commands)?.items.map((item) => item.name)).toEqual(["sonnet"]);
+  });
+
+  it("completes a command and then its subcommand with the keyboard", () => {
+    const editor = typeCommand("/sch");
+    expect(container.querySelector(".composer-command-menu")?.textContent).toContain("/schedule");
+
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+    expect(extractComposerText(editor)).toBe("/schedule ");
+    expect(container.querySelector(".composer-command-heading")?.textContent).toContain("/schedule");
+
+    typeCommand("/schedule pa");
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(extractComposerText(editor)).toBe("/schedule pause ");
+    expect(onChange).toHaveBeenLastCalledWith("/schedule pause ");
   });
 });

@@ -64,7 +64,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import DocumentWorkspace from "./DocumentWorkspace";
-import { ComposerEditor, type ComposerReferenceOption } from "./ComposerEditor";
+import { ComposerEditor, createComposerCommandOptions, type ComposerReferenceOption } from "./ComposerEditor";
 import { applyGatewayEvent } from "./events";
 import { normalizeMarkdownMathDelimiters } from "./markdownMath";
 import {
@@ -1874,6 +1874,10 @@ function App() {
       detail: `文档引用 · ${formatDocumentReferenceLocation(reference)}`,
     })),
   ], [pendingDocumentReferences, pendingFiles, pendingFolders, pendingImages]);
+  const composerCommands = useMemo(() => createComposerCommandOptions(
+    activeGateway?.models ?? [],
+    activePluginData.skills,
+  ), [activeGateway?.models, activePluginData.skills]);
 
   useEffect(() => {
     if (!activeSession?.busy) return;
@@ -2733,6 +2737,7 @@ function App() {
                   <ComposerEditor
                     value={composer}
                     references={composerReferences}
+                    commands={composerCommands}
                     onChange={setComposer}
                     onSubmit={() => void sendMessage()}
                     placeholder={activeSession.busy ? "输入内容以引导当前任务" : "输入任务"}
