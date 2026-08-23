@@ -148,6 +148,63 @@ type FocusedSessionSnapshot = SessionCleanupTarget & {
   view: WorkspaceView;
 };
 
+export function formatDocumentReferenceLocation(reference: DocumentReference): string {
+  if (reference.line_start === undefined || reference.line_end === undefined) return reference.page_label;
+  return `${reference.page_label} [${reference.line_start}-${reference.line_end}]`;
+}
+
+export function documentReferencePreview(text: string, edgeLength = 72): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= edgeLength * 2 + 1) return normalized;
+  return `${normalized.slice(0, edgeLength).trimEnd()}…${normalized.slice(-edgeLength).trimStart()}`;
+}
+
+function DocumentReferenceAttachment({
+  reference,
+  onRemove,
+}: {
+  reference: DocumentReference;
+  onRemove: () => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ left: number; top: number } | null>(null);
+  const preview = documentReferencePreview(reference.text);
+  const showTooltip = useCallback(() => {
+    const bounds = rootRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    setTooltipPosition({
+      left: Math.max(176, Math.min(window.innerWidth - 176, bounds.left + bounds.width / 2)),
+      top: bounds.top - 8,
+    });
+  }, []);
+  return (
+    <>
+      <div
+        ref={rootRef}
+        className="document-reference-attachment"
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setTooltipPosition(null)}
+        onFocusCapture={showTooltip}
+        onBlurCapture={() => setTooltipPosition(null)}
+      >
+        <Quote />
+        <span><strong>文档引用</strong><small>{formatDocumentReferenceLocation(reference)}</small></span>
+        <button type="button" title="移除文档引用" onClick={onRemove}><X /></button>
+      </div>
+      {tooltipPosition && preview && createPortal(
+        <div
+          className="document-reference-preview-tooltip"
+          role="tooltip"
+          style={tooltipPosition}
+        >
+          {preview}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 const EMPTY_GATEWAY: GatewayViewState = {
   status: "connecting",
   error: null,
@@ -1387,7 +1444,7 @@ function App() {
     ) return;
     const folderContext = pendingFolders.map((path) => `<folder>\n${path}\n</folder>`).join("\n");
     const documentContext = pendingDocumentReferences.map((reference) => (
-      `<document-reference>\n文档：${reference.document_name}\n位置：${reference.page_label}\n\n${reference.text}\n</document-reference>`
+      `<document-reference>\n文档：${reference.document_name}\n位置：${formatDocumentReferenceLocation(reference)}\n\n${reference.text}\n</document-reference>`
     )).join("\n\n");
     const messageText = [folderContext, documentContext, text].filter(Boolean).join("\n\n");
     const now = Date.now();
@@ -1401,7 +1458,7 @@ function App() {
         const attachmentLine = [
           ...pendingImages.map((image) => `[图片：${image.name}]`),
           ...pendingFolders.map((path) => `[文件夹：${path}]`),
-          ...pendingDocumentReferences.map((reference) => `[文档引用：${reference.page_label}]`),
+          ...pendingDocumentReferences.map((reference) => `[文档引用：${formatDocumentReferenceLocation(reference)}]`),
         ].join(" ");
         setSessions((current) => ({
           ...current,
@@ -1427,7 +1484,7 @@ function App() {
         const attachmentLine = [
           ...pendingImages.map((image) => `[图片：${image.name}]`),
           ...pendingFolders.map((path) => `[文件夹：${path}]`),
-          ...pendingDocumentReferences.map((reference) => `[文档引用：${reference.page_label}]`),
+          ...pendingDocumentReferences.map((reference) => `[文档引用：${formatDocumentReferenceLocation(reference)}]`),
         ].join(" ");
         setSessions((current) => ({
           ...current,
@@ -2534,15 +2591,11 @@ function App() {
                         </div>
                       ))}
                       {pendingDocumentReferences.map((reference) => (
-                        <div className="document-reference-attachment" key={reference.id} title={reference.text}>
-                          <Quote />
-                          <span><strong>文档引用</strong><small>{reference.page_label}</small></span>
-                          <button
-                            type="button"
-                            title="移除文档引用"
-                            onClick={() => setPendingDocumentReferences((current) => current.filter((item) => item.id !== reference.id))}
-                          ><X /></button>
-                        </div>
+                        <DocumentReferenceAttachment
+                          key={reference.id}
+                          reference={reference}
+                          onRemove={() => setPendingDocumentReferences((current) => current.filter((item) => item.id !== reference.id))}
+                        />
                       ))}
                     </div>
                   )}

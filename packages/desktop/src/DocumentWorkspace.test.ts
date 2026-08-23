@@ -7,6 +7,7 @@ import {
   parseDocumentZoomInput,
   documentZoomDeltaForKeyboardEvent,
   documentZoomFromPinchWheel,
+  documentSelectionLineRange,
   groupTextBlocksIntoParagraphs,
   looksLikeFormulaText,
   translatedBox,
@@ -49,6 +50,39 @@ function textBlock(
 }
 
 describe("document translation coordinates", () => {
+  it("maps a PDF selection to stable document-wide line numbers", () => {
+    const result = documentSelectionLineRange({
+      fingerprint: "test",
+      page_count: 2,
+      pages: [
+        {
+          width: 100,
+          height: 100,
+          blocks: [],
+          lines: [
+            { x: .1, y: .1, width: .8, height: .05 },
+            { x: .1, y: .2, width: .8, height: .05 },
+          ],
+        },
+        {
+          width: 100,
+          height: 100,
+          blocks: [],
+          lines: [
+            { x: .1, y: .1, width: .8, height: .05 },
+            { x: .1, y: .2, width: .8, height: .05 },
+            { x: .1, y: .3, width: .8, height: .05 },
+          ],
+        },
+      ],
+    }, [
+      { page: 2, x: .2, y: .21, width: .3, height: .02 },
+      { page: 2, x: .2, y: .31, width: .3, height: .02 },
+    ]);
+
+    expect(result).toEqual({ start: 4, end: 5 });
+  });
+
   it("labels the PDF toggle with the action it will perform", () => {
     expect(documentTranslationToggleLabel(false)).toBe("查看译文");
     expect(documentTranslationToggleLabel(true)).toBe("查看原文");

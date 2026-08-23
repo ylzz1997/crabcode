@@ -192,6 +192,12 @@ export interface DocumentPageLayout {
   width: number;
   height: number;
   blocks: DocumentTextBlock[];
+  lines?: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
 }
 
 export interface DocumentLayout {
@@ -241,6 +247,8 @@ export interface DocumentReference {
   project_id: string;
   document_name: string;
   page_label: string;
+  line_start?: number;
+  line_end?: number;
   text: string;
 }
 

@@ -352,6 +352,28 @@ function pageLabel(rects: DocumentSelectionRect[]): string {
   return `第 ${pages[0]}–${pages.at(-1)} 页`;
 }
 
+export function documentSelectionLineRange(
+  layout: DocumentLayout,
+  rects: DocumentSelectionRect[],
+): { start: number; end: number } | null {
+  const selected: number[] = [];
+  let lineOffset = 0;
+  for (const [pageIndex, page] of layout.pages.entries()) {
+    const lines = page.lines ?? page.blocks.map(({ x, y, width, height }) => ({ x, y, width, height }));
+    const pageRects = rects.filter((rect) => rect.page === pageIndex + 1);
+    for (const [lineIndex, line] of lines.entries()) {
+      const intersects = pageRects.some((rect) => (
+        Math.min(rect.x + rect.width, line.x + line.width) > Math.max(rect.x, line.x)
+        && Math.min(rect.y + rect.height, line.y + line.height) > Math.max(rect.y, line.y)
+      ));
+      if (intersects) selected.push(lineOffset + lineIndex + 1);
+    }
+    lineOffset += lines.length;
+  }
+  if (selected.length === 0) return null;
+  return { start: Math.min(...selected), end: Math.max(...selected) };
+}
+
 function isMissing(error: unknown): boolean {
   return error instanceof Error && /\b404\b|not found/i.test(error.message);
 }
@@ -861,8 +883,9 @@ async function extractLayout(pdf: PDFDocumentProxy): Promise<DocumentLayout> {
         direction: item.dir || "ltr",
       }];
     });
+    const lines = textLines(rawBlocks).map(({ x, y, width, height }) => ({ x, y, width, height }));
     const blocks = groupTextBlocksIntoParagraphs(rawBlocks, pageNumber);
-    pages.push({ width: viewport.width, height: viewport.height, blocks });
+    pages.push({ width: viewport.width, height: viewport.height, blocks, lines });
   }
   const sourceFingerprint = pdf.fingerprints[0] || `${pdf.numPages}-${Date.now()}`;
   const fingerprint = `${sourceFingerprint}:${DOCUMENT_LAYOUT_VERSION}`;
@@ -952,7 +975,6 @@ function PdfPage({
   showTranslation,
   rotation,
   annotations,
-  selectionRects,
   onCurrent,
 }: {
   pdf: PDFDocumentProxy;
@@ -965,7 +987,6 @@ function PdfPage({
   showTranslation: boolean;
   rotation: number;
   annotations: DocumentAnnotation[];
-  selectionRects: DocumentSelectionRect[];
   onCurrent: (page: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1185,22 +1206,6 @@ function PdfPage({
                 />
               );
             }))}
-        </div>
-        <div className="document-active-selection-layer" aria-hidden="true">
-          {selectionRects.filter((rect) => rect.page === pageNumber).map((rect, index) => {
-            const box = translatedBox(rect, rotation);
-            return (
-              <span
-                key={index}
-                style={{
-                  left: `${box.x * 100}%`,
-                  top: `${box.y * 100}%`,
-                  width: `${box.width * 100}%`,
-                  height: `${box.height * 100}%`,
-                }}
-              />
-            );
-          })}
         </div>
       </div>
       <span className="document-page-number">{pageNumber}</span>
@@ -1633,7 +1638,11 @@ export default function DocumentWorkspace({
       const nextLayout = await extractLayout(nextPdf);
       let resolvedManifest = nextManifest;
       if (!nextManifest.layout || nextManifest.layout.fingerprint !== nextLayout.fingerprint) {
-        await api.saveDocumentLayout(project.path, nextLayout);
+        const persistedLayout = {
+          ...nextLayout,
+          pages: nextLayout.pages.map(({ lines: _lines, ...page }) => page),
+        };
+        await api.saveDocumentLayout(project.path, persistedLayout);
         resolvedManifest = await api.documentManifest(project.path);
       }
       if (cancelled) {
@@ -1945,7 +1954,6 @@ export default function DocumentWorkspace({
       return Number.isFinite(pageNumber) ? [{ page: pageNumber, ...base }] : [];
     }).slice(0, 1_000);
     if (rects.length === 0) return;
-    nativeSelection.removeAllRanges();
     setCopiedSelection(false);
     setSelectionLanguageOpen(false);
     setSelection({ text, rects, bounds: positionSelection(rects) });
@@ -2050,13 +2058,18 @@ export default function DocumentWorkspace({
     window.addEventListener("pointerup", finish);
   };
 
-  const selectionReference = selection && {
-    id: crypto.randomUUID(),
-    project_id: project.id,
-    document_name: manifest?.source.name ?? project.name,
-    page_label: pageLabel(selection.rects),
-    text: selection.text,
-  };
+  const selectionReference = selection && (() => {
+    const lineRange = layout ? documentSelectionLineRange(layout, selection.rects) : null;
+    return {
+      id: crypto.randomUUID(),
+      project_id: project.id,
+      document_name: manifest?.source.name ?? project.name,
+      page_label: pageLabel(selection.rects),
+      line_start: lineRange?.start,
+      line_end: lineRange?.end,
+      text: selection.text,
+    };
+  })();
   const selectionMenuPosition = selection?.bounds
     ? { left: selection.bounds.left, top: selection.bounds.top, width: 0, height: 0 }
     : null;
@@ -2252,7 +2265,6 @@ export default function DocumentWorkspace({
                 showTranslation={showTranslation && translation?.engine === "legacy"}
                 rotation={rotation}
                 annotations={showingPreciseTranslation ? [] : annotations}
-                selectionRects={selection?.rects ?? []}
                 onCurrent={selectCurrentPage}
               />
             ))}

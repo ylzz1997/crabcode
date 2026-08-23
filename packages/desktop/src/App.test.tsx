@@ -15,6 +15,8 @@ import {
   ProjectModal,
   ProjectTypeModal,
   DocumentProjectModal,
+  documentReferencePreview,
+  formatDocumentReferenceLocation,
   resolveDefaultProjectId,
   resolveRememberedModel,
   ScheduleDeleteModal,
@@ -32,6 +34,25 @@ const documentCapabilities = {
   libreoffice: { available: false, executable: null },
   ocr: { available: false },
 };
+
+describe("document reference labels", () => {
+  it("shows page and document-wide line range", () => {
+    expect(formatDocumentReferenceLocation({
+      id: "reference-1",
+      project_id: "project-1",
+      document_name: "paper.pdf",
+      page_label: "第 2 页",
+      line_start: 34,
+      line_end: 38,
+      text: "selection",
+    })).toBe("第 2 页 [34-38]");
+  });
+
+  it("keeps only the head and tail of a long hover preview", () => {
+    expect(documentReferencePreview("abcdefghijklmnopqrst", 5)).toBe("abcde…pqrst");
+    expect(documentReferencePreview("short text", 5)).toBe("short text");
+  });
+});
 
 describe("MessageMarkdown", () => {
   it("renders inline and display math with KaTeX", () => {
