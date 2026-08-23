@@ -112,8 +112,24 @@ describe("remote file and folder references", () => {
     expect(directories).toHaveBeenCalledWith("/remote/project", false, true);
     const file = Array.from(container.querySelectorAll<HTMLButtonElement>(".directory-list>button"))
       .find((button) => button.textContent?.includes("notes.md"))!;
+    const clear = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+      .find((button) => button.textContent === "取消选择")!;
+    expect(clear.disabled).toBe(true);
+
     act(() => file.click());
-    const select = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+    expect(clear.disabled).toBe(false);
+    let select = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+      .find((button) => button.textContent?.includes("引用此文件"))!;
+    expect(select.textContent).toContain("引用此文件");
+
+    act(() => clear.click());
+    expect(clear.disabled).toBe(true);
+    select = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+      .find((button) => button.textContent?.includes("引用此文件夹"))!;
+    expect(select.textContent).toContain("引用此文件夹");
+
+    act(() => file.click());
+    select = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
       .find((button) => button.textContent?.includes("引用此文件"))!;
     act(() => select.click());
 

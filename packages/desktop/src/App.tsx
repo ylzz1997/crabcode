@@ -5105,6 +5105,12 @@ export function DirectoryModal({
       <div className="modal-actions">
         <button onClick={onClose}>取消</button>
         <button
+          type="button"
+          disabled={!selectedFileEntry}
+          title={selectedFileEntry ? "取消文件选择并改为引用当前文件夹" : "尚未选择文件"}
+          onClick={() => setSelectedFile(null)}
+        >取消选择</button>
+        <button
           className="primary"
           disabled={!listing || (!selectedFileEntry && !allowDirectorySelection)}
           onClick={() => {
