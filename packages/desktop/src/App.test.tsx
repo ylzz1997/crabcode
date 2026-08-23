@@ -23,6 +23,7 @@ import {
   serializePendingFiles,
   ScheduleDeleteModal,
   ScheduledTasksView,
+  shouldAutoOpenDocumentSession,
 } from "./App";
 import type { GatewayApi } from "./gateway";
 import { favoriteEntries, resolveFavoriteEntries } from "./favorites";
@@ -36,6 +37,15 @@ const documentCapabilities = {
   libreoffice: { available: false, executable: null },
   ocr: { available: false },
 };
+
+describe("document session auto-open", () => {
+  it("only auto-opens a missing document session while the chat view is active", () => {
+    expect(shouldAutoOpenDocumentSession("chat", true, "document", null, "online")).toBe(true);
+    expect(shouldAutoOpenDocumentSession("scheduled", true, "document", null, "online")).toBe(false);
+    expect(shouldAutoOpenDocumentSession("favorites", true, "document", null, "online")).toBe(false);
+    expect(shouldAutoOpenDocumentSession("plugins", true, "document", null, "online")).toBe(false);
+  });
+});
 
 describe("document reference labels", () => {
   it("shows page and document-wide line range", () => {

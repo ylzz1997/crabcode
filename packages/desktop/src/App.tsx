@@ -148,6 +148,20 @@ type FocusedSessionSnapshot = SessionCleanupTarget & {
   projectPath: string;
   view: WorkspaceView;
 };
+
+export function shouldAutoOpenDocumentSession(
+  workspaceView: WorkspaceView,
+  hasConnection: boolean,
+  projectKind: ProjectPreset["kind"] | undefined,
+  activeSessionKey: string | null,
+  gatewayStatus: GatewayViewState["status"] | undefined,
+): boolean {
+  return workspaceView === "chat"
+    && hasConnection
+    && projectKind === "document"
+    && !activeSessionKey
+    && gatewayStatus === "online";
+}
 type PendingImage = {
   id: string;
   name: string;
@@ -1289,12 +1303,13 @@ function App() {
       autoOpeningDocumentRef.current = null;
       return;
     }
-    if (
-      !activeConnection
-      || !activeProject
-      || activeProject.kind !== "document"
-      || activeGateway?.status !== "online"
-    ) return;
+    if (!shouldAutoOpenDocumentSession(
+      workspaceView,
+      Boolean(activeConnection),
+      activeProject?.kind,
+      activeSessionKey,
+      activeGateway?.status,
+    ) || !activeConnection || !activeProject) return;
     const target = `${activeConnection.id}:${activeProject.id}`;
     if (autoOpeningDocumentRef.current === target) return;
     autoOpeningDocumentRef.current = target;
@@ -1308,6 +1323,7 @@ function App() {
     activeProject,
     activeSessionKey,
     openSession,
+    workspaceView,
   ]);
 
   useEffect(() => {
