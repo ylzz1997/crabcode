@@ -11,6 +11,7 @@ from crabcode_gateway.schemas import (
     WorkspaceDirectoryEntry,
     WorkspaceDirectoryCreateRequest,
     WorkspaceDirectoryListing,
+    WorkspaceFileEntry,
     WorkspaceInfo,
 )
 
@@ -121,12 +122,14 @@ async def list_directories(
     request: Request,
     path: str | None = None,
     include_hidden: bool = False,
+    include_files: bool = False,
 ) -> WorkspaceDirectoryListing:
     info: WorkspaceInfo = request.app.state.workspace_info
     roots = _workspace_roots(request)
     current = _resolve_directory(path or info.home, roots)
 
     directories: list[WorkspaceDirectoryEntry] = []
+    files: list[WorkspaceFileEntry] = []
     try:
         children = sorted(current.iterdir(), key=lambda item: item.name.casefold())
     except PermissionError as exc:
@@ -140,18 +143,33 @@ async def list_directories(
             continue
         try:
             resolved = child.resolve(strict=True)
-            if not resolved.is_dir() or not _is_within(resolved, roots):
+            if not _is_within(resolved, roots):
                 continue
         except (OSError, RuntimeError):
             continue
-        directories.append(
-            WorkspaceDirectoryEntry(
-                name=child.name,
-                path=str(child.absolute()),
-                hidden=hidden,
-                is_symlink=child.is_symlink(),
+        if resolved.is_dir():
+            directories.append(
+                WorkspaceDirectoryEntry(
+                    name=child.name,
+                    path=str(child.absolute()),
+                    hidden=hidden,
+                    is_symlink=child.is_symlink(),
+                )
             )
-        )
+        elif include_files and resolved.is_file():
+            try:
+                size = resolved.stat().st_size
+            except OSError:
+                size = 0
+            files.append(
+                WorkspaceFileEntry(
+                    name=child.name,
+                    path=str(child.absolute()),
+                    size=size,
+                    hidden=hidden,
+                    is_symlink=child.is_symlink(),
+                )
+            )
 
     parent = current.parent
     parent_path = str(parent) if parent != current and _is_within(parent, roots) else None
@@ -159,6 +177,7 @@ async def list_directories(
         path=str(current),
         parent=parent_path,
         directories=directories,
+        files=files,
     )
 
 

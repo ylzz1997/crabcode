@@ -2118,6 +2118,11 @@ button.primary:hover,
   background: var(--surface-hover);
 }
 
+.directory-list>button.selected {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .directory-list>button span {
   min-width: 0;
   flex: 1;
@@ -2134,6 +2139,14 @@ button.primary:hover,
   height: 260px;
   display: grid;
   place-items: center;
+}
+
+.directory-empty {
+  height: 160px;
+  display: grid;
+  place-items: center;
+  color: var(--subtle);
+  font-size: 11px;
 }
 
 .project-item-row {

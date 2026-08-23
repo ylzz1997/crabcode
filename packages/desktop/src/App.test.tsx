@@ -15,6 +15,7 @@ import {
   ProjectModal,
   ProjectTypeModal,
   DocumentProjectModal,
+  DirectoryModal,
   documentReferencePreview,
   formatDocumentReferenceLocation,
   resolveDefaultProjectId,
@@ -78,6 +79,47 @@ describe("file attachment serialization", () => {
       size: 5,
       text: "hello",
     }])).toBe('<file name="notes.md">\nhello\n</file>');
+  });
+});
+
+describe("remote file and folder references", () => {
+  it("selects a file path returned by the Gateway workspace browser", async () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onSelect = vi.fn();
+    const directories = vi.fn().mockResolvedValue({
+      path: "/remote/project",
+      parent: "/remote",
+      directories: [{ name: "src", path: "/remote/project/src", hidden: false, is_symlink: false }],
+      files: [{ name: "notes.md", path: "/remote/project/notes.md", size: 2048, hidden: false, is_symlink: false }],
+    });
+
+    await act(async () => root.render(
+      <DirectoryModal
+        api={{ directories } as unknown as GatewayApi}
+        home="/remote/project"
+        roots={["/remote"]}
+        title="引用文件或文件夹"
+        selectLabel="引用此文件夹"
+        allowFiles
+        onClose={vi.fn()}
+        onSelect={onSelect}
+      />,
+    ));
+
+    expect(directories).toHaveBeenCalledWith("/remote/project", false, true);
+    const file = Array.from(container.querySelectorAll<HTMLButtonElement>(".directory-list>button"))
+      .find((button) => button.textContent?.includes("notes.md"))!;
+    act(() => file.click());
+    const select = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+      .find((button) => button.textContent?.includes("引用此文件"))!;
+    act(() => select.click());
+
+    expect(onSelect).toHaveBeenCalledWith("/remote/project/notes.md", "file");
+    act(() => root.unmount());
+    container.remove();
   });
 });
 

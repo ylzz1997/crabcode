@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import { legacyFavoriteEntries, normalizeFavoriteEntries } from "./favorites";
 import type {
   CodeFontFamily,
@@ -240,21 +239,6 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
       };
     }),
   };
-}
-
-export async function selectAttachmentPaths(): Promise<string[]> {
-  if (!isDesktopShell()) return [];
-  const selected = await open({
-    title: "添加文件引用",
-    multiple: true,
-    directory: false,
-    filters: [{
-      name: "文本与代码文件",
-      extensions: ["txt", "md", "json", "py", "ts", "tsx", "js", "jsx", "rs", "go", "java", "css", "html", "yaml", "yml", "toml"],
-    }],
-  });
-  if (!selected) return [];
-  return Array.isArray(selected) ? selected : [selected];
 }
 
 export async function setDockIcon(choice: DockIconChoice, pngBytes?: Uint8Array): Promise<void> {

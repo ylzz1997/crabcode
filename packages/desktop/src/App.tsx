@@ -100,7 +100,6 @@ import {
   normalizeBaseUrl,
   removeDocumentEngine,
   saveSettings,
-  selectAttachmentPaths,
   setDockIcon,
   storeCredential,
   type DocumentEngineInstallProgress,
@@ -550,7 +549,7 @@ function App() {
   const [documentEngineBusy, setDocumentEngineBusy] = useState<"install" | "remove" | null>(null);
   const [documentEngineProgress, setDocumentEngineProgress] = useState<DocumentEngineInstallProgress | null>(null);
   const [documentEngineError, setDocumentEngineError] = useState<string | null>(null);
-  const [referenceDirectoryModal, setReferenceDirectoryModal] = useState(false);
+  const [referencePathModal, setReferencePathModal] = useState<"all" | "file" | null>(null);
   const [goalModal, setGoalModal] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("general");
@@ -1508,31 +1507,6 @@ function App() {
         });
       }
       if (attachments.length > 0) setPendingFiles((current) => [...current, ...attachments]);
-    } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const addFilePaths = async () => {
-    if (!isDesktopShell()) {
-      setGlobalError("仅传路径只支持 Crab Desktop，请切换为上传内容");
-      return;
-    }
-    try {
-      const paths = await selectAttachmentPaths();
-      if (paths.length === 0) return;
-      setPendingFiles((current) => [
-        ...current,
-        ...paths.map((path): PendingFile => ({
-          id: crypto.randomUUID(),
-          name: basename(path),
-          mediaType: "",
-          mode: "path",
-          path,
-          size: null,
-          text: "",
-        })),
-      ]);
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error));
     }
@@ -2756,8 +2730,8 @@ function App() {
                         onImages={(files) => void addImages(files)}
                         onFiles={(files) => void addFiles(files)}
                         fileUploadMode={settings.file_upload_mode}
-                        onFilePaths={() => void addFilePaths()}
-                        onReferenceFolder={() => setReferenceDirectoryModal(true)}
+                        onFilePaths={() => setReferencePathModal("file")}
+                        onReferencePath={() => setReferencePathModal("all")}
                         onGoal={() => setGoalModal(true)}
                         onPlan={() => selectMode("plan")}
                         onUltra={() => selectUltraMode(true)}
@@ -2953,17 +2927,33 @@ function App() {
         />
       )}
 
-      {referenceDirectoryModal && activeConnection && activeGateway?.workspace && (
+      {referencePathModal && activeConnection && activeGateway?.workspace && (
         <DirectoryModal
           api={apiRef.current.get(activeConnection.id)!}
           home={activeProject?.path || activeGateway.workspace.home}
           roots={activeGateway.workspace.browse_roots}
-          title="引用文件夹"
+          title={referencePathModal === "file" ? "引用文件路径" : "引用文件或文件夹"}
           selectLabel="引用此文件夹"
-          onClose={() => setReferenceDirectoryModal(false)}
-          onSelect={(path) => {
-            setPendingFolders((current) => current.includes(path) ? current : [...current, path]);
-            setReferenceDirectoryModal(false);
+          allowFiles
+          allowDirectorySelection={referencePathModal === "all"}
+          onClose={() => setReferencePathModal(null)}
+          onSelect={(path, kind) => {
+            if (kind === "folder") {
+              setPendingFolders((current) => current.includes(path) ? current : [...current, path]);
+            } else {
+              setPendingFiles((current) => current.some((file) => file.mode === "path" && file.path === path)
+                ? current
+                : [...current, {
+                  id: crypto.randomUUID(),
+                  name: basename(path),
+                  mediaType: "",
+                  mode: "path",
+                  path,
+                  size: null,
+                  text: "",
+                }]);
+            }
+            setReferencePathModal(null);
           }}
         />
       )}
@@ -3868,7 +3858,7 @@ function ComposerAddMenu({
   onFiles,
   fileUploadMode,
   onFilePaths,
-  onReferenceFolder,
+  onReferencePath,
   onGoal,
   onPlan,
   onUltra,
@@ -3880,7 +3870,7 @@ function ComposerAddMenu({
   onFiles: (files: File[]) => void;
   fileUploadMode: "content" | "path";
   onFilePaths: () => void;
-  onReferenceFolder: () => void;
+  onReferencePath: () => void;
   onGoal: () => void;
   onPlan: () => void;
   onUltra: () => void;
@@ -3942,8 +3932,8 @@ function ComposerAddMenu({
           >
             <FileText /><span>添加文件</span><small>{fileUploadMode === "path" ? "仅路径" : "含内容"}</small>
           </button>
-          <button type="button" role="menuitem" onClick={() => run(onReferenceFolder)}>
-            <FolderInput /><span>引用文件夹</span>
+          <button type="button" role="menuitem" onClick={() => run(onReferencePath)}>
+            <FolderInput /><span>引用文件或文件夹</span>
           </button>
           <div className="composer-add-separator" />
           <button type="button" role="menuitem" onClick={() => run(onGoal)}>
@@ -5040,12 +5030,14 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
   );
 }
 
-function DirectoryModal({
+export function DirectoryModal({
   api,
   home,
   roots,
   title = "选择项目目录",
   selectLabel = "使用此目录",
+  allowFiles = false,
+  allowDirectorySelection = true,
   onClose,
   onSelect,
 }: {
@@ -5054,20 +5046,25 @@ function DirectoryModal({
   roots: string[];
   title?: string;
   selectLabel?: string;
+  allowFiles?: boolean;
+  allowDirectorySelection?: boolean;
   onClose: () => void;
-  onSelect: (path: string) => void;
+  onSelect: (path: string, kind: "file" | "folder") => void;
 }) {
   const [path, setPath] = useState(home);
   const [listing, setListing] = useState<WorkspaceDirectoryListing | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setListing(null);
+    setSelectedFile(null);
     setError(null);
-    void api.directories(path, showHidden)
+    void api.directories(path, showHidden, allowFiles)
       .then(setListing)
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
-  }, [api, path, showHidden]);
+  }, [allowFiles, api, path, showHidden]);
+  const selectedFileEntry = listing?.files?.find((file) => file.path === selectedFile) ?? null;
   return (
     <Modal title={title} onClose={onClose} wide>
       <div className="directory-roots">
@@ -5076,7 +5073,7 @@ function DirectoryModal({
       <div className="directory-toolbar">
         <button className="icon-button" title="上一级" disabled={!listing?.parent} onClick={() => listing?.parent && setPath(listing.parent)}><ChevronLeft /></button>
         <input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => event.key === "Enter" && setPath(event.currentTarget.value)} />
-        <label><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />显示隐藏目录</label>
+        <label><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />显示隐藏项目</label>
       </div>
       <div className="directory-list">
         {!listing && !error && <div className="directory-loading"><LoaderCircle className="spin" /></div>}
@@ -5089,10 +5086,35 @@ function DirectoryModal({
             <ChevronRight />
           </button>
         ))}
+        {allowFiles && (listing?.files ?? []).map((file) => (
+          <button
+            key={file.path}
+            className={selectedFile === file.path ? "selected" : ""}
+            onClick={() => setSelectedFile(file.path)}
+            onDoubleClick={() => onSelect(file.path, "file")}
+          >
+            <FileText />
+            <span>{file.name}</span>
+            <small>{formatFileSize(file.size)}{file.is_symlink ? " · 链接" : ""}</small>
+          </button>
+        ))}
+        {listing && listing.directories.length === 0 && (!allowFiles || (listing.files ?? []).length === 0) && (
+          <div className="directory-empty">此目录为空</div>
+        )}
       </div>
       <div className="modal-actions">
         <button onClick={onClose}>取消</button>
-        <button className="primary" disabled={!listing} onClick={() => listing && onSelect(listing.path)}><FolderOpen />{selectLabel}</button>
+        <button
+          className="primary"
+          disabled={!listing || (!selectedFileEntry && !allowDirectorySelection)}
+          onClick={() => {
+            if (selectedFileEntry) onSelect(selectedFileEntry.path, "file");
+            else if (listing && allowDirectorySelection) onSelect(listing.path, "folder");
+          }}
+        >
+          {selectedFileEntry ? <FileText /> : <FolderOpen />}
+          {selectedFileEntry ? "引用此文件" : selectLabel}
+        </button>
       </div>
     </Modal>
   );

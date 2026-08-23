@@ -271,6 +271,15 @@ export interface WorkspaceDirectoryListing {
   path: string;
   parent: string | null;
   directories: WorkspaceDirectoryEntry[];
+  files?: WorkspaceFileEntry[];
+}
+
+export interface WorkspaceFileEntry {
+  name: string;
+  path: string;
+  size: number;
+  hidden: boolean;
+  is_symlink: boolean;
 }
 
 export interface SessionInfo {

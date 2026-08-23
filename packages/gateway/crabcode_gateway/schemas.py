@@ -550,10 +550,19 @@ class WorkspaceDirectoryEntry(BaseModel):
     is_symlink: bool = False
 
 
+class WorkspaceFileEntry(BaseModel):
+    name: str
+    path: str
+    size: int = 0
+    hidden: bool = False
+    is_symlink: bool = False
+
+
 class WorkspaceDirectoryListing(BaseModel):
     path: str
     parent: str | None = None
     directories: list[WorkspaceDirectoryEntry] = Field(default_factory=list)
+    files: list[WorkspaceFileEntry] = Field(default_factory=list)
 
 
 class SearchIndexStatus(BaseModel):

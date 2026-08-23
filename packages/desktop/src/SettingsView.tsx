@@ -602,7 +602,7 @@ export function SettingsView({
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
                       <strong>上传方式</strong>
-                      <span>仅传路径适合本地 Gateway；远程 Gateway 必须能访问同一个文件路径。</span>
+                      <span>仅传路径时，从当前 Gateway 的工作区选择文件，不读取或上传文件正文。</span>
                     </div>
                     <div className="settings-segmented" aria-label="文件上传方式">
                       {(["content", "path"] as FileUploadMode[]).map((mode) => (

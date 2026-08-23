@@ -102,8 +102,12 @@ export class GatewayApi {
     return this.request("/workspace/info");
   }
 
-  directories(path: string, includeHidden = false): Promise<WorkspaceDirectoryListing> {
-    const query = new URLSearchParams({ path, include_hidden: String(includeHidden) });
+  directories(path: string, includeHidden = false, includeFiles = false): Promise<WorkspaceDirectoryListing> {
+    const query = new URLSearchParams({
+      path,
+      include_hidden: String(includeHidden),
+      include_files: String(includeFiles),
+    });
     return this.request(`/workspace/directories?${query}`);
   }
 
