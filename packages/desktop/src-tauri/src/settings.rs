@@ -79,6 +79,7 @@ fn default_settings() -> Value {
         "font_smoothing": true,
         "show_turn_duration": true,
         "turn_duration_format": "hms",
+        "file_upload_mode": "content",
         "dock_icon": "dark"
     })
 }

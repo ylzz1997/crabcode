@@ -32,6 +32,7 @@ import type {
   DiffMarkerStyle,
   DockIconChoice,
   DocumentCapabilities,
+  FileUploadMode,
   GatewayViewState,
   ProjectPreset,
   ThemeMode,
@@ -53,8 +54,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   {
     id: "general",
     title: "常规",
-    description: "运行环境与会话显示设置",
-    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式 会话 显示 处理用时 耗时 仅秒数 时分秒",
+    description: "运行环境、文件上传与会话显示设置",
+    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式 文件 上传 内容 路径 引用 会话 显示 处理用时 耗时 仅秒数 时分秒",
   },
   {
     id: "appearance",
@@ -200,6 +201,7 @@ export type AppearanceSettingsUpdate = Partial<Pick<DesktopSettings,
 export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
   | "show_turn_duration"
   | "turn_duration_format"
+  | "file_upload_mode"
 >>;
 
 export type DocumentSettingsUpdate = Partial<Pick<DesktopSettings,
@@ -591,6 +593,31 @@ export function SettingsView({
                       <span className="settings-value">浏览器模式</span>
                     </div>
                   )}
+                </div>
+
+                <div className="settings-section-heading general-spaced-heading">
+                  <div><h2>文件上传</h2><p>控制添加文件时发送完整内容还是仅发送本地路径。</p></div>
+                </div>
+                <div className="settings-group general-options-group">
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>上传方式</strong>
+                      <span>仅传路径适合本地 Gateway；远程 Gateway 必须能访问同一个文件路径。</span>
+                    </div>
+                    <div className="settings-segmented" aria-label="文件上传方式">
+                      {(["content", "path"] as FileUploadMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          className={settings.file_upload_mode === mode ? "active" : ""}
+                          type="button"
+                          aria-pressed={settings.file_upload_mode === mode}
+                          onClick={() => onConversationChange({ file_upload_mode: mode })}
+                        >
+                          {mode === "content" ? "上传内容" : "仅传路径"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="settings-section-heading general-spaced-heading">

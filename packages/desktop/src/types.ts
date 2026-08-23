@@ -74,6 +74,7 @@ export interface DesktopSettings {
   font_smoothing: boolean;
   show_turn_duration: boolean;
   turn_duration_format: TurnDurationFormat;
+  file_upload_mode: FileUploadMode;
   dock_icon: DockIconChoice;
 }
 
@@ -83,6 +84,7 @@ export type UiFontFamily = "system" | "inter" | "serif";
 export type CodeFontFamily = "system-mono" | "menlo" | "monaco";
 export type DiffMarkerStyle = "color" | "symbols";
 export type TurnDurationFormat = "seconds" | "hms";
+export type FileUploadMode = "content" | "path";
 
 export interface ThemeProfile {
   accent_color: string;

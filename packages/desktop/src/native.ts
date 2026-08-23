@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { legacyFavoriteEntries, normalizeFavoriteEntries } from "./favorites";
 import type {
   CodeFontFamily,
@@ -82,6 +83,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   font_smoothing: true,
   show_turn_duration: true,
   turn_duration_format: "hms",
+  file_upload_mode: "content",
   dock_icon: "dark",
 };
 
@@ -189,6 +191,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     font_smoothing: raw.font_smoothing !== false,
     show_turn_duration: raw.show_turn_duration !== false,
     turn_duration_format: turnDurationFormat,
+    file_upload_mode: raw.file_upload_mode === "path" ? "path" : "content",
     dock_icon: dockIcon,
     document_agent_width: clampInteger(raw.document_agent_width, 320, 720, 400),
     document_agent_collapsed: raw.document_agent_collapsed === true,
@@ -237,6 +240,21 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
       };
     }),
   };
+}
+
+export async function selectAttachmentPaths(): Promise<string[]> {
+  if (!isDesktopShell()) return [];
+  const selected = await open({
+    title: "添加文件引用",
+    multiple: true,
+    directory: false,
+    filters: [{
+      name: "文本与代码文件",
+      extensions: ["txt", "md", "json", "py", "ts", "tsx", "js", "jsx", "rs", "go", "java", "css", "html", "yaml", "yml", "toml"],
+    }],
+  });
+  if (!selected) return [];
+  return Array.isArray(selected) ? selected : [selected];
 }
 
 export async function setDockIcon(choice: DockIconChoice, pngBytes?: Uint8Array): Promise<void> {

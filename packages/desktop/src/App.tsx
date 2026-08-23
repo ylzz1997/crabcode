@@ -64,6 +64,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import DocumentWorkspace from "./DocumentWorkspace";
+import { ComposerEditor, type ComposerReferenceOption } from "./ComposerEditor";
 import { applyGatewayEvent } from "./events";
 import { normalizeMarkdownMathDelimiters } from "./markdownMath";
 import {
@@ -99,6 +100,7 @@ import {
   normalizeBaseUrl,
   removeDocumentEngine,
   saveSettings,
+  selectAttachmentPaths,
   setDockIcon,
   storeCredential,
   type DocumentEngineInstallProgress,
@@ -146,6 +148,22 @@ type FocusedSessionSnapshot = SessionCleanupTarget & {
   busy: boolean;
   projectPath: string;
   view: WorkspaceView;
+};
+type PendingImage = {
+  id: string;
+  name: string;
+  media_type: string;
+  data: string;
+  dataUrl: string;
+};
+export type PendingFile = {
+  id: string;
+  name: string;
+  mediaType: string;
+  mode: "content" | "path";
+  path: string | null;
+  size: number | null;
+  text: string;
 };
 
 export function formatDocumentReferenceLocation(reference: DocumentReference): string {
@@ -198,6 +216,62 @@ function DocumentReferenceAttachment({
           style={tooltipPosition}
         >
           {preview}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function serializePendingFiles(files: PendingFile[]): string {
+  const escapeAttribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  return files.map((file) => (
+    file.mode === "path" && file.path
+      ? `<file path="${escapeAttribute(file.path)}"></file>`
+      : `<file name="${escapeAttribute(file.name)}">\n${file.text}\n</file>`
+  )).join("\n\n");
+}
+
+function FileAttachment({ file, onRemove }: { file: PendingFile; onRemove: () => void }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ left: number; top: number } | null>(null);
+  const preview = file.mode === "path" ? file.path ?? "" : documentReferencePreview(file.text);
+  const lineCount = file.text ? file.text.split(/\r?\n/).length : 0;
+  const showTooltip = useCallback(() => {
+    const bounds = rootRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    setTooltipPosition({
+      left: Math.max(176, Math.min(window.innerWidth - 176, bounds.left + bounds.width / 2)),
+      top: bounds.top - 8,
+    });
+  }, []);
+  return (
+    <>
+      <div
+        ref={rootRef}
+        className="file-attachment"
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setTooltipPosition(null)}
+        onFocusCapture={showTooltip}
+        onBlurCapture={() => setTooltipPosition(null)}
+      >
+        <FileText />
+        <span><strong>{file.name}</strong><small>{file.mode === "path" ? "仅路径" : formatFileSize(file.size ?? 0)}</small></span>
+        <button type="button" title="移除文件" onClick={onRemove}><X /></button>
+      </div>
+      {tooltipPosition && createPortal(
+        <div className="document-reference-preview-tooltip file-preview-tooltip" role="tooltip" style={tooltipPosition}>
+          <strong>{file.name}</strong>
+          <small>{file.mode === "path"
+            ? "仅发送路径，不上传文件内容"
+            : `${formatFileSize(file.size ?? 0)} · ${lineCount} 行${file.mediaType ? ` · ${file.mediaType}` : ""}`}</small>
+          {preview && <p className={file.mode === "path" ? "file-path-preview" : ""}>{preview}</p>}
         </div>,
         document.body,
       )}
@@ -412,7 +486,7 @@ function diffLines(diff: string) {
   });
 }
 
-function readImage(file: File): Promise<{ name: string; media_type: string; data: string; dataUrl: string }> {
+function readImage(file: File): Promise<PendingImage> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error ?? new Error("无法读取图片"));
@@ -424,6 +498,7 @@ function readImage(file: File): Promise<{ name: string; media_type: string; data
         return;
       }
       resolve({
+        id: crypto.randomUUID(),
         name: file.name,
         media_type: file.type || "image/png",
         data: dataUrl.slice(separator + 1),
@@ -463,12 +538,8 @@ function App() {
   const [permissionSelections, setPermissionSelections] = useState<Record<string, PermissionMode>>({});
   const [runClock, setRunClock] = useState(() => Date.now());
   const [composer, setComposer] = useState("");
-  const [pendingImages, setPendingImages] = useState<Array<{
-    name: string;
-    media_type: string;
-    data: string;
-    dataUrl: string;
-  }>>([]);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [pendingFolders, setPendingFolders] = useState<string[]>([]);
   const [pendingDocumentReferences, setPendingDocumentReferences] = useState<DocumentReference[]>([]);
   const [selectionTranslationEvents, setSelectionTranslationEvents] = useState<Record<string, GatewayEvent | null>>({});
@@ -1404,7 +1475,7 @@ function App() {
 
   const addImages = async (files: File[]) => {
     try {
-      const images: Array<{ name: string; media_type: string; data: string; dataUrl: string }> = [];
+      const images: PendingImage[] = [];
       for (const file of files) {
         if (file.size > 20 * 1024 * 1024) {
           setGlobalError(`${file.name} 超过 20MB`);
@@ -1420,15 +1491,48 @@ function App() {
 
   const addFiles = async (files: File[]) => {
     try {
-      const chunks: string[] = [];
+      const attachments: PendingFile[] = [];
       for (const file of files) {
         if (file.size > 5 * 1024 * 1024) {
           setGlobalError(`${file.name} 超过 5MB`);
           continue;
         }
-        chunks.push(`\n\n<file name="${file.name}">\n${await file.text()}\n</file>`);
+        attachments.push({
+          id: crypto.randomUUID(),
+          name: file.name,
+          mediaType: file.type,
+          mode: "content",
+          path: null,
+          size: file.size,
+          text: await file.text(),
+        });
       }
-      if (chunks.length > 0) setComposer((value) => value + chunks.join(""));
+      if (attachments.length > 0) setPendingFiles((current) => [...current, ...attachments]);
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const addFilePaths = async () => {
+    if (!isDesktopShell()) {
+      setGlobalError("仅传路径只支持 Crab Desktop，请切换为上传内容");
+      return;
+    }
+    try {
+      const paths = await selectAttachmentPaths();
+      if (paths.length === 0) return;
+      setPendingFiles((current) => [
+        ...current,
+        ...paths.map((path): PendingFile => ({
+          id: crypto.randomUUID(),
+          name: basename(path),
+          mediaType: "",
+          mode: "path",
+          path,
+          size: null,
+          text: "",
+        })),
+      ]);
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error));
     }
@@ -1437,16 +1541,17 @@ function App() {
   const sendMessage = async () => {
     const text = composer.trim();
     if (
-      (!text && pendingImages.length === 0 && pendingFolders.length === 0 && pendingDocumentReferences.length === 0)
+      (!text && pendingImages.length === 0 && pendingFiles.length === 0 && pendingFolders.length === 0 && pendingDocumentReferences.length === 0)
       || !activeChannel
       || !activeSessionKey
       || !activeSession
     ) return;
+    const fileContext = serializePendingFiles(pendingFiles);
     const folderContext = pendingFolders.map((path) => `<folder>\n${path}\n</folder>`).join("\n");
     const documentContext = pendingDocumentReferences.map((reference) => (
       `<document-reference>\n文档：${reference.document_name}\n位置：${formatDocumentReferenceLocation(reference)}\n\n${reference.text}\n</document-reference>`
     )).join("\n\n");
-    const messageText = [folderContext, documentContext, text].filter(Boolean).join("\n\n");
+    const messageText = [fileContext, folderContext, documentContext, text].filter(Boolean).join("\n\n");
     const now = Date.now();
     try {
       if (activeSession.busy && activeSession.operationId) {
@@ -1457,6 +1562,7 @@ function App() {
         );
         const attachmentLine = [
           ...pendingImages.map((image) => `[图片：${image.name}]`),
+          ...pendingFiles.map((file) => `[文件：${file.name}]`),
           ...pendingFolders.map((path) => `[文件夹：${path}]`),
           ...pendingDocumentReferences.map((reference) => `[文档引用：${formatDocumentReferenceLocation(reference)}]`),
         ].join(" ");
@@ -1483,6 +1589,7 @@ function App() {
         );
         const attachmentLine = [
           ...pendingImages.map((image) => `[图片：${image.name}]`),
+          ...pendingFiles.map((file) => `[文件：${file.name}]`),
           ...pendingFolders.map((path) => `[文件夹：${path}]`),
           ...pendingDocumentReferences.map((reference) => `[文档引用：${formatDocumentReferenceLocation(reference)}]`),
         ].join(" ");
@@ -1507,6 +1614,7 @@ function App() {
       }
       setComposer("");
       setPendingImages([]);
+      setPendingFiles([]);
       setPendingFolders([]);
       setPendingDocumentReferences([]);
     } catch (error) {
@@ -1750,6 +1858,32 @@ function App() {
     ? permissionSelections[activeSessionKey] || normalizePermissionMode(activeSession?.status?.permission_mode)
     : "default";
   const documentMode = workspaceView === "chat" && activeProject?.kind === "document";
+  const composerReferences = useMemo<ComposerReferenceOption[]>(() => [
+    ...pendingImages.map((image) => ({
+      key: `image:${image.id}`,
+      kind: "image" as const,
+      label: image.name,
+      detail: "图片",
+    })),
+    ...pendingFiles.map((file) => ({
+      key: `file:${file.id}`,
+      kind: "file" as const,
+      label: file.name,
+      detail: file.mode === "path" ? `路径 · ${file.path}` : `文件 · ${formatFileSize(file.size ?? 0)}`,
+    })),
+    ...pendingFolders.map((path) => ({
+      key: `folder:${path}`,
+      kind: "folder" as const,
+      label: basename(path),
+      detail: path,
+    })),
+    ...pendingDocumentReferences.map((reference) => ({
+      key: `document:${reference.id}`,
+      kind: "document" as const,
+      label: reference.document_name,
+      detail: `文档引用 · ${formatDocumentReferenceLocation(reference)}`,
+    })),
+  ], [pendingDocumentReferences, pendingFiles, pendingFolders, pendingImages]);
 
   useEffect(() => {
     if (!activeSession?.busy) return;
@@ -2567,17 +2701,24 @@ function App() {
                   )}
                 </div>
                 <div className={`composer-box ${activeSession.status?.ultra_mode ? "ultra-mode" : ""}`}>
-                  {(pendingImages.length > 0 || pendingFolders.length > 0 || pendingDocumentReferences.length > 0) && (
+                  {(pendingImages.length > 0 || pendingFiles.length > 0 || pendingFolders.length > 0 || pendingDocumentReferences.length > 0) && (
                     <div className="attachment-strip">
-                      {pendingImages.map((image, index) => (
-                        <div className="attachment-thumb" key={`${image.name}-${index}`}>
+                      {pendingImages.map((image) => (
+                        <div className="attachment-thumb" key={image.id} title={image.name}>
                           <img src={image.dataUrl} alt={image.name} />
                           <button
                             className="icon-button tiny"
                             title="移除图片"
-                            onClick={() => setPendingImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                            onClick={() => setPendingImages((current) => current.filter((item) => item.id !== image.id))}
                           ><X /></button>
                         </div>
+                      ))}
+                      {pendingFiles.map((file) => (
+                        <FileAttachment
+                          key={file.id}
+                          file={file}
+                          onRemove={() => setPendingFiles((current) => current.filter((item) => item.id !== file.id))}
+                        />
                       ))}
                       {pendingFolders.map((path) => (
                         <div className="folder-attachment" key={path} title={path}>
@@ -2599,17 +2740,12 @@ function App() {
                       ))}
                     </div>
                   )}
-                  <textarea
+                  <ComposerEditor
                     value={composer}
-                    onChange={(event) => setComposer(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        void sendMessage();
-                      }
-                    }}
+                    references={composerReferences}
+                    onChange={setComposer}
+                    onSubmit={() => void sendMessage()}
                     placeholder={activeSession.busy ? "输入内容以引导当前任务" : "输入任务"}
-                    rows={3}
                   />
                   <div className="composer-toolbar">
                     <div className="toolbar-left">
@@ -2619,6 +2755,8 @@ function App() {
                         ultraActive={Boolean(activeSession.status?.ultra_mode)}
                         onImages={(files) => void addImages(files)}
                         onFiles={(files) => void addFiles(files)}
+                        fileUploadMode={settings.file_upload_mode}
+                        onFilePaths={() => void addFilePaths()}
                         onReferenceFolder={() => setReferenceDirectoryModal(true)}
                         onGoal={() => setGoalModal(true)}
                         onPlan={() => selectMode("plan")}
@@ -2679,6 +2817,7 @@ function App() {
                           disabled={(
                             !composer.trim()
                             && pendingImages.length === 0
+                            && pendingFiles.length === 0
                             && pendingFolders.length === 0
                             && pendingDocumentReferences.length === 0
                           ) || !activeSession.connected}
@@ -3727,6 +3866,8 @@ function ComposerAddMenu({
   ultraActive,
   onImages,
   onFiles,
+  fileUploadMode,
+  onFilePaths,
   onReferenceFolder,
   onGoal,
   onPlan,
@@ -3737,6 +3878,8 @@ function ComposerAddMenu({
   ultraActive: boolean;
   onImages: (files: File[]) => void;
   onFiles: (files: File[]) => void;
+  fileUploadMode: "content" | "path";
+  onFilePaths: () => void;
   onReferenceFolder: () => void;
   onGoal: () => void;
   onPlan: () => void;
@@ -3792,8 +3935,12 @@ function ComposerAddMenu({
           <button type="button" role="menuitem" onClick={() => run(() => imageInputRef.current?.click())}>
             <ImageIcon /><span>添加图片</span>
           </button>
-          <button type="button" role="menuitem" onClick={() => run(() => fileInputRef.current?.click())}>
-            <FileText /><span>添加文件</span>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => run(() => fileUploadMode === "path" ? onFilePaths() : fileInputRef.current?.click())}
+          >
+            <FileText /><span>添加文件</span><small>{fileUploadMode === "path" ? "仅路径" : "含内容"}</small>
           </button>
           <button type="button" role="menuitem" onClick={() => run(onReferenceFolder)}>
             <FolderInput /><span>引用文件夹</span>

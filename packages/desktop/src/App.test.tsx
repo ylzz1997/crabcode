@@ -19,6 +19,7 @@ import {
   formatDocumentReferenceLocation,
   resolveDefaultProjectId,
   resolveRememberedModel,
+  serializePendingFiles,
   ScheduleDeleteModal,
   ScheduledTasksView,
 } from "./App";
@@ -51,6 +52,32 @@ describe("document reference labels", () => {
   it("keeps only the head and tail of a long hover preview", () => {
     expect(documentReferencePreview("abcdefghijklmnopqrst", 5)).toBe("abcde…pqrst");
     expect(documentReferencePreview("short text", 5)).toBe("short text");
+  });
+});
+
+describe("file attachment serialization", () => {
+  it("sends only the absolute path in path mode", () => {
+    expect(serializePendingFiles([{
+      id: "file-1",
+      name: "notes.md",
+      mediaType: "",
+      mode: "path",
+      path: "/Users/test/notes.md",
+      size: null,
+      text: "",
+    }])).toBe('<file path="/Users/test/notes.md"></file>');
+  });
+
+  it("keeps the existing embedded content format by default", () => {
+    expect(serializePendingFiles([{
+      id: "file-1",
+      name: "notes.md",
+      mediaType: "text/markdown",
+      mode: "content",
+      path: null,
+      size: 5,
+      text: "hello",
+    }])).toBe('<file name="notes.md">\nhello\n</file>');
   });
 });
 

@@ -79,6 +79,7 @@ const settings: DesktopSettings = {
   font_smoothing: true,
   show_turn_duration: true,
   turn_duration_format: "hms",
+  file_upload_mode: "content",
   dock_icon: "dark",
 };
 
@@ -228,6 +229,27 @@ describe("SettingsView", () => {
 
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(1, { turn_duration_format: "seconds" });
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(2, { show_turn_duration: false });
+  });
+
+  it("switches file uploads between content and path mode", () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="general"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    const pathMode = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="文件上传方式"] button'))
+      .find((button) => button.textContent?.includes("仅传路径"))!;
+    act(() => pathMode.click());
+
+    expect(handlers.onConversationChange).toHaveBeenCalledWith({ file_upload_mode: "path" });
   });
 
   it("shows document translation controls and updates their values", () => {

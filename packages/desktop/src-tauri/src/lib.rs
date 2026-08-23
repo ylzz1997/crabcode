@@ -7,6 +7,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(GatewayProcesses::default())
         .invoke_handler(tauri::generate_handler![
             settings::load_desktop_settings,
