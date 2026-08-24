@@ -6193,7 +6193,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <div id="plus-menu" class="plus-menu hidden" role="menu">
     <button type="button" role="menuitem" data-action="image">添加图片…</button>
     <button type="button" role="menuitem" data-action="file">添加文件…</button>
-    <button type="button" role="menuitem" data-action="screenshot">屏幕截图说明</button>
   </div>
   <div id="mode-menu" class="mode-menu hidden" role="menu">
     <div class="mode-item active" data-mode="agent" role="menuitem">
