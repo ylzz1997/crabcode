@@ -29,6 +29,7 @@ describe("ComposerEditor mentions", () => {
   let container: HTMLDivElement;
   let root: Root;
   let onChange: ReturnType<typeof vi.fn>;
+  let onImages: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,12 +37,14 @@ describe("ComposerEditor mentions", () => {
     document.body.append(container);
     root = createRoot(container);
     onChange = vi.fn();
+    onImages = vi.fn();
     act(() => root.render(
       <ComposerEditor
         value=""
         references={references}
         placeholder="输入任务"
         onChange={onChange}
+        onImages={onImages}
         onSubmit={vi.fn()}
       />,
     ));
@@ -94,6 +97,25 @@ describe("ComposerEditor mentions", () => {
 
     expect(editor.querySelector(".composer-inline-mention")).toBeNull();
     expect(extractComposerText(editor)).toBe("请看 ");
+  });
+
+  it("attaches an image pasted from the clipboard", () => {
+    const editor = container.querySelector<HTMLElement>(".composer-editor-input")!;
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+        files: [image],
+        getData: () => "",
+      },
+    });
+
+    act(() => editor.dispatchEvent(paste));
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(onImages).toHaveBeenCalledWith([image]);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 

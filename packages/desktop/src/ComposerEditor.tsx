@@ -230,6 +230,7 @@ export function ComposerEditor({
   commands,
   placeholder,
   onChange,
+  onImages,
   onSubmit,
 }: {
   value: string;
@@ -237,6 +238,7 @@ export function ComposerEditor({
   commands?: ComposerCommandOption[];
   placeholder: string;
   onChange: (value: string) => void;
+  onImages?: (files: File[]) => void;
   onSubmit: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -498,6 +500,21 @@ export function ComposerEditor({
         }}
         onClick={handleClick}
         onPaste={(event) => {
+          const imageFiles = [
+            ...Array.from(event.clipboardData.items)
+              .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+              .map((item) => item.getAsFile())
+              .filter((file): file is File => file !== null),
+            ...Array.from(event.clipboardData.files)
+              .filter((file) => file.type.startsWith("image/")),
+          ].filter((file, index, files) => files.findIndex((candidate) => candidate === file) === index);
+          if (imageFiles.length > 0 && onImages) {
+            event.preventDefault();
+            closeMentions();
+            closeCommands();
+            onImages(imageFiles);
+            return;
+          }
           event.preventDefault();
           const text = event.clipboardData.getData("text/plain");
           const selection = window.getSelection();

@@ -3042,6 +3042,7 @@ function App() {
                     references={composerReferences}
                     commands={composerCommands}
                     onChange={setComposer}
+                    onImages={(files) => void addImages(files)}
                     onSubmit={() => void sendMessage()}
                     placeholder={activeSession.busy ? "输入内容以引导当前任务" : "输入任务"}
                   />
