@@ -21,6 +21,8 @@ from crabcode_gateway.schemas import (
     GoalRequest,
     GoalState,
     ModelInfo,
+    ModelSettingsEntry,
+    ModelSettingsResponse,
     SetPermissionModeRequest,
     SetReasoningEffortRequest,
     SetUltraModeRequest,
@@ -132,6 +134,135 @@ def _list_models_from_settings() -> list[ModelInfo]:
     return result
 
 
+_MODEL_SETTING_KEYS = ("default_model", "groups", "models")
+_SENSITIVE_CONFIG_KEYS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "password",
+    "secret",
+    "token",
+)
+
+
+def _merge_model_settings(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge model settings with the same nested-object semantics as ConfigManager."""
+    result = dict(base)
+    for key, value in override.items():
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            result[key] = _merge_model_settings(current, value)
+        elif isinstance(current, list) and isinstance(value, list):
+            merged: list[Any] = []
+            seen: set[str] = set()
+            for item in current + value:
+                marker = (
+                    json.dumps(item, sort_keys=True)
+                    if isinstance(item, dict)
+                    else str(item)
+                )
+                if marker not in seen:
+                    seen.add(marker)
+                    merged.append(item)
+            result[key] = merged
+        else:
+            result[key] = value
+    return result
+
+
+def _redact_model_settings(value: Any, key: str = "") -> Any:
+    """Keep useful configuration visible without echoing embedded credentials."""
+    normalized_key = key.lower().replace("-", "_")
+    is_reference = normalized_key.endswith("_env") or normalized_key.endswith("_path")
+    if key and not is_reference and any(part in normalized_key for part in _SENSITIVE_CONFIG_KEYS):
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {
+            child_key: _redact_model_settings(child, str(child_key))
+            for child_key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_model_settings(child) for child in value]
+    return value
+
+
+def _model_settings_from_files(cwd: str) -> ModelSettingsResponse:
+    """Read raw model settings by layer, then resolve their effective values."""
+    from crabcode_core.config.manager import SETTING_SOURCES
+    from crabcode_core.types.config import CrabCodeSettings
+    from pydantic import ValidationError
+
+    manager = ConfigManager(cwd=cwd)
+    merged: dict[str, Any] = {}
+    sources: list[str] = []
+    model_sources: dict[str, list[str]] = {}
+
+    for source_name in SETTING_SOURCES:
+        raw = manager.get_settings_for_source(source_name)
+        if raw is None:
+            continue
+        relevant = {key: raw[key] for key in _MODEL_SETTING_KEYS if key in raw}
+        if not relevant:
+            continue
+        source_path = manager.settings_file_paths.get(source_name)
+        if source_path:
+            sources.append(source_path)
+            raw_models = raw.get("models")
+            if isinstance(raw_models, dict):
+                for model_name in raw_models:
+                    model_sources.setdefault(str(model_name), []).append(source_path)
+        merged = _merge_model_settings(merged, relevant)
+
+    try:
+        settings = CrabCodeSettings.model_validate(merged)
+    except ValidationError as exc:
+        messages = []
+        for error in exc.errors(include_input=False, include_url=False)[:5]:
+            location = ".".join(str(part) for part in error.get("loc", ()))
+            message = str(error.get("msg", "invalid value"))
+            messages.append(f"{location}: {message}" if location else message)
+        raise HTTPException(
+            status_code=422,
+            detail="模型配置无效：" + "; ".join(messages),
+        ) from exc
+
+    raw_groups = merged.get("groups") if isinstance(merged.get("groups"), dict) else {}
+    raw_models = merged.get("models") if isinstance(merged.get("models"), dict) else {}
+    warnings: list[str] = []
+    entries: list[ModelSettingsEntry] = []
+
+    for name, configured_value in raw_models.items():
+        configured = configured_value if isinstance(configured_value, dict) else {}
+        group = configured.get("group") if isinstance(configured.get("group"), str) else None
+        if group and group not in raw_groups:
+            warnings.append(f"模型“{name}”引用了不存在的配置组“{group}”")
+        effective = settings.get_api_config(str(name)).model_dump(exclude_none=True)
+        entries.append(
+            ModelSettingsEntry(
+                name=str(name),
+                group=group,
+                is_default=str(name) == settings.default_model,
+                configured=_redact_model_settings(configured),
+                effective=_redact_model_settings(effective),
+                overridden_fields=[str(field) for field in configured if field != "group"],
+                sources=model_sources.get(str(name), []),
+            )
+        )
+
+    if settings.default_model and settings.default_model not in raw_models:
+        warnings.append(f"默认模型“{settings.default_model}”不存在")
+
+    return ModelSettingsResponse(
+        cwd=cwd,
+        default_model=settings.default_model,
+        sources=sources,
+        groups=_redact_model_settings(raw_groups),
+        models=entries,
+        warnings=warnings,
+    )
+
+
 @router.get("/config/models", response_model=list[ModelInfo])
 async def list_models(
     request: Request,
@@ -167,6 +298,20 @@ async def list_models(
             for name, desc in models.items()
         ]
     return _list_models_from_settings()
+
+
+@router.get("/config/model-settings", response_model=ModelSettingsResponse)
+async def get_model_settings(
+    request: Request,
+    cwd: str | None = None,
+) -> ModelSettingsResponse:
+    """Inspect named model settings without exposing a mutation path."""
+    resolved_cwd = os.getcwd()
+    if cwd:
+        from crabcode_gateway.routes.workspace import _resolve_directory, _workspace_roots
+
+        resolved_cwd = str(_resolve_directory(cwd, _workspace_roots(request)))
+    return _model_settings_from_files(resolved_cwd)
 
 
 @router.post("/config/switch-model")

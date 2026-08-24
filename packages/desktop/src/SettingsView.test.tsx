@@ -9,7 +9,12 @@ import {
   type SettingsSectionId,
 } from "./SettingsView";
 import type { DocumentEngineInstallProgress } from "./native";
-import type { DesktopSettings, DocumentCapabilities, GatewayViewState } from "./types";
+import type {
+  DesktopSettings,
+  DocumentCapabilities,
+  GatewayViewState,
+  ModelSettingsResponse,
+} from "./types";
 
 const settings: DesktopSettings = {
   schema_version: 3,
@@ -123,6 +128,8 @@ describe("settings search", () => {
     expect(filterSettingsSections("处理用时").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("并行请求").map((section) => section.id)).toEqual(["document"]);
     expect(filterSettingsSections("显示原文").map((section) => section.id)).toEqual(["document"]);
+    expect(filterSettingsSections("Provider").map((section) => section.id)).toEqual(["models"]);
+    expect(filterSettingsSections("配置组").map((section) => section.id)).toEqual(["models"]);
     expect(filterSettingsSections("Yuri Head").map((section) => section.id)).toEqual(["about"]);
     expect(filterSettingsSections("不存在")).toEqual([]);
   });
@@ -434,6 +441,79 @@ describe("SettingsView", () => {
 
     expect(handlers.onEditConnection).toHaveBeenCalledWith("remote");
     expect(handlers.onDeleteConnection).toHaveBeenCalledWith("remote");
+  });
+
+  it("queries grouped models and shows configured and effective values without edit actions", () => {
+    const handlers = callbacks();
+    const refresh = vi.fn();
+    const modelSettings: ModelSettingsResponse = {
+      cwd: "/work/crabcode",
+      default_model: "gpt-5.6",
+      sources: ["/Users/test/.crabcode/settings.json"],
+      groups: {
+        "sky-router": {
+          provider: "codex",
+          base_url: "https://router.example.com/v1",
+          reasoning_effort: "high",
+        },
+      },
+      models: [
+        {
+          name: "claude",
+          group: null,
+          is_default: false,
+          configured: { provider: "anthropic", model: "claude-opus-4.6" },
+          effective: { provider: "anthropic", model: "claude-opus-4.6", max_tokens: 16384 },
+          overridden_fields: ["provider", "model"],
+          sources: ["/Users/test/.crabcode/settings.json"],
+        },
+        {
+          name: "gpt-5.6",
+          group: "sky-router",
+          is_default: true,
+          configured: { group: "sky-router", model: "gpt-5.6-sol" },
+          effective: {
+            group: "sky-router",
+            provider: "codex",
+            base_url: "https://router.example.com/v1",
+            model: "gpt-5.6-sol",
+            reasoning_effort: "high",
+          },
+          overridden_fields: ["model"],
+          sources: ["/Users/test/.crabcode/settings.json"],
+        },
+      ],
+      warnings: [],
+    };
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="models"
+        onSectionChange={vi.fn()}
+        modelSettings={modelSettings}
+        onRefreshModelSettings={refresh}
+      />,
+    ));
+
+    expect(Array.from(container.querySelectorAll(".model-settings-group > header strong"))
+      .map((element) => element.textContent)).toEqual(["未分组", "sky-router"]);
+    expect(container.querySelector(".model-settings-detail")?.textContent).toContain("gpt-5.6");
+    expect(container.querySelector(".model-settings-detail")?.textContent).toContain("继承 sky-router");
+    expect(container.querySelector(".model-settings-detail")?.textContent).toContain("https://router.example.com/v1");
+    expect(container.querySelector('[aria-label^="编辑"]')).toBeNull();
+    expect(container.querySelector('[aria-label^="删除"]')).toBeNull();
+
+    act(() => container.querySelector<HTMLButtonElement>(".model-refresh-command")!.click());
+    expect(refresh).toHaveBeenCalledOnce();
+
+    const search = container.querySelector<HTMLInputElement>('[aria-label="搜索模型配置"]')!;
+    act(() => changeInput(search, "anthropic"));
+    expect(container.querySelectorAll(".model-settings-group > button")).toHaveLength(1);
+    expect(container.querySelector(".model-settings-group > button")?.textContent).toContain("claude");
   });
 
   it("changes the theme mode and built-in Dock icon", async () => {

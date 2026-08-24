@@ -342,6 +342,25 @@ export interface GatewayModel {
   group?: string;
 }
 
+export interface ModelSettingsEntry {
+  name: string;
+  group: string | null;
+  is_default: boolean;
+  configured: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  overridden_fields: string[];
+  sources: string[];
+}
+
+export interface ModelSettingsResponse {
+  cwd: string;
+  default_model: string | null;
+  sources: string[];
+  groups: Record<string, Record<string, unknown>>;
+  models: ModelSettingsEntry[];
+  warnings: string[];
+}
+
 export interface GoalInfo {
   objective: string;
   status: "active" | "paused" | "complete" | "blocked";

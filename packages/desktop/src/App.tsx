@@ -129,6 +129,7 @@ import type {
   GatewayEvent,
   GatewayModel,
   GatewayViewState,
+  ModelSettingsResponse,
   ProjectPreset,
   ReasoningEffort,
   ScheduleJobInfo,
@@ -148,6 +149,12 @@ type AutomationTab = "schedule" | "monitor";
 type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
 type ScheduleActionState = { id: string; action: ScheduleAction };
 type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
+type ModelSettingsLoadState = {
+  key: string;
+  data: ModelSettingsResponse | null;
+  loading: boolean;
+  error: string | null;
+};
 
 SyntaxHighlighter.registerLanguage("bash", bash);
 SyntaxHighlighter.registerLanguage("css", css);
@@ -632,6 +639,7 @@ function App() {
   const [goalModal, setGoalModal] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("general");
+  const [modelSettingsState, setModelSettingsState] = useState<ModelSettingsLoadState | null>(null);
   const [connectionModal, setConnectionModal] = useState<"new" | string | null>(null);
   const [checkpointModal, setCheckpointModal] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -778,6 +786,36 @@ function App() {
       setPluginError(error instanceof Error ? error.message : String(error));
     } finally {
       setPluginLoading(false);
+    }
+  }, []);
+
+  const refreshModelSettings = useCallback(async (connectionId: string, cwd?: string) => {
+    const key = `${connectionId}\u0000${cwd ?? ""}`;
+    const api = apiRef.current.get(connectionId);
+    if (!api) {
+      setModelSettingsState({ key, data: null, loading: false, error: "Gateway 尚未连接" });
+      return;
+    }
+    setModelSettingsState((current) => ({
+      key,
+      data: current?.key === key ? current.data : null,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const data = await api.modelSettings(cwd);
+      setModelSettingsState((current) => current?.key === key
+        ? { key, data, loading: false, error: null }
+        : current);
+    } catch (error) {
+      setModelSettingsState((current) => current?.key === key
+        ? {
+            key,
+            data: current.data,
+            loading: false,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        : current);
     }
   }, []);
 
@@ -1459,6 +1497,23 @@ function App() {
       cancelled = true;
     };
   }, [activeConnection?.id, activeConnection?.base_url, activeGateway?.status, settings?.python_path, settingsOpen]);
+
+  useEffect(() => {
+    if (
+      !settingsOpen
+      || settingsSection !== "models"
+      || !activeConnection
+      || activeGateway?.status !== "online"
+    ) return;
+    void refreshModelSettings(activeConnection.id, activeProject?.path);
+  }, [
+    activeConnection?.id,
+    activeGateway?.status,
+    activeProject?.path,
+    refreshModelSettings,
+    settingsOpen,
+    settingsSection,
+  ]);
 
   const deleteConnection = useCallback(async (id: string) => {
     if (!settings) return;
@@ -2381,6 +2436,13 @@ function App() {
     return <div className="boot"><LoaderCircle className="spin" />正在加载 Crab Desktop</div>;
   }
 
+  const activeModelSettingsKey = activeConnection
+    ? `${activeConnection.id}\u0000${activeProject?.path ?? ""}`
+    : null;
+  const activeModelSettingsState = modelSettingsState?.key === activeModelSettingsKey
+    ? modelSettingsState
+    : null;
+
   return (
     <div className="app-shell">
       {settingsOpen ? (
@@ -2422,6 +2484,12 @@ function App() {
           onNewConnection={() => setConnectionModal("new")}
           onEditConnection={setConnectionModal}
           onDeleteConnection={(id) => void deleteConnection(id)}
+          modelSettings={activeModelSettingsState?.data ?? null}
+          modelSettingsLoading={activeModelSettingsState?.loading ?? false}
+          modelSettingsError={activeModelSettingsState?.error ?? null}
+          onRefreshModelSettings={() => {
+            if (activeConnection) void refreshModelSettings(activeConnection.id, activeProject?.path);
+          }}
           onNewProject={beginNewProject}
           onEditProject={setProjectModal}
           onDocumentWorkspaceRoot={(connectionId, path) => updateConnection(connectionId, (connection) => ({

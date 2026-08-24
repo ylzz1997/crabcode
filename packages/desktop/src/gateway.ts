@@ -12,6 +12,7 @@ import type {
   GatewayEvent,
   GatewayModel,
   GoalState,
+  ModelSettingsResponse,
   ReasoningEffort,
   ScheduleJobInfo,
   SessionInfo,
@@ -291,6 +292,11 @@ export class GatewayApi {
   models(sessionId?: string): Promise<GatewayModel[]> {
     const query = sessionId ? `?${new URLSearchParams({ session_id: sessionId })}` : "";
     return this.request(`/config/models${query}`);
+  }
+
+  modelSettings(cwd?: string): Promise<ModelSettingsResponse> {
+    const query = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+    return this.request(`/config/model-settings${query}`);
   }
 
   goal(sessionId: string): Promise<GoalState> {

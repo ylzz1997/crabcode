@@ -204,6 +204,7 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/permission/respond` | POST | 回复权限请求 |
 | `/choice/respond` | POST | 回复选择请求 |
 | `/config/models` | GET | 列出可用模型 |
+| `/config/model-settings` | GET | 查询工作目录的原始及最终生效模型配置 |
 | `/config/switch-model` | POST | 切换模型 |
 | `/config/switch-mode` | POST | 切换 agent/plan 模式 |
 | `/config/reasoning-effort` | POST | 设置推理强度 |

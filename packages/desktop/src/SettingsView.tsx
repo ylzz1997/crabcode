@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRightLeft,
+  Bot,
   Check,
   FileText,
   FolderCog,
@@ -21,6 +22,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ModelSettingsPanel } from "./ModelSettingsPanel";
 import {
   isDesktopShell,
   loadCustomDockIcon,
@@ -35,6 +37,7 @@ import type {
   DocumentCapabilities,
   FileUploadMode,
   GatewayViewState,
+  ModelSettingsResponse,
   ProjectPreset,
   ThemeMode,
   ThemeProfile,
@@ -43,7 +46,7 @@ import type {
 } from "./types";
 import desktopPackage from "../package.json";
 
-export type SettingsSectionId = "general" | "appearance" | "document" | "connections" | "projects" | "about";
+export type SettingsSectionId = "general" | "appearance" | "document" | "connections" | "models" | "projects" | "about";
 
 interface SettingsSectionDefinition {
   id: SettingsSectionId;
@@ -78,6 +81,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     searchText: "Gateway 连接 地址 密码 凭据 远程 本地 当前连接 新建 编辑 删除",
   },
   {
+    id: "models",
+    title: "模型",
+    description: "查询模型、配置组与最终生效参数",
+    searchText: "模型 Models Group 配置组 Provider Base URL 推理 Thinking Token 上下文 继承 默认模型 查询 刷新",
+  },
+  {
     id: "projects",
     title: "项目",
     description: "工作目录与项目管理",
@@ -106,6 +115,7 @@ const SECTION_ICONS = {
   appearance: Paintbrush,
   document: FileText,
   connections: Server,
+  models: Bot,
   projects: FolderCog,
   about: Info,
 } satisfies Record<SettingsSectionId, typeof Settings>;
@@ -187,6 +197,10 @@ interface SettingsViewProps {
   onNewConnection: () => void;
   onEditConnection: (id: string) => void;
   onDeleteConnection: (id: string) => void;
+  modelSettings?: ModelSettingsResponse | null;
+  modelSettingsLoading?: boolean;
+  modelSettingsError?: string | null;
+  onRefreshModelSettings?: () => void;
   onNewProject: () => void;
   onEditProject: (project: ProjectPreset) => void;
   onDocumentWorkspaceRoot?: (connectionId: string, path: string | null) => void;
@@ -402,6 +416,10 @@ export function SettingsView({
   onNewConnection,
   onEditConnection,
   onDeleteConnection,
+  modelSettings = null,
+  modelSettingsLoading = false,
+  modelSettingsError = null,
+  onRefreshModelSettings = () => {},
   onNewProject,
   onEditProject,
   onDocumentWorkspaceRoot,
@@ -1100,6 +1118,18 @@ export function SettingsView({
                   })}
                 </div>
               </section>
+            )}
+
+            {activeSection === "models" && (
+              <ModelSettingsPanel
+                activeConnection={activeConnection}
+                activeProject={activeProject}
+                gateway={activeGateway}
+                data={modelSettings}
+                loading={modelSettingsLoading}
+                error={modelSettingsError}
+                onRefresh={onRefreshModelSettings}
+              />
             )}
 
             {activeSection === "projects" && (

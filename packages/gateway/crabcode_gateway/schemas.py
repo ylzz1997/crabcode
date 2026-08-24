@@ -850,6 +850,29 @@ class ModelInfo(BaseModel):
     group: str = "default"
 
 
+class ModelSettingsEntry(BaseModel):
+    """One named model as configured and after group inheritance."""
+
+    name: str
+    group: str | None = None
+    is_default: bool = False
+    configured: dict[str, Any] = Field(default_factory=dict)
+    effective: dict[str, Any] = Field(default_factory=dict)
+    overridden_fields: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+
+
+class ModelSettingsResponse(BaseModel):
+    """Read-only model configuration visible from one working directory."""
+
+    cwd: str
+    default_model: str | None = None
+    sources: list[str] = Field(default_factory=list)
+    groups: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    models: list[ModelSettingsEntry] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = VERSION

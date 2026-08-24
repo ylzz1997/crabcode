@@ -211,6 +211,7 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/permission/respond` | POST | Respond to a permission request |
 | `/choice/respond` | POST | Respond to a choice request |
 | `/config/models` | GET | List available models |
+| `/config/model-settings` | GET | Inspect raw and effective model settings for a working directory |
 | `/config/switch-model` | POST | Switch model |
 | `/config/switch-mode` | POST | Switch agent/plan mode |
 | `/config/reasoning-effort` | POST | Set reasoning effort |
