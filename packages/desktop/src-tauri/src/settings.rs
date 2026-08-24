@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const KEYRING_SERVICE: &str = "io.crabcode.desktop";
@@ -30,7 +30,7 @@ fn dock_icon_bytes(choice: &str) -> Result<Vec<u8>, String> {
 
 fn default_settings() -> Value {
     json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "active_connection_id": "local",
         "connection_order": ["local"],
         "connections": [{
@@ -54,24 +54,8 @@ fn default_settings() -> Value {
         "document_translation_concurrency": 3,
         "document_translation_batch_size": 200,
         "theme_mode": "system",
-        "light_theme": {
-            "accent_color": "#e75f4b",
-            "background_color": "#f5f7f6",
-            "foreground_color": "#172421",
-            "ui_font_family": "system",
-            "code_font_family": "system-mono",
-            "translucent_sidebar": false,
-            "contrast": 50
-        },
-        "dark_theme": {
-            "accent_color": "#ff765f",
-            "background_color": "#0d1517",
-            "foreground_color": "#edf4ef",
-            "ui_font_family": "system",
-            "code_font_family": "system-mono",
-            "translucent_sidebar": false,
-            "contrast": 50
-        },
+        "active_theme_id": "builtin.crab",
+        "custom_theme_presets": [],
         "pointer_cursor": true,
         "ui_font_size": 14,
         "code_font_size": 12,
@@ -147,6 +131,57 @@ pub fn save_desktop_settings(settings: Value) -> Result<(), String> {
         .persist(&path)
         .map_err(|error| format!("Unable to replace desktop settings: {}", error.error))?;
     Ok(())
+}
+
+fn safe_export_filename(filename: &str) -> bool {
+    !filename.is_empty()
+        && filename.len() <= 160
+        && !filename.contains(['/', '\\', '\0'])
+        && Path::new(filename).file_name().and_then(|value| value.to_str()) == Some(filename)
+        && (filename.ends_with(".crabtheme.json") || filename.ends_with(".crabskin"))
+}
+
+#[tauri::command]
+pub fn save_theme_export(filename: String, bytes: Vec<u8>) -> Result<String, String> {
+    if !safe_export_filename(&filename) {
+        return Err("Theme export filename is invalid".to_string());
+    }
+    if bytes.is_empty() || bytes.len() > 12 * 1024 * 1024 {
+        return Err("Theme export must be between 1 byte and 12MB".to_string());
+    }
+    let directory = dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| "Unable to locate a Downloads directory".to_string())?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Unable to create the export directory: {error}"))?;
+    let suffix = if filename.ends_with(".crabtheme.json") {
+        ".crabtheme.json"
+    } else {
+        ".crabskin"
+    };
+    let stem = filename
+        .strip_suffix(suffix)
+        .ok_or_else(|| "Theme export filename is invalid".to_string())?;
+    let mut destination = directory.join(&filename);
+    for index in 1..10_000 {
+        if !destination.exists() {
+            break;
+        }
+        destination = directory.join(format!("{stem}-{index}{suffix}"));
+    }
+    if destination.exists() {
+        return Err("Unable to allocate a unique theme export filename".to_string());
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(&directory)
+        .map_err(|error| format!("Unable to create a temporary export: {error}"))?;
+    temporary
+        .write_all(&bytes)
+        .and_then(|_| temporary.as_file_mut().sync_all())
+        .map_err(|error| format!("Unable to write the theme export: {error}"))?;
+    temporary
+        .persist(&destination)
+        .map_err(|error| format!("Unable to save the theme export: {}", error.error))?;
+    Ok(destination.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -247,4 +282,18 @@ pub fn read_credential(credential_ref: &str) -> Result<String, String> {
             }
             other => format!("Unable to read the credential: {other}"),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_export_filename;
+
+    #[test]
+    fn theme_export_filenames_are_basenames_with_known_suffixes() {
+        assert!(safe_export_filename("深海.crabskin"));
+        assert!(safe_export_filename("graphite.crabtheme.json"));
+        assert!(!safe_export_filename("../escape.crabskin"));
+        assert!(!safe_export_filename("nested/theme.crabtheme.json"));
+        assert!(!safe_export_filename("theme.zip"));
+    }
 }

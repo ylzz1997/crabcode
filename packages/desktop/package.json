@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
+    "fflate": "^0.8.3",
     "katex": "^0.18.4",
     "lucide-react": "^0.468.0",
     "pdfjs-dist": "^4.10.38",

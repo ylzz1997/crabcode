@@ -11,6 +11,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             settings::load_desktop_settings,
             settings::save_desktop_settings,
+            settings::save_theme_export,
             settings::store_credential,
             settings::delete_credential,
             settings::set_dock_icon,

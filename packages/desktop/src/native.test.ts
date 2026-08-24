@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isInsecureRemoteUrl, isLoopbackUrl, normalizeBaseUrl, normalizeSettings } from "./native";
+import { BUILTIN_THEMES, resolveActiveTheme } from "./theme";
 import type { DesktopSettings } from "./types";
 
 describe("Gateway URL handling", () => {
@@ -43,12 +44,12 @@ describe("desktop settings migration", () => {
 
     const migrated = normalizeSettings(legacy);
 
-    expect(migrated.schema_version).toBe(3);
+    expect(migrated.schema_version).toBe(4);
     expect(migrated.theme_mode).toBe("system");
     expect(migrated.dock_icon).toBe("dark");
     expect(migrated).toMatchObject({
-      light_theme: { accent_color: "#e75f4b", background_color: "#f5f7f6" },
-      dark_theme: { accent_color: "#ff765f", background_color: "#0d1517" },
+      active_theme_id: "builtin.crab",
+      custom_theme_presets: [],
       pointer_cursor: true,
       ui_font_size: 14,
       code_font_size: 12,
@@ -206,19 +207,13 @@ describe("desktop settings migration", () => {
     } as unknown as DesktopSettings;
 
     const normalized = normalizeSettings(configured);
+    const migratedTheme = resolveActiveTheme(normalized);
 
     expect(normalized.theme_mode).toBe("dark");
     expect(normalized.dock_icon).toBe("light");
     expect(normalized).toMatchObject({
-      dark_theme: {
-        accent_color: "#33aa88",
-        background_color: "#101820",
-        foreground_color: "#f0f4f2",
-        ui_font_family: "serif",
-        code_font_family: "menlo",
-        translucent_sidebar: true,
-        contrast: 100,
-      },
+      active_theme_id: "custom.migrated",
+      custom_theme_presets: [{ id: "custom.migrated" }],
       pointer_cursor: false,
       ui_font_size: 18,
       code_font_size: 10,
@@ -231,6 +226,17 @@ describe("desktop settings migration", () => {
       document_show_original_text: true,
       document_translation_concurrency: 8,
       document_translation_batch_size: 10,
+    });
+    expect(migratedTheme).toMatchObject({
+      dark: {
+        accent_color: "#33aa88",
+        background_color: "#101820",
+        foreground_color: "#f0f4f2",
+        ui_font_family: "serif",
+        code_font_family: "menlo",
+        translucent_sidebar: true,
+        contrast: 100,
+      },
     });
   });
 
@@ -246,6 +252,29 @@ describe("desktop settings migration", () => {
     } as unknown as DesktopSettings);
 
     expect(migrated.theme_mode).toBe("light");
-    expect(migrated.light_theme.background_color).toBe("#f5f7f6");
+    expect(resolveActiveTheme(migrated).light.background_color).toBe("#f5f7f6");
+  });
+
+  it("drops corrupt or incompatible v4 presets and falls back to Crab default", () => {
+    const futureTheme = {
+      ...BUILTIN_THEMES[1],
+      id: "custom.future",
+      minimum_app_version: "99.0.0",
+    };
+    const normalized = normalizeSettings({
+      ...normalizeSettings({
+        schema_version: 1,
+        active_connection_id: "local",
+        connection_order: [],
+        connections: [],
+        sidebar_width: 280,
+      } as unknown as DesktopSettings),
+      schema_version: 4,
+      active_theme_id: "custom.future",
+      custom_theme_presets: [futureTheme, { id: "custom.broken" } as never],
+    });
+
+    expect(normalized.active_theme_id).toBe("builtin.crab");
+    expect(normalized.custom_theme_presets).toEqual([]);
   });
 });

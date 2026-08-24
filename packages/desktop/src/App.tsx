@@ -59,7 +59,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-light";
@@ -102,6 +102,16 @@ import { SettingsView, type SettingsSectionId } from "./SettingsView";
 import { TrajectoryView } from "./TrajectoryView";
 import { getToolPresentation, parseChecklistResult, type ToolField } from "./toolPresentation";
 import {
+  DEFAULT_THEME_ID,
+  addImportedTheme,
+  deleteCustomTheme,
+  duplicateTheme,
+  renameCustomTheme,
+  resolveActiveTheme,
+  resolveThemeTokens,
+  updateActiveThemeProfile,
+} from "./theme";
+import {
   deleteCredential,
   ensureLocalGateway,
   getDocumentEngineStatus,
@@ -137,6 +147,8 @@ import type {
   SessionViewState,
   SkillInfo,
   ToolInfo,
+  ThemePreset,
+  ThemeVisualSlot,
   TurnDurationFormat,
   WorkspaceDirectoryListing,
 } from "./types";
@@ -200,6 +212,35 @@ type FocusedSessionSnapshot = SessionCleanupTarget & {
   projectPath: string;
   view: WorkspaceView;
 };
+
+const DECORATION_SLOTS: readonly ThemeVisualSlot[] = [
+  "app_background",
+  "workspace_background",
+  "sidebar_overlay",
+  "welcome_character_left",
+  "welcome_character_right",
+  "top_trim",
+  "bottom_trim",
+];
+
+function ThemeDecorations({ theme }: { theme: ThemePreset }) {
+  if (!theme.visuals) return null;
+  return (
+    <div className="theme-visuals" aria-hidden="true">
+      {DECORATION_SLOTS.map((slot) => {
+        const visual = theme.visuals?.[slot];
+        if (!visual) return null;
+        const style: CSSProperties = {
+          backgroundImage: `url("${visual.data_url}")`,
+          backgroundPosition: visual.position,
+          backgroundSize: visual.fit,
+          opacity: visual.opacity,
+        };
+        return <div className={`theme-visual theme-visual-${slot.replaceAll("_", "-")}`} style={style} key={slot} />;
+      })}
+    </div>
+  );
+}
 
 export function shouldAutoOpenDocumentSession(
   workspaceView: WorkspaceView,
@@ -1285,22 +1326,22 @@ function App() {
     const applyAppearance = () => {
       const dark = settings.theme_mode === "dark"
         || (settings.theme_mode === "system" && media.matches);
-      const profile = dark ? settings.dark_theme : settings.light_theme;
-      const background = profile.background_color;
+      const theme = resolveActiveTheme(settings);
+      const profile = dark ? theme.dark : theme.light;
+      const tokens = resolveThemeTokens(profile, dark);
       root.dataset.theme = dark ? "dark" : "light";
       root.dataset.themeMode = settings.theme_mode;
+      root.dataset.themeId = theme.id;
+      root.dataset.themeVisuals = String(Boolean(theme.visuals && Object.keys(theme.visuals).length));
       root.dataset.customBackground = "true";
       root.dataset.customForeground = "true";
       root.dataset.translucentSidebar = String(profile.translucent_sidebar);
       root.dataset.pointerCursor = String(settings.pointer_cursor);
       root.dataset.diffMarkers = settings.diff_marker_style;
       root.dataset.fontSmoothing = String(settings.font_smoothing);
-      root.style.setProperty("--accent", profile.accent_color);
-      root.style.setProperty(
-        "--accent-strong",
-        `color-mix(in srgb, ${profile.accent_color} ${dark ? 72 : 78}%, ${dark ? "white" : "black"})`,
-      );
-      root.style.setProperty("--accent-soft", `color-mix(in srgb, ${profile.accent_color} 22%, transparent)`);
+      for (const [name, value] of Object.entries(tokens)) {
+        root.style.setProperty(`--${name.replaceAll("_", "-")}`, value);
+      }
       root.style.setProperty("--ui-font-family", ({
         system: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         inter: 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -1314,29 +1355,22 @@ function App() {
       root.style.setProperty("--ui-font-size", `${settings.ui_font_size}px`);
       root.style.setProperty("--code-font-size", `${settings.code_font_size}px`);
       root.style.setProperty("--ui-contrast", String(0.8 + profile.contrast * 0.004));
-      root.style.setProperty("--bg", background);
-      root.style.setProperty("--panel", `color-mix(in srgb, ${background} 94%, ${dark ? "white" : "black"})`);
-      root.style.setProperty("--panel-strong", `color-mix(in srgb, ${background} 88%, ${dark ? "white" : "black"})`);
-      root.style.setProperty("--surface", dark ? `color-mix(in srgb, ${background} 90%, white)` : `color-mix(in srgb, ${background} 35%, white)`);
-      root.style.setProperty("--surface-hover", `color-mix(in srgb, ${background} 84%, ${dark ? "white" : "black"})`);
-      root.style.setProperty("--surface-active", `color-mix(in srgb, ${background} 78%, ${dark ? "white" : "black"})`);
-      root.style.setProperty("--border", `color-mix(in srgb, ${background} 72%, ${dark ? "white" : "black"})`);
-      root.style.setProperty("--border-soft", `color-mix(in srgb, ${background} 82%, ${dark ? "white" : "black"})`);
-      root.style.setProperty("--code-bg", `color-mix(in srgb, ${background} 78%, black)`);
-      root.style.setProperty("--text", profile.foreground_color);
-      root.style.setProperty("--muted", `color-mix(in srgb, ${profile.foreground_color} 72%, ${background})`);
-      root.style.setProperty("--subtle", `color-mix(in srgb, ${profile.foreground_color} 56%, ${background})`);
+      root.style.setProperty("--theme-sidebar-width", `${settings.sidebar_width}px`);
+      const composerFrame = theme.visuals?.composer_frame;
+      root.style.setProperty("--theme-composer-frame", composerFrame ? `url("${composerFrame.data_url}")` : "none");
+      root.style.setProperty("--theme-composer-frame-opacity", String(composerFrame?.opacity ?? 0));
     };
     applyAppearance();
     if (settings.theme_mode === "system") media.addEventListener("change", applyAppearance);
     return () => media.removeEventListener("change", applyAppearance);
   }, [
-    settings?.dark_theme,
+    settings?.active_theme_id,
     settings?.code_font_size,
+    settings?.custom_theme_presets,
     settings?.diff_marker_style,
     settings?.font_smoothing,
-    settings?.light_theme,
     settings?.pointer_cursor,
+    settings?.sidebar_width,
     settings?.theme_mode,
     settings?.ui_font_size,
   ]);
@@ -2436,6 +2470,8 @@ function App() {
     return <div className="boot"><LoaderCircle className="spin" />正在加载 Crab Desktop</div>;
   }
 
+  const activeTheme = resolveActiveTheme(settings);
+
   const activeModelSettingsKey = activeConnection
     ? `${activeConnection.id}\u0000${activeProject?.path ?? ""}`
     : null;
@@ -2445,6 +2481,7 @@ function App() {
 
   return (
     <div className="app-shell">
+      <ThemeDecorations theme={activeTheme} />
       {settingsOpen ? (
         <SettingsView
           settings={settings}
@@ -2467,11 +2504,28 @@ function App() {
             commitSettings((current) => ({ ...current, theme_mode: mode }));
           }}
           onThemeProfileChange={(scheme, changes) => {
-            const key = scheme === "light" ? "light_theme" : "dark_theme";
-            commitSettings((current) => ({
-              ...current,
-              [key]: { ...current[key], ...changes },
-            }));
+            commitSettings((current) => updateActiveThemeProfile(current, scheme, changes));
+          }}
+          onThemePresetChange={(id) => {
+            commitSettings((current) => ({ ...current, active_theme_id: id }));
+          }}
+          onThemeDuplicate={(id) => {
+            commitSettings((current) => duplicateTheme(current, id));
+          }}
+          onThemeRename={(id, name) => {
+            commitSettings((current) => renameCustomTheme(current, id, name));
+          }}
+          onThemeDelete={(id) => {
+            commitSettings((current) => deleteCustomTheme(current, id));
+          }}
+          onThemeRestoreDefault={() => {
+            commitSettings((current) => ({ ...current, active_theme_id: DEFAULT_THEME_ID }));
+          }}
+          onThemeImport={(theme) => {
+            commitSettings((current) => addImportedTheme(current, theme));
+          }}
+          onThemeImportFailure={() => {
+            commitSettings((current) => ({ ...current, active_theme_id: DEFAULT_THEME_ID }));
           }}
           onAppearanceChange={(changes) => {
             commitSettings((current) => ({ ...current, ...changes }));

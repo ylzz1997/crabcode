@@ -1,6 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { legacyFavoriteEntries, normalizeFavoriteEntries } from "./favorites";
+import {
+  DEFAULT_DARK_THEME,
+  DEFAULT_LIGHT_THEME,
+  DEFAULT_THEME_ID,
+  THEME_SEMANTIC_COLOR_KEYS,
+  ThemeRegistry,
+  isThemeColor,
+  legacyThemePreset,
+  normalizeStoredThemePreset,
+  themeProfilesEqual,
+} from "./theme";
 import type {
   CodeFontFamily,
   DesktopSettings,
@@ -10,6 +21,7 @@ import type {
   DocumentViewState,
   ThemeMode,
   ThemeProfile,
+  ThemeSemanticColors,
   TurnDurationFormat,
   UiFontFamily,
 } from "./types";
@@ -28,28 +40,8 @@ interface EnsureGatewayResult {
   message: string;
 }
 
-const DEFAULT_LIGHT_THEME: ThemeProfile = {
-  accent_color: "#e75f4b",
-  background_color: "#f5f7f6",
-  foreground_color: "#172421",
-  ui_font_family: "system",
-  code_font_family: "system-mono",
-  translucent_sidebar: false,
-  contrast: 50,
-};
-
-const DEFAULT_DARK_THEME: ThemeProfile = {
-  accent_color: "#ff765f",
-  background_color: "#0d1517",
-  foreground_color: "#edf4ef",
-  ui_font_family: "system",
-  code_font_family: "system-mono",
-  translucent_sidebar: false,
-  contrast: 50,
-};
-
 const DEFAULT_SETTINGS: DesktopSettings = {
-  schema_version: 3,
+  schema_version: 4,
   active_connection_id: "local",
   connection_order: ["local"],
   connections: [{
@@ -73,8 +65,8 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   document_translation_concurrency: 3,
   document_translation_batch_size: 200,
   theme_mode: "system",
-  light_theme: DEFAULT_LIGHT_THEME,
-  dark_theme: DEFAULT_DARK_THEME,
+  active_theme_id: DEFAULT_THEME_ID,
+  custom_theme_presets: [],
   pointer_cursor: true,
   ui_font_size: 14,
   code_font_size: 12,
@@ -111,6 +103,7 @@ function normalizeDocumentView(raw: Partial<DocumentViewState> | undefined): Doc
 }
 
 interface LegacyAppearanceSettings {
+  schema_version?: number;
   auto_night_mode?: boolean;
   accent_color?: string;
   background_color?: string | null;
@@ -119,6 +112,10 @@ interface LegacyAppearanceSettings {
   code_font_family?: CodeFontFamily;
   translucent_sidebar?: boolean;
   contrast?: number;
+  light_theme?: Partial<ThemeProfile>;
+  dark_theme?: Partial<ThemeProfile>;
+  active_theme_id?: unknown;
+  custom_theme_presets?: unknown;
 }
 
 function normalizeThemeProfile(
@@ -136,6 +133,14 @@ function normalizeThemeProfile(
     : legacy.code_font_family === "menlo" || legacy.code_font_family === "monaco"
       ? legacy.code_font_family
       : fallback.code_font_family;
+  const overrides: Partial<ThemeSemanticColors> = {};
+  const rawOverrides = raw?.token_overrides;
+  if (rawOverrides && typeof rawOverrides === "object" && !Array.isArray(rawOverrides)) {
+    for (const key of THEME_SEMANTIC_COLOR_KEYS) {
+      const value = rawOverrides[key];
+      if (isThemeColor(value)) overrides[key] = value.toLowerCase();
+    }
+  }
   return {
     accent_color: validHexColor(raw?.accent_color)
       ? raw.accent_color.toLowerCase()
@@ -150,6 +155,9 @@ function normalizeThemeProfile(
     code_font_family: codeFontFamily,
     translucent_sidebar: raw?.translucent_sidebar ?? legacy.translucent_sidebar === true,
     contrast: clampInteger(raw?.contrast ?? legacy.contrast, 0, 100, fallback.contrast),
+    radius_scale: clampNumber(raw?.radius_scale, 0.5, 1.75, fallback.radius_scale),
+    shadow_strength: clampInteger(raw?.shadow_strength, 0, 100, fallback.shadow_strength),
+    token_overrides: overrides,
   };
 }
 
@@ -178,12 +186,37 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     : raw.theme_mode === "system" ? "system" : legacy.auto_night_mode === false ? "light" : "system";
   const diffMarkerStyle: DiffMarkerStyle = raw.diff_marker_style === "symbols" ? "symbols" : "color";
   const turnDurationFormat: TurnDurationFormat = raw.turn_duration_format === "seconds" ? "seconds" : "hms";
-  return {
+  const legacyLight = normalizeThemeProfile(legacy.light_theme, DEFAULT_LIGHT_THEME, legacy);
+  const legacyDark = normalizeThemeProfile(legacy.dark_theme, DEFAULT_DARK_THEME, legacy);
+  const parsedStoredThemes = Array.isArray(legacy.custom_theme_presets)
+    ? legacy.custom_theme_presets
+        .map(normalizeStoredThemePreset)
+        .filter((theme): theme is NonNullable<typeof theme> => theme !== null)
+    : [];
+  const storedThemeIds = new Set<string>();
+  const storedThemes = parsedStoredThemes.filter((theme) => {
+    if (storedThemeIds.has(theme.id)) return false;
+    storedThemeIds.add(theme.id);
+    return true;
+  });
+  const hasLegacyAppearance = legacy.schema_version !== 4 && (
+    !themeProfilesEqual(legacyLight, DEFAULT_LIGHT_THEME)
+    || !themeProfilesEqual(legacyDark, DEFAULT_DARK_THEME)
+  );
+  const customThemes = hasLegacyAppearance
+    ? [legacyThemePreset(legacyLight, legacyDark), ...storedThemes.filter((theme) => theme.id !== "custom.migrated")]
+    : storedThemes;
+  const requestedThemeId = hasLegacyAppearance
+    ? "custom.migrated"
+    : typeof legacy.active_theme_id === "string" ? legacy.active_theme_id : DEFAULT_THEME_ID;
+  const registry = new ThemeRegistry(customThemes);
+  const activeThemeId = registry.get(requestedThemeId) ? requestedThemeId : DEFAULT_THEME_ID;
+  const normalized = {
     ...raw,
-    schema_version: 3,
+    schema_version: 4,
     theme_mode: themeMode,
-    light_theme: normalizeThemeProfile(raw.light_theme, DEFAULT_LIGHT_THEME, legacy),
-    dark_theme: normalizeThemeProfile(raw.dark_theme, DEFAULT_DARK_THEME, legacy),
+    active_theme_id: activeThemeId,
+    custom_theme_presets: customThemes,
     pointer_cursor: raw.pointer_cursor !== false,
     ui_font_size: clampInteger(raw.ui_font_size, 11, 18, 14),
     code_font_size: clampInteger(raw.code_font_size, 10, 18, 12),
@@ -241,6 +274,20 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
       };
     }),
   };
+  const withoutLegacyAppearance = normalized as DesktopSettings & Record<string, unknown>;
+  for (const key of [
+    "auto_night_mode",
+    "accent_color",
+    "background_color",
+    "foreground_color",
+    "ui_font_family",
+    "code_font_family",
+    "translucent_sidebar",
+    "contrast",
+    "light_theme",
+    "dark_theme",
+  ]) delete withoutLegacyAppearance[key];
+  return withoutLegacyAppearance;
 }
 
 export async function setDockIcon(choice: DockIconChoice, pngBytes?: Uint8Array): Promise<void> {
@@ -263,6 +310,11 @@ export async function saveSettings(settings: DesktopSettings): Promise<void> {
     return;
   }
   localStorage.setItem("crabcode.desktop.settings", JSON.stringify(settings));
+}
+
+export async function saveThemeExport(filename: string, bytes: Uint8Array): Promise<string | null> {
+  if (!isDesktopShell()) return null;
+  return invoke<string>("save_theme_export", { filename, bytes: Array.from(bytes) });
 }
 
 export async function storeCredential(reference: string, password: string): Promise<void> {

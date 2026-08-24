@@ -8,6 +8,7 @@ import {
   SettingsView,
   type SettingsSectionId,
 } from "./SettingsView";
+import { BUILTIN_THEMES } from "./theme";
 import type { DocumentEngineInstallProgress } from "./native";
 import type {
   DesktopSettings,
@@ -17,7 +18,7 @@ import type {
 } from "./types";
 
 const settings: DesktopSettings = {
-  schema_version: 3,
+  schema_version: 4,
   active_connection_id: "local",
   connection_order: ["local", "remote"],
   connections: [
@@ -59,24 +60,8 @@ const settings: DesktopSettings = {
   document_translation_concurrency: 3,
   document_translation_batch_size: 200,
   theme_mode: "system",
-  light_theme: {
-    accent_color: "#e75f4b",
-    background_color: "#f5f7f6",
-    foreground_color: "#172421",
-    ui_font_family: "system",
-    code_font_family: "system-mono",
-    translucent_sidebar: false,
-    contrast: 50,
-  },
-  dark_theme: {
-    accent_color: "#ff765f",
-    background_color: "#0d1517",
-    foreground_color: "#edf4ef",
-    ui_font_family: "system",
-    code_font_family: "system-mono",
-    translucent_sidebar: false,
-    contrast: 50,
-  },
+  active_theme_id: "builtin.crab",
+  custom_theme_presets: [],
   pointer_cursor: true,
   ui_font_size: 14,
   code_font_size: 12,
@@ -159,6 +144,13 @@ describe("SettingsView", () => {
     onDocumentChange: vi.fn(),
     onThemeModeChange: vi.fn(),
     onThemeProfileChange: vi.fn(),
+    onThemePresetChange: vi.fn(),
+    onThemeDuplicate: vi.fn(),
+    onThemeRename: vi.fn(),
+    onThemeDelete: vi.fn(),
+    onThemeRestoreDefault: vi.fn(),
+    onThemeImport: vi.fn(),
+    onThemeImportFailure: vi.fn(),
     onAppearanceChange: vi.fn(),
     onDockIconChange: vi.fn().mockResolvedValue(undefined),
     onActivateConnection: vi.fn(),
@@ -578,6 +570,73 @@ describe("SettingsView", () => {
     expect(handlers.onThemeProfileChange).toHaveBeenCalledWith("dark", { contrast: 72 });
     expect(handlers.onThemeProfileChange).toHaveBeenCalledWith("light", { ui_font_family: "serif" });
     expect(handlers.onThemeProfileChange).toHaveBeenCalledWith("dark", { translucent_sidebar: true });
+  });
+
+  it("lists built-in skin presets and exposes preset management actions", () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="appearance"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    const presetCards = Array.from(container.querySelectorAll<HTMLElement>(".theme-preset-card"));
+    const graphite = presetCards.find((card) => card.textContent?.includes("石墨"))!;
+    const deepSea = presetCards.find((card) => card.textContent?.includes("深海"))!;
+
+    act(() => graphite.querySelector<HTMLButtonElement>(".theme-preset-select")!.click());
+    act(() => deepSea.querySelector<HTMLButtonElement>('button[title="复制 深海"]')!.click());
+    act(() => container.querySelector<HTMLButtonElement>(".theme-transfer-toolbar button:last-of-type")!.click());
+
+    expect(presetCards).toHaveLength(3);
+    expect(handlers.onThemePresetChange).toHaveBeenCalledWith("builtin.graphite");
+    expect(handlers.onThemeDuplicate).toHaveBeenCalledWith("builtin.deep-sea");
+    expect(handlers.onThemeRestoreDefault).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLButtonElement>(".theme-transfer-toolbar button:last-of-type")?.disabled).toBe(true);
+  });
+
+  it("renames and deletes a custom preset with inline confirmation", () => {
+    const handlers = callbacks();
+    const customTheme = {
+      ...BUILTIN_THEMES[0],
+      id: "custom.crab-copy",
+      name: "Crab 默认 副本",
+      author: "本地用户",
+    };
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={{
+          ...settings,
+          active_theme_id: customTheme.id,
+          custom_theme_presets: [customTheme],
+        }}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="appearance"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    act(() => container.querySelector<HTMLButtonElement>('button[title="重命名 Crab 默认 副本"]')!.click());
+    const renameInput = container.querySelector<HTMLInputElement>('input[aria-label="重命名 Crab 默认 副本"]')!;
+    expect(renameInput).not.toBeNull();
+    act(() => changeInput(renameInput, "我的螃蟹"));
+    act(() => container.querySelector<HTMLButtonElement>('button[title="保存名称"]')!.click());
+    expect(handlers.onThemeRename).toHaveBeenCalledWith(customTheme.id, "我的螃蟹");
+
+    act(() => container.querySelector<HTMLButtonElement>('button[title="删除 Crab 默认 副本"]')!.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("确定删除");
+    expect(handlers.onThemeDelete).not.toHaveBeenCalled();
+    act(() => container.querySelector<HTMLButtonElement>('button[title="确认删除 Crab 默认 副本"]')!.click());
+    expect(handlers.onThemeDelete).toHaveBeenCalledWith(customTheme.id);
   });
 
   it("shows both profiles for system mode and only the forced profile otherwise", () => {

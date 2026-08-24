@@ -53,7 +53,7 @@ export interface ConnectionPreset {
 }
 
 export interface DesktopSettings {
-  schema_version: 3;
+  schema_version: 4;
   active_connection_id: string;
   connection_order: string[];
   connections: ConnectionPreset[];
@@ -65,8 +65,8 @@ export interface DesktopSettings {
   document_translation_concurrency: number;
   document_translation_batch_size: number;
   theme_mode: ThemeMode;
-  light_theme: ThemeProfile;
-  dark_theme: ThemeProfile;
+  active_theme_id: string;
+  custom_theme_presets: ThemePreset[];
   pointer_cursor: boolean;
   ui_font_size: number;
   code_font_size: number;
@@ -95,6 +95,80 @@ export interface ThemeProfile {
   code_font_family: CodeFontFamily;
   translucent_sidebar: boolean;
   contrast: number;
+  radius_scale: number;
+  shadow_strength: number;
+  token_overrides: Partial<ThemeSemanticColors>;
+}
+
+export interface ThemeSemanticColors {
+  bg: string;
+  panel: string;
+  panel_strong: string;
+  surface: string;
+  surface_hover: string;
+  surface_active: string;
+  border: string;
+  border_soft: string;
+  text: string;
+  muted: string;
+  subtle: string;
+  accent: string;
+  accent_strong: string;
+  accent_soft: string;
+  green: string;
+  green_soft: string;
+  orange: string;
+  orange_soft: string;
+  red: string;
+  red_soft: string;
+  code_bg: string;
+}
+
+export type ThemeVisualSlot =
+  | "app_background"
+  | "workspace_background"
+  | "sidebar_overlay"
+  | "welcome_character_left"
+  | "welcome_character_right"
+  | "composer_frame"
+  | "top_trim"
+  | "bottom_trim";
+
+export type ThemeVisualFit = "cover" | "contain" | "fill" | "none";
+export type ThemeVisualPosition =
+  | "center"
+  | "top"
+  | "bottom"
+  | "left"
+  | "right"
+  | "left top"
+  | "left bottom"
+  | "right top"
+  | "right bottom";
+
+export interface ThemeVisualAsset {
+  data_url: string;
+  opacity: number;
+  fit: ThemeVisualFit;
+  position: ThemeVisualPosition;
+}
+
+export type ThemeVisuals = Partial<Record<ThemeVisualSlot, ThemeVisualAsset>>;
+
+export interface ThemePreset {
+  id: string;
+  name: string;
+  author: string;
+  version: string;
+  description: string;
+  minimum_app_version: string;
+  light: ThemeProfile;
+  dark: ThemeProfile;
+  preview?: {
+    light?: string;
+    dark?: string;
+  };
+  visuals?: ThemeVisuals;
 }
 
 export interface WorkspaceInfo {

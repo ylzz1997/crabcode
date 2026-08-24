@@ -3,6 +3,8 @@ import {
   ArrowRightLeft,
   Bot,
   Check,
+  Copy,
+  Download,
   FileText,
   FolderCog,
   Image as ImageIcon,
@@ -20,12 +22,22 @@ import {
   Trash2,
   Upload,
   WifiOff,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ModelSettingsPanel } from "./ModelSettingsPanel";
+import { ThemeRegistry, resolveActiveTheme } from "./theme";
+import {
+  parseSkinPackage,
+  parseThemeDocument,
+  safeThemeFilename,
+  serializeSkinPackage,
+  serializeThemeDocument,
+} from "./themePackages";
 import {
   isDesktopShell,
   loadCustomDockIcon,
+  saveThemeExport,
   type DocumentEngineInstallProgress,
 } from "./native";
 import type {
@@ -40,6 +52,7 @@ import type {
   ModelSettingsResponse,
   ProjectPreset,
   ThemeMode,
+  ThemePreset,
   ThemeProfile,
   TurnDurationFormat,
   UiFontFamily,
@@ -66,7 +79,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     id: "appearance",
     title: "外观",
     description: "主题、颜色、字体与应用图标",
-    searchText: "外观 主题 系统 跟随系统 浅色 深色 强调色 背景色 前景色 界面字体 代码字体 半透明侧栏 对比度 指针光标 字号 Diff 标记 加号 减号 字体平滑 Dock 图标 螃蟹 自定义 上传",
+    searchText: "外观 主题 皮肤 预设 导入 导出 复制 重命名 删除 恢复默认 system 跟随系统 浅色 深色 强调色 背景色 前景色 界面字体 代码字体 半透明侧栏 对比度 指针光标 字号 Diff 标记 加号 减号 字体平滑 Dock 图标 螃蟹 自定义 上传",
   },
   {
     id: "document",
@@ -191,6 +204,13 @@ interface SettingsViewProps {
   onDocumentChange: (changes: DocumentSettingsUpdate) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onThemeProfileChange: (scheme: "light" | "dark", changes: Partial<ThemeProfile>) => void;
+  onThemePresetChange: (id: string) => void;
+  onThemeDuplicate: (id: string) => void;
+  onThemeRename: (id: string, name: string) => void;
+  onThemeDelete: (id: string) => void;
+  onThemeRestoreDefault: () => void;
+  onThemeImport: (theme: ThemePreset) => void;
+  onThemeImportFailure: () => void;
   onAppearanceChange: (changes: AppearanceSettingsUpdate) => void;
   onDockIconChange: (choice: DockIconChoice, pngBytes?: Uint8Array) => Promise<void>;
   onActivateConnection: (id: string) => void;
@@ -393,6 +413,36 @@ function ThemeProfileEditor({
           <output>{profile.contrast}</output>
         </div>
       </div>
+      <div className="theme-profile-row">
+        <strong>圆角比例</strong>
+        <div className="settings-range-control">
+          <input
+            type="range"
+            min="0.5"
+            max="1.75"
+            step="0.05"
+            aria-label={`${schemeLabel}圆角比例`}
+            value={profile.radius_scale}
+            onChange={(event) => onChange({ radius_scale: Number(event.target.value) })}
+          />
+          <output>{Math.round(profile.radius_scale * 100)}%</output>
+        </div>
+      </div>
+      <div className="theme-profile-row">
+        <strong>阴影强度</strong>
+        <div className="settings-range-control">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            aria-label={`${schemeLabel}阴影强度`}
+            value={profile.shadow_strength}
+            onChange={(event) => onChange({ shadow_strength: Number(event.target.value) })}
+          />
+          <output>{profile.shadow_strength}</output>
+        </div>
+      </div>
     </section>
   );
 }
@@ -410,6 +460,13 @@ export function SettingsView({
   onDocumentChange,
   onThemeModeChange,
   onThemeProfileChange,
+  onThemePresetChange,
+  onThemeDuplicate,
+  onThemeRename,
+  onThemeDelete,
+  onThemeRestoreDefault,
+  onThemeImport,
+  onThemeImportFailure,
   onAppearanceChange,
   onDockIconChange,
   onActivateConnection,
@@ -436,8 +493,17 @@ export function SettingsView({
   const [customIconPreview, setCustomIconPreview] = useState<string | null>(null);
   const [dockIconBusy, setDockIconBusy] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
+  const [themeTransferMessage, setThemeTransferMessage] = useState<string | null>(null);
+  const [renamingThemeId, setRenamingThemeId] = useState<string | null>(null);
+  const [themeNameDraft, setThemeNameDraft] = useState("");
+  const [deletingThemeId, setDeletingThemeId] = useState<string | null>(null);
   const customIconInputRef = useRef<HTMLInputElement>(null);
+  const themeImportInputRef = useRef<HTMLInputElement>(null);
   const matchingSections = useMemo(() => filterSettingsSections(query), [query]);
+  const themeRegistry = useMemo(() => new ThemeRegistry(settings.custom_theme_presets), [settings.custom_theme_presets]);
+  const themePresets = useMemo(() => themeRegistry.list(), [themeRegistry]);
+  const activeTheme = useMemo(() => resolveActiveTheme(settings), [settings]);
+  const activeThemeIsBuiltin = themeRegistry.isBuiltin(activeTheme.id);
   const activeGateway = activeConnection ? gateways[activeConnection.id] : null;
   const canManageProjects = activeGateway?.status === "online" && Boolean(activeGateway.workspace);
 
@@ -475,6 +541,24 @@ export function SettingsView({
   const preciseEngine = documentCapabilities?.translation_engines?.precise;
   const documentEngineInstallCommand = preciseEngine?.install_command ?? "crabcode document-engine install";
 
+  const beginThemeRename = (theme: ThemePreset) => {
+    setDeletingThemeId(null);
+    setRenamingThemeId(theme.id);
+    setThemeNameDraft(theme.name);
+  };
+
+  const finishThemeRename = (theme: ThemePreset) => {
+    const name = themeNameDraft.trim();
+    if (name && name !== theme.name) onThemeRename(theme.id, name);
+    setRenamingThemeId(null);
+    setThemeNameDraft("");
+  };
+
+  const beginThemeDelete = (theme: ThemePreset) => {
+    setRenamingThemeId(null);
+    setDeletingThemeId(theme.id);
+  };
+
   const manageDocumentEngine = async (action: "install" | "remove") => {
     try {
       if (action === "install") await onInstallDocumentEngine();
@@ -511,6 +595,65 @@ export function SettingsView({
       await selectDockIcon("custom", bytes);
     } catch (error) {
       setAppearanceError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const downloadThemeFile = async (bytes: Uint8Array | string, filename: string, type: string): Promise<string | null> => {
+    const payload = typeof bytes === "string" ? new TextEncoder().encode(bytes) : new Uint8Array(bytes);
+    const nativePath = await saveThemeExport(filename, payload);
+    if (nativePath) return nativePath;
+    const blob = new Blob([payload], { type });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    return null;
+  };
+
+  const exportTheme = async () => {
+    setAppearanceError(null);
+    setThemeTransferMessage(null);
+    try {
+      const path = await downloadThemeFile(
+        serializeThemeDocument(activeTheme),
+        `${safeThemeFilename(activeTheme.name)}.crabtheme.json`,
+        "application/json",
+      );
+      setThemeTransferMessage(path ? `已导出到 ${path}` : `已导出 ${activeTheme.name} 的主题数据。`);
+    } catch (error) {
+      setAppearanceError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const exportSkin = async () => {
+    setAppearanceError(null);
+    setThemeTransferMessage(null);
+    try {
+      const path = await downloadThemeFile(
+        serializeSkinPackage(activeTheme),
+        `${safeThemeFilename(activeTheme.name)}.crabskin`,
+        "application/vnd.crabcode.skin+zip",
+      );
+      setThemeTransferMessage(path ? `已导出到 ${path}` : `已导出 ${activeTheme.name} 的完整皮肤包。`);
+    } catch (error) {
+      setAppearanceError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const importThemeFile = async (file: File) => {
+    setAppearanceError(null);
+    setThemeTransferMessage(null);
+    try {
+      const imported = file.name.toLowerCase().endsWith(".crabskin")
+        ? parseSkinPackage(new Uint8Array(await file.arrayBuffer()))
+        : parseThemeDocument(await file.text());
+      onThemeImport(imported);
+      setThemeTransferMessage(`已导入并启用 ${imported.name}。`);
+    } catch (error) {
+      onThemeImportFailure();
+      setAppearanceError(`${error instanceof Error ? error.message : String(error)}；已回退到 Crab 默认皮肤。`);
     }
   };
 
@@ -706,7 +849,120 @@ export function SettingsView({
 
             {activeSection === "appearance" && (
               <section className="settings-section appearance-settings" aria-labelledby="appearance-settings-title">
-                <h2 id="appearance-settings-title">主题</h2>
+                <h2 id="appearance-settings-title">皮肤预设</h2>
+                <p className="settings-section-description">每个预设同时包含浅色和深色外观；导入的主题只使用声明式颜色、排版和图片资源，不执行第三方代码。</p>
+                <div className="theme-preset-grid" aria-label="皮肤预设">
+                  {themePresets.map((theme) => {
+                    const builtin = themeRegistry.isBuiltin(theme.id);
+                    const selected = theme.id === activeTheme.id;
+                    return (
+                      <article className={`theme-preset-card ${selected ? "active" : ""}`} key={theme.id}>
+                        <button
+                          className="theme-preset-select"
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => onThemePresetChange(theme.id)}
+                        >
+                          <span className="theme-preset-preview">
+                            <i
+                              className="light"
+                              style={{
+                                backgroundColor: theme.light.background_color,
+                                color: theme.light.foreground_color,
+                                ...(theme.preview?.light ? { backgroundImage: `url("${theme.preview.light}")` } : {}),
+                              }}
+                            ><b style={{ backgroundColor: theme.light.accent_color }} /></i>
+                            <i
+                              className="dark"
+                              style={{
+                                backgroundColor: theme.dark.background_color,
+                                color: theme.dark.foreground_color,
+                                ...(theme.preview?.dark ? { backgroundImage: `url("${theme.preview.dark}")` } : {}),
+                              }}
+                            ><b style={{ backgroundColor: theme.dark.accent_color }} /></i>
+                          </span>
+                          <span className="theme-preset-copy">
+                            <strong>{theme.name}</strong>
+                            <small>{builtin ? "内置" : theme.author} · v{theme.version}</small>
+                          </span>
+                          <span className="theme-preset-check"><Check /></span>
+                        </button>
+                        {renamingThemeId === theme.id ? (
+                          <form
+                            className="theme-preset-inline-action rename"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              finishThemeRename(theme);
+                            }}
+                          >
+                            <input
+                              autoFocus
+                              aria-label={`重命名 ${theme.name}`}
+                              maxLength={80}
+                              value={themeNameDraft}
+                              onChange={(event) => setThemeNameDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape") {
+                                  setRenamingThemeId(null);
+                                  setThemeNameDraft("");
+                                }
+                              }}
+                            />
+                            <button type="submit" title="保存名称" disabled={!themeNameDraft.trim()}><Check />保存</button>
+                            <button type="button" title="取消重命名" onClick={() => setRenamingThemeId(null)}><X />取消</button>
+                          </form>
+                        ) : deletingThemeId === theme.id ? (
+                          <div className="theme-preset-inline-action delete" role="alert">
+                            <span>确定删除这个预设？</span>
+                            <button
+                              type="button"
+                              className="danger confirm"
+                              title={`确认删除 ${theme.name}`}
+                              onClick={() => {
+                                setDeletingThemeId(null);
+                                onThemeDelete(theme.id);
+                              }}
+                            ><Trash2 />删除</button>
+                            <button type="button" title="取消删除" onClick={() => setDeletingThemeId(null)}><X />取消</button>
+                          </div>
+                        ) : (
+                          <div className="theme-preset-actions">
+                            <button type="button" title={`复制 ${theme.name}`} onClick={() => onThemeDuplicate(theme.id)}><Copy />复制</button>
+                            {!builtin && (
+                              <>
+                                <button type="button" title={`重命名 ${theme.name}`} onClick={() => beginThemeRename(theme)}><Pencil />重命名</button>
+                                <button type="button" className="danger" title={`删除 ${theme.name}`} onClick={() => beginThemeDelete(theme)}><Trash2 />删除</button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+                <div className="theme-transfer-toolbar">
+                  <button type="button" onClick={() => themeImportInputRef.current?.click()}><Upload />导入主题或皮肤</button>
+                  <button type="button" onClick={() => void exportTheme()}><Download />导出主题</button>
+                  <button type="button" onClick={() => void exportSkin()} disabled={!activeTheme.visuals && !activeTheme.preview}><Download />导出完整皮肤</button>
+                  <button type="button" onClick={onThemeRestoreDefault} disabled={activeTheme.id === "builtin.crab"}><RotateCcw />恢复 Crab 默认</button>
+                  <input
+                    ref={themeImportInputRef}
+                    className="visually-hidden"
+                    type="file"
+                    accept=".crabtheme.json,.crabskin,application/json,application/zip"
+                    aria-label="导入 Crab 主题或皮肤"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void importThemeFile(file);
+                      event.target.value = "";
+                    }}
+                  />
+                </div>
+                {themeTransferMessage && <div className="appearance-success">{themeTransferMessage}</div>}
+
+                <div className="appearance-subheading appearance-spaced-heading">
+                  <div><h2>外观模式</h2><p>选择跟随系统，或固定使用预设中的浅色或深色版本。</p></div>
+                </div>
                 <div className="theme-choice-grid">
                   <button
                     className={`theme-choice ${settings.theme_mode === "system" ? "active" : ""}`}
@@ -749,18 +1005,24 @@ export function SettingsView({
                   </button>
                 </div>
 
+                <div className="appearance-subheading appearance-spaced-heading">
+                  <div>
+                    <h2>当前预设细节</h2>
+                    <p>{activeThemeIsBuiltin ? "修改任意字段时会自动创建一个可编辑副本。" : `正在编辑 ${activeTheme.name}。`}</p>
+                  </div>
+                </div>
                 <div className="theme-profiles">
                   {(settings.theme_mode === "system" || settings.theme_mode === "light") && (
                     <ThemeProfileEditor
                       scheme="light"
-                      profile={settings.light_theme}
+                      profile={activeTheme.light}
                       onChange={(changes) => onThemeProfileChange("light", changes)}
                     />
                   )}
                   {(settings.theme_mode === "system" || settings.theme_mode === "dark") && (
                     <ThemeProfileEditor
                       scheme="dark"
-                      profile={settings.dark_theme}
+                      profile={activeTheme.dark}
                       onChange={(changes) => onThemeProfileChange("dark", changes)}
                     />
                   )}
