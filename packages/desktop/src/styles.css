@@ -5704,6 +5704,18 @@ html[data-theme="light"] .document-actions-separator {
   position: absolute;
   border-bottom: 3px solid #f4bc4f;
   background: rgba(246, 202, 85, .22);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background .14s ease, box-shadow .14s ease;
+}
+
+.document-annotation-layer span:hover,
+.document-annotation-layer span:focus-visible,
+.document-annotation-layer span.is-active {
+  outline: 2px solid #f4bc4f;
+  outline-offset: 1px;
+  background: rgba(246, 202, 85, .42);
+  box-shadow: 0 0 0 4px rgba(244, 188, 79, .18);
 }
 
 .document-annotation-layer span.has-label::after {
@@ -5931,6 +5943,59 @@ html[data-theme="light"] .document-actions-separator {
 
 .document-annotation-modal {
   width: min(500px, calc(100vw - 28px));
+}
+
+.document-annotations-count {
+  min-width: 17px;
+  height: 17px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 10px;
+}
+.document-actions-menu > button.active { background: var(--surface-active); color: var(--text); }
+.document-actions-menu > button .document-actions-count { margin-left: auto; }
+
+.document-annotations-sidebar {
+  position: fixed;
+  z-index: 130;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, calc(100vw - 18px));
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: -18px 0 48px rgba(0, 0, 0, .24);
+}
+.document-annotations-sidebar > header { display: flex; align-items: center; justify-content: space-between; padding: 15px 14px 12px; border-bottom: 1px solid var(--border-soft); }
+.document-annotations-sidebar > header > div { display: flex; align-items: center; gap: 7px; }
+.document-annotations-sidebar > header svg { width: 16px; color: var(--accent-strong); }
+.document-annotations-search { display: flex; align-items: center; gap: 7px; margin: 12px; padding: 0 9px; height: 32px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); }
+.document-annotations-search svg { width: 14px; }
+.document-annotations-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 11px; }
+.document-annotations-list { min-height: 0; overflow: auto; padding: 0 8px 16px; }
+.document-annotations-empty { margin: 30px 12px; color: var(--muted); font-size: 12px; text-align: center; }
+.document-annotation-item { position: relative; display: flex; margin-bottom: 6px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-hover); }
+.document-annotation-item.is-active { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: var(--accent-soft); }
+.document-annotation-item-main { min-width: 0; flex: 1; padding: 10px 8px 10px 11px; border: 0; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
+.document-annotation-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.document-annotation-item-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.document-annotation-item-heading small { flex: none; color: var(--muted); font-size: 10px; }
+.document-annotation-item-text, .document-annotation-item-note { display: -webkit-box; overflow: hidden; margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.document-annotation-item-note { color: var(--text); -webkit-line-clamp: 3; }
+.document-annotation-item-actions { display: flex; flex-direction: column; gap: 2px; padding: 7px 5px 0 0; }
+.document-annotation-item-actions .icon-button { opacity: .55; }
+.document-annotation-item:hover .document-annotation-item-actions .icon-button, .document-annotation-item-actions .icon-button:focus-visible { opacity: 1; }
+.document-annotation-item-actions .danger { color: var(--red); }
+.document-delete-annotation-modal { width: min(420px, calc(100vw - 28px)); }
+
+@media (max-width: 680px) {
+  .document-annotations-sidebar { top: auto; width: 100%; height: min(62vh, 520px); border-top: 1px solid var(--border); border-left: 0; box-shadow: 0 -18px 48px rgba(0, 0, 0, .24); }
 }
 
 .document-annotation-modal blockquote {

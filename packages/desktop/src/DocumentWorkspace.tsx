@@ -13,6 +13,7 @@ import {
   MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
+  Pencil,
   Plus,
   Quote,
   RefreshCw,
@@ -20,6 +21,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Tag,
   X,
 } from "lucide-react";
 import {
@@ -398,12 +400,15 @@ function DocumentActionsMenu({
   blogDisabled,
   blogClearDisabled,
   clearingBlog,
+  annotationCount,
+  annotationsOpen,
   onLocale,
   onBlogLanguage,
   onTranslate,
   onClear,
   onGenerateBlog,
   onClearBlog,
+  onToggleAnnotations,
 }: {
   locale: string;
   blogLanguage: string;
@@ -417,12 +422,15 @@ function DocumentActionsMenu({
   blogDisabled: boolean;
   blogClearDisabled: boolean;
   clearingBlog: boolean;
+  annotationCount: number;
+  annotationsOpen: boolean;
   onLocale: (locale: string) => void;
   onBlogLanguage: (language: string) => void;
   onTranslate: () => void;
   onClear: () => void;
   onGenerateBlog: () => void;
   onClearBlog: () => void;
+  onToggleAnnotations: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -434,7 +442,7 @@ function DocumentActionsMenu({
     if (!rect) return;
     const viewportPadding = 8;
     const menuWidth = Math.min(236, window.innerWidth - viewportPadding * 2);
-    const menuHeight = 300;
+    const menuHeight = 350;
     setPosition({
       top: Math.min(rect.bottom + 7, Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding)),
       left: Math.max(viewportPadding, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding)),
@@ -536,6 +544,12 @@ function DocumentActionsMenu({
           <button className="danger" type="button" role="menuitem" disabled={blogClearDisabled} onClick={() => choose(onClearBlog)}>
             {clearingBlog ? <LoaderCircle className="spin" /> : <Trash2 />}
             <span>清空 Blog 缓存</span>
+          </button>
+          <div className="document-actions-separator" role="separator" />
+          <button type="button" role="menuitem" className={annotationsOpen ? "active" : ""} onClick={() => choose(onToggleAnnotations)}>
+            <Tag />
+            <span>查看标注</span>
+            {annotationCount > 0 && <b className="document-actions-count">{annotationCount}</b>}
           </button>
         </div>,
         document.body,
@@ -985,6 +999,8 @@ function PdfPage({
   showTranslation,
   rotation,
   annotations,
+  activeAnnotationId,
+  onAnnotationSelect,
   onCurrent,
 }: {
   pdf: PDFDocumentProxy;
@@ -997,6 +1013,8 @@ function PdfPage({
   showTranslation: boolean;
   rotation: number;
   annotations: DocumentAnnotation[];
+  activeAnnotationId?: string | null;
+  onAnnotationSelect?: (id: string) => void;
   onCurrent: (page: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1196,7 +1214,7 @@ function PdfPage({
             })}
           </div>
         )}
-        <div className="document-annotation-layer" aria-hidden="true">
+        <div className="document-annotation-layer" aria-label="文档标注">
           {annotations.flatMap((annotation) => annotation.rects
             .filter((rect) => rect.page === pageNumber)
             .map((rect, index) => {
@@ -1204,9 +1222,19 @@ function PdfPage({
               return (
                 <span
                   key={`${annotation.id}-${index}`}
-                  className={index === 0 ? "has-label" : undefined}
+                  className={`${index === 0 ? "has-label" : ""} ${activeAnnotationId === annotation.id ? "is-active" : ""}`.trim()}
                   data-label={index === 0 ? annotation.label || "标注" : undefined}
                   title={[annotation.label, annotation.note].filter(Boolean).join(" · ")}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`打开标注 ${annotation.label || "未命名标注"}`}
+                  onClick={() => onAnnotationSelect?.(annotation.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onAnnotationSelect?.(annotation.id);
+                    }
+                  }}
                   style={{
                     left: `${box.x * 100}%`,
                     top: `${box.y * 100}%`,
@@ -1296,20 +1324,22 @@ function SelectionToolbar({
 function AnnotationModal({
   selection,
   saving,
+  initial,
   onClose,
   onSave,
 }: {
   selection: DocumentSelection;
   saving: boolean;
+  initial?: Pick<DocumentAnnotation, "label" | "note">;
   onClose: () => void;
   onSave: (label: string, note: string) => void;
 }) {
-  const [label, setLabel] = useState("");
-  const [note, setNote] = useState("");
+  const [label, setLabel] = useState(initial?.label ?? "");
+  const [note, setNote] = useState(initial?.note ?? "");
   return createPortal(
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
-      <section className="modal document-annotation-modal" role="dialog" aria-modal="true" aria-label="添加文档标注">
-        <header><h2>添加标注</h2><button className="icon-button" title="关闭" disabled={saving} onClick={onClose}><X /></button></header>
+      <section className="modal document-annotation-modal" role="dialog" aria-modal="true" aria-label={initial ? "编辑文档标注" : "添加文档标注"}>
+        <header><h2>{initial ? "编辑标注" : "添加标注"}</h2><button className="icon-button" title="关闭" disabled={saving} onClick={onClose}><X /></button></header>
         <div className="modal-body">
           <blockquote>{selection.text}</blockquote>
           <label><span>Label</span><input autoFocus maxLength={100} value={label} onChange={(event) => setLabel(event.target.value)} placeholder="例如：重点、待确认、灵感" /></label>
@@ -1317,12 +1347,58 @@ function AnnotationModal({
           <div className="modal-actions">
             <button type="button" disabled={saving} onClick={onClose}>取消</button>
             <button className="primary" type="button" disabled={saving || (!label.trim() && !note.trim())} onClick={() => onSave(label.trim(), note.trim())}>
-              {saving ? <LoaderCircle className="spin" /> : <Highlighter />}保存标注
+              {saving ? <LoaderCircle className="spin" /> : <Highlighter />}{initial ? "保存修改" : "保存标注"}
             </button>
           </div>
         </div>
       </section>
     </div>,
+    document.body,
+  );
+}
+
+function AnnotationSidebar({
+  annotations,
+  activeId,
+  onSelect,
+  onEdit,
+  onDelete,
+  onClose,
+}: {
+  annotations: DocumentAnnotation[];
+  activeId: string | null;
+  onSelect: (annotation: DocumentAnnotation) => void;
+  onEdit: (annotation: DocumentAnnotation) => void;
+  onDelete: (annotation: DocumentAnnotation) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = annotations.filter((annotation) =>
+    !query.trim() || [annotation.label, annotation.note, annotation.text].join(" ").toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  return createPortal(
+    <aside className="document-annotations-sidebar" aria-label="文档标注">
+      <header>
+        <div><Tag /><strong>标注</strong><span className="document-annotations-count">{annotations.length}</span></div>
+        <button className="icon-button tiny" type="button" title="关闭标注" aria-label="关闭标注" onClick={onClose}><X /></button>
+      </header>
+      <label className="document-annotations-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标注" aria-label="搜索标注" /></label>
+      <div className="document-annotations-list">
+        {filtered.length === 0 ? <p className="document-annotations-empty">{annotations.length ? "没有匹配的标注" : "还没有标注"}</p> : filtered.map((annotation) => (
+          <article key={annotation.id} className={`document-annotation-item ${activeId === annotation.id ? "is-active" : ""}`}>
+            <button type="button" className="document-annotation-item-main" onClick={() => onSelect(annotation)}>
+              <span className="document-annotation-item-heading"><strong>{annotation.label || "未命名标注"}</strong><small>第 {annotation.rects[0]?.page ?? "-"} 页</small></span>
+              <span className="document-annotation-item-text">{annotation.text}</span>
+              {annotation.note && <span className="document-annotation-item-note">{annotation.note}</span>}
+            </button>
+            <div className="document-annotation-item-actions">
+              <button type="button" className="icon-button tiny" title="编辑标注" aria-label="编辑标注" onClick={() => onEdit(annotation)}><Pencil /></button>
+              <button type="button" className="icon-button tiny danger" title="删除标注" aria-label="删除标注" onClick={() => onDelete(annotation)}><Trash2 /></button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </aside>,
     document.body,
   );
 }
@@ -1376,6 +1452,10 @@ export default function DocumentWorkspace({
   const [selectionTranslation, setSelectionTranslation] = useState<SelectionTranslationState | null>(null);
   const [copiedSelection, setCopiedSelection] = useState(false);
   const [annotations, setAnnotations] = useState<DocumentAnnotation[]>([]);
+  const [annotationsOpen, setAnnotationsOpen] = useState(false);
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [editingAnnotation, setEditingAnnotation] = useState<DocumentAnnotation | null>(null);
+  const [deletingAnnotation, setDeletingAnnotation] = useState<DocumentAnnotation | null>(null);
   const [annotationModal, setAnnotationModal] = useState(false);
   const [savingAnnotation, setSavingAnnotation] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1550,6 +1630,9 @@ export default function DocumentWorkspace({
     setSelectionTranslation(null);
     setSelectionLanguageOpen(false);
     setAnnotationModal(false);
+    setAnnotationsOpen(false);
+    setActiveAnnotationId(null);
+    setEditingAnnotation(null);
   }, [connectionId, documentView, persistViewState, project.id, projectKey]);
 
   useLayoutEffect(() => {
@@ -1836,6 +1919,25 @@ export default function DocumentWorkspace({
     latestScrollRef.current = { top: scroll.scrollTop, left: scroll.scrollLeft };
     persistViewState(true);
   }, [currentPage, persistViewState, totalPages]);
+  const selectAnnotation = useCallback((annotation: DocumentAnnotation) => {
+    setAnnotationsOpen(true);
+    setActiveAnnotationId(annotation.id);
+    setView("document");
+    if (showingPreciseTranslation) setShowTranslation(false);
+    const pageNumber = annotation.rects[0]?.page;
+    if (!pageNumber) return;
+    setCurrentPage(pageNumber);
+    window.setTimeout(() => {
+      const scroll = scrollRef.current;
+      const page = scroll?.querySelector<HTMLElement>(`.document-pdf-page[data-page-number="${pageNumber}"]`);
+      if (!scroll || !page) return;
+      const scrollBounds = scroll.getBoundingClientRect();
+      const pageBounds = page.getBoundingClientRect();
+      scroll.scrollTop = Math.max(0, scroll.scrollTop + pageBounds.top - scrollBounds.top - 32);
+      latestScrollRef.current = { top: scroll.scrollTop, left: scroll.scrollLeft };
+      persistViewState(true);
+    }, 0);
+  }, [persistViewState, showingPreciseTranslation]);
   const setZoomFromInput = useCallback((value: string) => {
     applyZoom(parseDocumentZoomInput(value, zoomRef.current));
   }, [applyZoom]);
@@ -2040,6 +2142,33 @@ export default function DocumentWorkspace({
     }
   }, [api, project.path, selection]);
 
+  const saveEditedAnnotation = useCallback(async (label: string, note: string) => {
+    if (!editingAnnotation) return;
+    setSavingAnnotation(true);
+    setError(null);
+    try {
+      const saved = await api.saveDocumentAnnotation(project.path, { ...editingAnnotation, label, note });
+      setAnnotations((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setEditingAnnotation(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSavingAnnotation(false);
+    }
+  }, [api, editingAnnotation, project.path]);
+
+  const deleteAnnotation = useCallback(async (annotation: DocumentAnnotation) => {
+    setDeletingAnnotation(null);
+    setError(null);
+    try {
+      await api.deleteDocumentAnnotation(project.path, annotation.id);
+      setAnnotations((current) => current.filter((item) => item.id !== annotation.id));
+      setActiveAnnotationId((current) => current === annotation.id ? null : current);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [api, project.path]);
+
   const clearTranslationCache = useCallback(async () => {
     setClearingTranslation(true);
     setError(null);
@@ -2161,6 +2290,8 @@ export default function DocumentWorkspace({
               blogDisabled={!layout || sessionBusy || (showTranslation && !translation)}
               blogClearDisabled={!blog || sessionBusy || clearingBlog || pendingAction !== null}
               clearingBlog={clearingBlog}
+              annotationCount={annotations.length}
+              annotationsOpen={annotationsOpen}
               onLocale={setLocale}
               onBlogLanguage={setBlogLanguage}
               onTranslate={() => {
@@ -2184,6 +2315,7 @@ export default function DocumentWorkspace({
                 })) setPendingAction(null);
               }}
               onClearBlog={() => setClearBlogConfirm(true)}
+              onToggleAnnotations={() => setAnnotationsOpen((value) => !value)}
             />
             <label className={`document-translation-toggle ${translation ? "ready" : ""}`}>
               <input
@@ -2333,7 +2465,12 @@ export default function DocumentWorkspace({
                 showOriginalText={showOriginalText}
                 showTranslation={showTranslation && translation?.engine === "legacy"}
                 rotation={rotation}
-                annotations={showingPreciseTranslation ? [] : annotations}
+                annotations={annotations}
+                activeAnnotationId={activeAnnotationId}
+                onAnnotationSelect={(id) => {
+                  const annotation = annotations.find((item) => item.id === id);
+                  if (annotation) selectAnnotation(annotation);
+                }}
                 onCurrent={selectCurrentPage}
               />
             ))}
@@ -2445,6 +2582,34 @@ export default function DocumentWorkspace({
           onClose={() => setAnnotationModal(false)}
           onSave={(label, note) => void saveAnnotation(label, note)}
         />
+      )}
+      {editingAnnotation && (
+        <AnnotationModal
+          selection={{ text: editingAnnotation.text, rects: editingAnnotation.rects, bounds: null }}
+          initial={editingAnnotation}
+          saving={savingAnnotation}
+          onClose={() => setEditingAnnotation(null)}
+          onSave={(label, note) => void saveEditedAnnotation(label, note)}
+        />
+      )}
+      {annotationsOpen && (
+        <AnnotationSidebar
+          annotations={annotations}
+          activeId={activeAnnotationId}
+          onSelect={selectAnnotation}
+          onEdit={(annotation) => setEditingAnnotation(annotation)}
+          onDelete={(annotation) => setDeletingAnnotation(annotation)}
+          onClose={() => setAnnotationsOpen(false)}
+        />
+      )}
+      {deletingAnnotation && createPortal(
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setDeletingAnnotation(null)}>
+          <section className="modal document-delete-annotation-modal" role="dialog" aria-modal="true" aria-label="删除文档标注">
+            <header><h2>删除标注？</h2><button className="icon-button" type="button" title="关闭" onClick={() => setDeletingAnnotation(null)}><X /></button></header>
+            <div className="modal-body"><p>删除“{deletingAnnotation.label || "未命名标注"}”后无法恢复。</p><div className="modal-actions"><button type="button" onClick={() => setDeletingAnnotation(null)}>取消</button><button className="confirm-danger" type="button" onClick={() => void deleteAnnotation(deletingAnnotation)}><Trash2 />删除</button></div></div>
+          </section>
+        </div>,
+        document.body,
       )}
     </section>
   );
