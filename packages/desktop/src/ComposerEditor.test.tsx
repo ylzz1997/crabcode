@@ -142,6 +142,16 @@ describe("ComposerEditor slash commands", () => {
     expect(resolveComposerCommandCompletion("/model so", commands)?.items.map((item) => item.name)).toEqual(["sonnet"]);
   });
 
+  it("can limit built-ins to commands implemented by the host while retaining skills", () => {
+    const desktopCommands = createComposerCommandOptions(
+      [{ name: "sonnet" }],
+      [{ name: "release", description: "Prepare a release" }],
+      new Set(["/plan", "/model"]),
+    );
+    expect(desktopCommands.filter((item) => item.kind === "command").map((item) => item.name)).toEqual(["/plan", "/model"]);
+    expect(desktopCommands.find((item) => item.kind === "skill")?.name).toBe("/release");
+  });
+
   it("completes a command and then its subcommand with the keyboard", () => {
     const editor = typeCommand("/sch");
     expect(container.querySelector(".composer-command-menu")?.textContent).toContain("/schedule");

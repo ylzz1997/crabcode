@@ -1053,6 +1053,8 @@ button.primary:hover,
   color: var(--muted);
   font-size: 12px;
   text-align: center;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .error-line {

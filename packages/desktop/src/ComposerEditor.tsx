@@ -27,7 +27,7 @@ type SlashCompletion = {
 const BUILTIN_COMMANDS: Array<Omit<ComposerCommandOption, "kind" | "children">> = [
   { name: "/help", description: "显示帮助" },
   { name: "/plan", description: "切换到计划模式（只读分析）" },
-  { name: "/agent", description: "切换到 Agent 模式 / 查看 Agent" },
+  { name: "/agent", description: "切换到 Agent 模式" },
   { name: "/plan-status", description: "显示当前计划状态" },
   { name: "/agents", description: "列出托管的 Agent" },
   { name: "/agent-log", description: "查看 Agent transcript" },
@@ -92,18 +92,21 @@ const STATIC_SUBCOMMANDS: Record<string, ComposerCommandOption[]> = {
 export function createComposerCommandOptions(
   models: Array<{ name: string; description?: string }>,
   skills: Array<{ name: string; description?: string }>,
+  supportedCommandNames?: ReadonlySet<string>,
 ): ComposerCommandOption[] {
-  const builtins = BUILTIN_COMMANDS.map((command) => ({
-    ...command,
-    kind: "command" as const,
-    children: command.name === "/model"
-      ? models.map((model) => ({
-        name: model.name,
-        description: model.description || model.name,
-        kind: "subcommand" as const,
-      }))
-      : STATIC_SUBCOMMANDS[command.name],
-  }));
+  const builtins = BUILTIN_COMMANDS
+    .filter((command) => !supportedCommandNames || supportedCommandNames.has(command.name))
+    .map((command) => ({
+      ...command,
+      kind: "command" as const,
+      children: command.name === "/model"
+        ? models.map((model) => ({
+          name: model.name,
+          description: model.description || model.name,
+          kind: "subcommand" as const,
+        }))
+        : STATIC_SUBCOMMANDS[command.name],
+    }));
   const builtinNames = new Set(builtins.map((command) => command.name.slice(1).toLocaleLowerCase()));
   return [
     ...builtins,

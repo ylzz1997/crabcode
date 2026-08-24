@@ -259,6 +259,31 @@ export class GatewayApi {
     return this.request("/session/recent?limit=100");
   }
 
+  searchSessions(query: string, limit = 100): Promise<SessionInfo[]> {
+    return this.request("/session/search", {
+      method: "POST",
+      body: JSON.stringify({ query, limit }),
+    });
+  }
+
+  compactSession(sessionId: string, customInstructions = ""): Promise<{ status: string }> {
+    return this.request("/session/compact", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, custom_instructions: customInstructions || null }),
+    });
+  }
+
+  clearSession(sessionId: string): Promise<{ status: string; messages_cleared: number }> {
+    return this.request("/session/clear", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  sessionStats(): Promise<Record<string, unknown>> {
+    return this.request("/session/stats");
+  }
+
   models(sessionId?: string): Promise<GatewayModel[]> {
     const query = sessionId ? `?${new URLSearchParams({ session_id: sessionId })}` : "";
     return this.request(`/config/models${query}`);
@@ -312,6 +337,27 @@ export class GatewayApi {
     return this.request(`/tasks${suffix}`);
   }
 
+  backgroundTask(taskId: string): Promise<BackgroundTaskInfo> {
+    return this.request(`/tasks/${encodeURIComponent(taskId)}`);
+  }
+
+  backgroundTaskOutput(taskId: string, lines = 200): Promise<{
+    task_id: string;
+    path: string | null;
+    lines: string[];
+    truncated: boolean;
+  }> {
+    const query = new URLSearchParams({ lines: String(lines) });
+    return this.request(`/tasks/${encodeURIComponent(taskId)}/output?${query}`);
+  }
+
+  stopBackgroundTask(taskId: string): Promise<{ status: string; task_id: string; stopped: boolean }> {
+    return this.request("/tasks/stop", {
+      method: "POST",
+      body: JSON.stringify({ task_id: taskId }),
+    });
+  }
+
   pauseSchedule(jobId: string): Promise<ScheduleJobInfo> {
     return this.scheduleAction<ScheduleJobInfo>("pause", jobId);
   }
@@ -341,6 +387,20 @@ export class GatewayApi {
 
   checkpoints(sessionId: string): Promise<CheckpointInfo[]> {
     return this.request(`/snapshot/list?${new URLSearchParams({ session_id: sessionId })}`);
+  }
+
+  createCheckpoint(sessionId: string, label = ""): Promise<{ checkpoint_id: string }> {
+    return this.request("/snapshot/checkpoint", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, label }),
+    });
+  }
+
+  rollback(sessionId: string, checkpointId: string): Promise<unknown> {
+    return this.request("/snapshot/rollback", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, checkpoint_id: checkpointId }),
+    });
   }
 
   revert(sessionId: string, checkpointId: string): Promise<unknown> {

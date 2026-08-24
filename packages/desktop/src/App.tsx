@@ -134,6 +134,12 @@ type AutomationTab = "schedule" | "monitor";
 type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
 type ScheduleActionState = { id: string; action: ScheduleAction };
 type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
+const DESKTOP_COMMAND_NAMES = new Set([
+  "/help", "/plan", "/agent", "/status", "/effort", "/ultra", "/model", "/new",
+  "/compact", "/clear", "/sessions", "/recent", "/search", "/archive", "/stats",
+  "/checkpoint", "/checkpoints", "/rollback", "/revert", "/undo", "/resume", "/goal",
+  "/tasks", "/schedule",
+]);
 export type FavoriteSessionItem = { project: ProjectPreset; session: SessionInfo };
 type PermissionMode = "default" | "ask" | "ai_review" | "run_everything";
 type SessionCleanupTarget = {
@@ -1536,6 +1542,17 @@ function App() {
       || !activeSessionKey
       || !activeSession
     ) return;
+    if (
+      text.startsWith("/")
+      && pendingImages.length === 0
+      && pendingFiles.length === 0
+      && pendingFolders.length === 0
+      && pendingDocumentReferences.length === 0
+      && await executeDesktopSlashCommand(text)
+    ) {
+      setComposer("");
+      return;
+    }
     const fileContext = serializePendingFiles(pendingFiles);
     const folderContext = pendingFolders.map((path) => `<folder>\n${path}\n</folder>`).join("\n");
     const documentContext = pendingDocumentReferences.map((reference) => (
@@ -1814,6 +1831,280 @@ function App() {
     }
   };
 
+  function appendCommandMessage(text: string, error = false) {
+    if (!activeSessionKey) return;
+    setSessions((current) => {
+      const session = current[activeSessionKey];
+      if (!session) return current;
+      return {
+        ...current,
+        [activeSessionKey]: {
+          ...session,
+          items: [...session.items, {
+            id: crypto.randomUUID(),
+            kind: error ? "error" : "system",
+            text,
+            status: error ? "failed" : "complete",
+          }],
+        },
+      };
+    });
+  }
+
+  function commandSessionId(): string {
+    const sessionId = activeChannel?.sessionId;
+    if (!sessionId) throw new Error("会话尚未就绪，请稍后重试");
+    return sessionId;
+  }
+
+  function resolveVisibleSession(selector: string): { project: ProjectPreset; session: SessionInfo } | null {
+    if (!activeConnection || !activeGateway) return null;
+    const candidates = activeConnection.projects.flatMap((project) => (
+      (activeGateway.sessionsByProject[project.path] ?? []).map((session) => ({ project, session }))
+    ));
+    const exact = candidates.find(({ session }) => session.session_id === selector);
+    if (exact) return exact;
+    const matches = candidates.filter(({ session }) => session.session_id.startsWith(selector));
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  async function executeDesktopSlashCommand(text: string): Promise<boolean> {
+    const spaceIndex = text.indexOf(" ");
+    const command = (spaceIndex < 0 ? text : text.slice(0, spaceIndex)).toLocaleLowerCase();
+    if (!DESKTOP_COMMAND_NAMES.has(command)) return false;
+    const args = spaceIndex < 0 ? "" : text.slice(spaceIndex + 1).trim();
+    const api = activeConnection ? apiRef.current.get(activeConnection.id) : null;
+
+    try {
+      if (command === "/help") {
+        const summary = composerCommands
+          .filter((option) => option.kind === "command")
+          .map((option) => `${option.name} — ${option.description}`)
+          .join(" · ");
+        appendCommandMessage(summary || "暂无可用快捷命令");
+        return true;
+      }
+      if (command === "/plan" || command === "/agent") {
+        if (args) throw new Error(`用法：${command}`);
+        selectMode(command === "/plan" ? "plan" : "agent");
+        appendCommandMessage(command === "/plan" ? "已切换到 Plan 模式" : "已切换到 Agent 模式");
+        return true;
+      }
+      if (command === "/status") {
+        if (args) throw new Error("用法：/status");
+        const status = activeSession?.status;
+        if (!status) throw new Error("会话状态尚未就绪");
+        appendCommandMessage([
+          `模型 ${status.model_profile || status.model || "默认"}`,
+          `模式 ${status.mode === "plan" ? "Plan" : "Agent"}`,
+          `推理 ${status.reasoning_effort || "自动"}`,
+          `Ultra ${status.ultra_mode ? "开启" : "关闭"}`,
+          `上下文 ${status.context_used_percent.toFixed(1)}%`,
+        ].join(" · "));
+        return true;
+      }
+      if (command === "/effort") {
+        if (!args) {
+          appendCommandMessage(`当前推理强度：${activeSession?.status?.reasoning_effort || "自动"}`);
+          return true;
+        }
+        const allowed: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+        if (!allowed.includes(args as ReasoningEffort)) throw new Error("用法：/effort <none|minimal|low|medium|high|xhigh|max>");
+        selectReasoningEffort(args as ReasoningEffort);
+        appendCommandMessage(`推理强度已切换为 ${args}`);
+        return true;
+      }
+      if (command === "/ultra") {
+        if (args && args !== "true" && args !== "false") throw new Error("用法：/ultra [true|false]");
+        const enabled = args ? args === "true" : !activeSession?.status?.ultra_mode;
+        selectUltraMode(enabled);
+        appendCommandMessage(`Ultra 模式已${enabled ? "开启" : "关闭"}`);
+        return true;
+      }
+      if (command === "/model") {
+        if (!args) {
+          const models = activeGateway?.models.map((model) => model.name).join("、") || "暂无可用模型";
+          appendCommandMessage(`当前模型：${activeModel || activeSession?.status?.model || "默认"} · 可用模型：${models}`);
+          return true;
+        }
+        const model = activeGateway?.models.find((item) => item.name.toLocaleLowerCase() === args.toLocaleLowerCase());
+        if (!model) throw new Error(`找不到模型：${args}`);
+        selectModel(model.name);
+        appendCommandMessage(`模型已切换为 ${model.name}`);
+        return true;
+      }
+      if (command === "/new") {
+        if (args) throw new Error("Desktop 暂不支持 /new 参数；请先新建会话，再从工具栏选择模型");
+        if (!activeConnection || !activeProject) throw new Error("当前没有可用项目");
+        openSession(activeConnection, activeProject);
+        return true;
+      }
+      if (!api) throw new Error("Gateway 尚未连接");
+      if (command === "/compact") {
+        const result = await api.compactSession(commandSessionId(), args);
+        appendCommandMessage(result.status === "ok" ? "对话上下文已压缩" : "当前无需压缩");
+        return true;
+      }
+      if (command === "/clear") {
+        if (args) throw new Error("用法：/clear");
+        const result = await api.clearSession(commandSessionId());
+        if (activeSessionKey) {
+          setSessions((current) => current[activeSessionKey]
+            ? { ...current, [activeSessionKey]: { ...current[activeSessionKey], items: [] } }
+            : current);
+        }
+        appendCommandMessage(`已清除 ${result.messages_cleared} 条历史消息`);
+        return true;
+      }
+      if (command === "/sessions") {
+        if (args) throw new Error("用法：/sessions");
+        const list = Object.values(activeGateway?.sessionsByProject ?? {}).flat();
+        appendCommandMessage(list.length
+          ? list.slice(0, 30).map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join(" · ")
+          : "暂无会话");
+        return true;
+      }
+      if (command === "/recent") {
+        const limit = args ? Number.parseInt(args, 10) : 10;
+        if (!Number.isFinite(limit) || limit < 1) throw new Error("用法：/recent [数量]");
+        const list = (await api.recentSessions()).slice(0, limit);
+        appendCommandMessage(list.length
+          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join(" · ")
+          : "暂无最近会话");
+        return true;
+      }
+      if (command === "/search") {
+        if (!args) throw new Error("用法：/search <关键词>");
+        const list = await api.searchSessions(args);
+        appendCommandMessage(list.length
+          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join(" · ")
+          : `没有找到与“${args}”匹配的会话`);
+        return true;
+      }
+      if (command === "/archive") {
+        if (!args) throw new Error("用法：/archive <session-id>");
+        await api.archive(args);
+        if (activeConnection) {
+          await Promise.all(activeConnection.projects.map((project) => refreshProjectSessions(activeConnection.id, project.path)));
+        }
+        appendCommandMessage(`会话 ${args} 已归档`);
+        return true;
+      }
+      if (command === "/stats") {
+        if (args) throw new Error("用法：/stats");
+        appendCommandMessage(`使用统计：${textFromUnknown(await api.sessionStats()).replace(/\s+/g, " ")}`);
+        return true;
+      }
+      if (command === "/checkpoint") {
+        const result = await api.createCheckpoint(commandSessionId(), args);
+        appendCommandMessage(`已创建检查点 ${result.checkpoint_id.slice(0, 8)}${args ? `（${args}）` : ""}`);
+        return true;
+      }
+      if (command === "/checkpoints") {
+        if (args) throw new Error("用法：/checkpoints");
+        setCheckpointModal(true);
+        return true;
+      }
+      if (command === "/rollback" || command === "/revert") {
+        if (!args) throw new Error(`用法：${command} <checkpoint-id>`);
+        if (command === "/rollback") await api.rollback(commandSessionId(), args);
+        else await api.revert(commandSessionId(), args);
+        appendCommandMessage(`已${command === "/rollback" ? "回滚会话" : "还原文件和会话"}到检查点 ${args}`);
+        return true;
+      }
+      if (command === "/undo") {
+        if (args) throw new Error("用法：/undo");
+        await api.undo(commandSessionId());
+        appendCommandMessage("已撤销到最近的检查点");
+        return true;
+      }
+      if (command === "/resume") {
+        if (!args) {
+          appendCommandMessage("用法：/resume <session-id>");
+          return true;
+        }
+        const target = resolveVisibleSession(args.split(/\s+/)[0]);
+        if (!target || !activeConnection) throw new Error(`找不到会话，或短 ID 不唯一：${args}`);
+        updateConnection(activeConnection.id, (connection) => ({
+          ...connection,
+          last_project_path: target.project.path,
+          last_project_id: target.project.id,
+        }));
+        openSession(activeConnection, target.project, target.session);
+        return true;
+      }
+      if (command === "/goal") {
+        if (!args) {
+          setGoalModal(true);
+          return true;
+        }
+        const action = args.startsWith("edit ") ? "edit" : "set";
+        const objective = action === "edit" ? args.slice(5).trim() : args.replace(/^set\s+/, "").trim();
+        if (!objective) throw new Error("用法：/goal [set|edit] <objective>");
+        await api.manageGoal(commandSessionId(), action, objective);
+        appendCommandMessage(`Goal 已${action === "edit" ? "更新" : "设置"}：${objective}`);
+        return true;
+      }
+      if (command === "/tasks") {
+        const tokens = args.split(/\s+/).filter(Boolean);
+        const action = (tokens.shift() || "list").toLocaleLowerCase();
+        if (action === "list") {
+          setAutomationTab("monitor");
+          setWorkspaceView("scheduled");
+          return true;
+        }
+        const selector = tokens.shift();
+        if (!selector) throw new Error("用法：/tasks [list|show|output|stop] <task-id>");
+        if (action === "show") {
+          const task = await api.backgroundTask(selector);
+          appendCommandMessage(`${task.description || task.task_id} · ${task.status} · ${task.task_type} · ${task.task_id}`);
+        } else if (action === "output") {
+          const lines = tokens[0] ? Number.parseInt(tokens[0], 10) : 200;
+          if (!Number.isFinite(lines) || lines < 1) throw new Error("用法：/tasks output <task-id> [lines]");
+          const output = await api.backgroundTaskOutput(selector, lines);
+          appendCommandMessage(output.lines.length ? output.lines.join("\n") : "该任务暂无输出");
+        } else if (action === "stop") {
+          if (tokens.length) throw new Error("用法：/tasks stop <task-id>");
+          await api.stopBackgroundTask(selector);
+          appendCommandMessage(`后台任务 ${selector} 已停止`);
+          if (activeConnection) await refreshMonitors(activeConnection.id);
+        } else {
+          throw new Error("用法：/tasks [list|show|output|stop] <task-id>");
+        }
+        return true;
+      }
+      if (command === "/schedule") {
+        const tokens = args.split(/\s+/).filter(Boolean);
+        const action = (tokens.shift() || "list").toLocaleLowerCase();
+        if (action === "list" || action === "show" || action === "runs" || action === "create") {
+          setAutomationTab("schedule");
+          setWorkspaceView("scheduled");
+          if (action !== "list") appendCommandMessage(`已打开“已安排”页面；请在页面中继续 ${action} 操作`);
+          return true;
+        }
+        const actionMap: Record<string, ScheduleAction> = { pause: "pause", resume: "resume", run: "trigger", cancel: "cancel" };
+        const scheduleAction = actionMap[action];
+        const selector = tokens[0];
+        if (!scheduleAction || !selector || tokens.length !== 1) {
+          throw new Error("用法：/schedule [list|show|runs|create|pause|resume|run|cancel] [job-id]");
+        }
+        const matches = activeJobs.filter((job) => job.id === selector || job.id.startsWith(selector));
+        if (matches.length !== 1) throw new Error(`找不到已安排任务，或短 ID 不唯一：${selector}`);
+        if (scheduleAction === "cancel") {
+          setScheduleDeleteTarget(matches[0]);
+        } else {
+          await updateSchedule(scheduleAction, matches[0]);
+          appendCommandMessage(`已执行 /schedule ${action} ${selector}`);
+        }
+        return true;
+      }
+      return false;
+    } catch (reason) {
+      appendCommandMessage(reason instanceof Error ? reason.message : String(reason), true);
+      return true;
+    }
+  }
+
   const activeFavoriteEntries = favoriteEntries(activeConnection);
   const favoriteSessionIds = new Set(activeProject
     ? favoriteSessionIdsForProject(activeFavoriteEntries, activeProject.id)
@@ -1877,6 +2168,7 @@ function App() {
   const composerCommands = useMemo(() => createComposerCommandOptions(
     activeGateway?.models ?? [],
     activePluginData.skills,
+    DESKTOP_COMMAND_NAMES,
   ), [activeGateway?.models, activePluginData.skills]);
 
   useEffect(() => {
