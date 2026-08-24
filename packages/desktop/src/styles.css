@@ -1948,7 +1948,8 @@ button.primary:hover,
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  /* Modals must cover document selection popovers (z-index 119-130). */
+  z-index: 150;
   display: grid;
   place-items: center;
   padding: 24px;
