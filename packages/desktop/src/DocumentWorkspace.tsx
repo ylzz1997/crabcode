@@ -102,6 +102,14 @@ export function documentTranslationToggleLabel(showTranslation: boolean): string
   return showTranslation ? "查看原文" : "查看译文";
 }
 
+export function hasDocumentTranslationCache(manifest: DocumentManifest | null, locale: string): boolean {
+  if (!manifest) return false;
+  if (manifest.translations[locale]) return true;
+  return Object.values(manifest.jobs).some((job) =>
+    job.action === "translate" && job.locale === locale,
+  );
+}
+
 export function formatDocumentZoom(zoom: number): string {
   return `${Math.round(clampDocumentZoom(zoom) * 100)}%`;
 }
@@ -2303,7 +2311,11 @@ export default function DocumentWorkspace({
               clearing={clearingTranslation}
               generatingBlog={pendingAction === "generate_blog"}
               translateDisabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
-              clearDisabled={sessionBusy || clearingTranslation}
+              clearDisabled={
+                !hasDocumentTranslationCache(manifest, locale)
+                || sessionBusy
+                || clearingTranslation
+              }
               blogDisabled={!layout || sessionBusy || (showTranslation && !translation)}
               blogClearDisabled={!blog || sessionBusy || clearingBlog || pendingAction !== null}
               clearingBlog={clearingBlog}

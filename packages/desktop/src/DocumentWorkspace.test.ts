@@ -3,6 +3,7 @@ import {
   clampDocumentAgentWidth,
   clampDocumentZoom,
   documentTranslationToggleLabel,
+  hasDocumentTranslationCache,
   formatDocumentZoom,
   parseDocumentPageInput,
   parseDocumentZoomInput,
@@ -14,7 +15,7 @@ import {
   translatedBox,
   unrotateSelectionBox,
 } from "./DocumentWorkspace";
-import type { DocumentTextBlock } from "./types";
+import type { DocumentManifest, DocumentTextBlock } from "./types";
 
 const block: DocumentTextBlock = {
   id: "p1-b0",
@@ -59,6 +60,55 @@ function textBlock(
 }
 
 describe("document translation coordinates", () => {
+  const manifest = (overrides: Partial<DocumentManifest> = {}): DocumentManifest => ({
+    schema_version: 1,
+    project_id: "project-1",
+    project_name: "Test",
+    workspace: "/test",
+    source: {
+      origin: "upload",
+      name: "test.pdf",
+      path: "test.pdf",
+      url: null,
+      content_type: "application/pdf",
+      size: 1,
+      sha256: "source",
+    },
+    pdf: { path: "test.pdf", sha256: "pdf", page_count: 1 },
+    layout: null,
+    translations: {},
+    blog: null,
+    jobs: {},
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  });
+
+  it("only enables translation cache clearing when the selected locale has cache or progress", () => {
+    expect(hasDocumentTranslationCache(null, "zh-CN")).toBe(false);
+    expect(hasDocumentTranslationCache(manifest(), "zh-CN")).toBe(false);
+    expect(hasDocumentTranslationCache(manifest({
+      translations: { "zh-CN": { engine: "legacy", path: ".crabcode/document/translations/zh-CN.json" } },
+    }), "zh-CN")).toBe(true);
+    expect(hasDocumentTranslationCache(manifest({
+      translations: { en: { engine: "legacy", path: ".crabcode/document/translations/en.json" } },
+    }), "zh-CN")).toBe(false);
+    expect(hasDocumentTranslationCache(manifest({
+      jobs: {
+        "translate-1": {
+          action: "translate",
+          status: "failed",
+          locale: "zh-CN",
+          source: "original",
+          current: 2,
+          total: 10,
+          message: "failed",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      },
+    }), "zh-CN")).toBe(true);
+  });
+
   it("maps a PDF selection to stable document-wide line numbers", () => {
     const result = documentSelectionLineRange({
       fingerprint: "test",
