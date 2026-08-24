@@ -83,6 +83,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   show_turn_duration: true,
   turn_duration_format: "hms",
   file_upload_mode: "content",
+  file_upload_max_size_mb: 5,
   dock_icon: "dark",
 };
 
@@ -191,6 +192,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     show_turn_duration: raw.show_turn_duration !== false,
     turn_duration_format: turnDurationFormat,
     file_upload_mode: raw.file_upload_mode === "path" ? "path" : "content",
+    file_upload_max_size_mb: clampInteger(raw.file_upload_max_size_mb, 1, 100, 5),
     dock_icon: dockIcon,
     document_agent_width: clampInteger(raw.document_agent_width, 320, 720, 400),
     document_agent_collapsed: raw.document_agent_collapsed === true,

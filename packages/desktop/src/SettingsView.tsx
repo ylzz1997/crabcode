@@ -211,6 +211,7 @@ export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
   | "show_turn_duration"
   | "turn_duration_format"
   | "file_upload_mode"
+  | "file_upload_max_size_mb"
 >>;
 
 export type DocumentSettingsUpdate = Partial<Pick<DesktopSettings,
@@ -626,6 +627,20 @@ export function SettingsView({
                         </button>
                       ))}
                     </div>
+                  </div>
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>最大文件大小</strong>
+                      <span>上传文件内容时的单文件上限，单位 MB，范围 1–100。</span>
+                    </div>
+                    <NumberSettingInput
+                      label="最大文件大小（MB）"
+                      value={settings.file_upload_max_size_mb}
+                      minimum={1}
+                      maximum={100}
+                      step={1}
+                      onChange={(value) => onConversationChange({ file_upload_max_size_mb: value })}
+                    />
                   </div>
                 </div>
 

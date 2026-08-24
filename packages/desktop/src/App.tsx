@@ -1534,9 +1534,11 @@ function App() {
   const addFiles = async (files: File[]) => {
     try {
       const attachments: PendingFile[] = [];
+      const maxSizeMb = settings?.file_upload_max_size_mb ?? 5;
+      const maxBytes = maxSizeMb * 1024 * 1024;
       for (const file of files) {
-        if (file.size > 5 * 1024 * 1024) {
-          setGlobalError(`${file.name} 超过 5MB`);
+        if (file.size > maxBytes) {
+          setGlobalError(`${file.name} 超过 ${maxSizeMb}MB`);
           continue;
         }
         attachments.push({

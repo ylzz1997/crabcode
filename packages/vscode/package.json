@@ -131,6 +131,13 @@
           "maximum": 50,
           "description": "待审核修改面板一次可见的文件行数；超过后列表滚动"
         },
+        "crabcode.fileUploadMaxSizeMb": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "添加非图片文件并发送完整内容时的单文件大小上限（MB）"
+        },
         "crabcode.chatModels": {
           "type": "array",
           "items": {

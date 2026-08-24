@@ -142,6 +142,12 @@ function normalizePendingEditsVisibleFiles(value: unknown): number {
   return Math.min(50, Math.max(1, Math.floor(parsed)));
 }
 
+function normalizeFileUploadMaxSizeMb(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 5;
+  return Math.min(100, Math.max(1, Math.floor(parsed)));
+}
+
 function normalizePermissionMode(value: unknown): PermissionMode {
   if (value === "ask" || value === "ai_review" || value === "run_everything") {
     return value;
@@ -478,6 +484,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "pickFiles":
           void this.pickFilesForChat();
+          break;
+        case "searchWorkspaceFiles":
+          void this.searchWorkspaceFilesForChat(
+            typeof msg.query === "string" ? msg.query : "",
+            typeof msg.requestId === "number" ? msg.requestId : 0,
+          );
+          break;
+        case "attachWorkspaceFile":
+          if (typeof msg.path === "string") {
+            const uri = vscode.Uri.file(msg.path);
+            if (vscode.workspace.getWorkspaceFolder(uri)) {
+              void this.attachTextFilesForChat([uri]);
+            }
+          }
           break;
         case "screenshotHint":
           void vscode.window.showInformationMessage(
@@ -2036,7 +2056,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async attachImagePaths(rawPaths: string[]): Promise<void> {
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
     if (!rawPaths.length) return;
-    const images: ImageAttachment[] = [];
+    const images: Array<ImageAttachment & { name: string }> = [];
     const maxBytes = 20 * 1024 * 1024;
     const imageExts: Record<string, string> = {
       png: "image/png",
@@ -2070,7 +2090,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           continue;
         }
         const data = await vscode.workspace.fs.readFile(uri);
-        images.push({ media_type: mediaType, data: Buffer.from(data).toString("base64") });
+        images.push({ name: base, media_type: mediaType, data: Buffer.from(data).toString("base64") });
       } catch (error) {
         errors.push(`${trimmed}：${error instanceof Error ? error.message : "无法读取"}`);
       }
@@ -2854,6 +2874,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const pendingEditsVisibleFiles = normalizePendingEditsVisibleFiles(
       cfg.get<number>("pendingEditsVisibleFiles", 5),
     );
+    const fileUploadMaxSizeMb = normalizeFileUploadMaxSizeMb(
+      cfg.get<number>("fileUploadMaxSizeMb", 5),
+    );
     const selectedModel =
       this.connection.modelName && models.includes(this.connection.modelName)
         ? this.connection.modelName
@@ -2866,6 +2889,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       selectedModel,
       permissionMode: mode,
       pendingEditsVisibleFiles,
+      fileUploadMaxSizeMb,
       connected: this.connection.connected,
     });
   }
@@ -2876,7 +2900,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       canSelectMany: true,
       openLabel: "添加",
       filters: {
-        Images: ["png", "jpg", "jpeg", "gif", "webp"],
         "Text / code": [
           "txt",
           "md",
@@ -2909,56 +2932,88 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           "vue",
           "svelte",
         ],
-        "All files": ["*"],
       },
     });
     if (!picked?.length) {
       return;
     }
 
-    const images: ImageAttachment[] = [];
-    const textSnippets: { name: string; text: string }[] = [];
-    const maxBytes = 20 * 1024 * 1024;
+    await this.attachTextFilesForChat(picked);
+  }
+
+  private async attachTextFilesForChat(uris: vscode.Uri[]): Promise<void> {
+    const textSnippets: { name: string; text: string; path: string }[] = [];
+    const maxSizeMb = normalizeFileUploadMaxSizeMb(
+      vscode.workspace.getConfiguration("crabcode").get<number>("fileUploadMaxSizeMb", 5),
+    );
+    const maxBytes = maxSizeMb * 1024 * 1024;
     const maxTextChars = 200_000;
 
-    for (const uri of picked) {
+    for (const uri of uris) {
       try {
         const stat = await vscode.workspace.fs.stat(uri);
+        if ((stat.type & vscode.FileType.File) === 0) {
+          void vscode.window.showWarningMessage(`CrabCode：已跳过非文件\n${uri.fsPath}`);
+          continue;
+        }
         if (stat.size > maxBytes) {
-          void vscode.window.showWarningMessage(`CrabCode：已跳过过大文件（>20MB）\n${uri.fsPath}`);
+          void vscode.window.showWarningMessage(`CrabCode：已跳过过大文件（>${maxSizeMb}MB）\n${uri.fsPath}`);
           continue;
         }
         const buf = await vscode.workspace.fs.readFile(uri);
-        const base = uri.fsPath.split(/[/\\]/).pop() || "file";
-        const ext = base.includes(".") ? base.split(".").pop()!.toLowerCase() : "";
-        const imageExts: Record<string, string> = {
-          png: "image/png",
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-          gif: "image/gif",
-          webp: "image/webp",
-        };
-        if (ext && imageExts[ext]) {
-          images.push({
-            media_type: imageExts[ext],
-            data: Buffer.from(buf).toString("base64"),
-          });
-        } else {
-          const decoder = new TextDecoder("utf-8", { fatal: false });
-          let text = decoder.decode(buf);
-          if (text.length > maxTextChars) {
-            text = text.slice(0, maxTextChars) + "\n…(已截断)";
-          }
-          textSnippets.push({ name: base, text });
+        const base = path.basename(uri.fsPath) || "file";
+        const decoder = new TextDecoder("utf-8", { fatal: false });
+        let text = decoder.decode(buf);
+        if (text.length > maxTextChars) {
+          text = text.slice(0, maxTextChars) + "\n…(已截断)";
         }
+        textSnippets.push({ name: base, text, path: uri.fsPath });
       } catch {
         void vscode.window.showWarningMessage(`CrabCode：无法读取文件\n${uri.fsPath}`);
       }
     }
 
-    if (images.length > 0 || textSnippets.length > 0) {
-      this.postMessage({ type: "addAttachments", images, textSnippets });
+    if (textSnippets.length > 0) {
+      this.postMessage({ type: "addAttachments", images: [], textSnippets });
     }
+  }
+
+  private async searchWorkspaceFilesForChat(query: string, requestId: number): Promise<void> {
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    if (workspaceFolders.length === 0) {
+      this.postMessage({ type: "workspaceFileSuggestions", requestId, items: [] });
+      return;
+    }
+
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const supportedExtensions = new Set([
+      "txt", "md", "json", "py", "ts", "tsx", "js", "jsx", "mjs", "cjs",
+      "css", "html", "yml", "yaml", "toml", "rs", "go", "java", "kt", "swift",
+      "c", "h", "cpp", "hpp", "cs", "rb", "php", "sh", "vue", "svelte",
+    ]);
+    const uris = await vscode.workspace.findFiles(
+      "**/*",
+      "**/{.git,node_modules,dist,build,out,target,.venv,venv}/**",
+      2_000,
+    );
+    const items = uris
+      .map((uri) => {
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+        const relativePath = workspaceFolder
+          ? path.relative(workspaceFolder.uri.fsPath, uri.fsPath).split(path.sep).join("/")
+          : path.basename(uri.fsPath);
+        return { path: uri.fsPath, relativePath, name: path.basename(uri.fsPath) };
+      })
+      .filter((item) => supportedExtensions.has(path.extname(item.name).slice(1).toLocaleLowerCase()))
+      .filter((item) => !normalizedQuery || item.relativePath.toLocaleLowerCase().includes(normalizedQuery))
+      .sort((a, b) => {
+        const aNameMatch = a.name.toLocaleLowerCase().startsWith(normalizedQuery) ? 0 : 1;
+        const bNameMatch = b.name.toLocaleLowerCase().startsWith(normalizedQuery) ? 0 : 1;
+        return aNameMatch - bNameMatch || a.relativePath.localeCompare(b.relativePath);
+      })
+      .slice(0, 50);
+
+    this.postMessage({ type: "workspaceFileSuggestions", requestId, items });
   }
 
   // ── Public API used by commands ────────────────────────────────
@@ -5221,13 +5276,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .text-file-chip .remove-btn:hover { opacity: 1; }
 
-    /* ── Textarea ──────────────────────────────────────────────── */
+    /* ── Composer editor ───────────────────────────────────────── */
     #input {
       display: block;
       width: 100%;
       min-height: 72px;
       max-height: 200px;
-      resize: vertical;
+      overflow-y: auto;
       border: none;
       outline: none;
       background: transparent;
@@ -5235,8 +5290,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding: 10px 12px 8px;
       font-size: 13px;
       line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
-    #input::placeholder { color: color-mix(in srgb, var(--vscode-input-foreground) 35%, transparent); }
+    #input:empty::before {
+      color: color-mix(in srgb, var(--vscode-input-foreground) 35%, transparent);
+      content: attr(data-placeholder);
+      pointer-events: none;
+    }
+    .composer-inline-mention {
+      height: 23px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: min(210px, calc(100% - 8px));
+      margin: 0 2px;
+      padding: 0 3px 0 7px;
+      border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent-muted) 76%, var(--surface-elevated));
+      color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+      font-size: 11px;
+      line-height: 21px;
+      vertical-align: 1px;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .composer-inline-mention.image {
+      border-color: color-mix(in srgb, var(--vscode-charts-green, #89d185) 48%, var(--border));
+      color: var(--vscode-charts-green, #89d185);
+    }
+    .composer-inline-mention-label { overflow: hidden; text-overflow: ellipsis; }
+    .composer-inline-mention button {
+      width: 17px;
+      height: 17px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 17px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: currentColor;
+      font: inherit;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0.65;
+    }
+    .composer-inline-mention button:hover { background: color-mix(in srgb, currentColor 12%, transparent); opacity: 1; }
     #steering-hint {
       display: none;
       align-items: flex-start;
@@ -5350,6 +5451,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       background: color-mix(in srgb, var(--accent, var(--vscode-focusBorder)) 18%, transparent);
       color: color-mix(in srgb, var(--accent, var(--vscode-focusBorder)) 80%, var(--vscode-foreground));
     }
+    #mention-popup {
+      position: fixed;
+      background: var(--vscode-menu-background, var(--vscode-input-background));
+      border: 1px solid var(--vscode-menu-border, var(--border));
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 201;
+      overflow: hidden;
+      max-height: 260px;
+      min-width: 240px;
+    }
+    #mention-popup.hidden { display: none; }
+    .mention-popup-heading { padding: 7px 10px 5px; font-size: 10px; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+    .mention-item { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; cursor: pointer; }
+    .mention-item:hover, .mention-item.active { background: color-mix(in srgb, var(--accent, var(--vscode-focusBorder)) 14%, var(--vscode-input-background)); }
+    .mention-item strong { font-size: 12px; font-weight: 500; }
+    .mention-item small { font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .composer-toolbar {
       display: flex;
       align-items: center;
@@ -6171,7 +6289,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <div id="ctx-attachments">
         <div id="attachment-bar"></div>
       </div>
-      <textarea id="input" rows="3" placeholder="输入问题或命令（如 /help）…"></textarea>
+      <div id="input" contenteditable="true" role="textbox" aria-label="任务输入" aria-multiline="true" data-placeholder="输入问题或命令（如 /help）…"></div>
       <div id="steering-hint" aria-live="polite">
         <span class="steering-dot" aria-hidden="true"></span>
         <span class="steering-copy">
@@ -6228,6 +6346,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <div id="slash-popup" class="hidden" role="listbox" aria-label="命令列表">
     <div id="slash-popup-list" class="slash-popup-list"></div>
   </div>
+  <div id="mention-popup" class="hidden" role="listbox" aria-label="引用工作区文件"></div>
   <div id="plus-menu" class="plus-menu hidden" role="menu">
     <button type="button" role="menuitem" data-action="image">添加图片…</button>
     <button type="button" role="menuitem" data-action="file">添加文件…</button>
@@ -6287,6 +6406,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const plusMenu = document.getElementById('plus-menu');
         const slashPopup = document.getElementById('slash-popup');
         const slashPopupList = document.getElementById('slash-popup-list');
+        const mentionPopup = document.getElementById('mention-popup');
         const fileInputImage = document.getElementById('file-input-image');
         const modelSelectWrap = document.getElementById('model-select-wrap');
         const modelSelectLabel = document.getElementById('model-select-label');
@@ -6339,16 +6459,64 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let pendingEditsVisibleFiles = 5;
     let currentPendingEditSummary = null;
     let pendingSteeringQueue = [];
+    let mentionItems = [];
+    let mentionActiveIndex = -1;
+    let mentionRequestId = 0;
+    let mentionTriggerRange = null;
+    let currentMentionQuery = '';
     let turnCounter = 0;
     let activeTurn = null;
     const turns = [];
     const SEND_ICON_HTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
 
-    // pendingImages: { media_type, data, dataUrl }; pendingTextFiles: { name, text }
+    // Pending attachments carry stable keys so inline @ capsules survive list reordering.
     const pendingImages = [];
     const pendingTextFiles = [];
     const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
-    const MAX_TEXT_FILE = 20 * 1024 * 1024;
+    let maxTextFileSizeMb = 5;
+    let attachmentSequence = 0;
+
+    function nextAttachmentKey(kind) {
+      attachmentSequence += 1;
+      return kind + ':' + attachmentSequence;
+    }
+
+    function composerNodeText(node) {
+      if (node.nodeType === Node.TEXT_NODE) return String(node.textContent || '').replace(/\u200b/g, '');
+      if (!(node instanceof HTMLElement)) return '';
+      if (node.classList.contains('composer-inline-mention')) return '@' + (node.dataset.mentionLabel || '引用');
+      if (node.tagName === 'BR') return '\\n';
+      const text = Array.from(node.childNodes).map(composerNodeText).join('');
+      return node.tagName === 'DIV' || node.tagName === 'P' ? text + '\\n' : text;
+    }
+
+    function getInputText() {
+      return Array.from(input.childNodes).map(composerNodeText).join('').replace(/\\n+$/, '');
+    }
+
+    function setInputText(text) {
+      input.replaceChildren();
+      if (text) input.appendChild(document.createTextNode(String(text)));
+    }
+
+    function clearInput() {
+      input.replaceChildren();
+    }
+
+    function setComposerCaret(node, offset) {
+      const selection = window.getSelection();
+      if (!selection) return;
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    function setComposerCaretAtEnd() {
+      input.focus();
+      setComposerCaret(input, input.childNodes.length);
+    }
 
     // ── Session management state ────────────────────────────────────
     let allSessions = [];          // { session_id, message_count, status, title }
@@ -7583,9 +7751,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function updateComposerPlaceholder() {
       if (!input) return;
       if (isBusy) {
-        input.placeholder = '补充或纠正 Agent 的下一步行为…';
+        input.dataset.placeholder = '补充或纠正 Agent 的下一步行为…';
       } else {
-        input.placeholder = currentMode === 'plan'
+        input.dataset.placeholder = currentMode === 'plan'
           ? '描述目标，CrabCode 会先只读分析并生成计划…'
           : '输入问题或命令（如 /help）…';
       }
@@ -7772,22 +7940,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       reader.onload = function(e) {
         const dataUrl = e.target.result;
         const base64 = dataUrl.split(',')[1];
-        pendingImages.push({ media_type: mime, data: base64, dataUrl: dataUrl });
+        pendingImages.push({ key: nextAttachmentKey('image'), name: file.name || '图片', media_type: mime, data: base64, dataUrl: dataUrl });
         renderAttachmentBar();
       };
       reader.readAsDataURL(file);
     }
 
     function addTextFile(file) {
-      if (file.size > MAX_TEXT_FILE) {
-        alert('CrabCode：文件过大（最大 20MB）\\n' + file.name);
+      if (file.size > maxTextFileSizeMb * 1024 * 1024) {
+        alert('CrabCode：文件过大（最大 ' + maxTextFileSizeMb + 'MB）\\n' + file.name);
         return;
       }
       const reader = new FileReader();
       reader.onload = function() {
         let t = reader.result || '';
         if (t.length > 200000) t = t.slice(0, 200000) + '\\n…(已截断)';
-        pendingTextFiles.push({ name: file.name, text: t });
+        pendingTextFiles.push({ key: nextAttachmentKey('file'), name: file.name, text: t, path: '' });
         renderAttachmentBar();
       };
       reader.readAsText(file);
@@ -7799,12 +7967,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       else addTextFile(file);
     }
 
+    function removeMentionCapsules(key) {
+      input.querySelectorAll('.composer-inline-mention').forEach(function(pill) {
+        if (pill.dataset.mentionKey !== key) return;
+        const next = pill.nextSibling;
+        pill.remove();
+        if (next && next.nodeType === Node.TEXT_NODE && String(next.textContent || '').startsWith(String.fromCharCode(8203))) {
+          next.textContent = String(next.textContent || '').slice(1);
+        }
+      });
+    }
+
     function removeImage(index) {
+      const image = pendingImages[index];
+      if (image) removeMentionCapsules(image.key);
       pendingImages.splice(index, 1);
       renderAttachmentBar();
     }
 
     function removeTextFile(index) {
+      const file = pendingTextFiles[index];
+      if (file) removeMentionCapsules(file.key);
       pendingTextFiles.splice(index, 1);
       renderAttachmentBar();
     }
@@ -7850,16 +8033,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function mergeHostAttachments(msg) {
       (msg.images || []).forEach(function(img) {
         const url = 'data:' + img.media_type + ';base64,' + img.data;
-        pendingImages.push({ media_type: img.media_type, data: img.data, dataUrl: url });
+        pendingImages.push({ key: nextAttachmentKey('image'), name: img.name || '图片', media_type: img.media_type, data: img.data, dataUrl: url });
       });
       (msg.textSnippets || []).forEach(function(s) {
-        pendingTextFiles.push({ name: s.name, text: s.text });
+        const key = s.path ? 'file-path:' + s.path : nextAttachmentKey('file');
+        if (pendingTextFiles.some(function(file) { return file.key === key; })) return;
+        pendingTextFiles.push({ key: key, name: s.name, text: s.text, path: s.path || '' });
       });
       renderAttachmentBar();
     }
 
     function applyOptions(msg) {
       hasReceivedOptions = true;
+      maxTextFileSizeMb = Math.min(100, Math.max(1, Math.floor(Number(msg.fileUploadMaxSizeMb) || 5)));
       const models = msg.models || [];
       const previousValue = currentModelValue;
       if (models.length === 0) {
@@ -8126,18 +8312,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!item) return;
       if (item.type === 'sub') {
         // Fill in full command + sub-value, ready to send
-        input.value = item.cmd + ' ' + item.name;
-        input.focus();
+        setInputText(item.cmd + ' ' + item.name);
+        setComposerCaretAtEnd();
         closeSlashPopup();
       } else if (SUBCOMMAND_SOURCES[item.name]) {
         // Has sub-items — fill with trailing space to trigger sub-completion
-        input.value = item.name + ' ';
-        input.focus();
+        setInputText(item.name + ' ');
+        setComposerCaretAtEnd();
         slashActiveIndex = -1;
         renderSlashPopup('', item.name);
       } else {
-        input.value = item.name + ' ';
-        input.focus();
+        setInputText(item.name + ' ');
+        setComposerCaretAtEnd();
         closeSlashPopup();
       }
     }
@@ -8148,8 +8334,165 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       slashItems = [];
     }
 
+    function closeMentionPopup() {
+      mentionPopup.classList.add('hidden');
+      mentionItems = [];
+      mentionActiveIndex = -1;
+      mentionTriggerRange = null;
+      currentMentionQuery = '';
+    }
+
+    function pendingMentionItems(query) {
+      const normalized = String(query || '').toLowerCase();
+      const items = pendingImages.map(function(image) {
+        return {
+          key: image.key,
+          kind: 'image',
+          name: image.name,
+          detail: '图片 · 已附加',
+          path: '',
+          attached: true,
+        };
+      }).concat(pendingTextFiles.map(function(file) {
+        return {
+          key: file.key,
+          kind: 'file',
+          name: file.name,
+          detail: file.path ? '文件 · ' + file.path : '文件 · 已附加',
+          path: file.path || '',
+          attached: true,
+        };
+      }));
+      return items.filter(function(item) {
+        return !normalized || (item.name + ' ' + item.detail).toLowerCase().includes(normalized);
+      });
+    }
+
+    function mergeMentionItems(workspaceItems) {
+      const attached = pendingMentionItems(currentMentionQuery);
+      const attachedPaths = new Set(attached.map(function(item) { return item.path; }).filter(Boolean));
+      const workspace = (Array.isArray(workspaceItems) ? workspaceItems : []).filter(function(item) {
+        return !attachedPaths.has(item.path);
+      }).map(function(item) {
+        return Object.assign({
+          key: 'file-path:' + item.path,
+          kind: 'file',
+          detail: '工作区 · ' + item.relativePath,
+          attached: false,
+        }, item);
+      });
+      return attached.concat(workspace);
+    }
+
+    function renderMentionPopup(items) {
+      mentionItems = Array.isArray(items) ? items : [];
+      mentionActiveIndex = mentionItems.length ? 0 : -1;
+      if (!mentionItems.length) { closeMentionPopup(); return; }
+      mentionPopup.innerHTML = '<div class="mention-popup-heading">@ 引用图片或文件 · Tab / Enter 添加</div>' + mentionItems.map(function(item, index) {
+        return '<div class="mention-item' + (index === 0 ? ' active' : '') + '" data-index="' + index + '" role="option" aria-selected="' + (index === 0 ? 'true' : 'false') + '">' +
+          '<strong>' + escapeHtml(item.name) + '</strong><small>' + escapeHtml(item.detail) + '</small></div>';
+      }).join('');
+      mentionPopup.classList.remove('hidden');
+      const cardRect = composerCard.getBoundingClientRect();
+      const popupRect = mentionPopup.getBoundingClientRect();
+      mentionPopup.style.left = Math.max(8, cardRect.left) + 'px';
+      mentionPopup.style.top = Math.max(8, cardRect.top - popupRect.height - 6) + 'px';
+      mentionPopup.style.width = Math.max(240, cardRect.width) + 'px';
+      mentionPopup.querySelectorAll('.mention-item').forEach(function(el) {
+        el.addEventListener('mousedown', function(e) {
+          e.preventDefault();
+          selectMentionItem(parseInt(el.getAttribute('data-index'), 10));
+        });
+        el.addEventListener('mouseover', function() { setMentionActive(parseInt(el.getAttribute('data-index'), 10)); });
+      });
+    }
+
+    function setMentionActive(index) {
+      mentionActiveIndex = index;
+      mentionPopup.querySelectorAll('.mention-item').forEach(function(el, i) {
+        el.classList.toggle('active', i === index);
+        el.setAttribute('aria-selected', i === index ? 'true' : 'false');
+      });
+      const active = mentionPopup.querySelector('.mention-item.active');
+      if (active) active.scrollIntoView({ block: 'nearest' });
+    }
+
+    function selectMentionItem(index) {
+      const item = mentionItems[index];
+      const trigger = mentionTriggerRange;
+      if (!item || !trigger) return;
+      input.focus();
+      const pill = document.createElement('span');
+      pill.className = 'composer-inline-mention ' + item.kind;
+      pill.contentEditable = 'false';
+      pill.dataset.mentionKey = item.key;
+      pill.dataset.mentionLabel = item.name;
+      pill.dataset.mentionKind = item.kind;
+      pill.title = item.detail;
+      const marker = document.createElement('span');
+      marker.textContent = '@';
+      const label = document.createElement('span');
+      label.className = 'composer-inline-mention-label';
+      label.textContent = item.name;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.tabIndex = -1;
+      remove.dataset.removeMention = 'true';
+      remove.setAttribute('aria-label', '移除引用 ' + item.name);
+      remove.textContent = '×';
+      pill.append(marker, label, remove);
+      trigger.deleteContents();
+      trigger.insertNode(pill);
+      const spacer = document.createTextNode(String.fromCharCode(8203));
+      pill.after(spacer);
+      setComposerCaret(spacer, 1);
+      if (!item.attached) vscode.postMessage({ type: 'attachWorkspaceFile', path: item.path });
+      closeMentionPopup();
+    }
+
+    function findMentionTrigger() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return null;
+      const caret = selection.getRangeAt(0);
+      if (!input.contains(caret.startContainer) || caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
+      const textNode = caret.startContainer;
+      const before = textNode.data.slice(0, caret.startOffset).replace(/\u200b/g, '');
+      const match = before.match(/(^|\\s)@([^\\s@]*)$/);
+      if (!match) return null;
+      const range = caret.cloneRange();
+      range.setStart(textNode, caret.startOffset - match[2].length - 1);
+      return { query: match[2], range: range };
+    }
+
+    function updateMentionPopup() {
+      const trigger = findMentionTrigger();
+      if (!trigger) {
+        mentionRequestId += 1;
+        closeMentionPopup();
+        return;
+      }
+      mentionTriggerRange = trigger.range;
+      currentMentionQuery = trigger.query;
+      const attached = pendingMentionItems(currentMentionQuery);
+      if (attached.length > 0) renderMentionPopup(attached);
+      const requestId = ++mentionRequestId;
+      vscode.postMessage({ type: 'searchWorkspaceFiles', query: trigger.query, requestId: requestId });
+    }
+
+    function removeMentionPill(pill) {
+      const parent = pill.parentNode;
+      const next = pill.nextSibling;
+      const index = parent ? Array.from(parent.childNodes).indexOf(pill) : 0;
+      pill.remove();
+      if (next && next.nodeType === Node.TEXT_NODE && String(next.textContent || '').startsWith(String.fromCharCode(8203))) {
+        next.textContent = String(next.textContent || '').slice(1);
+      }
+      if (next && next.nodeType === Node.TEXT_NODE) setComposerCaret(next, 0);
+      else if (parent) setComposerCaret(parent, Math.max(0, index));
+    }
+
     function getSlashQuery() {
-      const val = input.value;
+      const val = getInputText();
       if (!val.startsWith('/')) return null;
       const spaceIdx = val.indexOf(' ');
       if (spaceIdx < 0) {
@@ -8165,6 +8508,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     input.addEventListener('input', function() {
+      updateMentionPopup();
       const result = getSlashQuery();
       if (result !== null) {
         slashActiveIndex = -1;
@@ -8175,6 +8519,44 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     });
 
     input.addEventListener('keydown', function(e) {
+      if (!mentionPopup.classList.contains('hidden')) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const delta = e.key === 'ArrowDown' ? 1 : -1;
+          setMentionActive((mentionActiveIndex + delta + mentionItems.length) % mentionItems.length);
+          return;
+        }
+        if ((e.key === 'Enter' || e.key === 'Tab') && mentionActiveIndex >= 0) {
+          e.preventDefault();
+          selectMentionItem(mentionActiveIndex);
+          return;
+        }
+        if (e.key === 'Escape') { e.preventDefault(); closeMentionPopup(); return; }
+      }
+      if (e.key === 'Backspace') {
+        const selection = window.getSelection();
+        if (selection && selection.isCollapsed && selection.rangeCount > 0) {
+          const caret = selection.getRangeAt(0);
+          if (caret.startContainer.nodeType === Node.TEXT_NODE) {
+            const textNode = caret.startContainer;
+            if (caret.startOffset > 0 && textNode.data.charCodeAt(caret.startOffset - 1) === 8203 && textNode.previousSibling && textNode.previousSibling.classList && textNode.previousSibling.classList.contains('composer-inline-mention')) {
+              e.preventDefault();
+              const pill = textNode.previousSibling;
+              textNode.deleteData(caret.startOffset - 1, 1);
+              pill.remove();
+              setComposerCaret(textNode, caret.startOffset - 1);
+              return;
+            }
+          } else if (caret.startContainer === input && caret.startOffset > 0) {
+            const previous = input.childNodes[caret.startOffset - 1];
+            if (previous && previous.classList && previous.classList.contains('composer-inline-mention')) {
+              e.preventDefault();
+              removeMentionPill(previous);
+              return;
+            }
+          }
+        }
+      }
       if (slashPopup.classList.contains('hidden')) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -8196,8 +8578,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     });
 
+    input.addEventListener('keyup', function(e) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') updateMentionPopup();
+    });
+
+    input.addEventListener('click', function(e) {
+      const target = e.target;
+      const remove = target && target.closest ? target.closest('[data-remove-mention]') : null;
+      const pill = remove && remove.closest ? remove.closest('.composer-inline-mention') : null;
+      if (!pill) return;
+      e.preventDefault();
+      removeMentionPill(pill);
+      input.focus();
+    });
+
     document.addEventListener('click', function(e) {
-      if (!slashPopup.contains(e.target) && e.target !== input) closeSlashPopup();
+      if (!slashPopup.contains(e.target) && !input.contains(e.target)) closeSlashPopup();
+      if (!mentionPopup.contains(e.target) && !input.contains(e.target)) closeMentionPopup();
     });
 
     // ── Send ─────────────────────────────────────────────────────
@@ -8911,11 +9308,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     };
 
     function send() {
-      let text = input.value.trim();
+      let text = getInputText().trim();
       let extra = '';
-      const bt = String.fromCharCode(96);
       pendingTextFiles.forEach(function(f) {
-        extra += '\\n\\n[附加文件: ' + f.name + ']\\n' + bt + bt + bt + '\\n' + f.text + '\\n' + bt + bt + bt + '\\n';
+        const escapedName = String(f.name).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        extra += '\\n\\n<file name="' + escapedName + '">\\n' + f.text + '\\n</file>\\n';
       });
       text = (text + extra).trim();
       if (!text && pendingImages.length === 0 && pendingTextFiles.length === 0) return;
@@ -8924,11 +9321,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const command = text.slice(1).trim();
         if (!command) addLocalSystemMessage('用法：! <cmd>');
         else vscode.postMessage({ type: 'runShellCommand', command: command });
-        input.value = '';
+        clearInput();
         pendingImages.length = 0;
         pendingTextFiles.length = 0;
         renderAttachmentBar();
         closeSlashPopup();
+        closeMentionPopup();
         return;
       }
 
@@ -8939,21 +9337,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const args = spaceIdx < 0 ? '' : text.slice(spaceIdx + 1).trim();
         const handler = DIRECT_COMMANDS[cmd];
         if (handler && handler(args)) {
-          input.value = '';
+          clearInput();
           pendingImages.length = 0;
           pendingTextFiles.length = 0;
           renderAttachmentBar();
           closeSlashPopup();
+          closeMentionPopup();
           return;
         }
         const skillName = cmd.startsWith('/') ? cmd.slice(1) : '';
         if (skillName && slashSkills.some(function(skill) { return skill.name === skillName; })) {
           vscode.postMessage({ type: 'invokeSkill', name: skillName, userInput: args });
-          input.value = '';
+          clearInput();
           pendingImages.length = 0;
           pendingTextFiles.length = 0;
           renderAttachmentBar();
           closeSlashPopup();
+          closeMentionPopup();
           return;
         }
       }
@@ -8962,10 +9362,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return { media_type: img.media_type, data: img.data };
       });
       vscode.postMessage({ type: 'sendMessage', text: text, images: images.length > 0 ? images : undefined });
-      input.value = '';
+      clearInput();
       pendingImages.length = 0;
       pendingTextFiles.length = 0;
       renderAttachmentBar();
+      closeSlashPopup();
+      closeMentionPopup();
     }
 
     sendBtn.addEventListener('click', send);
@@ -9273,9 +9675,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     input.addEventListener('paste', function(e) {
       const items = e.clipboardData && e.clipboardData.items;
-      if (!items) return;
       let handled = false;
-      for (let i = 0; i < items.length; i++) {
+      for (let i = 0; items && i < items.length; i++) {
         const item = items[i];
         if (item.kind === 'file') {
           const f = item.getAsFile();
@@ -9288,7 +9689,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (f) { handled = true; addImageFile(f); }
         }
       }
-      if (handled) e.preventDefault();
+      if (handled) {
+        e.preventDefault();
+        return;
+      }
+      const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+      if (!text) return;
+      e.preventDefault();
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const textNode = document.createTextNode(text);
+      range.insertNode(textNode);
+      setComposerCaret(textNode, text.length);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
     window.addEventListener('message', event => {
@@ -9327,8 +9742,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           scrollMessagesToBottom(true);
           break;
         case 'prefill':
-          input.value = msg.text;
-          input.focus();
+          setInputText(msg.text);
+          setComposerCaretAtEnd();
           break;
         case 'skills':
           if (Array.isArray(msg.skills)) {
@@ -9482,6 +9897,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'addAttachments':
           mergeHostAttachments(msg);
+          break;
+        case 'workspaceFileSuggestions':
+          if (typeof msg.requestId === 'number' && msg.requestId === mentionRequestId) {
+            renderMentionPopup(mergeMentionItems(msg.items || []));
+          }
           break;
         case 'sessionList':
           renderSessionList(msg.sessions);

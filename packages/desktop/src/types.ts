@@ -75,6 +75,7 @@ export interface DesktopSettings {
   show_turn_duration: boolean;
   turn_duration_format: TurnDurationFormat;
   file_upload_mode: FileUploadMode;
+  file_upload_max_size_mb: number;
   dock_icon: DockIconChoice;
 }
 

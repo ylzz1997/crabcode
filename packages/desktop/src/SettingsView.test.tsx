@@ -80,6 +80,7 @@ const settings: DesktopSettings = {
   show_turn_duration: true,
   turn_duration_format: "hms",
   file_upload_mode: "content",
+  file_upload_max_size_mb: 5,
   dock_icon: "dark",
 };
 
@@ -251,6 +252,11 @@ describe("SettingsView", () => {
     act(() => pathMode.click());
 
     expect(handlers.onConversationChange).toHaveBeenCalledWith({ file_upload_mode: "path" });
+
+    const maximum = container.querySelector<HTMLInputElement>('[aria-label="最大文件大小（MB）"]')!;
+    act(() => changeInput(maximum, "12"));
+    act(() => maximum.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    expect(handlers.onConversationChange).toHaveBeenCalledWith({ file_upload_max_size_mb: 12 });
   });
 
   it("shows document translation controls and updates their values", () => {

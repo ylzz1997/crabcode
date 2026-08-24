@@ -80,6 +80,7 @@ fn default_settings() -> Value {
         "show_turn_duration": true,
         "turn_duration_format": "hms",
         "file_upload_mode": "content",
+        "file_upload_max_size_mb": 5,
         "dock_icon": "dark"
     })
 }
