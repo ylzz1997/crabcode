@@ -338,6 +338,7 @@ export interface SessionStatus {
 export interface GatewayModel {
   name: string;
   description?: string;
+  group?: string;
 }
 
 export interface GoalInfo {

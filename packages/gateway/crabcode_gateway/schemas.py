@@ -847,6 +847,7 @@ class AgentTranscriptResponse(BaseModel):
 class ModelInfo(BaseModel):
     name: str
     description: str = ""
+    group: str = "default"
 
 
 class HealthResponse(BaseModel):

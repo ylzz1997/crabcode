@@ -122,7 +122,13 @@ def _list_models_from_settings() -> list[ModelInfo]:
         if cfg.model:
             parts.append(cfg.model)
         desc = "/".join(parts) if parts else "(no model set)"
-        result.append(ModelInfo(name=name, description=desc))
+        result.append(
+            ModelInfo(
+                name=name,
+                description=desc,
+                group=cfg.group or "default",
+            )
+        )
     return result
 
 
@@ -145,8 +151,19 @@ async def list_models(
         else:
             models = None
     if models is not None:
+        session_settings = getattr(session, "settings", None)
         return [
-            ModelInfo(name=name, description=desc)
+            ModelInfo(
+                name=name,
+                description=desc,
+                group=(
+                    getattr(session_settings.get_api_config(name), "group", None)
+                    if session_settings is not None
+                    and hasattr(session_settings, "get_api_config")
+                    else None
+                )
+                or "default",
+            )
             for name, desc in models.items()
         ]
     return _list_models_from_settings()

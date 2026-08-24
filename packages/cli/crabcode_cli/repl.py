@@ -2854,18 +2854,27 @@ async def _handle_command(
             active_cfg = session.settings.get_api_config(current_name)
             provider = active_cfg.provider
             model = active_cfg.model
+            group = active_cfg.group or "default"
             label = f"[bold cyan]{current_name}[/]  " if current_name else ""
             console.print(
                 f"Current: {label}"
                 f"provider=[bold]{provider or '[yellow]not set[/]'}[/]  "
-                f"model=[bold]{model or '[yellow]not set[/]'}[/]"
+                f"model=[bold]{model or '[yellow]not set[/]'}[/]  "
+                f"group=[bold]{group}[/]"
             )
             named = session.list_models()
             if named:
                 console.print("\nConfigured models (use [bold]/model <name>[/] to switch):")
+                grouped: dict[str, list[tuple[str, str]]] = {}
                 for name, desc in named.items():
-                    marker = " [bold green]← active[/]" if name == current_name else ""
-                    console.print(f"  [cyan]{name}[/]  {desc}{marker}")
+                    model_cfg = session.settings.get_api_config(name)
+                    model_group = model_cfg.group or "default"
+                    grouped.setdefault(model_group, []).append((name, desc))
+                for model_group, entries in grouped.items():
+                    console.print(f"  [bold magenta]{model_group}[/]")
+                    for name, desc in entries:
+                        marker = " [bold green]← active[/]" if name == current_name else ""
+                        console.print(f"    [cyan]{name}[/]  {desc}{marker}")
             return True
 
         # /model <name>  — switch to named model
@@ -2883,7 +2892,8 @@ async def _handle_command(
             active_cfg = session.settings.get_api_config(arg)
             console.print(
                 f"[green]✓[/] Switched to [bold cyan]{arg}[/]  "
-                f"({active_cfg.provider or 'anthropic'}/{active_cfg.model or 'default'})"
+                f"({active_cfg.provider or 'anthropic'}/{active_cfg.model or 'default'}; "
+                f"group={active_cfg.group or 'default'})"
             )
         else:
             console.print(f"[bold red]Failed to switch model to: {arg}[/]")

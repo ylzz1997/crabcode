@@ -114,6 +114,7 @@ import type {
   FavoriteEntry,
   FavoriteFolder,
   GatewayEvent,
+  GatewayModel,
   GatewayViewState,
   ProjectPreset,
   ReasoningEffort,
@@ -340,6 +341,26 @@ export function resolveRememberedModel(
   return remembered && models.some((model) => model.name === remembered)
     ? remembered
     : undefined;
+}
+
+export function groupGatewayModels(
+  models: GatewayModel[],
+  query = "",
+): Array<{ group: string; models: GatewayModel[] }> {
+  const needle = query.trim().toLowerCase();
+  const grouped = new Map<string, GatewayModel[]>();
+  for (const model of models) {
+    const group = model.group || "default";
+    const matches = !needle
+      || model.name.toLowerCase().includes(needle)
+      || (model.description ?? "").toLowerCase().includes(needle)
+      || group.toLowerCase().includes(needle);
+    if (!matches) continue;
+    const entries = grouped.get(group) ?? [];
+    entries.push(model);
+    grouped.set(group, entries);
+  }
+  return Array.from(grouped, ([group, entries]) => ({ group, models: entries }));
 }
 
 function sessionKey(connectionId: string, sessionId: string): string {
@@ -1929,8 +1950,11 @@ function App() {
       }
       if (command === "/model") {
         if (!args) {
-          const models = activeGateway?.models.map((model) => model.name).join("、") || "暂无可用模型";
-          appendCommandMessage(`当前模型：${activeModel || activeSession?.status?.model || "默认"} · 可用模型：${models}`);
+          const grouped = groupGatewayModels(activeGateway?.models ?? []);
+          const models = grouped.length > 0
+            ? grouped.map(({ group, models: entries }) => `${group}: ${entries.map((model) => model.name).join("、")}`).join("\n")
+            : "暂无可用模型";
+          appendCommandMessage(`当前模型：${activeModel || activeSession?.status?.model || "默认"}\n可用模型：\n${models}`);
           return true;
         }
         const model = activeGateway?.models.find((item) => item.name.toLocaleLowerCase() === args.toLocaleLowerCase());
@@ -4294,10 +4318,8 @@ function ModelPicker({
   const ref = useRef<HTMLDivElement | null>(null);
   const close = useCallback(() => setOpen(false), []);
   useDismissMenu(open, close, ref);
-  const filtered = models.filter((model) => {
-    const needle = query.trim().toLowerCase();
-    return !needle || model.name.toLowerCase().includes(needle) || (model.description ?? "").toLowerCase().includes(needle);
-  });
+  const grouped = groupGatewayModels(models, query);
+  const filteredCount = grouped.reduce((total, entry) => total + entry.models.length, 0);
   return (
     <div className="picker model-picker" ref={ref}>
       <button
@@ -4318,21 +4340,26 @@ function ModelPicker({
           <div className="picker-menu-heading"><span>模型</span><small>{models.length} 个可用</small></div>
           <label className="picker-search"><Search /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型" /></label>
           <div className="picker-options">
-            {filtered.map((model) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected={model.name === value}
-                className={`picker-option ${model.name === value ? "selected" : ""}`}
-                key={model.name}
-                onClick={() => { onChange(model.name); setOpen(false); setQuery(""); }}
-              >
-                <span className="picker-option-icon"><Bot /></span>
-                <span className="picker-option-copy"><strong>{model.name}</strong>{model.description && <small>{model.description}</small>}</span>
-                {model.name === value && <Check className="picker-check" />}
-              </button>
+            {grouped.map(({ group, models: entries }) => (
+              <div className="picker-model-group" key={group} role="group" aria-label={group}>
+                <div className="picker-group-heading" aria-hidden="true">{group}</div>
+                {entries.map((model) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={model.name === value}
+                    className={`picker-option ${model.name === value ? "selected" : ""}`}
+                    key={model.name}
+                    onClick={() => { onChange(model.name); setOpen(false); setQuery(""); }}
+                  >
+                    <span className="picker-option-icon"><Bot /></span>
+                    <span className="picker-option-copy"><strong>{model.name}</strong>{model.description && <small>{model.description}</small>}</span>
+                    {model.name === value && <Check className="picker-check" />}
+                  </button>
+                ))}
+              </div>
             ))}
-            {filtered.length === 0 && <span className="picker-empty">没有匹配的模型</span>}
+            {filteredCount === 0 && <span className="picker-empty">没有匹配的模型</span>}
           </div>
         </div>
       )}

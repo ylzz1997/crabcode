@@ -9,6 +9,7 @@ import {
   defaultProjectDirectory,
   FavoritesView,
   formatTurnDuration,
+  groupGatewayModels,
   MessageMarkdown,
   ProjectActionsMenu,
   ProjectDeleteModal,
@@ -1083,5 +1084,28 @@ describe("remembered model selection", () => {
       { last_model_profile: "removed" },
       [{ name: "fast" }, { name: "smart" }],
     )).toBeUndefined();
+  });
+});
+
+describe("model grouping", () => {
+  const models = [
+    { name: "codex", description: "codex/gpt-5.6-sol" },
+    { name: "sky-5.5", description: "codex/gpt-5.5", group: "sky-router" },
+    { name: "sky-5.6", description: "codex/gpt-5.6-sol", group: "sky-router" },
+    { name: "claude", description: "anthropic/claude-opus-4.6", group: "anthropic" },
+  ];
+
+  it("preserves group and model order while assigning missing groups to default", () => {
+    expect(groupGatewayModels(models)).toEqual([
+      { group: "default", models: [models[0]] },
+      { group: "sky-router", models: [models[1], models[2]] },
+      { group: "anthropic", models: [models[3]] },
+    ]);
+  });
+
+  it("matches a group name during model search", () => {
+    expect(groupGatewayModels(models, "sky")).toEqual([
+      { group: "sky-router", models: [models[1], models[2]] },
+    ]);
   });
 });

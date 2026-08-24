@@ -65,6 +65,7 @@ import type {
 interface GatewayModelInfo {
   name: string;
   description?: string;
+  group?: string;
 }
 
 function uniqNonEmpty(values: Array<string | null | undefined>): string[] {
@@ -353,6 +354,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private _modelsFetchInProgress = false;
   private static readonly MODELS_FETCH_COOLDOWN_MS = 30_000;
   private lastNonEmptyModels: string[] = [];
+  private lastNonEmptyModelGroups: Record<string, string> = {};
   private webviewReady = false;
   private pendingWebviewMessages: any[] = [];
   private logFollowAbort: AbortController | null = null;
@@ -1734,7 +1736,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       url.searchParams.set("session_id", sessionId);
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) throw new Error(`读取模型列表失败：${response.status}`);
-      const models = await response.json() as Array<{ name: string; description?: string }>;
+      const models = await response.json() as GatewayModelInfo[];
       const activeProfile = status.model_profile || this.connection.modelName || "";
       const activeModel = [status.provider, status.model].filter(Boolean).join("/") || "未配置";
       const lines = [
@@ -1743,9 +1745,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       ];
       if (models.length > 0) {
         lines.push("", "**可用模型：**");
+        const groupedModels = new Map<string, GatewayModelInfo[]>();
         for (const model of models) {
-          const marker = model.name === activeProfile ? " ← 当前" : "";
-          lines.push(`- \`${model.name}\`${marker}${model.description ? ` · ${model.description}` : ""}`);
+          const group = model.group || "default";
+          const entries = groupedModels.get(group) ?? [];
+          entries.push(model);
+          groupedModels.set(group, entries);
+        }
+        for (const [group, entries] of groupedModels) {
+          lines.push("", `**${group}**`);
+          for (const model of entries) {
+            const marker = model.name === activeProfile ? " ← 当前" : "";
+            lines.push(`- \`${model.name}\`${marker}${model.description ? ` · ${model.description}` : ""}`);
+          }
         }
       } else {
         lines.push("", "（网关没有返回已命名模型）");
@@ -2720,6 +2732,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cfg = vscode.workspace.getConfiguration("crabcode");
     const configuredModels = cfg.get<string[]>("chatModels", []) ?? [];
     if (configuredModels.length > 0) {
+      this.lastNonEmptyModelGroups = Object.fromEntries(
+        configuredModels.map((name) => [name, "default"]),
+      );
       return configuredModels;
     }
 
@@ -2745,6 +2760,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       const models = (await response.json()) as GatewayModelInfo[];
+      const modelGroups = Object.fromEntries(
+        models
+          .filter((model) => typeof model.name === "string" && model.name.length > 0)
+          .map((model) => [model.name, model.group || "default"]),
+      );
+      if (models.length > 0) this.lastNonEmptyModelGroups = modelGroups;
       return models.map((model) => model.name).filter((name) => name.length > 0);
     } catch {
       return [];
@@ -2783,6 +2804,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const requestId = ++this.latestModelRequestId;
     const cfg = vscode.workspace.getConfiguration("crabcode");
     let fetchedModels: string[];
+    let modelGroups: Record<string, string> = {};
 
     // Throttle: skip the HTTP fetch if we recently fetched and a fetch is
     // already in-flight.  Heartbeats every 10 s were causing a flood of
@@ -2795,10 +2817,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     if (skipFetch) {
       fetchedModels = this.lastNonEmptyModels;
+      modelGroups = this.lastNonEmptyModelGroups;
     } else {
       try {
         this._modelsFetchInProgress = true;
         fetchedModels = await this.resolveModelsFromSettingsOrGateway();
+        modelGroups = this.lastNonEmptyModelGroups;
         this._lastModelsFetchTime = Date.now();
       } catch {
         fetchedModels = [];
@@ -2806,6 +2830,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this._modelsFetchInProgress = false;
       }
     }
+    if (!modelGroups) modelGroups = {};
     if (requestId !== this.latestModelRequestId) {
       return;
     }
@@ -2820,6 +2845,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const models = fetchedModels.length > 0
       ? fetchedModels
       : (this.lastNonEmptyModels.length > 0 ? this.lastNonEmptyModels : fallbackModels);
+    if (Object.keys(modelGroups).length === 0) {
+      modelGroups = Object.fromEntries(models.map((name) => [name, "default"]));
+    }
     const mode = normalizePermissionMode(
       cfg.get<string>("permissionMode", "default"),
     );
@@ -2833,6 +2861,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.postMessage({
       type: "options",
       models,
+      modelGroups,
       defaultModel,
       selectedModel,
       permissionMode: mode,
@@ -5549,6 +5578,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .model-search:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
     .model-menu-list { max-height: 240px; overflow-y: auto; }
+    .model-menu-group {
+      padding: 6px 12px 3px 32px;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: none;
+      border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+    }
+    .model-menu-group:first-child { border-top: none; }
     .model-menu-item {
       display: flex;
       align-items: center;
@@ -6296,6 +6334,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let hasReceivedOptions = false;
     let currentModelValue = '';
     let currentModelList = [];
+    let currentModelGroups = {};
     let pendingEditsCollapsed = false;
     let pendingEditsVisibleFiles = 5;
     let currentPendingEditSummary = null;
@@ -7825,6 +7864,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const previousValue = currentModelValue;
       if (models.length === 0) {
         currentModelList = [];
+        currentModelGroups = {};
         currentModelValue = '';
         if (modelBtn) modelBtn.disabled = true;
         if (modelSelectLabel) {
@@ -7834,6 +7874,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (modelSelectWrap) modelSelectWrap.classList.add('is-empty');
       } else {
         currentModelList = models;
+        currentModelGroups = msg.modelGroups || {};
         const preferred = [
           msg.selectedModel,
           msg.defaultModel,
@@ -9054,20 +9095,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!modelMenuList) return;
       const q = filter.toLowerCase();
       modelMenuList.innerHTML = '';
+      const groupedModels = {};
+      const groupOrder = [];
       models.forEach(function(m) {
         if (q && m.toLowerCase().indexOf(q) < 0) return;
-        const el = document.createElement('div');
-        el.className = 'model-menu-item' + (m === selected ? ' active' : '');
-        el.setAttribute('role', 'option');
-        el.setAttribute('data-model', m);
-        el.innerHTML =
-          '<span class="model-check">✓</span>' +
-          '<span class="model-name">' + m.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>';
-        el.addEventListener('click', function() {
-          selectModel(m);
-          closeModelMenu();
+        const group = currentModelGroups[m] || 'default';
+        if (!groupedModels[group]) {
+          groupedModels[group] = [];
+          groupOrder.push(group);
+        }
+        groupedModels[group].push(m);
+      });
+      groupOrder.forEach(function(group) {
+        const heading = document.createElement('div');
+        heading.className = 'model-menu-group';
+        heading.textContent = group;
+        modelMenuList.appendChild(heading);
+        groupedModels[group].forEach(function(m) {
+          const el = document.createElement('div');
+          el.className = 'model-menu-item' + (m === selected ? ' active' : '');
+          el.setAttribute('role', 'option');
+          el.setAttribute('data-model', m);
+          el.innerHTML =
+            '<span class="model-check">✓</span>' +
+            '<span class="model-name">' + m.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>';
+          el.addEventListener('click', function() {
+            selectModel(m);
+            closeModelMenu();
+          });
+          modelMenuList.appendChild(el);
         });
-        modelMenuList.appendChild(el);
       });
     }
 

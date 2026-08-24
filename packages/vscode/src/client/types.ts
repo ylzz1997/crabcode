@@ -635,6 +635,7 @@ export interface AgentTranscriptResponse {
 export interface ModelInfo {
   name: string;
   description?: string;
+  group?: string;
 }
 
 export interface HealthResponse {
