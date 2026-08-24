@@ -425,6 +425,7 @@ export type ChatItemKind =
   | "document_job"
   | "file_change"
   | "turn_duration"
+  | "command"
   | "system"
   | "error";
 
@@ -433,6 +434,7 @@ export interface ChatItem {
   kind: ChatItemKind;
   text?: string;
   title?: string;
+  command?: string;
   detail?: unknown;
   input?: Record<string, unknown>;
   result?: string;

@@ -1831,7 +1831,7 @@ function App() {
     }
   };
 
-  function appendCommandMessage(text: string, error = false) {
+  function appendCommandMessage(text: string, error = false, title?: string, command?: string) {
     if (!activeSessionKey) return;
     setSessions((current) => {
       const session = current[activeSessionKey];
@@ -1842,13 +1842,19 @@ function App() {
           ...session,
           items: [...session.items, {
             id: crypto.randomUUID(),
-            kind: error ? "error" : "system",
+            kind: error ? "error" : title ? "command" : "system",
+            title,
+            command,
             text,
             status: error ? "failed" : "complete",
           }],
         },
       };
     });
+  }
+
+  function appendCommandCard(command: string, title: string, text: string) {
+    appendCommandMessage(text, false, title, command);
   }
 
   function commandSessionId(): string {
@@ -1880,8 +1886,8 @@ function App() {
         const summary = composerCommands
           .filter((option) => option.kind === "command")
           .map((option) => `${option.name} — ${option.description}`)
-          .join(" · ");
-        appendCommandMessage(summary || "暂无可用快捷命令");
+          .join("\n");
+        appendCommandCard(command, "快捷命令", summary || "暂无可用快捷命令");
         return true;
       }
       if (command === "/plan" || command === "/agent") {
@@ -1894,18 +1900,18 @@ function App() {
         if (args) throw new Error("用法：/status");
         const status = activeSession?.status;
         if (!status) throw new Error("会话状态尚未就绪");
-        appendCommandMessage([
+        appendCommandCard(command, "会话状态", [
           `模型 ${status.model_profile || status.model || "默认"}`,
           `模式 ${status.mode === "plan" ? "Plan" : "Agent"}`,
           `推理 ${status.reasoning_effort || "自动"}`,
           `Ultra ${status.ultra_mode ? "开启" : "关闭"}`,
           `上下文 ${status.context_used_percent.toFixed(1)}%`,
-        ].join(" · "));
+        ].join("\n"));
         return true;
       }
       if (command === "/effort") {
         if (!args) {
-          appendCommandMessage(`当前推理强度：${activeSession?.status?.reasoning_effort || "自动"}`);
+          appendCommandCard(command, "推理强度", `当前推理强度：${activeSession?.status?.reasoning_effort || "自动"}`);
           return true;
         }
         const allowed: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -1959,8 +1965,8 @@ function App() {
       if (command === "/sessions") {
         if (args) throw new Error("用法：/sessions");
         const list = Object.values(activeGateway?.sessionsByProject ?? {}).flat();
-        appendCommandMessage(list.length
-          ? list.slice(0, 30).map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join(" · ")
+        appendCommandCard(command, "会话列表", list.length
+          ? list.slice(0, 30).map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join("\n")
           : "暂无会话");
         return true;
       }
@@ -1968,16 +1974,16 @@ function App() {
         const limit = args ? Number.parseInt(args, 10) : 10;
         if (!Number.isFinite(limit) || limit < 1) throw new Error("用法：/recent [数量]");
         const list = (await api.recentSessions()).slice(0, limit);
-        appendCommandMessage(list.length
-          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join(" · ")
+        appendCommandCard(command, "最近会话", list.length
+          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join("\n")
           : "暂无最近会话");
         return true;
       }
       if (command === "/search") {
         if (!args) throw new Error("用法：/search <关键词>");
         const list = await api.searchSessions(args);
-        appendCommandMessage(list.length
-          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join(" · ")
+        appendCommandCard(command, "会话搜索", list.length
+          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join("\n")
           : `没有找到与“${args}”匹配的会话`);
         return true;
       }
@@ -1992,7 +1998,7 @@ function App() {
       }
       if (command === "/stats") {
         if (args) throw new Error("用法：/stats");
-        appendCommandMessage(`使用统计：${textFromUnknown(await api.sessionStats()).replace(/\s+/g, " ")}`);
+        appendCommandCard(command, "使用统计", textFromUnknown(await api.sessionStats()));
         return true;
       }
       if (command === "/checkpoint") {
@@ -2057,12 +2063,17 @@ function App() {
         if (!selector) throw new Error("用法：/tasks [list|show|output|stop] <task-id>");
         if (action === "show") {
           const task = await api.backgroundTask(selector);
-          appendCommandMessage(`${task.description || task.task_id} · ${task.status} · ${task.task_type} · ${task.task_id}`);
+          appendCommandCard(command, "后台任务详情", [
+            `任务：${task.description || task.task_id}`,
+            `状态：${task.status}`,
+            `类型：${task.task_type}`,
+            `ID：${task.task_id}`,
+          ].join("\n"));
         } else if (action === "output") {
           const lines = tokens[0] ? Number.parseInt(tokens[0], 10) : 200;
           if (!Number.isFinite(lines) || lines < 1) throw new Error("用法：/tasks output <task-id> [lines]");
           const output = await api.backgroundTaskOutput(selector, lines);
-          appendCommandMessage(output.lines.length ? output.lines.join("\n") : "该任务暂无输出");
+          appendCommandCard(command, "后台任务输出", output.lines.length ? output.lines.join("\n") : "该任务暂无输出");
         } else if (action === "stop") {
           if (tokens.length) throw new Error("用法：/tasks stop <task-id>");
           await api.stopBackgroundTask(selector);
@@ -4653,6 +4664,19 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
   }
   if (item.kind === "assistant") {
     return <article className="message assistant-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></article>;
+  }
+  if (item.kind === "command") {
+    return (
+      <article className="command-card">
+        <header className="command-card-header">
+          <Terminal />
+          <strong>{item.title ?? "命令结果"}</strong>
+          {item.command && <code>{item.command}</code>}
+          <span>完成</span>
+        </header>
+        <pre className="command-card-content">{item.text ?? ""}</pre>
+      </article>
+    );
   }
   if (item.kind === "system") return <div className="system-line">{item.text}</div>;
   if (item.kind === "error") return <div className="error-line"><AlertTriangle />{item.text}</div>;

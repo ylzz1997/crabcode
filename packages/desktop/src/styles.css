@@ -526,7 +526,11 @@ svg {
 .message+.message,
 .message+.activity-card,
 .activity-card+.message,
-.request-card+.message {
+.request-card+.message,
+.command-card+.message,
+.message+.command-card,
+.command-card+.activity-card,
+.activity-card+.command-card {
   margin-top: 16px;
 }
 
@@ -946,6 +950,59 @@ svg {
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface);
+}
+
+.command-card {
+  margin: 14px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-left: 3px solid var(--accent);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.command-card-header {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  color: var(--text);
+}
+
+.command-card-header svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.command-card-header code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--subtle);
+  font: 11px var(--code-font-family);
+}
+
+.command-card-header span {
+  margin-left: auto;
+  color: var(--green);
+  font-size: 11px;
+}
+
+.command-card-content {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px 13px;
+  color: var(--muted);
+  background: transparent;
+  font: 12px/1.6 var(--code-font-family);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .request-title {

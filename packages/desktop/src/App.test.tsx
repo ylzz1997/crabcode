@@ -903,6 +903,39 @@ describe("turn duration formatting", () => {
   });
 });
 
+describe("desktop command feedback", () => {
+  it("renders content commands as titled cards", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    act(() => root.render(
+      <ChatItemView
+        item={{
+          id: "command-1",
+          kind: "command",
+          command: "/status",
+          title: "会话状态",
+          text: "模型 默认\n模式 Agent",
+          status: "complete",
+        }}
+        now={0}
+        showTurnDuration
+        turnDurationFormat="hms"
+        onPermission={vi.fn()}
+        onToggleChoice={vi.fn()}
+        onSubmitChoice={vi.fn()}
+        onPlan={vi.fn()}
+      />,
+    ));
+
+    expect(container.querySelector(".command-card-header")?.textContent).toContain("会话状态");
+    expect(container.querySelector(".command-card-header code")?.textContent).toBe("/status");
+    expect(container.querySelector(".command-card-content")?.textContent).toContain("模式 Agent");
+    act(() => root.unmount());
+    container.remove();
+  });
+});
+
 describe("favorite sessions", () => {
   const project = {
     id: "project-1",
