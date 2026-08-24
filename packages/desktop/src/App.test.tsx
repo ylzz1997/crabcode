@@ -151,6 +151,40 @@ describe("remote file and folder references", () => {
 });
 
 describe("MessageMarkdown", () => {
+  it("renders GFM tables in a scrollable themed container", () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    act(() => root.render(
+      <MessageMarkdown>{`| 频段 | 频率范围 | 预测内容 |
+|---|---:|---|
+| Low | < 1.5 kHz | 只修正相位 |`}</MessageMarkdown>,
+    ));
+
+    expect(container.querySelector(".message-table-wrap table")).not.toBeNull();
+    expect(container.querySelectorAll("th")).toHaveLength(3);
+    expect(container.querySelector("td")?.textContent).toBe("Low");
+
+    act(() => root.unmount());
+  });
+
+  it("syntax-highlights fenced Python code", () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    act(() => root.render(
+      <MessageMarkdown>{"```python\nfor item in values:\n    print(item)\n```"}</MessageMarkdown>,
+    ));
+
+    expect(container.querySelector(".message-code-block")).not.toBeNull();
+    expect(container.querySelector(".token.keyword")?.textContent).toBe("for");
+    expect(container.querySelector(".message-code-block")?.textContent).toContain("print");
+
+    act(() => root.unmount());
+  });
+
   it("renders inline and display math with KaTeX", () => {
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement("div");

@@ -64,6 +64,8 @@ const DOCUMENT_ZOOM_MAX = 2.5;
 const DOCUMENT_ZOOM_STEP = .1;
 const DOCUMENT_PINCH_SENSITIVITY = .01;
 const DOCUMENT_ZOOM_RENDER_DELAY = 400;
+const DOCUMENT_AGENT_WIDTH_MIN = 320;
+const DOCUMENT_WORKSPACE_WIDTH_MIN = 180;
 
 function boundDocumentZoom(value: number): number {
   return Math.min(DOCUMENT_ZOOM_MAX, Math.max(DOCUMENT_ZOOM_MIN, value));
@@ -72,6 +74,13 @@ function boundDocumentZoom(value: number): number {
 export function clampDocumentZoom(value: number): number {
   if (!Number.isFinite(value)) return 1.2;
   return Math.round(boundDocumentZoom(value) * 100) / 100;
+}
+
+export function clampDocumentAgentWidth(value: number, panelWidth: number): number {
+  const maximum = Number.isFinite(panelWidth) && panelWidth > 0
+    ? Math.max(DOCUMENT_AGENT_WIDTH_MIN, panelWidth - DOCUMENT_WORKSPACE_WIDTH_MIN)
+    : DOCUMENT_AGENT_WIDTH_MIN;
+  return Math.round(Math.min(maximum, Math.max(DOCUMENT_AGENT_WIDTH_MIN, value)));
 }
 
 export function documentZoomFromPinchWheel(currentZoom: number, deltaY: number, deltaMode = 0): number {
@@ -2207,8 +2216,16 @@ export default function DocumentWorkspace({
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = agentWidth;
-    const move = (next: PointerEvent) => onAgentWidth(Math.min(720, Math.max(320, startWidth + startX - next.clientX)));
+    const panel = event.currentTarget.closest<HTMLElement>(".main-panel");
+    const panelWidth = panel?.getBoundingClientRect().width ?? window.innerWidth;
+    const renderedAgentWidth = panel
+      ?.querySelector<HTMLElement>(":scope > .conversation-header")
+      ?.getBoundingClientRect().width;
+    const startWidth = renderedAgentWidth && renderedAgentWidth > 0 ? renderedAgentWidth : agentWidth;
+    const move = (next: PointerEvent) => onAgentWidth(clampDocumentAgentWidth(
+      startWidth + startX - next.clientX,
+      panelWidth,
+    ));
     const finish = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);

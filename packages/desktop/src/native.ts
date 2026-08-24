@@ -194,7 +194,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     file_upload_mode: raw.file_upload_mode === "path" ? "path" : "content",
     file_upload_max_size_mb: clampInteger(raw.file_upload_max_size_mb, 1, 100, 5),
     dock_icon: dockIcon,
-    document_agent_width: clampInteger(raw.document_agent_width, 320, 720, 400),
+    document_agent_width: clampInteger(raw.document_agent_width, 320, 4_000, 400),
     document_agent_collapsed: raw.document_agent_collapsed === true,
     document_show_original_text: raw.document_show_original_text === true,
     document_translation_concurrency: clampInteger(raw.document_translation_concurrency, 1, 8, 3),

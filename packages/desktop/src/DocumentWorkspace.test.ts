@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clampDocumentAgentWidth,
   clampDocumentZoom,
   documentTranslationToggleLabel,
   formatDocumentZoom,
@@ -26,6 +27,14 @@ const block: DocumentTextBlock = {
   fontFamily: "sans-serif",
   direction: "ltr",
 };
+
+describe("document Agent panel sizing", () => {
+  it("uses the available panel width instead of a fixed maximum", () => {
+    expect(clampDocumentAgentWidth(1_200, 1_600)).toBe(1_200);
+    expect(clampDocumentAgentWidth(1_500, 1_600)).toBe(1_420);
+    expect(clampDocumentAgentWidth(200, 1_600)).toBe(320);
+  });
+});
 
 function textBlock(
   id: string,

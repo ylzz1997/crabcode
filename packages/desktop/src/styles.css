@@ -500,7 +500,37 @@ svg {
 
 .conversation-actions {
   display: flex;
+  align-items: center;
   gap: 3px;
+}
+
+.conversation-font-size {
+  height: 27px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-right: 2px;
+  padding: 0 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.conversation-font-size .icon-button {
+  width: 25px;
+  height: 25px;
+}
+
+.conversation-font-size .icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.conversation-font-size output {
+  min-width: 34px;
+  color: var(--muted);
+  font: 10px/1 var(--code-font-family);
+  text-align: center;
 }
 
 .conversation-actions .favorite-active {
@@ -593,6 +623,147 @@ svg {
   background: var(--code-bg);
 }
 
+.message-table-wrap {
+  max-width: 100%;
+  margin: 16px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 48%, var(--bg));
+}
+
+.message-table-wrap table {
+  width: 100%;
+  min-width: 540px;
+  border-collapse: collapse;
+  font-size: .92em;
+  line-height: 1.45;
+}
+
+.message-table-wrap th,
+.message-table-wrap td {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-table-wrap th {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--text);
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.message-table-wrap tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface) 42%, transparent);
+}
+
+.message-table-wrap tr:last-child td {
+  border-bottom: 0;
+}
+
+.message-table-wrap td code,
+.message-table-wrap th code {
+  white-space: nowrap;
+}
+
+.message-code-block {
+  margin: 16px 0 !important;
+  padding: 13px 14px !important;
+  overflow: auto;
+  border: 1px solid var(--border) !important;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--code-bg) 92%, var(--panel)) !important;
+  color: var(--text);
+  font: var(--code-font-size)/1.58 var(--code-font-family) !important;
+  tab-size: 2;
+  text-shadow: none;
+}
+
+.message-code-block code {
+  font: inherit !important;
+}
+
+.message-code-block .token.comment,
+.message-code-block .token.prolog,
+.message-code-block .token.doctype,
+.message-code-block .token.cdata {
+  color: var(--subtle);
+}
+
+.message-code-block .token.punctuation,
+.message-code-block .token.operator {
+  color: var(--muted);
+}
+
+.message-code-block .token.property,
+.message-code-block .token.tag,
+.message-code-block .token.boolean,
+.message-code-block .token.number,
+.message-code-block .token.constant,
+.message-code-block .token.symbol {
+  color: #e9b86c;
+}
+
+.message-code-block .token.selector,
+.message-code-block .token.attr-name,
+.message-code-block .token.string,
+.message-code-block .token.char,
+.message-code-block .token.builtin {
+  color: #9dd58c;
+}
+
+.message-code-block .token.inserted,
+.message-code-block .token.deleted {
+  color: var(--text);
+}
+
+.message-code-block .token.atrule,
+.message-code-block .token.attr-value,
+.message-code-block .token.keyword,
+.message-code-block .token.function,
+.message-code-block .token.class-name {
+  color: #d79bf0;
+}
+
+.message-code-block .token.regex,
+.message-code-block .token.important,
+.message-code-block .token.variable {
+  color: #70c8e8;
+}
+
+html[data-theme="light"] .message-code-block .token.property,
+html[data-theme="light"] .message-code-block .token.tag,
+html[data-theme="light"] .message-code-block .token.boolean,
+html[data-theme="light"] .message-code-block .token.number,
+html[data-theme="light"] .message-code-block .token.constant,
+html[data-theme="light"] .message-code-block .token.symbol {
+  color: #a35c00;
+}
+
+html[data-theme="light"] .message-code-block .token.selector,
+html[data-theme="light"] .message-code-block .token.attr-name,
+html[data-theme="light"] .message-code-block .token.string,
+html[data-theme="light"] .message-code-block .token.char,
+html[data-theme="light"] .message-code-block .token.builtin {
+  color: #247a3d;
+}
+
+html[data-theme="light"] .message-code-block .token.atrule,
+html[data-theme="light"] .message-code-block .token.attr-value,
+html[data-theme="light"] .message-code-block .token.keyword,
+html[data-theme="light"] .message-code-block .token.function,
+html[data-theme="light"] .message-code-block .token.class-name {
+  color: #7b36a8;
+}
+
+html[data-theme="light"] .message-code-block .token.regex,
+html[data-theme="light"] .message-code-block .token.important,
+html[data-theme="light"] .message-code-block .token.variable {
+  color: #136f9b;
+}
+
 .message code {
   font-family: var(--code-font-family);
   font-size: .9em;
@@ -611,7 +782,9 @@ svg {
 .message .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 2px;
+  /* KaTeX accents and superscripts can extend beyond the normal line box. */
+  padding: .24em 0 .3em;
+  margin: calc(1em - .24em) 0 calc(1em - .3em);
 }
 
 .activity-card {

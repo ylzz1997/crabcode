@@ -56,10 +56,23 @@ import {
   Workflow,
   WifiOff,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
+import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-light";
+import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
+import css from "react-syntax-highlighter/dist/esm/languages/prism/css";
+import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
+import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
+import jsx from "react-syntax-highlighter/dist/esm/languages/prism/jsx";
+import markdown from "react-syntax-highlighter/dist/esm/languages/prism/markdown";
+import python from "react-syntax-highlighter/dist/esm/languages/prism/python";
+import rust from "react-syntax-highlighter/dist/esm/languages/prism/rust";
+import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
+import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -135,6 +148,31 @@ type AutomationTab = "schedule" | "monitor";
 type ScheduleAction = "pause" | "resume" | "trigger" | "cancel";
 type ScheduleActionState = { id: string; action: ScheduleAction };
 type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
+
+SyntaxHighlighter.registerLanguage("bash", bash);
+SyntaxHighlighter.registerLanguage("css", css);
+SyntaxHighlighter.registerLanguage("javascript", javascript);
+SyntaxHighlighter.registerLanguage("json", json);
+SyntaxHighlighter.registerLanguage("jsx", jsx);
+SyntaxHighlighter.registerLanguage("markdown", markdown);
+SyntaxHighlighter.registerLanguage("python", python);
+SyntaxHighlighter.registerLanguage("rust", rust);
+SyntaxHighlighter.registerLanguage("tsx", tsx);
+SyntaxHighlighter.registerLanguage("typescript", typescript);
+
+const MESSAGE_CODE_LANGUAGE_ALIASES: Record<string, string> = {
+  js: "javascript",
+  md: "markdown",
+  py: "python",
+  rs: "rust",
+  sh: "bash",
+  shell: "bash",
+  ts: "typescript",
+};
+const MESSAGE_CODE_LANGUAGES = new Set([
+  "bash", "css", "javascript", "json", "jsx", "markdown", "python", "rust", "tsx", "typescript",
+]);
+
 const DESKTOP_COMMAND_NAMES = new Set([
   "/help", "/plan", "/agent", "/status", "/effort", "/ultra", "/model", "/new",
   "/compact", "/clear", "/sessions", "/recent", "/search", "/archive", "/stats",
@@ -2795,7 +2833,9 @@ function App() {
         <main
           className={`main-panel ${documentMode ? "document-mode" : ""} ${settings.document_agent_collapsed ? "document-agent-collapsed" : ""}`}
           style={documentMode ? {
-            gridTemplateColumns: `minmax(0, 1fr) ${settings.document_agent_collapsed ? 44 : settings.document_agent_width ?? 400}px`,
+            gridTemplateColumns: settings.document_agent_collapsed
+              ? "minmax(0, 1fr) 44px"
+              : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 400}px, calc(100% - 180px))`,
           } : undefined}
         >
           {documentMode && activeProject && activeConnection && apiRef.current.get(activeConnection.id) && (
@@ -2952,6 +2992,25 @@ function App() {
                   >轨迹</button>
                 </div>
                 <div className="conversation-actions">
+                  <div className="conversation-font-size" aria-label="Agent 字号">
+                    <button
+                      className="icon-button tiny"
+                      type="button"
+                      title="缩小 Agent 字号"
+                      aria-label="缩小 Agent 字号"
+                      disabled={settings.ui_font_size <= 11}
+                      onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size - 1 }))}
+                    ><ZoomOut /></button>
+                    <output>{settings.ui_font_size}px</output>
+                    <button
+                      className="icon-button tiny"
+                      type="button"
+                      title="放大 Agent 字号"
+                      aria-label="放大 Agent 字号"
+                      disabled={settings.ui_font_size >= 18}
+                      onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size + 1 }))}
+                    ><ZoomIn /></button>
+                  </div>
                   <button className="icon-button" title="检查点" onClick={() => setCheckpointModal(true)}>
                     <History />
                   </button>
@@ -4658,12 +4717,44 @@ function ToolResultView({ toolName, result }: { toolName: string; result: unknow
   return <pre className={`tool-result ${isDiff ? "diff-view" : ""}`}>{isDiff ? diffLines(text) : text}</pre>;
 }
 
+function markdownCodeChild(children: ReactNode): { className: string; source: string } | null {
+  if (!isValidElement<{ className?: string; children?: ReactNode }>(children)) return null;
+  const className = children.props.className ?? "";
+  const language = /(?:^|\s)language-([^\s]+)/.exec(className)?.[1]?.toLowerCase();
+  if (!language) return null;
+  return {
+    className: MESSAGE_CODE_LANGUAGE_ALIASES[language] ?? language,
+    source: String(children.props.children ?? "").replace(/\n$/, ""),
+  };
+}
+
+const MESSAGE_MARKDOWN_COMPONENTS: Components = {
+  table: ({ children }) => <div className="message-table-wrap"><table>{children}</table></div>,
+  pre: ({ children }) => {
+    const code = markdownCodeChild(children);
+    if (!code || !MESSAGE_CODE_LANGUAGES.has(code.className)) return <pre>{children}</pre>;
+    return (
+      <SyntaxHighlighter
+        className="message-code-block"
+        language={code.className}
+        PreTag="pre"
+        CodeTag="code"
+        useInlineStyles={false}
+        customStyle={{}}
+      >
+        {code.source}
+      </SyntaxHighlighter>
+    );
+  },
+};
+
 export function MessageMarkdown({ children }: { children: string }) {
   const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(children), [children]);
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex]}
+      components={MESSAGE_MARKDOWN_COMPONENTS}
     >
       {normalizedMarkdown}
     </ReactMarkdown>
