@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 ReasoningEffort = Literal[
@@ -76,6 +77,10 @@ class LspServerConfig(BaseModel):
 
 class ApiConfig(BaseModel):
     """API backend configuration."""
+    # Optional shared configuration entry.  This is metadata used while
+    # loading ``CrabCodeSettings`` and is retained on the resolved config so
+    # callers can still identify its source group.
+    group: str | None = None
     provider: str | None = None  # anthropic | openai | codex | ollama | gemini | azure | bedrock | vertex | router
     model: str | None = None
     base_url: str | None = None
@@ -216,6 +221,9 @@ class CrabCodeSettings(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     api: ApiConfig = Field(default_factory=ApiConfig)
+    # Shared API settings inherited by named models.  A model's explicitly
+    # configured fields take precedence over the referenced group.
+    groups: dict[str, ApiConfig] = Field(default_factory=dict)
     models: dict[str, ApiConfig] = Field(default_factory=dict)
     default_model: str | None = None
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
@@ -238,6 +246,43 @@ class CrabCodeSettings(BaseModel):
     lsp: dict[str, LspServerConfig] | bool = Field(default_factory=dict)
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="after")
+    def _resolve_model_groups(self) -> "CrabCodeSettings":
+        """Expand group settings into named models after validation.
+
+        Pydantic populates omitted fields with defaults, so using a normal
+        dictionary merge would incorrectly override group values (for example
+        an omitted ``thinking_enabled`` would look like ``True``).  The
+        per-model ``model_fields_set`` records which fields the user actually
+        supplied and lets us inherit only the omitted fields.
+        """
+        if not self.groups or not self.models:
+            return self
+
+        resolved: dict[str, ApiConfig] = {}
+        for name, model_config in self.models.items():
+            group_name = model_config.group
+            group_config = self.groups.get(group_name) if group_name else None
+            if group_config is None:
+                # Keep unknown groups non-fatal so a typo does not discard all
+                # otherwise valid settings; the model remains usable on its
+                # own and callers can report the missing group if desired.
+                resolved[name] = model_config
+                continue
+
+            inherited = group_config.model_copy(deep=True)
+            for field_name in ApiConfig.model_fields:
+                if field_name in model_config.model_fields_set:
+                    setattr(
+                        inherited,
+                        field_name,
+                        deepcopy(getattr(model_config, field_name)),
+                    )
+            resolved[name] = inherited
+
+        self.models = resolved
+        return self
 
     def get_api_config(self, model_name: str | None = None) -> ApiConfig:
         """Return the ApiConfig for a named model, falling back to the default api config."""

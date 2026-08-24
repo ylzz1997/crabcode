@@ -3692,7 +3692,7 @@ class CoreSession:
 
         from crabcode_core.api import create_adapter
 
-        api_config = self.settings.models[name]
+        api_config = self.settings.get_api_config(name)
         if self._reasoning_effort_override is not None:
             api_config.reasoning_effort = self._reasoning_effort_override
         # Build the replacement before mutating session state.  A malformed

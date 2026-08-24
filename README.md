@@ -614,6 +614,31 @@ Define multiple model profiles in `settings.json` and switch between them at run
 
 Each entry under `models` is a full `ApiConfig` and can have its own `provider`, `base_url`, `api_key_env`, `codex_auth_path`, etc.
 
+For profiles that share a backend, define the common fields once under
+`groups` and reference the group from each model. A model field explicitly set
+under `models` overrides the value inherited from its group:
+
+```json
+{
+  "groups": {
+    "sky-router": {
+      "provider": "codex",
+      "base_url": "https://router.example.com/v1",
+      "api_key_env": "SKY_ROUTER_API_KEY",
+      "reasoning_effort": "high",
+      "http_headers": {"originator": "codex_vscode"}
+    }
+  },
+  "models": {
+    "gpt-5.6": {"group": "sky-router", "model": "gpt-5.6-sol"},
+    "gpt-5.5": {"group": "sky-router", "model": "gpt-5.5", "reasoning_effort": "low"}
+  }
+}
+```
+
+`groups` and `models` accept the same API configuration fields. An unknown
+group leaves the model's own fields unchanged.
+
 **Select a profile at startup:**
 
 ```bash

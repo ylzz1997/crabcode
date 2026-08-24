@@ -2880,7 +2880,7 @@ async def _handle_command(
 
         ok = session.switch_model(arg)
         if ok:
-            active_cfg = session.settings.models[arg]
+            active_cfg = session.settings.get_api_config(arg)
             console.print(
                 f"[green]✓[/] Switched to [bold cyan]{arg}[/]  "
                 f"({active_cfg.provider or 'anthropic'}/{active_cfg.model or 'default'})"

@@ -114,7 +114,8 @@ def _list_models_from_settings() -> list[ModelInfo]:
     """Read model list directly from settings (works without a session)."""
     settings = ConfigManager().get()
     result: list[ModelInfo] = []
-    for name, cfg in settings.models.items():
+    for name in settings.models:
+        cfg = settings.get_api_config(name)
         parts = []
         if cfg.provider:
             parts.append(cfg.provider)

@@ -597,6 +597,30 @@ CrabCode 会估算完整请求（system prompt、消息、工具调用/结果、
 
 `models` 下的每个条目都是完整的 `ApiConfig`，可以有各自独立的 `provider`、`base_url`、`api_key_env`、`codex_auth_path` 等配置。
 
+如果多个模型共用同一个后端，可以把公共字段集中写在 `groups` 中，再让
+`models` 通过 `group` 引用。模型自身显式配置的字段会覆盖 group 中的值：
+
+```json
+{
+  "groups": {
+    "sky-router": {
+      "provider": "codex",
+      "base_url": "https://router.example.com/v1",
+      "api_key_env": "SKY_ROUTER_API_KEY",
+      "reasoning_effort": "high",
+      "http_headers": {"originator": "codex_vscode"}
+    }
+  },
+  "models": {
+    "gpt-5.6": {"group": "sky-router", "model": "gpt-5.6-sol"},
+    "gpt-5.5": {"group": "sky-router", "model": "gpt-5.5", "reasoning_effort": "low"}
+  }
+}
+```
+
+`groups` 和 `models` 支持相同的 API 配置字段。group 名称不存在时，模型仍会
+按自身配置使用，不会导致整份设置失效。
+
 **启动时选择模型：**
 
 ```bash
