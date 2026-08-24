@@ -5,6 +5,7 @@ import {
   FileText,
   FolderCog,
   Image as ImageIcon,
+  Info,
   Minus,
   Pencil,
   Paintbrush,
@@ -40,8 +41,9 @@ import type {
   TurnDurationFormat,
   UiFontFamily,
 } from "./types";
+import desktopPackage from "../package.json";
 
-export type SettingsSectionId = "general" | "appearance" | "document" | "connections" | "projects";
+export type SettingsSectionId = "general" | "appearance" | "document" | "connections" | "projects" | "about";
 
 interface SettingsSectionDefinition {
   id: SettingsSectionId;
@@ -81,6 +83,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     description: "工作目录与项目管理",
     searchText: "项目 项目目录 工作目录 文件夹 当前项目 新建 编辑 移除",
   },
+  {
+    id: "about",
+    title: "关于",
+    description: "Crab Desktop 版本与作者信息",
+    searchText: "关于 版本 Crab Desktop Gateway 协议 作者 Yuri Head",
+  },
 ];
 
 export function filterSettingsSections(query: string): SettingsSectionDefinition[] {
@@ -99,6 +107,7 @@ const SECTION_ICONS = {
   document: FileText,
   connections: Server,
   projects: FolderCog,
+  about: Info,
 } satisfies Record<SettingsSectionId, typeof Settings>;
 
 const DARK_DOCK_ICON = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
@@ -1161,6 +1170,24 @@ export function SettingsView({
                   {activeConnection?.projects.length === 0 && (
                     <div className="settings-list-empty">当前 Gateway 还没有项目</div>
                   )}
+                </div>
+              </section>
+            )}
+
+            {activeSection === "about" && (
+              <section className="settings-section settings-about" aria-labelledby="about-settings-title">
+                <div className="settings-about-card">
+                  <div className="settings-about-mark"><Info /></div>
+                  <div className="settings-about-copy">
+                    <h2 id="about-settings-title">Crab Desktop</h2>
+                    <p>面向 CrabCode 工作区的桌面客户端。</p>
+                    <dl className="settings-about-details">
+                      <div><dt>版本</dt><dd>v{desktopPackage.version}</dd></div>
+                      <div><dt>Gateway 协议</dt><dd>v1</dd></div>
+                      <div><dt>文档布局</dt><dd>paragraph-v1</dd></div>
+                    </dl>
+                    <p className="settings-about-author">作者 Yuri Head</p>
+                  </div>
                 </div>
               </section>
             )}

@@ -122,6 +122,7 @@ describe("settings search", () => {
     expect(filterSettingsSections("处理用时").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("并行请求").map((section) => section.id)).toEqual(["document"]);
     expect(filterSettingsSections("显示原文").map((section) => section.id)).toEqual(["document"]);
+    expect(filterSettingsSections("Yuri Head").map((section) => section.id)).toEqual(["about"]);
     expect(filterSettingsSections("不存在")).toEqual([]);
   });
 });
@@ -269,6 +270,7 @@ describe("SettingsView", () => {
     const navigation = Array.from(container.querySelectorAll(".settings-nav button"))
       .map((button) => button.textContent);
     expect(navigation.indexOf("文档")).toBe(navigation.indexOf("外观") + 1);
+    expect(navigation[navigation.length - 1]).toBe("关于");
     expect(container.querySelector(".settings-section h2")?.textContent).toBe("翻译");
     expect(Array.from(container.querySelectorAll(".settings-section h2")).map((heading) => heading.textContent))
       .toEqual(["翻译", "选择"]);

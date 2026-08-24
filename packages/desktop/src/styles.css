@@ -8999,6 +8999,80 @@ html[data-theme="light"] .document-actions-separator {
   width: 100%;
 }
 
+.settings-about-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid #294347;
+  border-radius: 8px;
+  background: #111d20;
+}
+
+.settings-about-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  flex: 0 0 42px;
+  place-items: center;
+  border: 1px solid #39595b;
+  border-radius: 8px;
+  background: #17292c;
+  color: var(--accent-strong);
+}
+
+.settings-about-mark svg {
+  width: 20px;
+  height: 20px;
+}
+
+.settings-about-copy {
+  min-width: 0;
+}
+
+.settings-about-copy h2 {
+  margin: 0;
+  color: #eef5f0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.settings-about-copy > p {
+  margin: 7px 0 0;
+  color: #7d9690;
+  font-size: 12px;
+}
+
+.settings-about-details {
+  display: grid;
+  gap: 8px;
+  margin: 22px 0 0;
+}
+
+.settings-about-details > div {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  font-size: 12px;
+}
+
+.settings-about-details dt {
+  width: 90px;
+  color: #708983;
+}
+
+.settings-about-details dd {
+  margin: 0;
+  color: #cfdad5;
+  font-family: var(--code-font-family);
+}
+
+.settings-about-author {
+  padding-top: 16px;
+  border-top: 1px solid #20383b;
+  color: #adbfba !important;
+}
+
 .settings-section>h2,
 .settings-section-heading h2 {
   margin: 0 0 9px;
@@ -10858,6 +10932,34 @@ html[data-theme="light"] :is(
   background: var(--surface);
   color: var(--text);
   box-shadow: 0 5px 18px rgba(38, 57, 51, .05);
+}
+
+html[data-theme="light"] .settings-about-card {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+html[data-theme="light"] .settings-about-mark {
+  border-color: var(--border);
+  background: var(--surface-active);
+}
+
+html[data-theme="light"] .settings-about-copy h2 {
+  color: var(--text);
+}
+
+html[data-theme="light"] .settings-about-copy > p,
+html[data-theme="light"] .settings-about-details dt {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .settings-about-details dd {
+  color: var(--text);
+}
+
+html[data-theme="light"] .settings-about-author {
+  border-color: var(--border);
+  color: var(--muted) !important;
 }
 
 html[data-theme="light"] :is(.settings-entity-row, .theme-profile-card>header, .theme-profile-row) {
