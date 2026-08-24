@@ -159,7 +159,7 @@ export interface DocumentManifest {
     engine_version?: string;
     warnings?: string[];
   }>;
-  blog: null | { path: string; revision: string; language: string };
+  blog: null | { path: string; revision: string; language: string; operation_id?: string };
   jobs: Record<string, {
     action: "translate" | "generate_blog";
     status: string;

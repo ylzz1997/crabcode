@@ -66,6 +66,28 @@ _TRANSLATION_CONCURRENCY_MAX = 8
 
 router = APIRouter(tags=["events"])
 
+_BLOG_LANGUAGE_LABELS = {
+    "zh-CN": "简体中文",
+    "en": "English",
+    "ja": "日本語",
+    "ko": "한국어",
+    "fr": "Français",
+    "de": "Deutsch",
+    "es": "Español",
+}
+
+
+def _blog_language_instruction(language: str) -> str:
+    """Make the requested output language unambiguous to the session model."""
+    if language == "source":
+        return "Blog 必须使用当前内容的主要语言。"
+    label = _BLOG_LANGUAGE_LABELS.get(language, language)
+    return (
+        f"Blog 的标题、摘要和正文必须全部使用{label}（语言代码 {language}）。"
+        f"不要因为原文是英文而输出英文；解释性文字必须翻译成{label}，"
+        "但专有名词、API 名称、代码、文件名和数学公式可以保留原样。"
+    )
+
 
 @dataclass(frozen=True)
 class _DocumentJobContext:
@@ -1441,11 +1463,7 @@ async def _handle_document_action(ws: WebSocket, msg: dict) -> None:
             if source == "translation"
             else "读取 .crabcode/document/content.md 作为原文。"
         )
-        language_instruction = (
-            "Blog 必须使用当前内容的主要语言。"
-            if language == "source"
-            else f"Blog 的标题和正文必须使用 {language}。"
-        )
+        language_instruction = _blog_language_instruction(language)
         prompt = f"""[文档操作：生成 Blog]
 {source_instruction}
 {language_instruction}

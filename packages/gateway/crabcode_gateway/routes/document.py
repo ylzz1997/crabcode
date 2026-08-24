@@ -1518,11 +1518,31 @@ def _finalize_document_job_unlocked(
     if expected_document_hash and _document_action_hash(workspace, source, locale, engine) != expected_document_hash:
         raise ValueError("source document changed while the operation was running")
     internal = _managed_internal_directory(workspace)
+    manifest = _read_manifest(workspace)
+    now = datetime.now(timezone.utc).isoformat()
+    if action == "generate_blog":
+        # Finalization may be retried after the first call has atomically moved
+        # blog.md and removed the staging directory. Treat that exact publish
+        # as idempotently complete instead of reporting a missing artifact.
+        published = manifest.get("blog")
+        expected_language = locale if language == "source" and source == "translation" else language
+        expected_language = expected_language or (locale if source == "translation" else "source")
+        output = workspace / "blog.md"
+        if (
+            isinstance(published, dict)
+            and published.get("operation_id") == operation_id
+            and published.get("source") == source
+            and output.is_file()
+            and not output.is_symlink()
+        ):
+            if published.get("language") != expected_language:
+                published["language"] = expected_language
+                manifest["updated_at"] = now
+                _json_write(workspace / MANIFEST_RELATIVE_PATH, manifest)
+            return 1, 1
     job = _document_job_directory(workspace, operation_id)
     if job.is_symlink():
         raise ValueError("document job directory cannot be a symlink")
-    manifest = _read_manifest(workspace)
-    now = datetime.now(timezone.utc).isoformat()
     if action == "translate" and engine == "precise":
         return _finalize_precise_translation_unlocked(
             workspace,
@@ -1632,6 +1652,7 @@ def _finalize_document_job_unlocked(
             "revision": revision,
             "language": blog_language or (locale if source == "translation" else "source"),
             "source": source,
+            "operation_id": operation_id,
             "updated_at": now,
         }
         current = total = 1
