@@ -251,6 +251,10 @@ export class GatewayApi {
     });
   }
 
+  clearDocumentBlog(workspace: string): Promise<{ removed: boolean; removed_assets: boolean; language: string }> {
+    return this.request(`/document/blog?${new URLSearchParams({ workspace })}`, { method: "DELETE" });
+  }
+
   sessions(cwd: string): Promise<SessionInfo[]> {
     return this.request(`/session/list?${new URLSearchParams({ cwd })}`);
   }

@@ -1707,6 +1707,8 @@ async def read_document_blog(workspace: str, request: Request, response: Respons
         path = root / "blog.md"
         if path.is_symlink():
             raise HTTPException(status_code=403, detail="Blog path is invalid")
+        if path.exists() and not path.is_file():
+            raise HTTPException(status_code=403, detail="Blog path is invalid")
         try:
             markdown = path.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
@@ -1740,3 +1742,38 @@ async def write_document_blog(req: DocumentBlogWriteRequest, workspace: str, req
         manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
         _json_write(root / MANIFEST_RELATIVE_PATH, manifest)
         return {"markdown": req.markdown, "revision": revision, "language": req.language}
+
+
+@router.delete("/blog")
+async def delete_document_blog(
+    workspace: str,
+    request: Request,
+) -> dict[str, Any]:
+    root = _validated_workspace(workspace, _workspace_roots(request))
+    with _manifest_lock(root):
+        path = root / "blog.md"
+        if path.is_symlink():
+            raise HTTPException(status_code=403, detail="Blog path is invalid")
+        if path.exists() and not path.is_file():
+            raise HTTPException(status_code=403, detail="Blog path is invalid")
+        manifest = _read_manifest(root)
+        entry = manifest.get("blog")
+        blog_entry = entry if isinstance(entry, dict) else {}
+        assets = root / "blog-assets"
+        if assets.is_symlink() or (assets.exists() and not assets.is_dir()):
+            raise HTTPException(status_code=403, detail="Blog assets path is invalid")
+        removed = path.exists()
+        if removed:
+            path.unlink()
+        removed_assets = assets.is_dir()
+        if removed_assets:
+            shutil.rmtree(assets)
+        if entry is not None or removed or removed_assets:
+            manifest["blog"] = None
+            manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _json_write(root / MANIFEST_RELATIVE_PATH, manifest)
+        return {
+            "removed": removed or removed_assets,
+            "removed_assets": removed_assets,
+            "language": blog_entry.get("language", ""),
+        }

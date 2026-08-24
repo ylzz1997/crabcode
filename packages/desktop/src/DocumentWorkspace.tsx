@@ -396,11 +396,14 @@ function DocumentActionsMenu({
   translateDisabled,
   clearDisabled,
   blogDisabled,
+  blogClearDisabled,
+  clearingBlog,
   onLocale,
   onBlogLanguage,
   onTranslate,
   onClear,
   onGenerateBlog,
+  onClearBlog,
 }: {
   locale: string;
   blogLanguage: string;
@@ -412,11 +415,14 @@ function DocumentActionsMenu({
   translateDisabled: boolean;
   clearDisabled: boolean;
   blogDisabled: boolean;
+  blogClearDisabled: boolean;
+  clearingBlog: boolean;
   onLocale: (locale: string) => void;
   onBlogLanguage: (language: string) => void;
   onTranslate: () => void;
   onClear: () => void;
   onGenerateBlog: () => void;
+  onClearBlog: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -428,7 +434,7 @@ function DocumentActionsMenu({
     if (!rect) return;
     const viewportPadding = 8;
     const menuWidth = Math.min(236, window.innerWidth - viewportPadding * 2);
-    const menuHeight = 250;
+    const menuHeight = 300;
     setPosition({
       top: Math.min(rect.bottom + 7, Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding)),
       left: Math.max(viewportPadding, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding)),
@@ -463,7 +469,7 @@ function DocumentActionsMenu({
     setOpen(false);
     action();
   };
-  const pending = translating || clearing || generatingBlog;
+  const pending = translating || clearing || generatingBlog || clearingBlog;
 
   return (
     <>
@@ -526,6 +532,10 @@ function DocumentActionsMenu({
           <button className="blog" type="button" role="menuitem" disabled={blogDisabled} onClick={() => choose(onGenerateBlog)}>
             {generatingBlog ? <LoaderCircle className="spin" /> : <Sparkles />}
             <span>生成 Blog</span>
+          </button>
+          <button className="danger" type="button" role="menuitem" disabled={blogClearDisabled} onClick={() => choose(onClearBlog)}>
+            {clearingBlog ? <LoaderCircle className="spin" /> : <Trash2 />}
+            <span>清空 Blog 缓存</span>
           </button>
         </div>,
         document.body,
@@ -1358,6 +1368,8 @@ export default function DocumentWorkspace({
   const [pendingAction, setPendingAction] = useState<"translate" | "generate_blog" | null>(null);
   const [clearTranslationConfirm, setClearTranslationConfirm] = useState(false);
   const [clearingTranslation, setClearingTranslation] = useState(false);
+  const [clearBlogConfirm, setClearBlogConfirm] = useState(false);
+  const [clearingBlog, setClearingBlog] = useState(false);
   const [selection, setSelection] = useState<DocumentSelection | null>(null);
   const [selectionLocale, setSelectionLocale] = useState("zh-CN");
   const [selectionLanguageOpen, setSelectionLanguageOpen] = useState(false);
@@ -2045,6 +2057,24 @@ export default function DocumentWorkspace({
     }
   }, [api, locale, project.path]);
 
+  const clearBlogCache = useCallback(async () => {
+    setClearingBlog(true);
+    setError(null);
+    try {
+      await api.clearDocumentBlog(project.path);
+      setBlog(null);
+      setBlogTouched(false);
+      setBlogConflict(null);
+      setPendingAction(null);
+      setManifest(await api.documentManifest(project.path));
+      setClearBlogConfirm(false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setClearingBlog(false);
+    }
+  }, [api, project.path]);
+
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
     const startX = event.clientX;
@@ -2129,6 +2159,8 @@ export default function DocumentWorkspace({
               translateDisabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
               clearDisabled={sessionBusy || clearingTranslation}
               blogDisabled={!layout || sessionBusy || (showTranslation && !translation)}
+              blogClearDisabled={!blog || sessionBusy || clearingBlog || pendingAction !== null}
+              clearingBlog={clearingBlog}
               onLocale={setLocale}
               onBlogLanguage={setBlogLanguage}
               onTranslate={() => {
@@ -2151,6 +2183,7 @@ export default function DocumentWorkspace({
                   source: showTranslation ? "translation" : "original",
                 })) setPendingAction(null);
               }}
+              onClearBlog={() => setClearBlogConfirm(true)}
             />
             <label className={`document-translation-toggle ${translation ? "ready" : ""}`}>
               <input
@@ -2218,6 +2251,42 @@ export default function DocumentWorkspace({
                 <button type="button" disabled={clearingTranslation} onClick={() => setClearTranslationConfirm(false)}>取消</button>
                 <button className="confirm-danger" type="button" disabled={clearingTranslation} onClick={() => void clearTranslationCache()}>
                   {clearingTranslation ? <LoaderCircle className="spin" /> : <Trash2 />}清空
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ), document.body)}
+
+      {clearBlogConfirm && createPortal((
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => event.target === event.currentTarget && !clearingBlog && setClearBlogConfirm(false)}
+        >
+          <section className="modal" role="dialog" aria-modal="true" aria-label="清空 Blog 缓存">
+            <header>
+              <h2>清空 Blog 缓存</h2>
+              <button
+                className="icon-button"
+                type="button"
+                title="关闭"
+                disabled={clearingBlog}
+                onClick={() => setClearBlogConfirm(false)}
+              ><X /></button>
+            </header>
+            <div className="modal-body">
+              <div className="confirm-dialog-copy">
+                <Trash2 />
+                <div>
+                  <strong>删除当前 Blog？</strong>
+                  <p>Blog 文件和缓存记录会被删除，原文、译文和文档布局不受影响。</p>
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button type="button" disabled={clearingBlog} onClick={() => setClearBlogConfirm(false)}>取消</button>
+                <button className="confirm-danger" type="button" disabled={clearingBlog} onClick={() => void clearBlogCache()}>
+                  {clearingBlog ? <LoaderCircle className="spin" /> : <Trash2 />}清空
                 </button>
               </div>
             </div>
