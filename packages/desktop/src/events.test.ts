@@ -67,6 +67,21 @@ describe("Gateway event reducer", () => {
     });
   });
 
+  it("shows tool result image attachments immediately", () => {
+    const current = applyGatewayEvent(state(), {
+      type: "tool_result",
+      tool_use_id: "tool-shot",
+      tool_name: "Browser",
+      result: "screenshot saved",
+      images: [{ media_type: "image/png", data: "aGVsbG8=" }],
+    });
+    expect(current.items[0]).toMatchObject({
+      kind: "tool",
+      images: [{ media_type: "image/png", data: "aGVsbG8=" }],
+      collapsed: false,
+    });
+  });
+
   it("records live and completed step durations", () => {
     const now = vi.spyOn(Date, "now");
     now.mockReturnValueOnce(1_000);

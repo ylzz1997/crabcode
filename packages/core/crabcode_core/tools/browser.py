@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import shutil
 import tempfile
 import uuid
@@ -528,11 +530,22 @@ class BrowserTool(Tool):
             out = Path(context.cwd) / out
         out.parent.mkdir(parents=True, exist_ok=True)
         await page.screenshot(path=str(out), full_page=bool(tool_input.get("options", {}).get("full_page", True)))
+        images: list[dict[str, str]] = []
+        try:
+            raw = out.read_bytes()
+            if len(raw) <= 20 * 1024 * 1024:
+                images.append({
+                    "media_type": mimetypes.guess_type(out.name)[0] or "image/png",
+                    "data": base64.b64encode(raw).decode("ascii"),
+                })
+        except OSError:
+            logger.debug("Failed to read browser screenshot for inline display: %s", out, exc_info=True)
         return self._result(
             session=session,
             tab_id=tab_id,
             status="screenshot",
             data={"path": str(out)},
+            images=images,
         )
 
     async def _evaluate(self, session: _BrowserSession, tool_input: dict[str, Any]) -> ToolResult:
@@ -633,6 +646,7 @@ class BrowserTool(Tool):
         tab_id: str | None,
         status: str,
         data: Any = None,
+        images: list[dict[str, str]] | None = None,
     ) -> ToolResult:
         page = session.tabs.get(tab_id) if tab_id else None
         url = page.url if page is not None else ""
@@ -659,4 +673,4 @@ class BrowserTool(Tool):
                 compact = compact[:4000] + "…"
             text.append("data:")
             text.append(compact)
-        return ToolResult(data=payload, result_for_model="\n".join(text))
+        return ToolResult(data=payload, result_for_model="\n".join(text), images=images or [])

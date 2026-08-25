@@ -431,6 +431,7 @@ async def _run_tools(
                     result_for_model=f"{result.result_for_model}\n\nPost hook error: {reason}",
                     result_for_display=result.result_for_display,
                     is_error=True,
+                    images=result.images,
                 )
 
         msg = create_tool_result_message(
@@ -438,6 +439,7 @@ async def _run_tools(
             result=result.result_for_model,
             is_error=result.is_error,
             source_tool_assistant_uuid=assistant_msg.uuid,
+            images=result.images,
         )
         event = ToolResultEvent(
             tool_use_id=block.id,
@@ -446,6 +448,7 @@ async def _run_tools(
             is_error=result.is_error,
             result_for_display=result.result_for_display,
             tool_input=block.input,
+            images=result.images,
         )
         return [*extra_messages, msg], event
 

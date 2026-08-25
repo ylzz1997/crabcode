@@ -238,6 +238,7 @@ export interface ToolCard {
   result: string | null;
   isError: boolean;
   collapsed: boolean;
+  images?: ImageAttachment[];
 }
 
 export interface ThinkingCard {
@@ -3635,6 +3636,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (!toolId) continue;
           const result = typeof block.content === "string" ? block.content : String(block.content ?? "");
           const isError = block.is_error === true;
+          const images = blocks
+            .filter((candidate) => candidate.type === "image")
+            .map((candidate) => {
+              const source = asRecord(candidate.source);
+              return {
+                media_type: typeof source.media_type === "string" ? source.media_type : "image/png",
+                data: typeof source.data === "string" ? source.data : "",
+              };
+            })
+            .filter((image) => image.data);
           let card = state.toolCards.get(toolId);
           if (!card) {
             card = {
@@ -3644,13 +3655,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               result: null,
               isError: false,
               collapsed: false,
+              images: [],
             };
             state.toolCards.set(toolId, card);
             state.history.push({ kind: "tool", card });
           }
           card.result = result;
           card.isError = isError;
-          card.collapsed = !isError;
+          card.images = images;
+          card.collapsed = !isError && images.length === 0;
           continue;
         }
         // Signatures and future block types carry no standalone UI surface.
@@ -3867,7 +3880,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     card.result = payload.result_for_display ?? payload.result;
     card.isError = payload.is_error ?? false;
-    card.collapsed = !card.isError;
+    card.images = payload.images ?? [];
+    card.collapsed = !card.isError && (card.images?.length ?? 0) === 0;
     if (updateWebview) this.postMessage({ type: "toolResult", card });
   }
 
@@ -6114,6 +6128,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       cursor: pointer;
     }
     .msg-images img:hover { opacity: 0.88; }
+    .assistant-inline-image {
+      display: block;
+      max-width: 100%;
+      max-height: 520px;
+      object-fit: contain;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+    .tool-result-image {
+      display: block;
+      max-width: 100%;
+      max-height: 520px;
+      object-fit: contain;
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+    }
 
     :root[data-panel-width="narrow"] #messages {
       padding-left: 8px;
@@ -7220,9 +7253,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       let code = null;
       let codeLines = [];
 
+      const standaloneImage = (value) => {
+        const match = String(value || '').trim().match(new RegExp('^!\\\\[([^\\\\]]*)\\\\]\\\\((https?:\\\\/\\\\/[^)\\\\s]+|data:image\\\\/[^)]+)\\\\)$', 'i'));
+        if (!match) return '';
+        return '<img class="assistant-inline-image" src="' + escapeAttr(match[2]) + '" alt="' + escapeAttr(match[1] || '图片') + '" loading="lazy" />';
+      };
+
       const flushParagraph = () => {
         if (!paragraph.length) return;
-        parts.push('<div class="md-text">' + escapeHtml(paragraph.join('\\n')) + '</div>');
+        const source = paragraph.join('\\n');
+        const image = standaloneImage(source);
+        parts.push(image || '<div class="md-text">' + escapeHtml(source) + '</div>');
         paragraph = [];
       };
       const flushCode = () => {
@@ -7370,11 +7411,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       const inputHtml = renderToolInput(card.toolName, card.input, presentation);
+      const imagesHtml = (card.images || []).map(function(img, index) {
+        return '<img class="tool-result-image" src="data:' + escapeAttr(img.media_type) + ';base64,' + img.data + '" alt="图片 ' + (index + 1) + '" loading="lazy" />';
+      }).join('');
       let bodyHtml = '';
       if (!card.collapsed) {
         if (card.result !== null) {
           bodyHtml = '<div class="tool-card-body">' + inputHtml +
-            '<section class="tool-card-section">' + renderResult(card.result, card.toolName, card.isError) + '</section></div>';
+            '<section class="tool-card-section">' + renderResult(card.result, card.toolName, card.isError) + imagesHtml + '</section></div>';
         } else {
           bodyHtml = '<div class="tool-card-body">' + inputHtml + '</div>';
         }

@@ -527,10 +527,16 @@ export type ChatItemKind =
   | "system"
   | "error";
 
+export interface ImageAttachment {
+  media_type: string;
+  data: string;
+}
+
 export interface ChatItem {
   id: string;
   kind: ChatItemKind;
   text?: string;
+  images?: ImageAttachment[];
   title?: string;
   command?: string;
   detail?: unknown;
@@ -606,6 +612,7 @@ export interface GatewayEvent {
   tool_use_id?: string;
   result?: string;
   result_for_display?: string;
+  images?: ImageAttachment[];
   is_error?: boolean;
   reason?: string;
   agent_id?: string | null;

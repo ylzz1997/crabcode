@@ -922,6 +922,7 @@ class ToolResultPayload(BaseModel):
     result_for_display: str | None = None
     tool_input: dict[str, Any] = Field(default_factory=dict)
     agent_id: str | None = None
+    images: list[ImageAttachment] = Field(default_factory=list)
 
 
 class PermissionRequestPayload(BaseModel):
@@ -1268,6 +1269,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             result_for_display=event.result_for_display,
             tool_input=event.tool_input,
             agent_id=event.agent_id,
+            images=event.images,
         )
     if isinstance(event, PermissionRequestEvent):
         return PermissionRequestPayload(

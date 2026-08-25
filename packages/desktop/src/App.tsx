@@ -4921,7 +4921,28 @@ function MessageBlockCopy({ text, label }: { text: string; label: string }) {
   );
 }
 
+function InlineImages({ images }: { images?: Array<{ media_type: string; data: string }> }) {
+  if (!images?.length) return null;
+  return (
+    <div className="message-images" aria-label="图片附件">
+      {images.map((image, index) => (
+        <img
+          key={`${image.media_type}-${index}`}
+          src={`data:${image.media_type};base64,${image.data}`}
+          alt={`图片 ${index + 1}`}
+          loading="lazy"
+        />
+      ))}
+    </div>
+  );
+}
+
 const MESSAGE_MARKDOWN_COMPONENTS: Components = {
+  img: ({ src, alt }) => (
+    typeof src === "string" && /^(?:https?:|data:image\/)/i.test(src)
+      ? <img src={src} alt={alt ?? "图片"} loading="lazy" />
+      : null
+  ),
   table: ({ children }) => (
     <div className="message-table-shell">
       <div className="message-table-wrap"><table>{children}</table></div>
@@ -4995,6 +5016,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     return (
       <article className="message user-message-shell">
         <div className="user-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></div>
+        <InlineImages images={item.images} />
         {item.text && <div className="message-actions">
           <CopyButton text={item.text} label="复制输入" />
         </div>}
@@ -5005,6 +5027,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     return (
       <article className="message assistant-message">
         <MessageMarkdown>{item.text ?? ""}</MessageMarkdown>
+        <InlineImages images={item.images} />
         {item.text && <div className="message-actions">
           <CopyButton text={item.text} label="复制回复" />
           {item.status === "complete" && onFork && (
@@ -5130,6 +5153,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
                 <ToolResultView toolName={item.title ?? "Tool"} result={result} isError={item.isError} />
               </section>
             )}
+            <InlineImages images={item.images} />
             {presentation.fields.length === 0 && result === undefined && <div className="tool-empty">无需参数</div>}
           </div>
         )}

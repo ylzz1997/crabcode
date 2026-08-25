@@ -44,6 +44,7 @@ class ToolResultEvent:
     result_for_display: str | None = None
     tool_input: dict[str, Any] = field(default_factory=dict)
     agent_id: str | None = None
+    images: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass

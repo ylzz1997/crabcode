@@ -1,4 +1,4 @@
-import type { ChatItem, GatewayEvent, SessionViewState } from "./types";
+import type { ChatItem, GatewayEvent, ImageAttachment, SessionViewState } from "./types";
 
 function stringify(value: unknown): string {
   if (typeof value === "string") return value;
@@ -83,19 +83,25 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
       continue;
     }
     if (!Array.isArray(content)) continue;
+    const hasToolResultBlock = content.some((rawBlock) => (
+      rawBlock && typeof rawBlock === "object" && (rawBlock as Record<string, unknown>).type === "tool_result"
+    ));
 
     let text = "";
+    let images: ImageAttachment[] = [];
     let segment = 0;
     const flushText = () => {
-      if (!text) return;
+      if (!text && images.length === 0) return;
       items.push({
         id: segment === 0 ? baseId : `${baseId}:part-${segment}`,
         kind,
         text,
+        images: images.length > 0 ? images : undefined,
         status: "complete",
         ...messageTiming,
       });
       text = "";
+      images = [];
       segment += 1;
     };
 
@@ -104,6 +110,19 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
       const block = rawBlock as Record<string, unknown>;
       if (block.type === "text") {
         if (typeof block.text === "string") text += block.text;
+        return;
+      }
+      if (block.type === "image") {
+        if (hasToolResultBlock) return;
+        const source = block.source;
+        if (source && typeof source === "object" && typeof (source as Record<string, unknown>).data === "string") {
+          images.push({
+            media_type: typeof (source as Record<string, unknown>).media_type === "string"
+              ? (source as Record<string, unknown>).media_type as string
+              : "image/png",
+            data: (source as Record<string, unknown>).data as string,
+          });
+        }
         return;
       }
       if (block.type === "thinking") {
@@ -147,14 +166,24 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
         const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
         if (!toolUseId) return;
         const result = stringify(block.content ?? block.result ?? "");
+        const images = content
+          .filter((rawImage) => rawImage && typeof rawImage === "object" && (rawImage as Record<string, unknown>).type === "image")
+          .map((rawImage) => {
+            const source = (rawImage as Record<string, unknown>).source;
+            const record = source && typeof source === "object" ? source as Record<string, unknown> : {};
+            return { media_type: typeof record.media_type === "string" ? record.media_type : "image/png", data: typeof record.data === "string" ? record.data : "" };
+          })
+          .filter((image) => image.data);
         const toolIndex = tools.get(toolUseId);
         if (toolIndex !== undefined) {
           items[toolIndex] = {
             ...items[toolIndex],
             detail: result,
             result,
+            images,
             isError: block.is_error === true,
             status: "complete",
+            collapsed: images.length === 0 && block.is_error !== true,
             ...(messageTimestamp === null ? {} : {
               completedAt: messageTimestamp,
               durationMs: items[toolIndex].startedAt === undefined
@@ -174,7 +203,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
             isError: block.is_error === true,
             tool_use_id: toolUseId,
             status: "complete",
-            collapsed: true,
+            collapsed: images.length === 0 && block.is_error !== true,
             ...(messageTimestamp === null ? {} : { completedAt: messageTimestamp, durationMs: 0 }),
           });
         }
@@ -360,7 +389,9 @@ export function applyGatewayEvent(
             ...completeItem(item, now),
             detail: result,
             result,
+            images: event.images,
             isError: event.is_error ?? false,
+            collapsed: (event.images?.length ?? 0) === 0,
           }), "tool")
         : [
             ...state.items,
@@ -371,10 +402,11 @@ export function applyGatewayEvent(
               detail: result,
               input: event.tool_input ?? {},
               result,
+              images: event.images,
               isError: event.is_error ?? false,
               tool_use_id: event.tool_use_id,
               status: "complete" as const,
-              collapsed: true,
+              collapsed: (event.images?.length ?? 0) === 0,
               completedAt: now,
             },
           ];

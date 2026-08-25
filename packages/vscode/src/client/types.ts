@@ -705,6 +705,7 @@ export interface ToolResultPayload {
   result_for_display?: string | null;
   tool_input?: Record<string, unknown>;
   agent_id?: string | null;
+  images?: ImageAttachment[];
 }
 
 export interface PermissionRequestPayload {

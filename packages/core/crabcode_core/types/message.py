@@ -143,6 +143,7 @@ def create_tool_result_message(
     result: str,
     is_error: bool = False,
     source_tool_assistant_uuid: str | None = None,
+    images: list[dict[str, str]] | None = None,
 ) -> UserMessage:
     """Create a user message containing a tool result."""
     return UserMessage(
@@ -152,6 +153,16 @@ def create_tool_result_message(
                 content=result,
                 is_error=is_error,
             )
+        ] + [
+            ImageBlock(
+                source={
+                    "type": "base64",
+                    "media_type": image.get("media_type", "image/png"),
+                    "data": image.get("data", ""),
+                },
+            )
+            for image in (images or [])
+            if image.get("data")
         ],
         parent_uuid=source_tool_assistant_uuid,
         tool_use_result=result,

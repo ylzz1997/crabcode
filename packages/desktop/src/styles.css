@@ -13100,3 +13100,23 @@ html[data-theme-visuals="true"] :is(.composer-box, .welcome-composer)::after {
   padding-right: 42px;
   padding-bottom: 34px;
 }
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.message-images img {
+  display: block;
+  max-width: min(100%, 560px);
+  max-height: 520px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.tool-card-body .message-images {
+  margin-top: 12px;
+}

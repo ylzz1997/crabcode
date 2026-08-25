@@ -38,6 +38,9 @@ class ToolResult:
     result_for_model: str = ""
     result_for_display: str | None = None
     is_error: bool = False
+    # Inline image attachments for the conversation UI. Each entry carries
+    # ``media_type`` and base64-encoded ``data``.
+    images: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass

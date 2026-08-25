@@ -285,6 +285,27 @@ s_\theta(x_t,y,t) \approx \nabla_{x_t}\log p_t(x_t\mid y)
       value: previousClipboard,
     });
   });
+
+  it("renders assistant image attachments", () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    act(() => root.render(
+      <ChatItemView
+        item={{ id: "assistant-image", kind: "assistant", images: [{ media_type: "image/png", data: "aGVsbG8=" }] }}
+        now={0}
+        showTurnDuration
+        turnDurationFormat="hms"
+        onPermission={vi.fn()}
+        onToggleChoice={vi.fn()}
+        onSubmitChoice={vi.fn()}
+        onPlan={vi.fn()}
+      />,
+    ));
+    expect(container.querySelector(".message-images img")?.getAttribute("src")).toBe("data:image/png;base64,aGVsbG8=");
+    act(() => root.unmount());
+    container.remove();
+  });
 });
 
 const job: ScheduleJobInfo = {
