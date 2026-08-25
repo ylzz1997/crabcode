@@ -236,6 +236,16 @@ s_\theta(x_t,y,t) \approx \nabla_{x_t}\log p_t(x_t\mid y)
     act(() => root.render(
       <>
         <ChatItemView
+          item={{ id: "user-copy", kind: "user", text: "用户输入" }}
+          now={0}
+          showTurnDuration
+          turnDurationFormat="hms"
+          onPermission={vi.fn()}
+          onToggleChoice={vi.fn()}
+          onSubmitChoice={vi.fn()}
+          onPlan={vi.fn()}
+        />
+        <ChatItemView
           item={{ id: "assistant-copy", kind: "assistant", text: "最终回复" }}
           now={0}
           showTurnDuration
@@ -252,10 +262,16 @@ s_\theta(x_t,y,t) \approx \nabla_{x_t}\log p_t(x_t\mid y)
       </>,
     ));
 
+    expect(container.querySelector('[aria-label="复制输入"]')).not.toBeNull();
+    expect(container.querySelector('.user-message .copy-button')).toBeNull();
+    expect(container.querySelector('.user-message-shell > .message-actions .copy-button')).not.toBeNull();
     expect(container.querySelector('[aria-label="复制回复"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="复制表格"]')).not.toBeNull();
+    expect(container.querySelector('.message-table-wrap .copy-button')).toBeNull();
+    expect(container.querySelector('.message-table-shell > .message-block-actions .copy-button')).not.toBeNull();
     const codeCopy = container.querySelector<HTMLButtonElement>('[aria-label="复制代码"]');
     expect(codeCopy).not.toBeNull();
+    expect(container.querySelector('.message-code-shell .message-code-block + .message-block-actions .copy-button')).not.toBeNull();
     await act(async () => {
       codeCopy?.click();
       await Promise.resolve();

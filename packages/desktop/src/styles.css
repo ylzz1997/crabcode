@@ -571,11 +571,26 @@ svg {
 .user-message {
   width: fit-content;
   max-width: min(78%, 680px);
-  margin-left: auto;
   padding: 10px 13px;
   border: 1px solid var(--border-soft);
   border-radius: 7px;
   background: var(--panel-strong);
+}
+
+.user-message-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.user-message-shell .message-actions {
+  margin-top: 4px;
+}
+
+.user-message-shell:hover .message-actions>.copy-button,
+.user-message-shell:focus-within .message-actions>.copy-button {
+  opacity: .82;
+  pointer-events: auto;
 }
 
 .assistant-message {
@@ -629,6 +644,10 @@ svg {
 
 .copyable-content:hover>.copy-button,
 .copyable-content:focus-within>.copy-button,
+.message-table-shell:hover .message-block-actions .copy-button,
+.message-table-shell:focus-within .message-block-actions .copy-button,
+.message-code-shell:hover .message-block-actions .copy-button,
+.message-code-shell:focus-within .message-block-actions .copy-button,
 .message-actions:hover>.copy-button,
 .message-actions:focus-within>.copy-button,
 .error-line.copyable-inline:hover>.copy-button,
@@ -720,7 +739,6 @@ svg {
   max-width: 100%;
   margin: 0;
   overflow-x: auto;
-  padding-bottom: 32px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 48%, var(--bg));
@@ -730,8 +748,16 @@ svg {
   margin: 16px 0;
 }
 
-.message-table-shell .copy-button {
-  bottom: 8px;
+.message-block-actions {
+  min-height: 25px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.message-block-actions .copy-button {
+  position: static;
 }
 
 .message-table-wrap table {
@@ -787,13 +813,8 @@ svg {
   margin: 16px 0;
 }
 
-.message-code-shell .message-code-block {
-  padding-right: 44px !important;
-  padding-bottom: 36px !important;
-}
-
-.message-code-shell .copy-button {
-  bottom: 8px;
+.message-code-shell .message-plain-code {
+  margin: 0;
 }
 
 .message-code-block code {
@@ -8848,9 +8869,115 @@ html[data-theme="light"] :is(
   border-color: var(--border);
 }
 
+html[data-theme="light"] :is(
+  .model-context-bar,
+  .model-settings-loading,
+  .model-settings-empty,
+  .model-settings-search,
+  .model-settings-sources
+) {
+  color: var(--muted);
+}
+
+html[data-theme="light"] :is(
+  .model-context-bar svg,
+  .model-settings-loading svg,
+  .model-settings-empty > svg,
+  .model-settings-search svg,
+  .model-settings-group > button > svg
+) {
+  color: var(--muted);
+}
+
+html[data-theme="light"] :is(.model-group-icon, .model-detail-icon) {
+  border-color: var(--border);
+  background: var(--surface-active);
+}
+
+html[data-theme="light"] .model-detail-icon {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+html[data-theme="light"] :is(
+  .model-context-bar,
+  .model-settings-search,
+  .model-detail-meta > div,
+  .model-detail-fields,
+  .model-config-json
+) {
+  background: var(--surface);
+}
+
+html[data-theme="light"] :is(
+  .model-context-divider,
+  .model-settings-group > header,
+  .model-settings-group > button,
+  .model-detail-field,
+  .model-config-json pre
+) {
+  border-color: var(--border-soft);
+}
+
+html[data-theme="light"] .model-settings-group > header {
+  background: var(--surface-active);
+}
+
+html[data-theme="light"] .model-settings-group > header small,
+html[data-theme="light"] .model-settings-group > button small,
+html[data-theme="light"] .model-settings-detail > header small,
+html[data-theme="light"] .model-detail-meta span,
+html[data-theme="light"] .model-detail-sources > span,
+html[data-theme="light"] .model-detail-field > span,
+html[data-theme="light"] .model-settings-sources {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .model-settings-group > header strong,
+html[data-theme="light"] .model-settings-group > header small,
+html[data-theme="light"] .model-group-icon {
+  color: var(--text);
+}
+
+html[data-theme="light"] .model-settings-group > header > em {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+html[data-theme="light"] .model-settings-detail > header > em {
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+html[data-theme="light"] .model-settings-group > button {
+  color: var(--muted);
+}
+
 html[data-theme="light"] .model-settings-group > button:hover,
 html[data-theme="light"] .model-settings-group > button.active {
-  background: var(--active);
+  background: var(--surface-active);
+}
+
+html[data-theme="light"] .model-settings-group > button > em {
+  color: var(--green);
+}
+
+html[data-theme="light"] .model-detail-field > small.override {
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+
+html[data-theme="light"] .model-detail-field > small.inherited {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+html[data-theme="light"] .model-detail-field > small.default {
+  background: var(--surface-hover);
+  color: var(--muted);
 }
 
 @media (max-width: 850px) {

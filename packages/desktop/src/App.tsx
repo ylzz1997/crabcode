@@ -4913,21 +4913,34 @@ function markdownCodeChild(children: ReactNode): { className: string; source: st
   };
 }
 
+function MessageBlockCopy({ text, label }: { text: string; label: string }) {
+  return (
+    <div className="message-block-actions">
+      <CopyButton text={text} label={label} />
+    </div>
+  );
+}
+
 const MESSAGE_MARKDOWN_COMPONENTS: Components = {
   table: ({ children }) => (
-    <div className="message-table-shell copyable-content">
+    <div className="message-table-shell">
       <div className="message-table-wrap"><table>{children}</table></div>
-      <CopyButton text={reactNodeText(children).trim()} label="复制表格" />
+      <MessageBlockCopy text={reactNodeText(children).trim()} label="复制表格" />
     </div>
   ),
   pre: ({ children }) => {
     const code = markdownCodeChild(children);
     if (!code || !MESSAGE_CODE_LANGUAGES.has(code.className)) {
       const text = reactNodeText(children).replace(/\n$/, "");
-      return <CopyablePre text={text} className="message-plain-code" containerClassName="message-code-shell">{children}</CopyablePre>;
+      return (
+        <div className="message-code-shell">
+          <pre className="message-plain-code">{children}</pre>
+          <MessageBlockCopy text={text} label="复制代码" />
+        </div>
+      );
     }
     return (
-      <div className="message-code-shell copyable-content">
+      <div className="message-code-shell">
         <SyntaxHighlighter
           className="message-code-block"
           language={code.className}
@@ -4938,7 +4951,7 @@ const MESSAGE_MARKDOWN_COMPONENTS: Components = {
         >
           {code.source}
         </SyntaxHighlighter>
-        <CopyButton text={code.source} label="复制代码" />
+        <MessageBlockCopy text={code.source} label="复制代码" />
       </div>
     );
   },
@@ -4979,7 +4992,14 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     return <div className="turn-duration-divider" role="separator" aria-label={label}><span>{label}</span></div>;
   }
   if (item.kind === "user") {
-    return <article className="message user-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></article>;
+    return (
+      <article className="message user-message-shell">
+        <div className="user-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></div>
+        {item.text && <div className="message-actions">
+          <CopyButton text={item.text} label="复制输入" />
+        </div>}
+      </article>
+    );
   }
   if (item.kind === "assistant") {
     return (
