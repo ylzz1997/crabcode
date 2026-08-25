@@ -61,7 +61,7 @@ class FileReadTool(Tool):
     ) -> ToolResult:
         file_path = first_non_empty_str(
             tool_input,
-            ("file_path", "path", "target_file", "filepath", "file"),
+            ("file_path", "filePath", "path", "target_file", "filepath", "file"),
         )
         offset = tool_input.get("offset")
         limit = tool_input.get("limit")
@@ -70,7 +70,7 @@ class FileReadTool(Tool):
             return ToolResult(
                 result_for_model=(
                     "Error: file_path is required. Pass the file path as \"file_path\" "
-                    "(aliases: path, target_file, filepath, file)."
+                    "(aliases: filePath, path, target_file, filepath, file)."
                 ),
                 is_error=True,
             )

@@ -53,6 +53,10 @@ from crabcode_core.types.message import (
 )
 from crabcode_core.permissions.ai_reviewer import AiPermissionReviewer, AiReviewRequest
 from crabcode_core.permissions.manager import PermissionMode
+from crabcode_core.tools._input_schema import (
+    ToolInputNormalization,
+    normalize_tool_input,
+)
 from crabcode_core.types.tool import PermissionBehavior, PermissionResult, Tool, ToolContext, ToolResult
 
 logger = get_logger(__name__)
@@ -261,6 +265,32 @@ def _find_tool(tools: list[Tool], name: str) -> Tool | None:
     return None
 
 
+def _normalize_and_record_tool_input(
+    tool: Tool,
+    block: ToolUseBlock,
+) -> ToolInputNormalization:
+    normalization = normalize_tool_input(block.input, tool.input_schema)
+    if normalization.corrections:
+        logger.warning(
+            "telemetry tool_input_schema_normalized tool=%s tool_use_id=%s corrections=%s",
+            tool.name,
+            block.id,
+            json.dumps(
+                [
+                    {
+                        "path": correction.path,
+                        "received": correction.received,
+                        "expected": correction.expected,
+                    }
+                    for correction in normalization.corrections
+                ],
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+    return normalization
+
+
 async def _run_tools(
     tool_use_blocks: list[ToolUseBlock],
     assistant_msg: AssistantMessage,
@@ -323,6 +353,25 @@ async def _run_tools(
                 tool_input=block.input,
             )
             return [msg], event
+
+        normalization = _normalize_and_record_tool_input(tool, block)
+        if normalization.error:
+            msg = create_tool_result_message(
+                tool_use_id=block.id,
+                result=f"Validation error: {normalization.error}",
+                is_error=True,
+                source_tool_assistant_uuid=assistant_msg.uuid,
+            )
+            event = ToolResultEvent(
+                tool_use_id=block.id,
+                tool_name=block.name,
+                result=f"Validation error: {normalization.error}",
+                is_error=True,
+                tool_input=block.input,
+            )
+            return [msg], event
+        if normalization.corrections:
+            block = block.model_copy(update={"input": normalization.value}, deep=True)
 
         validation_error = await tool.validate_input(block.input)
         if validation_error:
@@ -1395,6 +1444,32 @@ async def query_loop(
 
         for block in tool_use_blocks:
             tool = _find_tool(params.tools, block.name)
+
+            if tool is not None:
+                normalization = _normalize_and_record_tool_input(tool, block)
+                if normalization.error:
+                    result = f"Validation error: {normalization.error}"
+                    msg = create_tool_result_message(
+                        tool_use_id=block.id,
+                        result=result,
+                        is_error=True,
+                        source_tool_assistant_uuid=assistant_msg.uuid,
+                    )
+                    messages.append(msg)
+                    params.messages[:] = messages
+                    yield ToolResultEvent(
+                        tool_use_id=block.id,
+                        tool_name=block.name,
+                        result=result,
+                        is_error=True,
+                        tool_input=block.input,
+                    )
+                    continue
+                if normalization.corrections:
+                    block = block.model_copy(
+                        update={"input": normalization.value},
+                        deep=True,
+                    )
 
             # Tool-schema filtering is advisory: some providers can replay or
             # synthesize calls to tools that were not included in this request.
