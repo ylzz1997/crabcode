@@ -580,7 +580,32 @@ export function applyGatewayEvent(
             ],
       };
     }
-    case "turn_complete":
+    case "turn_complete": {
+      const durableAssistantId = event.assistant_message_uuid;
+      const runningAssistantIndex = state.items.reduce(
+        (index, item, itemIndex) => (
+          item.kind === "assistant" && item.status === "running" ? itemIndex : index
+        ),
+        -1,
+      );
+      const latestAssistantIndex = state.items.reduce(
+        (index, item, itemIndex) => (item.kind === "assistant" ? itemIndex : index),
+        -1,
+      );
+      const assistantIndex = runningAssistantIndex >= 0
+        ? runningAssistantIndex
+        : latestAssistantIndex;
+      const completedItems = completeRunning(state.items, now).map((item, itemIndex) => {
+        if (
+          durableAssistantId
+          && item.kind === "assistant"
+          && itemIndex === assistantIndex
+        ) {
+          const partSuffix = item.id.match(/:part-\d+$/)?.[0] ?? "";
+          return { ...item, id: `${durableAssistantId}${partSuffix}` };
+        }
+        return item;
+      });
       return {
         ...state,
         busy: false,
@@ -589,7 +614,7 @@ export function applyGatewayEvent(
         currentStep: null,
         lastTurnUsage: event.usage ?? state.lastTurnUsage ?? null,
         items: appendTurnDuration(
-          completeRunning(state.items, now),
+          completedItems,
           state.runStartedAt,
           now,
           event.operation_id ?? state.operationId ?? undefined,
@@ -604,6 +629,7 @@ export function applyGatewayEvent(
             }
           : state.status,
       };
+    }
     default:
       return state;
   }

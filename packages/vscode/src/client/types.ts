@@ -132,6 +132,12 @@ export interface ResumeSessionRequest {
   model_profile?: string | null;
 }
 
+export interface ForkSessionRequest {
+  session_id: string;
+  message_uuid: string;
+  title?: string | null;
+}
+
 export interface CompactRequest {
   session_id: string;
   custom_instructions?: string | null;
@@ -409,6 +415,9 @@ export interface SessionInfo {
   cwd?: string;
   tokens_used?: number;
   preview?: string;
+  forked_from_session_id?: string | null;
+  forked_from_message_uuid?: string | null;
+  forked_from_title?: string | null;
 }
 
 export interface WorkspaceInfo {
@@ -784,6 +793,7 @@ export interface TurnCompletePayload {
   context_window_tokens?: number;
   context_remaining_tokens?: number;
   context_used_percent?: number;
+  assistant_message_uuid?: string | null;
 }
 
 export interface StreamModePayload {

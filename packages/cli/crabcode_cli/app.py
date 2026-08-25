@@ -385,6 +385,50 @@ def sessions_export(
     typer.echo(f"Exported to {out_path}")
 
 
+@sessions_app.command("fork")
+def sessions_fork(
+    session_id: str = typer.Argument(..., help="Source session ID (full or prefix)"),
+    message_uuid: str = typer.Argument(..., help="Assistant message UUID (full or unique prefix)"),
+    cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory used for local session lookup"),
+    title: Optional[str] = typer.Option(None, "--title", help="Title for the forked session"),
+) -> None:
+    """Fork a session at an assistant reply."""
+    work_dir = cwd or os.getcwd()
+    from crabcode_core.session.storage import SessionStorage
+
+    try:
+        resolved_id, resolved_cwd = _resolve_export_session(session_id, work_dir)
+        source = SessionStorage(resolved_cwd, resolved_id)
+        messages = source.load_messages()
+        selector = str(message_uuid or "").strip()
+        if not selector:
+            raise ValueError("assistant message UUID is required")
+        assistant_ids = [
+            str(message.get("uuid") or "")
+            for message in messages
+            if message.get("type") == "assistant" and message.get("uuid")
+        ]
+        matches = [value for value in assistant_ids if value == selector or value.startswith(selector)]
+        if len(matches) != 1:
+            if not matches:
+                raise ValueError(f"assistant message not found: {selector}")
+            raise ValueError(f"assistant message selector is ambiguous: {selector}")
+        forked = SessionStorage.fork_from(
+            resolved_cwd,
+            resolved_id,
+            matches[0],
+            title=title,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(
+        f"Forked session {resolved_id[:8]}… at {matches[0][:8]}… "
+        f"into {forked.session_id}"
+    )
+
+
 def _resolve_export_session(selector: str, cwd: str) -> tuple[str, str]:
     """Resolve an export selector without silently producing an empty file."""
     from crabcode_core.session.meta_db import SessionMetaStore

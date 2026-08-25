@@ -208,6 +208,7 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/revert": [],
     "/undo": [],
     "/resume": [],  # Dynamic: session IDs
+    "/fork": [],  # Dynamic: assistant message UUIDs
     "/exit": [],
     "/quit": [],
     "/image": [],  # Dynamic: file path
@@ -325,6 +326,21 @@ class _CrabCodeCompleter(Completer):
                         )
                 return
 
+            # /fork [message-uuid] — complete assistant message UUIDs
+            if cmd == "/fork" and self._session:
+                for message in reversed(self._session.messages):
+                    if message.role != MessageRole.ASSISTANT:
+                        continue
+                    message_id = str(message.uuid)
+                    if message_id.startswith(word_before_cursor):
+                        yield Completion(
+                            message_id,
+                            start_position=-len(word_before_cursor),
+                            display=message_id[:12] + "…",
+                            display_meta=message.text_content[:40],
+                        )
+                return
+
             if cmd in {"/agent", "/agent-log", "/agent-send", "/wait", "/cancel-agent"} and self._session:
                 for snapshot in self._session.list_agents()[:20]:
                     sid = snapshot.agent_id
@@ -373,6 +389,7 @@ class _CrabCodeCompleter(Completer):
             "/revert": "revert files + conversation to checkpoint",
             "/undo": "undo last checkpoint (revert files + conversation)",
             "/resume": "resume session",
+            "/fork": "fork session at an assistant reply",
             "/image": "attach image to next message",
             "/exit": "exit CrabCode",
             "/quit": "exit CrabCode",
@@ -2613,6 +2630,7 @@ async def _handle_command(
             "[bold]/revert <id|#>[/] — revert files + conversation to a checkpoint\n"
             "[bold]/undo[/] — revert last checkpoint (files + conversation)\n"
             "[bold]/resume <id>[/] — resume a previous session\n"
+            "[bold]/fork [message-uuid][/] — fork at an assistant reply\n"
             "[bold]/image <path>[/] — attach image(s) to your next message\n"
             "[bold]/exit[/] — exit CrabCode\n"
             f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
@@ -4362,6 +4380,52 @@ async def _handle_command(
             _render_session_history(session.messages)
         else:
             console.print(f"[bold red]Failed to resume session {match[:8]}…[/]")
+        return True
+
+    if cmd == "/fork":
+        from crabcode_core.session.storage import SessionStorage
+
+        source_id = str(session.session_id or "").strip()
+        if not source_id:
+            console.print("[dim]No active session to fork.[/]")
+            return True
+        assistants = [
+            message for message in session.messages
+            if message.role == MessageRole.ASSISTANT and message.uuid
+        ]
+        if not assistants:
+            console.print("[dim]No assistant reply is available to fork.[/]")
+            return True
+
+        selector = arg.strip()
+        if selector:
+            matches = [
+                message for message in assistants
+                if message.uuid == selector or message.uuid.startswith(selector)
+            ]
+            if len(matches) != 1:
+                detail = "not found" if not matches else "ambiguous"
+                console.print(f"[bold red]Assistant message selector {detail}: {selector}[/]")
+                return True
+            target = matches[0]
+        else:
+            target = assistants[-1]
+
+        try:
+            forked = SessionStorage.fork_from(session.cwd, source_id, target.uuid)
+            if not await session.resume(forked.session_id):
+                console.print(f"[bold red]Failed to resume fork {forked.session_id[:8]}…[/]")
+                return True
+        except (OSError, ValueError, RuntimeError) as exc:
+            console.print(f"[bold red]Fork failed: {safe_utf8_str(str(exc))}[/]")
+            return True
+
+        console.print(
+            f"[dim]Forked [bold]{source_id[:8]}…[/bold] at [bold]{target.uuid[:8]}…[/bold] "
+            f"into [bold]{forked.session_id[:8]}…[/bold][/dim]"
+        )
+        console.print()
+        _render_session_history(session.messages)
         return True
 
     if cmd in ("/exit", "/quit"):

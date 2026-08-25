@@ -880,7 +880,12 @@ class SessionStorage:
             self._archive_state_checked = True
             self._meta["is_archived"] = True
 
-    def load_messages(self, *, full_history: bool = False) -> list[dict[str, Any]]:
+    def load_messages(
+        self,
+        *,
+        full_history: bool = False,
+        _transcript_text: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Load the active context, or the durable audit history when requested.
 
         A completed ``compact_boundary`` atomically replaces the active projection
@@ -896,7 +901,11 @@ class SessionStorage:
         self._written_uuids = set()
         self._meta = {}
         self._meta_written = False
-        transcript = self._read_transcript_text()
+        transcript = (
+            self._read_transcript_text()
+            if _transcript_text is None
+            else _transcript_text
+        )
         if not transcript:
             if get_session_tombstone_path(self.cwd, self.session_id).exists():
                 self._meta = {
@@ -1120,6 +1129,80 @@ class SessionStorage:
         if full_history:
             return all_messages
         return active_messages if boundary_seen or rollback_seen else all_messages
+
+    @classmethod
+    def fork_from(
+        cls,
+        source_cwd: str,
+        source_session_id: str,
+        message_uuid: str,
+        *,
+        title: str | None = None,
+    ) -> "SessionStorage":
+        """Atomically clone durable conversation state up to an assistant reply."""
+        source = cls(os.path.abspath(source_cwd), source_session_id)
+        _validate_component(message_uuid, "message uuid")
+        with _session_lifecycle_lock(source.cwd, source.session_id, exclusive=True):
+            if not source._transcript_path.exists():
+                raise ValueError(f"Session {source.session_id} not found")
+            with _transcript_file_lock(source._transcript_path, exclusive=False):
+                transcript = source._transcript_path.read_text(encoding="utf-8")
+            messages = source.load_messages(_transcript_text=transcript)
+            if source.meta.get("is_archived"):
+                raise ValueError(f"Session {source.session_id} is archived")
+            target_index = next(
+                (
+                    index for index, item in enumerate(messages)
+                    if item.get("uuid") == message_uuid
+                    and item.get("type") == "assistant"
+                ),
+                -1,
+            )
+            if target_index < 0:
+                raise ValueError("Assistant message not found in active session history")
+            cloned_messages = messages[: target_index + 1]
+            source_meta = dict(source.meta)
+
+        new_id = generate_session_id()
+        destination = cls(source.cwd, new_id)
+        source_title = str(
+            source_meta.get("title")
+            or source_meta.get("first_user_message")
+            or ""
+        )[:200]
+        fork_title = str(title or "").strip()[:200] or (
+            f"{source_title} · 分叉" if source_title else "分叉会话"
+        )
+        first_user = str(source_meta.get("first_user_message") or "")[:500]
+        now = datetime.now(timezone.utc)
+        metadata = destination._new_meta(
+            model=str(source_meta.get("model") or ""),
+            provider=str(source_meta.get("provider") or ""),
+            first_user_message=first_user,
+            now=now,
+        )
+        metadata.update(
+            {
+                "title": fork_title,
+                "updated_at": now.isoformat(),
+                "forked_from_session_id": source.session_id,
+                "forked_from_message_uuid": message_uuid,
+                "forked_from_title": source_title,
+                "message_count": len(cloned_messages),
+            }
+        )
+        for key in ("summary", "goal", "git_branch", "git_sha"):
+            if source_meta.get(key) is not None:
+                metadata[key] = source_meta[key]
+        lines = [_dump_jsonl_line({"type": "session_meta", **metadata})]
+        lines.extend(_dump_jsonl_line(item) for item in cloned_messages)
+        with _session_lifecycle_lock(destination.cwd, destination.session_id):
+            destination._ensure_dir()
+            destination._atomic_write_text(destination._transcript_path, "".join(lines))
+            destination._meta = metadata
+            destination._meta_written = True
+            destination._upsert_meta_locked()
+        return destination
 
     def update_title(self, title: str) -> None:
         """Update the session title in JSONL, SQLite, and in-memory metadata."""
@@ -1392,6 +1475,9 @@ class SessionStorage:
                         else ""
                     ),
                     "summary": row.get("summary", ""),
+                    "forked_from_session_id": row.get("forked_from_session_id"),
+                    "forked_from_message_uuid": row.get("forked_from_message_uuid"),
+                    "forked_from_title": row.get("forked_from_title"),
                     "preview": (
                         row.get("summary", "")[:100]
                         or row.get("first_user_message", "")[:100]
@@ -1477,6 +1563,9 @@ class SessionStorage:
                     "message_count": meta_info.get("message_count", 0),
                     "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                     "summary": meta_info.get("summary", ""),
+                    "forked_from_session_id": meta_info.get("forked_from_session_id"),
+                    "forked_from_message_uuid": meta_info.get("forked_from_message_uuid"),
+                    "forked_from_title": meta_info.get("forked_from_title"),
                     "preview": meta_info.get("first_user_message", "")[:100] or first_user_msg,
                     "_sort_timestamp": stat.st_mtime,
                 }

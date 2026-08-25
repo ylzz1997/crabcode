@@ -367,6 +367,9 @@ export interface SessionInfo {
   cwd: string;
   tokens_used: number;
   preview: string;
+  forked_from_session_id?: string | null;
+  forked_from_message_uuid?: string | null;
+  forked_from_title?: string | null;
 }
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -633,6 +636,7 @@ export interface GatewayEvent {
   context_window_tokens?: number;
   context_remaining_tokens?: number;
   context_used_percent?: number;
+  assistant_message_uuid?: string | null;
   usage?: Record<string, unknown>;
   error_type?: string;
   recoverable?: boolean;

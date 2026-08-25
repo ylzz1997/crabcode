@@ -16,6 +16,7 @@ from crabcode_gateway.schemas import (
     ClearSessionRequest,
     CompactRequest,
     ExportSessionRequest,
+    ForkSessionRequest,
     InterruptRequest,
     NewSessionRequest,
     PruneSessionsRequest,
@@ -74,6 +75,18 @@ def _session_info_from_row(row: dict[str, Any]) -> SessionInfo:
         cwd=str(row.get("cwd") or ""),
         tokens_used=int(row.get("tokens_used") or 0),
         preview=str(row.get("preview") or row.get("first_user_message") or ""),
+        forked_from_session_id=(
+            str(row["forked_from_session_id"])
+            if row.get("forked_from_session_id") else None
+        ),
+        forked_from_message_uuid=(
+            str(row["forked_from_message_uuid"])
+            if row.get("forked_from_message_uuid") else None
+        ),
+        forked_from_title=(
+            str(row["forked_from_title"])
+            if row.get("forked_from_title") else None
+        ),
     )
 
 
@@ -292,11 +305,17 @@ async def new_session(req: NewSessionRequest, request: Request) -> SessionInfo:
         raise
 
     model, provider = _session_model_provider(session)
+    meta = getattr(getattr(session, "_session_storage", None), "meta", {}) or {}
     return SessionInfo(
         session_id=session.session_id,
         message_count=0,
         model=model,
         provider=provider,
+        title=str(meta.get("title") or ""),
+        cwd=str(getattr(session, "cwd", "") or ""),
+        forked_from_session_id=meta.get("forked_from_session_id"),
+        forked_from_message_uuid=meta.get("forked_from_message_uuid"),
+        forked_from_title=meta.get("forked_from_title"),
     )
 
 
@@ -459,11 +478,17 @@ async def resume_session(req: ResumeSessionRequest, request: Request) -> Session
         message_count = len(getattr(session, "messages", ()))
 
     model, provider = _session_model_provider(session)
+    meta = getattr(getattr(session, "_session_storage", None), "meta", {}) or {}
     return SessionInfo(
         session_id=session.session_id,
         message_count=message_count,
         model=model,
         provider=provider,
+        title=str(meta.get("title") or ""),
+        cwd=str(getattr(session, "cwd", "") or ""),
+        forked_from_session_id=meta.get("forked_from_session_id"),
+        forked_from_message_uuid=meta.get("forked_from_message_uuid"),
+        forked_from_title=meta.get("forked_from_title"),
     )
 
 
@@ -519,6 +544,46 @@ async def session_messages(
             payload["role"] = role.value
         result.append(payload)
     return result
+
+
+@router.post("/fork", response_model=SessionInfo)
+async def fork_session(req: ForkSessionRequest, request: Request) -> SessionInfo:
+    """Fork a durable session from any completed assistant reply."""
+    if getattr(request.app.state, "gateway_closing", False):
+        raise HTTPException(status_code=503, detail="Gateway is shutting down")
+    from crabcode_core.session.storage import SessionStorage
+    async with get_session_lock(request.app.state):
+        loaded = dict(request.app.state.sessions)
+        default_id = request.app.state.default_session_id
+        selector_cwd = os.getcwd()
+        if default_id and default_id in loaded:
+            selector_cwd = str(getattr(loaded[default_id], "cwd", selector_cwd))
+        resolved = _resolve_session_selector(
+            req.session_id,
+            selector_cwd,
+            loaded_sessions=loaded,
+        )
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Session not found or selector is ambiguous")
+        source_id, source_cwd = resolved
+        source = loaded.get(source_id)
+        if source is not None and (
+            bool(getattr(source, "_foreground_turn_active", False))
+            or bool(getattr(getattr(source, "_turn_lock", None), "locked", lambda: False)())
+        ):
+            raise HTTPException(status_code=409, detail="Cannot fork a session while it is running")
+        try:
+            forked = SessionStorage.fork_from(
+                source_cwd,
+                source_id,
+                req.message_uuid,
+                title=req.title,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status = 404 if "not found" in detail.lower() else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
+    return _session_info_from_row({**forked.meta, "session_id": forked.session_id})
 
 
 @router.get("/list", response_model=list[SessionInfo])
@@ -590,12 +655,17 @@ async def resolve_session(selector: str, request: Request) -> SessionInfo:
             if settings is not None and hasattr(settings, "get_api_config")
             else None
         )
+        session_meta = getattr(getattr(session, "_session_storage", None), "meta", {}) or {}
         return SessionInfo(
             session_id=session_id,
             message_count=len(getattr(session, "messages", ())),
             model=str(getattr(active_config, "model", "") or ""),
             provider=str(getattr(active_config, "provider", "") or ""),
             cwd=resolved_cwd,
+            title=str(session_meta.get("title") or ""),
+            forked_from_session_id=session_meta.get("forked_from_session_id"),
+            forked_from_message_uuid=session_meta.get("forked_from_message_uuid"),
+            forked_from_title=session_meta.get("forked_from_title"),
         )
 
     store = SessionMetaStore()

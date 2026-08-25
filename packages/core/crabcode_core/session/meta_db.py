@@ -55,7 +55,10 @@ CREATE TABLE IF NOT EXISTS session_meta (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     is_archived INTEGER NOT NULL DEFAULT 0,
-    message_count INTEGER NOT NULL DEFAULT 0
+    message_count INTEGER NOT NULL DEFAULT 0,
+    forked_from_session_id TEXT,
+    forked_from_message_uuid TEXT,
+    forked_from_title TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_session_meta_updated
     ON session_meta(updated_at DESC, id DESC);
@@ -77,6 +80,9 @@ CREATE TRIGGER IF NOT EXISTS prevent_tombstoned_session_insert
 
 _MIGRATIONS = [
     "ALTER TABLE session_meta ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE session_meta ADD COLUMN forked_from_session_id TEXT",
+    "ALTER TABLE session_meta ADD COLUMN forked_from_message_uuid TEXT",
+    "ALTER TABLE session_meta ADD COLUMN forked_from_title TEXT",
     """\
 CREATE TABLE IF NOT EXISTS checkpoints (
     id TEXT PRIMARY KEY,
@@ -156,8 +162,9 @@ class SessionMetaStore:
             """INSERT INTO session_meta
                (id, title, cwd, model, provider, first_user_message,
                 tokens_used, git_branch, git_sha,
-                created_at, updated_at, is_archived, message_count, summary)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, is_archived, message_count, summary,
+                forked_from_session_id, forked_from_message_uuid, forked_from_title)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    title = excluded.title,
                    cwd = excluded.cwd,
@@ -173,6 +180,9 @@ class SessionMetaStore:
                    -- session write must not make the row visible again.
                    is_archived = MAX(session_meta.is_archived, excluded.is_archived),
                    message_count = excluded.message_count,
+                   forked_from_session_id = excluded.forked_from_session_id,
+                   forked_from_message_uuid = excluded.forked_from_message_uuid,
+                   forked_from_title = excluded.forked_from_title,
                    summary = CASE
                        WHEN ? THEN excluded.summary
                        ELSE session_meta.summary
@@ -192,6 +202,9 @@ class SessionMetaStore:
                 1 if meta.get("is_archived") else 0,
                 meta.get("message_count", 0),
                 summary or "",
+                meta.get("forked_from_session_id"),
+                meta.get("forked_from_message_uuid"),
+                meta.get("forked_from_title"),
                 1 if summary_provided else 0,
             ),
         )

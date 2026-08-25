@@ -271,6 +271,17 @@ export class GatewayApi {
     });
   }
 
+  forkSession(sessionId: string, messageUuid: string, title?: string): Promise<SessionInfo> {
+    return this.request("/session/fork", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: sessionId,
+        message_uuid: messageUuid,
+        title: title || null,
+      }),
+    });
+  }
+
   compactSession(sessionId: string, customInstructions = ""): Promise<{ status: string }> {
     return this.request("/session/compact", {
       method: "POST",

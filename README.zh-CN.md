@@ -106,6 +106,10 @@ crabcode sessions search "重构认证"
 # 导出会话为 Markdown 或 JSON
 crabcode sessions export <id> --format md --output chat.md
 
+# 从任意助手回复分叉会话（支持完整 ID 或唯一前缀）
+crabcode sessions fork <session-id> <assistant-message-uuid>
+crabcode sessions fork <session-id> <assistant-message-uuid> --title "尝试另一种方案"
+
 # 归档旧会话（超过 30 天）并清理文件
 crabcode sessions prune --days 30 --delete-files
 
@@ -113,6 +117,9 @@ crabcode sessions prune --days 30 --delete-files
 crabcode stats
 crabcode stats --project   # 仅当前项目
 ```
+
+在交互式 CLI 中使用 `/fork [assistant-message-uuid]`；省略 UUID 时从最后一条已
+完成的助手回复分叉。助手消息 UUID 支持补全和唯一前缀。
 
 ## 多 API 支持
 
@@ -184,6 +191,7 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/session/compact` | POST | 手动触发对话压缩 |
 | `/session/clear` | POST | 清空活动上下文并持久化清空边界 |
 | `/session/messages` | GET | 读取结构化的活动消息投影 |
+| `/session/fork` | POST | 从任意已完成的助手回复原子分叉会话，并记录来源会话、消息和标题 |
 | `/session/list` | GET | 列出当前项目或可选 `cwd` 对应的持久化会话 |
 | `/session/recent` | GET | 跨项目列出最近会话 |
 | `/session/search` | POST | 按标题或消息搜索会话 |
@@ -255,6 +263,12 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 远程 Gateway、项目、多会话并行、流式聊天、权限、计划、diff 和检查点恢复。
 Tauri 额外提供系统凭据库与本地 Gateway 自动启动；浏览器版连接已经运行的
 Gateway，密码只保留在当前浏览器标签页中。
+
+Desktop 和 VS Code 扩展中的每条已完成助手回复都可以分叉到新会话。新会话会
+立即打开，保留该回复之前的对话，并显示来源会话/标题；运行中的轮次、待处理的
+工具、权限请求和 WebSocket 运行态不会被复制。VS Code 聊天里的复制按钮默认隐藏，
+在 hover 或 focus 时显示，可复制完整回复、代码块、Markdown 表格、工具参数与
+输出、diff 以及错误内容。
 
 Tauri 将不含敏感信息的 UI 状态写入
 `~/.crabcode/settings_desktop.json`；Gateway 模型和工具配置仍使用原有

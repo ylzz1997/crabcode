@@ -107,6 +107,10 @@ crabcode sessions search "refactor auth"
 # Export a session to Markdown or JSON
 crabcode sessions export <id> --format md --output chat.md
 
+# Fork a session from an assistant reply (full or unique-prefix IDs)
+crabcode sessions fork <session-id> <assistant-message-uuid>
+crabcode sessions fork <session-id> <assistant-message-uuid> --title "Try another approach"
+
 # Archive old sessions (older than 30 days) and clean up
 crabcode sessions prune --days 30 --delete-files
 
@@ -114,6 +118,10 @@ crabcode sessions prune --days 30 --delete-files
 crabcode stats
 crabcode stats --project   # current project only
 ```
+
+Inside the interactive CLI, use `/fork [assistant-message-uuid]`; omitting the
+UUID forks from the latest completed assistant reply. UUIDs support completion
+and unique prefixes.
 
 ## Multi-API Support
 
@@ -191,6 +199,7 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/session/compact` | POST | Trigger manual compaction |
 | `/session/clear` | POST | Clear the active context and persist the clear boundary |
 | `/session/messages` | GET | Read the structured active message projection |
+| `/session/fork` | POST | Atomically fork a session through any completed assistant reply; records the source session/message/title |
 | `/session/list` | GET | List persisted sessions for the current project, or for an optional `cwd` |
 | `/session/recent` | GET | List recent sessions across projects |
 | `/session/search` | POST | Search sessions by title or message |
@@ -263,6 +272,14 @@ remote Gateways, projects, concurrent sessions, streaming chat, permissions,
 plans, diffs, and checkpoint recovery. Tauri additionally provides system
 credential storage and automatic local Gateway startup; browser mode connects
 to an already-running Gateway and retains passwords only for the current tab.
+
+In Desktop and the VS Code extension, every completed assistant reply can be
+forked into a new session. The new session opens immediately, preserves the
+conversation up to that reply, and shows its source session/title. Running
+turns, pending tools, permission requests, and WebSocket runtime state are not
+copied. In the VS Code chat, copy controls stay hidden until hover or focus;
+they are available for full replies, fenced code, Markdown tables, tool input
+and output, diffs, and error messages.
 
 Tauri writes non-secret UI state to `~/.crabcode/settings_desktop.json`.
 Gateway model and tool settings continue to use the normal `settings.json`.

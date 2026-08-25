@@ -11,6 +11,7 @@ Architecture mirrors OpenCode's agent.ts:
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from typing import Any
 
@@ -47,6 +48,7 @@ from acp.schema import (
     SessionModeState,
     SessionModelState,
     SessionResumeCapabilities,
+    SessionForkCapabilities,
     SetSessionConfigOptionResponse,
     SetSessionModeResponse,
     SetSessionModelResponse,
@@ -800,11 +802,7 @@ class CrabCodeACPAgent:
                 mcp_capabilities=McpCapabilities(http=True, sse=True),
                 prompt_capabilities=PromptCapabilities(embedded_context=True, image=True),
                 session_capabilities=SessionCapabilities(
-                    # Fork is intentionally not advertised until the Gateway
-                    # has a durable transcript-clone endpoint.  The previous
-                    # implementation returned an empty session while claiming
-                    # fork support, which silently discarded conversation
-                    # history.
+                    fork=SessionForkCapabilities(),
                     list=SessionListCapabilities(),
                     resume=SessionResumeCapabilities(),
                 ),
@@ -906,10 +904,58 @@ class CrabCodeACPAgent:
         mcp_servers: list[McpServerStdio | HttpMcpServer | SseMcpServer] | None = None,
         **kwargs: Any,
     ) -> ForkSessionResponse:
-        raise RequestError(
-            code=-32601,
-            message="Session fork is not supported by the CrabCode Gateway",
-        )
+        if self._closed:
+            raise RequestError(code=-32603, message="ACP agent is closed")
+        try:
+            # ACP currently identifies the source session, not a message. Use
+            # its latest completed assistant reply; Desktop exposes the more
+            # precise message-level fork endpoint directly.
+            messages_resp = await self._session_mgr.client.get(
+                "/session/messages",
+                params={"session_id": session_id},
+            )
+            messages_resp.raise_for_status()
+            messages = messages_resp.json()
+            requested_uuid = kwargs.get("message_uuid") or kwargs.get("messageUuid")
+            assistant_uuid = str(requested_uuid) if requested_uuid else next(
+                (
+                    str(message.get("uuid"))
+                    for message in reversed(messages)
+                    if isinstance(message, dict)
+                    and message.get("role") == "assistant"
+                    and message.get("uuid")
+                ),
+                None,
+            )
+            if assistant_uuid is None:
+                raise RequestError(code=-32602, message="Session has no assistant reply to fork")
+            response = await self._session_mgr.client.post(
+                "/session/fork",
+                json={"session_id": session_id, "message_uuid": assistant_uuid},
+            )
+            response.raise_for_status()
+            data = response.json()
+            forked_id = str(data["session_id"])
+            state = ACPSessionState(
+                id=forked_id,
+                cwd=str(data.get("cwd") or cwd),
+                mcp_servers=mcp_servers or [],
+                created_at=time.time(),
+                model=self._config.default_model,
+            )
+            self._session_mgr._sessions[forked_id] = state
+            models_state = await self._build_models_state(state)
+            modes_state = await self._build_modes_state(state)
+            return ForkSessionResponse(
+                session_id=forked_id,
+                models=models_state,
+                modes=modes_state,
+                config_options=_build_config_options(models_state, modes_state),
+            )
+        except RequestError:
+            raise
+        except Exception as e:
+            raise RequestError(code=-32603, message=str(e))
 
     async def resume_session(
         self,

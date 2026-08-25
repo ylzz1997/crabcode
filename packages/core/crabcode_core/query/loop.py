@@ -1070,6 +1070,14 @@ async def query_loop(
                 if context_window_tokens
                 else 0.0
             )
+            assistant_uuid = next(
+                (
+                    str(message.uuid)
+                    for message in reversed(snapshot)
+                    if getattr(getattr(message, "role", None), "value", getattr(message, "role", None)) == "assistant"
+                ),
+                None,
+            )
             return TurnCompleteEvent(
                 reason=reason,
                 turn_count=turn_count,
@@ -1078,6 +1086,7 @@ async def query_loop(
                 context_window_tokens=context_window_tokens,
                 context_remaining_tokens=context_remaining,
                 context_used_percent=context_percent,
+                assistant_message_uuid=assistant_uuid,
             )
 
         assistant_content: list[ContentBlock] = []

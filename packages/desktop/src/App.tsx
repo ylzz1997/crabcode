@@ -743,12 +743,21 @@ function App() {
       cwd: activeSession.cwd,
       tokens_used: existing?.tokens_used ?? activeSession.status?.context_used_tokens ?? 0,
       preview: existing?.preview || userPreview.slice(0, 100),
+      forked_from_session_id: existing?.forked_from_session_id ?? null,
+      forked_from_message_uuid: existing?.forked_from_message_uuid ?? null,
+      forked_from_title: existing?.forked_from_title ?? null,
     };
     if (existing) {
       return activeList.map((item) => item.session_id === activeSession.id ? optimistic : item);
     }
     return [optimistic, ...activeList];
   }, [activeList, activeProject, activeSession]);
+  const activeSessionInfo = activeSession
+    ? displayList.find((item) => item.session_id === activeSession.id)
+    : undefined;
+  const activeForkOrigin = activeSessionInfo?.forked_from_title
+    || activeSessionInfo?.forked_from_session_id?.slice(0, 8)
+    || null;
 
   const refreshSchedules = useCallback(async (connectionId: string) => {
     const api = apiRef.current.get(connectionId);
@@ -1228,6 +1237,32 @@ function App() {
     channelRef.current.set(key, channel);
     void channel.connect();
   }, [gateways, refreshProjectSessions, updateConnection, updateSessionStatus]);
+
+  const forkSessionFromMessage = useCallback(async (item: ChatItem) => {
+    if (
+      !activeConnection
+      || !activeProject
+      || !activeSession
+      || activeSession.id.startsWith("new-")
+      || activeSession.busy
+      || item.kind !== "assistant"
+    ) return;
+    const api = apiRef.current.get(activeConnection.id);
+    if (!api) {
+      setGlobalError("Gateway 尚未连接");
+      return;
+    }
+    const messageUuid = item.id.replace(/:part-\d+$/, "");
+    try {
+      const forked = await api.forkSession(activeSession.id, messageUuid);
+      openSession(activeConnection, activeProject, forked);
+      void refreshProjectSessions(activeConnection.id, activeProject.path).catch((error) => {
+        setGlobalError(error instanceof Error ? error.message : String(error));
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  }, [activeConnection, activeProject, activeSession, openSession, refreshProjectSessions]);
 
   const connectGateway = useCallback(async (connection: ConnectionPreset, pythonPath: string | null) => {
     setGateways((current) => ({
@@ -3097,6 +3132,9 @@ function App() {
                 <div className="conversation-title">
                   <h1>{activeSession.title}</h1>
                   <span>{activeSession.cwd}</span>
+                  {activeForkOrigin && (
+                    <small className="conversation-origin">来自“{activeForkOrigin}” · 分叉</small>
+                  )}
                 </div>
                 <div className="conversation-view-tabs" role="tablist" aria-label="会话视图">
                   <button
@@ -3172,6 +3210,8 @@ function App() {
                       action,
                       item.detail && typeof item.detail === "object" ? item.detail as Record<string, unknown> : undefined,
                     )}
+                    onFork={forkSessionFromMessage}
+                    forkDisabled={activeSession.busy}
                     onCompatibilityRetry={item.kind === "document_job" && item.engine === "precise" && item.status === "failed"
                       ? () => startDocumentAction("translate", {
                           locale: item.locale,
@@ -4917,7 +4957,7 @@ export function MessageMarkdown({ children }: { children: string }) {
   );
 }
 
-export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan, onCompatibilityRetry }: {
+export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, onToggleChoice, onSubmitChoice, onPlan, onCompatibilityRetry, onFork, forkDisabled }: {
   item: ChatItem;
   now: number;
   showTurnDuration: boolean;
@@ -4927,6 +4967,8 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
   onSubmitChoice: (item: ChatItem) => void;
   onPlan: (action: "execute" | "revise" | "cancel") => void;
   onCompatibilityRetry?: () => void;
+  onFork?: (item: ChatItem) => void;
+  forkDisabled?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(item.collapsed ?? false);
   const durationMs = item.durationMs ?? (item.startedAt ? Math.max(0, now - item.startedAt) : null);
@@ -4943,7 +4985,21 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     return (
       <article className="message assistant-message">
         <MessageMarkdown>{item.text ?? ""}</MessageMarkdown>
-        {item.text && <div className="message-actions"><CopyButton text={item.text} label="复制回复" /></div>}
+        {item.text && <div className="message-actions">
+          <CopyButton text={item.text} label="复制回复" />
+          {item.status === "complete" && onFork && (
+            <button
+              className="copy-button fork-button"
+              type="button"
+              title="从此处分叉"
+              aria-label="从此处分叉"
+              disabled={forkDisabled}
+              onClick={() => onFork(item)}
+            >
+              <GitBranch />
+            </button>
+          )}
+        </div>}
       </article>
     );
   }

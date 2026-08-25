@@ -582,6 +582,11 @@ svg {
   padding: 2px 0;
 }
 
+.conversation-origin {
+  color: var(--subtle);
+  font-size: 11px;
+}
+
 .message-actions {
   display: flex;
   justify-content: flex-end;

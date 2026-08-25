@@ -90,6 +90,12 @@ class ResumeSessionRequest(BaseModel):
     model_profile: str | None = None
 
 
+class ForkSessionRequest(BaseModel):
+    session_id: str
+    message_uuid: str = Field(min_length=1)
+    title: str | None = Field(default=None, max_length=200)
+
+
 class CompactRequest(BaseModel):
     session_id: str
     custom_instructions: str | None = None
@@ -534,6 +540,9 @@ class SessionInfo(BaseModel):
     cwd: str = ""
     tokens_used: int = 0
     preview: str = ""
+    forked_from_session_id: str | None = None
+    forked_from_message_uuid: str | None = None
+    forked_from_title: str | None = None
 
 
 class WorkspaceInfo(BaseModel):
@@ -984,6 +993,7 @@ class TurnCompletePayload(BaseModel):
     context_window_tokens: int = 0
     context_remaining_tokens: int = 0
     context_used_percent: float = 0.0
+    assistant_message_uuid: str | None = None
 
 
 class StreamModePayload(BaseModel):
@@ -1316,6 +1326,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             context_window_tokens=event.context_window_tokens,
             context_remaining_tokens=event.context_remaining_tokens,
             context_used_percent=event.context_used_percent,
+            assistant_message_uuid=event.assistant_message_uuid,
         )
     if isinstance(event, StreamModeEvent):
         return StreamModePayload(mode=event.mode, agent_id=event.agent_id)

@@ -101,6 +101,7 @@ class TurnCompleteEvent:
     context_window_tokens: int = 0
     context_remaining_tokens: int = 0
     context_used_percent: float = 0.0
+    assistant_message_uuid: str | None = None
 
 
 @dataclass

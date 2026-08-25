@@ -44,6 +44,7 @@ import type {
   ScheduleRunInfo,
   SessionMessagePayload,
   SessionHistoryPayload,
+  SessionInfo,
   SessionRuntimeStatus,
   SnapshotPayload,
   StreamModePayload,
@@ -225,6 +226,9 @@ export interface ChatMessage {
   parentId?: string | null;
   origin?: string | null;
   usage?: Record<string, unknown> | null;
+  /** Durable assistant UUID used by message-level session forks. */
+  messageUuid?: string | null;
+  copyLabel?: string | null;
 }
 
 export interface ToolCard {
@@ -442,6 +446,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "sendMessage":
           this.handleUserMessage(msg.text, msg.images);
           break;
+        case "copyText":
+          if (typeof msg.text === "string") void this.copyTextToClipboard(msg.text, typeof msg.requestId === "string" ? msg.requestId : "");
+          break;
+        case "forkSession":
+          if (typeof msg.messageUuid === "string") void this.forkSession(msg.messageUuid);
+          break;
         case "requestHistory":
           this.postMessage({ type: "history", items: this.history });
           break;
@@ -564,6 +574,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             cwd,
             normalizeSessionLaunchOverrides(msg.options),
           );
+          this.postMessage({ type: "sessionInfo", sessionId: null, title: "新会话", origin: null, status: "done" });
           this.postMessage({ type: "history", items: [] });
           this.postMessage({ type: "busyState", busy: false });
           this.postMessage({ type: "contextUsage", usage: null });
@@ -1121,6 +1132,73 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async copyTextToClipboard(text: string, requestId: string): Promise<void> {
+    try {
+      await vscode.env.clipboard.writeText(text);
+      this.postMessage({ type: "copyResult", requestId, ok: true });
+    } catch (error) {
+      this.postMessage({
+        type: "copyResult",
+        requestId,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async forkSession(messageUuid: string): Promise<void> {
+    const sourceSessionId = this.displayedSessionId ?? this.connection.sessionId;
+    if (!sourceSessionId) {
+      this.addMessage("system", "无法分叉：当前没有活动会话。");
+      return;
+    }
+    let targetSessionId = sourceSessionId;
+    if (this.busySessions.has(sourceSessionId) || this.getSessionState(sourceSessionId).isBusy) {
+      this.addMessage("system", "当前会话仍在运行，完成后才能分叉。");
+      return;
+    }
+
+    try {
+      const response = await fetch(this._gatewayUrl("/session/fork"), {
+        method: "POST",
+        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sourceSessionId, message_uuid: messageUuid }),
+      });
+      if (!response.ok) {
+        this.addSessionSystemMessage(sourceSessionId, `分叉失败：${await this.gatewayError(response)}`);
+        return;
+      }
+      const forked = await response.json() as SessionInfo;
+      const forkedId = typeof forked.session_id === "string" ? forked.session_id : "";
+      if (!forkedId) throw new Error("网关没有返回新会话 ID");
+      targetSessionId = forkedId;
+
+      // Switch the displayed state before the resume handshake so late events
+      // from the source session cannot repaint the new conversation.
+      this.busySessions.delete(sourceSessionId);
+      this.displayedSessionId = forkedId;
+      const state = this.getSessionState(forkedId);
+      state.isBusy = false;
+      state.activeOperationId = null;
+      state.pendingSteeringMessages = [];
+      this.postMessage({ type: "history", items: state.history });
+      this.postMessage({ type: "busyState", busy: false });
+      this.postMessage({ type: "contextUsage", usage: state.contextUsage ?? null });
+      this.postMessage({ type: "steeringQueue", messages: [] });
+      const origin = forked.forked_from_title
+        || (forked.forked_from_session_id ? `会话 ${forked.forked_from_session_id.slice(0, 8)}…` : `会话 ${sourceSessionId.slice(0, 8)}…`);
+      this.postMessage({ type: "sessionInfo", sessionId: forkedId, title: forked.title || "分叉会话", origin, status: "done" });
+      this.connection.sendResumeSession(forkedId);
+      await this.fetchAndApplySessionHistory(forkedId);
+      void this.fetchAndSendSessions();
+    } catch (error) {
+      this.addSessionSystemMessage(
+        targetSessionId,
+        `分叉失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   private async fetchAndSendCurrentTitle(): Promise<void> {
     const sid = this.connection.sessionId;
     if (!sid) return;
@@ -1136,10 +1214,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (password) headers.Authorization = `Bearer ${password}`;
       const response = await fetch(url.toString(), { headers });
       if (!response.ok) return;
-      const sessions = (await response.json()) as Array<{ session_id: string; title?: string }>;
+      const sessions = (await response.json()) as Array<SessionInfo>;
       const found = sessions.find((s) => s.session_id === sid);
       if (found?.title) {
-        this.postMessage({ type: "sessionInfo", sessionId: sid, title: found.title, status: null });
+        const origin = found.forked_from_title
+          || (found.forked_from_session_id ? `会话 ${found.forked_from_session_id.slice(0, 8)}…` : null);
+        this.postMessage({ type: "sessionInfo", sessionId: sid, title: found.title, origin, status: null });
       }
     } catch {
       // ignore
@@ -1300,19 +1380,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (password) headers.Authorization = `Bearer ${password}`;
       const response = await fetch(url.toString(), { headers });
       if (!response.ok) return;
-      const sessions = (await response.json()) as Array<{
-        session_id: string;
-        message_count?: number;
-        model?: string;
-        created_at?: string;
-        title?: string;
-      }>;
+      const sessions = (await response.json()) as Array<SessionInfo>;
       const sessionList = sessions.map((s) => ({
         session_id: s.session_id,
         message_count: s.message_count,
         model: s.model,
         created_at: s.created_at,
         title: s.title ?? s.session_id.slice(0, 12),
+        forked_from_title: s.forked_from_title,
+        forked_from_session_id: s.forked_from_session_id,
         status: this.busySessions.has(s.session_id) ? "running" : "done",
       }));
       this.postMessage({ type: "sessionList", sessions: sessionList });
@@ -1345,6 +1421,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     // Immediately update displayed session before processing
     this.displayedSessionId = sessionId;
+    this.postMessage({ type: "sessionInfo", sessionId, title: null, origin: null, status: this.busySessions.has(sessionId) ? "running" : "done" });
 
     // If we already have cached state for this session, render it immediately
     const cached = this.sessionStates.get(sessionId);
@@ -1586,10 +1663,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       url.searchParams.set("limit", String(limit));
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) return;
-      const sessions = (await response.json()) as Array<{
-        session_id: string; message_count?: number; model?: string; created_at?: string; title?: string;
-        cwd?: string; tokens_used?: number; preview?: string;
-      }>;
+      const sessions = (await response.json()) as Array<SessionInfo>;
       const sessionList = sessions.map((s) => ({
         session_id: s.session_id,
         message_count: s.message_count,
@@ -1599,6 +1673,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         cwd: s.cwd,
         tokens_used: s.tokens_used,
         preview: s.preview,
+        forked_from_title: s.forked_from_title,
+        forked_from_session_id: s.forked_from_session_id,
         status: this.busySessions.has(s.session_id) ? "running" : "done",
       }));
       this.postMessage({ type: "sessionList", sessions: sessionList });
@@ -1613,10 +1689,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ query, limit: 20 }),
       });
       if (!response.ok) return;
-      const sessions = (await response.json()) as Array<{
-        session_id: string; message_count?: number; model?: string; created_at?: string; title?: string;
-        cwd?: string; tokens_used?: number; preview?: string;
-      }>;
+      const sessions = (await response.json()) as Array<SessionInfo>;
       const sessionList = sessions.map((s) => ({
         session_id: s.session_id,
         message_count: s.message_count,
@@ -1626,6 +1699,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         cwd: s.cwd,
         tokens_used: s.tokens_used,
         preview: s.preview,
+        forked_from_title: s.forked_from_title,
+        forked_from_session_id: s.forked_from_session_id,
         status: this.busySessions.has(s.session_id) ? "running" : "done",
       }));
       this.postMessage({ type: "sessionList", sessions: sessionList });
@@ -3363,7 +3438,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.handleFileChangeOnState(state, payload as FileChangePayload, updateWebview);
         break;
       case "error":
-        this.addMessageOnState(state, "system", `CrabCode：${payload.message}`, updateWebview);
+        this.addMessageOnState(state, "system", `CrabCode：${payload.message}`, updateWebview, undefined, "复制错误");
         if (payload.command_error && payload.command === "steer_message") {
           state.pendingSteeringMessages.shift();
           if (updateWebview) {
@@ -3394,6 +3469,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         if (!this.terminalBelongsToState(payload, state)) break;
         this.finalizeThinkingOnState(state, updateWebview);
+        const assistantMessageUuid = (payload as TurnCompletePayload).assistant_message_uuid;
+        if (assistantMessageUuid) {
+          const latestAssistant = [...state.messages].reverse().find((message) => message.role === "assistant");
+          if (latestAssistant) {
+            latestAssistant.messageUuid = assistantMessageUuid;
+            if (updateWebview) {
+              this.postMessage({
+                type: "messageForkable",
+                id: latestAssistant.id,
+                messageUuid: assistantMessageUuid,
+              });
+            }
+          }
+        }
         state.activeOperationId = null;
         state.isBusy = false;
         state.batchDenied = false;
@@ -3484,6 +3573,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           parentId,
           origin,
           usage,
+          messageUuid: role === "assistant" ? baseId : null,
         };
         state.messages.push(chatMsg);
         state.history.push({ kind: "message", message: chatMsg });
@@ -4017,13 +4107,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private addMessageOnState(state: SessionState, role: ChatMessageRole, text: string, updateWebview: boolean, images?: ImageAttachment[]): void {
+  private addMessageOnState(
+    state: SessionState,
+    role: ChatMessageRole,
+    text: string,
+    updateWebview: boolean,
+    images?: ImageAttachment[],
+    copyLabel?: string,
+  ): void {
     const msg: ChatMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
       timestamp: Date.now(),
       images,
+      copyLabel: copyLabel ?? null,
     };
     state.messages.push(msg);
     state.history.push({ kind: "message", message: msg });
@@ -4258,6 +4356,122 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       word-break: break-word;
       line-height: 1.55;
       font-size: 13px;
+    }
+    .msg .assistant-markdown {
+      white-space: normal;
+    }
+    .assistant-markdown .md-text {
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+    }
+    .copyable-content {
+      position: relative;
+      min-width: 0;
+    }
+    .copyable-content > pre {
+      margin: 0;
+      padding: 10px 42px 34px 10px;
+      overflow: auto;
+      white-space: pre;
+      word-break: normal;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .message-code-shell { margin: 10px 0; }
+    .message-table-shell { margin: 10px 0; }
+    .message-table-wrap {
+      overflow-x: auto;
+      padding-bottom: 30px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--surface-soft) 80%, var(--vscode-editor-background));
+    }
+    .message-table-wrap table {
+      width: 100%;
+      min-width: 360px;
+      border-collapse: collapse;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .message-table-wrap th,
+    .message-table-wrap td {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+    .message-table-wrap th {
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .message-table-wrap tr:last-child td { border-bottom: 0; }
+    .copy-button {
+      position: absolute;
+      right: 7px;
+      bottom: 7px;
+      z-index: 2;
+      width: 25px;
+      height: 25px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: color-mix(in srgb, var(--surface) 88%, var(--vscode-editor-background));
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .14s, color .14s, border-color .14s, background .14s;
+    }
+    .copyable-content:hover > .copy-button,
+    .copyable-content:focus-within > .copy-button,
+    .message-actions:hover > .copy-button,
+    .message-actions:focus-within > .copy-button,
+    .msg.copyable-inline:hover .copy-button,
+    .msg.copyable-inline:focus-within .copy-button,
+    .copy-button:focus-visible,
+    .copy-button[data-copy-state="copied"] {
+      opacity: .84;
+      pointer-events: auto;
+    }
+    .copy-button:hover,
+    .copy-button:focus-visible {
+      opacity: 1;
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--accent-muted);
+    }
+    .copy-button[data-copy-state="copied"] { color: var(--vscode-terminal-ansiGreen, #89d185); opacity: 1; }
+    .copy-button:disabled { cursor: default; opacity: 0; pointer-events: none; }
+    .copy-button svg { width: 13px; height: 13px; }
+    .message-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 4px;
+      min-height: 25px;
+      margin-top: 6px;
+      position: relative;
+    }
+    .message-actions .copy-button {
+      position: static;
+    }
+    .fork-button { margin-left: 2px; }
+    .tool-copy-button { position: absolute; right: 8px; bottom: 8px; }
+    .tool-card-section.copyable-content { padding-bottom: 30px; }
+    .tool-result-shell { min-height: 28px; }
+    .tool-card-body .tool-result-shell > pre {
+      padding-right: 42px;
+      padding-bottom: 34px;
+    }
+    @media (hover: none) {
+      .copy-button:not(:disabled) { opacity: .82; pointer-events: auto; }
     }
 
     /* ── Tool cards ────────────────────────────────────────────── */
@@ -5992,6 +6206,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       flex: 1;
       min-width: 0;
     }
+    .session-origin {
+      display: none;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 400;
+    }
+    .session-origin.visible { display: inline; }
     .session-header-right {
       display: flex;
       align-items: center;
@@ -6258,6 +6483,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <span class="session-title" id="session-title">新会话</span>
+      <span class="session-origin" id="session-origin" title=""></span>
     </div>
     <div class="session-header-right">
       <button type="button" class="session-hdr-btn" id="hdr-new-btn" title="新建会话">
@@ -6430,6 +6656,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const sessionListNewBtn = document.getElementById('session-list-new-btn');
         const sessionBackBtn = document.getElementById('session-back-btn');
         const sessionTitleEl = document.getElementById('session-title');
+        const sessionOriginEl = document.getElementById('session-origin');
         const hdrNewBtn = document.getElementById('hdr-new-btn');
         const hdrSettingsBtn = document.getElementById('hdr-settings-btn');
         const hdrHistoryBtn = document.getElementById('hdr-history-btn');
@@ -6531,6 +6758,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (sessionTitleEl) sessionTitleEl.textContent = currentSessionTitle;
     }
 
+    function setSessionOrigin(origin) {
+      const value = origin ? String(origin) : '';
+      if (!sessionOriginEl) return;
+      sessionOriginEl.textContent = value ? '· 来自 ' + value : '';
+      sessionOriginEl.title = value;
+      sessionOriginEl.classList.toggle('visible', !!value);
+    }
+
     function showSessionList() {
       sessionListVisible = true;
       if (sessionListPanel) sessionListPanel.classList.add('visible');
@@ -6564,6 +6799,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (session.message_count != null) parts.push(session.message_count + ' 条消息');
       if (session.tokens_used != null && session.tokens_used > 0) parts.push(session.tokens_used.toLocaleString() + ' tokens');
       if (session.model) parts.push(session.model);
+      if (session.forked_from_title) parts.push('来自 ' + session.forked_from_title);
+      else if (session.forked_from_session_id) parts.push('来自 ' + session.forked_from_session_id.slice(0, 8) + '…');
       if (session.cwd) {
         const cwdParts = String(session.cwd).split(/[\\/]/).filter(Boolean);
         if (cwdParts.length > 0) parts.push(cwdParts[cwdParts.length - 1]);
@@ -6887,6 +7124,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       stickToBottom = isNearBottom();
     });
 
+    let copyRequestCounter = 0;
+    msgContainer.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const forkButton = target.closest('[data-fork-message-uuid]');
+      if (forkButton instanceof HTMLElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        const messageUuid = forkButton.getAttribute('data-fork-message-uuid');
+        if (messageUuid) vscode.postMessage({ type: 'forkSession', messageUuid });
+        return;
+      }
+      const copyButton = target.closest('[data-copy-text]');
+      if (!(copyButton instanceof HTMLElement)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const text = copyButton.getAttribute('data-copy-text') || '';
+      if (!text) return;
+      copyRequestCounter += 1;
+      const requestId = 'copy-' + Date.now() + '-' + copyRequestCounter;
+      copyButton.dataset.copyId = requestId;
+      copyButton.dataset.copyState = 'pending';
+      vscode.postMessage({ type: 'copyText', text, requestId });
+    });
+
     window.addEventListener('resize', () => {
       updatePanelWidthMode();
       if (!plusMenu.classList.contains('hidden')) {
@@ -6909,12 +7171,121 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }).observe(document.body);
     }
 
+    function copyIconSvg() {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    }
+
+    function forkIconSvg() {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="18" cy="19" r="2"></circle><path d="M6 7v5a5 5 0 0 0 5 5h5"></path><path d="M15 14l3 3 3-3"></path></svg>';
+    }
+
+    function copyButtonHtml(text, label, extraClass) {
+      if (!text) return '';
+      return '<button type="button" class="copy-button ' + (extraClass || '') + '" data-copy-text="' + escapeAttr(text) + '" data-copy-label="' + escapeAttr(label || '复制') + '" title="' + escapeAttr(label || '复制') + '" aria-label="' + escapeAttr(label || '复制') + '">' + copyIconSvg() + '</button>';
+    }
+
+    function forkButtonHtml(messageUuid) {
+      if (!messageUuid) return '';
+      return '<button type="button" class="copy-button fork-button" data-fork-message-uuid="' + escapeAttr(messageUuid) + '" title="从此处分叉" aria-label="从此处分叉"' + (isBusy ? ' disabled' : '') + '>' + forkIconSvg() + '</button>';
+    }
+
+    function updateForkButtonsDisabled() {
+      msgContainer.querySelectorAll('[data-fork-message-uuid]').forEach(button => {
+        button.disabled = !!isBusy;
+      });
+    }
+
+    function tableRowCells(line) {
+      let value = String(line || '').trim();
+      if (value.startsWith('|')) value = value.slice(1);
+      if (value.endsWith('|')) value = value.slice(0, -1);
+      return value.split('|').map(cell => cell.trim());
+    }
+
+    function isTableSeparator(line) {
+      const cells = tableRowCells(line);
+      return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
+    }
+
+    function isTableAt(lines, index) {
+      return index + 1 < lines.length
+        && lines[index].includes('|')
+        && isTableSeparator(lines[index + 1]);
+    }
+
+    function renderAssistantMarkdown(text) {
+      const lines = String(text || '').split('\\n');
+      const parts = [];
+      let paragraph = [];
+      let code = null;
+      let codeLines = [];
+
+      const flushParagraph = () => {
+        if (!paragraph.length) return;
+        parts.push('<div class="md-text">' + escapeHtml(paragraph.join('\\n')) + '</div>');
+        paragraph = [];
+      };
+      const flushCode = () => {
+        if (code === null) return;
+        const source = codeLines.join('\\n');
+        const languageClass = code.trim() ? ' language-' + escapeAttr(code.trim().toLowerCase()) : '';
+        parts.push('<div class="copyable-content message-code-shell"><pre><code class="' + languageClass + '">' + escapeHtml(source) + '</code></pre>' + copyButtonHtml(source, '复制代码', 'tool-copy-button') + '</div>');
+        code = null;
+        codeLines = [];
+      };
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const fenceMarker = String.fromCharCode(96).repeat(3);
+        const fence = line.match(new RegExp('^\\s*' + fenceMarker + '\\s*([^' + String.fromCharCode(96) + ']*)\\s*$'));
+        if (fence) {
+          if (code !== null) flushCode();
+          else {
+            flushParagraph();
+            code = fence[1] || '';
+            codeLines = [];
+          }
+          continue;
+        }
+        if (code !== null) {
+          codeLines.push(line);
+          continue;
+        }
+        if (isTableAt(lines, index)) {
+          flushParagraph();
+          const tableLines = [lines[index]];
+          const tableSourceLines = [lines[index], lines[index + 1]];
+          const header = tableRowCells(lines[index]);
+          index += 2;
+          while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
+            tableLines.push(lines[index]);
+            tableSourceLines.push(lines[index]);
+            index += 1;
+          }
+          index -= 1;
+          const rows = tableLines.map(tableRowCells);
+          const headHtml = rows[0].map(cell => '<th>' + escapeHtml(cell) + '</th>').join('');
+          const bodyHtml = rows.slice(1).map(row => '<tr>' + header.map((_, cellIndex) => '<td>' + escapeHtml(row[cellIndex] || '') + '</td>').join('') + '</tr>').join('');
+          parts.push('<div class="copyable-content message-table-shell"><div class="message-table-wrap"><table><thead><tr>' + headHtml + '</tr></thead><tbody>' + bodyHtml + '</tbody></table></div>' + copyButtonHtml(tableSourceLines.join('\\n'), '复制表格', 'tool-copy-button') + '</div>');
+          continue;
+        }
+        paragraph.push(line);
+      }
+      if (code !== null) flushCode();
+      flushParagraph();
+      return parts.join('');
+    }
+
     function addMessageEl(msg) {
       const shouldStick = captureScrollAnchor();
       const div = document.createElement('div');
-      div.className = 'msg ' + msg.role;
+      const copyable = msg.copyLabel || (msg.role === 'assistant' && msg.text);
+      div.className = 'msg ' + msg.role + (copyable ? ' copyable-inline' : '');
       div.id = 'msg-' + msg.id;
-      let html = '<div class="role">' + roleLabel(msg.role) + '</div><div class="text">' + escapeHtml(msg.text) + '</div>';
+      const textHtml = msg.role === 'assistant'
+        ? '<div class="text assistant-markdown" data-raw-text="' + escapeAttr(msg.text || '') + '">' + renderAssistantMarkdown(msg.text || '') + '</div>'
+        : '<div class="text">' + escapeHtml(msg.text) + '</div>';
+      let html = '<div class="role">' + roleLabel(msg.role) + '</div>' + textHtml;
       // Render images in user messages
       if (msg.images && msg.images.length > 0) {
         html += '<div class="msg-images">';
@@ -6923,6 +7294,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           html += '<img src="' + src + '" alt="attachment" loading="lazy" />';
         }
         html += '</div>';
+      }
+      if (copyable) {
+        html += '<div class="message-actions">' + copyButtonHtml(msg.text || '', msg.copyLabel || '复制回复') + (msg.role === 'assistant' ? forkButtonHtml(msg.messageUuid) : '') + '</div>';
       }
       div.innerHTML = html;
       if (msg.role === 'user') {
@@ -7000,7 +7374,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!card.collapsed) {
         if (card.result !== null) {
           bodyHtml = '<div class="tool-card-body">' + inputHtml +
-            '<section class="tool-card-section">' + renderResult(card.result, card.toolName) + '</section></div>';
+            '<section class="tool-card-section">' + renderResult(card.result, card.toolName, card.isError) + '</section></div>';
         } else {
           bodyHtml = '<div class="tool-card-body">' + inputHtml + '</div>';
         }
@@ -7168,10 +7542,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return '<div class="tool-detail-row"><span>' + escapeHtml(field.label) + '</span><code' +
           (field.variant === 'path' ? ' class="path" data-path="' + escapeAttr(field.value) + '"' : '') + '>' + escapeHtml(field.value) + '</code></div>';
       }).join('');
-      return '<section class="tool-card-section">' +
+      return '<section class="tool-card-section copyable-content">' +
         '<div class="timeline-meta">input</div>' +
         (presentation.action ? '<span class="tool-action-badge">' + escapeHtml(presentation.action) + '</span>' : '') +
-        '<div class="tool-detail-list">' + fields + '</div></section>';
+        '<div class="tool-detail-list">' + fields + '</div>' +
+        copyButtonHtml(formatToolInput(toolName, input), '复制参数', 'tool-copy-button') +
+        '</section>';
     }
 
     function formatChecklistInput(input) {
@@ -7286,31 +7662,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           })
         : '';
 
-      return '<div class="checklist-stack">' +
+      return '<div class="copyable-content checklist-stack">' +
         '<div class="checklist-meta-row">' + metaParts.join('') + '</div>' +
         panel +
+        copyButtonHtml(formatChecklistInput(input), '复制参数', 'tool-copy-button') +
         '</div>';
     }
 
-    function renderResult(text, toolName) {
+    function renderResult(text, toolName, isError) {
+      const copyLabel = isError ? '复制错误' : '复制执行结果';
       if ((toolName || '').toLowerCase() === 'checklist') {
-        return renderChecklistResult(text);
+        return renderChecklistResult(text, copyLabel);
       }
       if (text.startsWith('---') || text.startsWith('diff --git') || text.includes('\\n+++')) {
-        return '<div class="timeline-meta">result</div><pre>' + text.split('\\n').map(line => {
+        return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + text.split('\\n').map(line => {
           if (line.startsWith('+++') || line.startsWith('+')) return '<span class="diff-line-add">' + escapeHtml(line) + '</span>';
           if (line.startsWith('---') || line.startsWith('-')) return '<span class="diff-line-del">' + escapeHtml(line) + '</span>';
           if (line.startsWith('@@')) return '<span class="diff-line-ctx">' + escapeHtml(line) + '</span>';
           return escapeHtml(line);
-        }).join('\\n') + '</pre>';
+        }).join('\\n') + '</pre>' + copyButtonHtml(text, copyLabel, 'tool-copy-button') + '</div>';
       }
-      return '<div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>';
+      return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel, 'tool-copy-button') + '</div>';
     }
 
-    function renderChecklistResult(text) {
+    function renderChecklistResult(text, copyLabel) {
       const blocks = parseChecklistResultBlocks(text);
       if (blocks.length === 0) {
-        return '<div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>';
+        return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel || '复制执行结果', 'tool-copy-button') + '</div>';
       }
       const firstBlockIndex = String(text).split('\\n').findIndex(line => /^(\\s*)📋\\s+/.test(line));
       const prefix = firstBlockIndex > 0
@@ -7323,13 +7701,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         done: block.done,
         total: block.total || block.items.length,
       })).join('');
-      return '<div class="checklist-stack">' +
+      return '<div class="copyable-content tool-result-shell"><div class="checklist-stack">' +
         '<div class="checklist-meta-row">' +
         '<span class="checklist-badge good">Checklist</span>' +
         (prefix ? '<span class="checklist-caption">' + escapeHtml(prefix) + '</span>' : '') +
         '</div>' +
         panels +
-        '</div>';
+        '</div>' + copyButtonHtml(text, copyLabel || '复制执行结果', 'tool-copy-button') + '</div>';
     }
 
     function addFileChangePill(payload) {
@@ -7711,6 +8089,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (busyIndicator) {
         busyIndicator.classList.toggle('visible', busy);
       }
+      updateForkButtonsDisabled();
       if (!busy) {
         finishActiveTurn();
       } else if (activeTurn) {
@@ -9711,14 +10090,57 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!msg) return;
       try {
       switch (msg.type) {
+        case 'copyResult': {
+          const button = msg.requestId
+            ? msgContainer.querySelector('[data-copy-id="' + escapeAttr(msg.requestId) + '"]')
+            : null;
+          if (button instanceof HTMLElement) {
+            button.dataset.copyState = msg.ok ? 'copied' : 'error';
+            button.title = msg.ok ? '已复制' : '复制失败';
+            button.setAttribute('aria-label', button.title);
+            if (msg.ok) {
+              setTimeout(() => {
+                if (button.dataset.copyId === msg.requestId) {
+                  button.dataset.copyState = 'idle';
+                  button.title = button.getAttribute('data-copy-label') || '复制';
+                  button.setAttribute('aria-label', button.title);
+                }
+              }, 1600);
+            }
+          }
+          break;
+        }
         case 'newMessage':
           addMessageEl(msg.message);
           break;
+        case 'messageForkable': {
+          const messageEl = document.getElementById('msg-' + msg.id);
+          if (messageEl && msg.messageUuid) {
+            let actions = messageEl.querySelector('.message-actions');
+            if (!actions) {
+              actions = document.createElement('div');
+              actions.className = 'message-actions';
+              messageEl.appendChild(actions);
+            }
+            if (!actions.querySelector('[data-fork-message-uuid]')) {
+              actions.insertAdjacentHTML('beforeend', forkButtonHtml(msg.messageUuid));
+            }
+          }
+          break;
+        }
         case 'appendText': {
           const el = document.getElementById('msg-' + msg.id);
           if (el) {
             const textEl = el.querySelector('.text');
-            textEl.textContent += msg.chunk;
+            if (textEl && textEl.classList.contains('assistant-markdown')) {
+              const nextText = (textEl.getAttribute('data-raw-text') || '') + String(msg.chunk || '');
+              textEl.setAttribute('data-raw-text', nextText);
+              textEl.innerHTML = renderAssistantMarkdown(nextText);
+              const fullCopy = el.querySelector('.message-actions [data-copy-label="复制回复"]');
+              if (fullCopy) fullCopy.setAttribute('data-copy-text', nextText);
+            } else if (textEl) {
+              textEl.textContent += msg.chunk;
+            }
             scrollMessagesToBottom();
           }
           break;
@@ -9908,8 +10330,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           renderHistoryList(msg.sessions, historySearchQuery);
           break;
         case 'sessionInfo':
-          if (msg.sessionId) currentSessionId = msg.sessionId;
+          if (msg.sessionId !== undefined) currentSessionId = msg.sessionId;
           if (msg.title) setSessionTitle(msg.title);
+          if (msg.origin !== undefined) setSessionOrigin(msg.origin);
           if (msg.status && currentSessionId) {
             const s = allSessions.find(function(x) { return x.session_id === currentSessionId; });
             if (s) { s.status = msg.status; renderSessionList(allSessions); renderHistoryList(allSessions, historySearchQuery); }
