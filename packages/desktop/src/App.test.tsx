@@ -220,6 +220,55 @@ s_\theta(x_t,y,t) \approx \nabla_{x_t}\log p_t(x_t\mid y)
 
     act(() => root.unmount());
   });
+
+  it("adds copy controls for replies, tables, and fenced code", async () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const previousClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    act(() => root.render(
+      <>
+        <ChatItemView
+          item={{ id: "assistant-copy", kind: "assistant", text: "最终回复" }}
+          now={0}
+          showTurnDuration
+          turnDurationFormat="hms"
+          onPermission={vi.fn()}
+          onToggleChoice={vi.fn()}
+          onSubmitChoice={vi.fn()}
+          onPlan={vi.fn()}
+        />
+        <MessageMarkdown>{`| 名称 | 值 |
+|---|---|
+| Crab | Desktop |`}</MessageMarkdown>
+        <MessageMarkdown>{"```python\nprint('hello')\n```"}</MessageMarkdown>
+      </>,
+    ));
+
+    expect(container.querySelector('[aria-label="复制回复"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="复制表格"]')).not.toBeNull();
+    const codeCopy = container.querySelector<HTMLButtonElement>('[aria-label="复制代码"]');
+    expect(codeCopy).not.toBeNull();
+    await act(async () => {
+      codeCopy?.click();
+      await Promise.resolve();
+    });
+    expect(writeText).toHaveBeenCalledWith("print('hello')");
+
+    act(() => root.unmount());
+    container.remove();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: previousClipboard,
+    });
+  });
 });
 
 const job: ScheduleJobInfo = {
@@ -966,6 +1015,39 @@ describe("desktop command feedback", () => {
     expect(container.querySelector(".command-card-header")?.textContent).toContain("会话状态");
     expect(container.querySelector(".command-card-header code")?.textContent).toBe("/status");
     expect(container.querySelector(".command-card-content")?.textContent).toContain("模式 Agent");
+    expect(container.querySelector('[aria-label="复制"]')).not.toBeNull();
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("adds copy controls to tool parameters and errors", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    act(() => root.render(
+      <ChatItemView
+        item={{
+          id: "tool-copy",
+          kind: "tool",
+          title: "Bash",
+          input: { command: "pdftotext input.pdf output.txt" },
+          result: "/bin/sh: pdftotext: command not found\nExit code: 127",
+          isError: true,
+          status: "failed",
+        }}
+        now={0}
+        showTurnDuration
+        turnDurationFormat="hms"
+        onPermission={vi.fn()}
+        onToggleChoice={vi.fn()}
+        onSubmitChoice={vi.fn()}
+        onPlan={vi.fn()}
+      />,
+    ));
+
+    expect(container.querySelector('[aria-label="复制执行结果"]')).toBeNull();
+    expect(container.querySelector('[aria-label="复制"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="复制错误"]')).not.toBeNull();
     act(() => root.unmount());
     container.remove();
   });

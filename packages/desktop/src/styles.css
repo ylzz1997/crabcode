@@ -582,6 +582,90 @@ svg {
   padding: 2px 0;
 }
 
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.message-actions .copy-button {
+  position: static;
+}
+
+.copyable-content {
+  position: relative;
+  min-width: 0;
+}
+
+.copyable-content>pre {
+  padding-right: 42px;
+  padding-bottom: 34px;
+}
+
+.copy-button {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  z-index: 1;
+  width: 25px;
+  height: 25px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--code-bg));
+  color: var(--subtle);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, opacity 140ms ease;
+}
+
+.copyable-content:hover>.copy-button,
+.copyable-content:focus-within>.copy-button,
+.message-actions:hover>.copy-button,
+.message-actions:focus-within>.copy-button,
+.error-line.copyable-inline:hover>.copy-button,
+.error-line.copyable-inline:focus-within>.copy-button,
+.copy-button:focus-visible,
+.copy-button[data-copy-state="copied"] {
+  opacity: .82;
+  pointer-events: auto;
+}
+
+.copy-button:hover:not(:disabled),
+.copy-button:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.copy-button:disabled {
+  cursor: default;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.copy-button[data-copy-state="copied"] {
+  border-color: color-mix(in srgb, var(--green) 60%, var(--border));
+  color: var(--green);
+  opacity: 1;
+}
+
+.copy-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+@media (hover: none) {
+  .copy-button:not(:disabled) {
+    opacity: .82;
+    pointer-events: auto;
+  }
+}
+
 .turn-duration-divider {
   width: 100%;
   display: flex;
@@ -629,11 +713,20 @@ svg {
 
 .message-table-wrap {
   max-width: 100%;
-  margin: 16px 0;
+  margin: 0;
   overflow-x: auto;
+  padding-bottom: 32px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 48%, var(--bg));
+}
+
+.message-table-shell {
+  margin: 16px 0;
+}
+
+.message-table-shell .copy-button {
+  bottom: 8px;
 }
 
 .message-table-wrap table {
@@ -673,7 +766,7 @@ svg {
 }
 
 .message-code-block {
-  margin: 16px 0 !important;
+  margin: 0 !important;
   padding: 13px 14px !important;
   overflow: auto;
   border: 1px solid var(--border) !important;
@@ -683,6 +776,19 @@ svg {
   font: var(--code-font-size)/1.58 var(--code-font-family) !important;
   tab-size: 2;
   text-shadow: none;
+}
+
+.message-code-shell {
+  margin: 16px 0;
+}
+
+.message-code-shell .message-code-block {
+  padding-right: 44px !important;
+  padding-bottom: 36px !important;
+}
+
+.message-code-shell .copy-button {
+  bottom: 8px;
 }
 
 .message-code-block code {
@@ -1297,6 +1403,21 @@ button.primary:hover,
   justify-content: center;
   gap: 7px;
   color: var(--red);
+}
+
+.error-line.copyable-inline {
+  position: relative;
+  padding: 2px 38px;
+}
+
+.error-line.copyable-inline>span {
+  min-width: 0;
+}
+
+.error-line.copyable-inline .copy-button {
+  position: static;
+  flex: 0 0 25px;
+  margin-left: 2px;
 }
 
 .document-job-card {
@@ -12834,4 +12955,16 @@ html[data-theme-visuals="true"] :is(.composer-box, .welcome-composer)::after {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Keep the copy affordance clear of the last lines in dense output blocks. */
+:is(
+  .command-card,
+  .tool-card-section,
+  .diff-card,
+  .request-card,
+  .trajectory-record-details
+) .copyable-content>pre {
+  padding-right: 42px;
+  padding-bottom: 34px;
 }

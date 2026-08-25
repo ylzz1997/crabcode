@@ -78,6 +78,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import DocumentWorkspace from "./DocumentWorkspace";
 import { ComposerEditor, createComposerCommandOptions, type ComposerReferenceOption } from "./ComposerEditor";
+import { CopyButton } from "./CopyButton";
 import { applyGatewayEvent } from "./events";
 import { normalizeMarkdownMathDelimiters } from "./markdownMath";
 import {
@@ -4798,7 +4799,7 @@ function ToolFieldView({ field }: { field: ToolField }) {
     <div className={`tool-detail-row ${field.variant === "code" || field.variant === "json" ? "stacked" : ""}`}>
       <span>{field.label}</span>
       {field.variant === "code" || field.variant === "json"
-        ? <pre>{field.value}</pre>
+        ? <CopyablePre text={field.value} />
         : <code className={field.variant === "path" ? "tool-path" : ""}>{field.value}</code>}
     </div>
   );
@@ -4831,12 +4832,34 @@ function ChecklistResultView({ result }: { result: unknown }) {
   );
 }
 
-function ToolResultView({ toolName, result }: { toolName: string; result: unknown }) {
+function ToolResultView({ toolName, result, isError = false }: { toolName: string; result: unknown; isError?: boolean }) {
   const checklist = toolName.toLowerCase() === "checklist" ? parseChecklistResult(result) : [];
   if (checklist.length) return <ChecklistResultView result={result} />;
   const text = textFromUnknown(result);
   const isDiff = text.startsWith("---") || text.startsWith("diff --git") || text.includes("\n+++");
-  return <pre className={`tool-result ${isDiff ? "diff-view" : ""}`}>{isDiff ? diffLines(text) : text}</pre>;
+  return <CopyablePre text={text} label={isError ? "复制错误" : isDiff ? "复制 diff" : "复制执行结果"} className={`tool-result ${isDiff ? "diff-view" : ""}`}>{isDiff ? diffLines(text) : text}</CopyablePre>;
+}
+
+function CopyablePre({ text, label = "复制", className = "", containerClassName = "", children }: { text: string; label?: string; className?: string; containerClassName?: string; children?: ReactNode }) {
+  return (
+    <div className={`copyable-content ${containerClassName}`.trim()}>
+      <pre className={className}>{children ?? text}</pre>
+      <CopyButton text={text} label={label} />
+    </div>
+  );
+}
+
+function reactNodeText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeText).join("");
+  if (!isValidElement<{ children?: ReactNode }>(node)) return "";
+  const type = typeof node.type === "string" ? node.type : "";
+  const content = reactNodeText(node.props.children);
+  if (type === "tr") return `${content}\n`;
+  if (type === "th" || type === "td") return `${content}\t`;
+  if (["li", "p", "div"].includes(type)) return `${content}\n`;
+  return content;
 }
 
 function markdownCodeChild(children: ReactNode): { className: string; source: string } | null {
@@ -4851,21 +4874,32 @@ function markdownCodeChild(children: ReactNode): { className: string; source: st
 }
 
 const MESSAGE_MARKDOWN_COMPONENTS: Components = {
-  table: ({ children }) => <div className="message-table-wrap"><table>{children}</table></div>,
+  table: ({ children }) => (
+    <div className="message-table-shell copyable-content">
+      <div className="message-table-wrap"><table>{children}</table></div>
+      <CopyButton text={reactNodeText(children).trim()} label="复制表格" />
+    </div>
+  ),
   pre: ({ children }) => {
     const code = markdownCodeChild(children);
-    if (!code || !MESSAGE_CODE_LANGUAGES.has(code.className)) return <pre>{children}</pre>;
+    if (!code || !MESSAGE_CODE_LANGUAGES.has(code.className)) {
+      const text = reactNodeText(children).replace(/\n$/, "");
+      return <CopyablePre text={text} className="message-plain-code" containerClassName="message-code-shell">{children}</CopyablePre>;
+    }
     return (
-      <SyntaxHighlighter
-        className="message-code-block"
-        language={code.className}
-        PreTag="pre"
-        CodeTag="code"
-        useInlineStyles={false}
-        customStyle={{}}
-      >
-        {code.source}
-      </SyntaxHighlighter>
+      <div className="message-code-shell copyable-content">
+        <SyntaxHighlighter
+          className="message-code-block"
+          language={code.className}
+          PreTag="pre"
+          CodeTag="code"
+          useInlineStyles={false}
+          customStyle={{}}
+        >
+          {code.source}
+        </SyntaxHighlighter>
+        <CopyButton text={code.source} label="复制代码" />
+      </div>
     );
   },
 };
@@ -4906,7 +4940,12 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     return <article className="message user-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></article>;
   }
   if (item.kind === "assistant") {
-    return <article className="message assistant-message"><MessageMarkdown>{item.text ?? ""}</MessageMarkdown></article>;
+    return (
+      <article className="message assistant-message">
+        <MessageMarkdown>{item.text ?? ""}</MessageMarkdown>
+        {item.text && <div className="message-actions"><CopyButton text={item.text} label="复制回复" /></div>}
+      </article>
+    );
   }
   if (item.kind === "command") {
     return (
@@ -4917,12 +4956,20 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
           {item.command && <code>{item.command}</code>}
           <span>完成</span>
         </header>
-        <pre className="command-card-content">{item.text ?? ""}</pre>
+        <CopyablePre text={item.text ?? ""} className="command-card-content" />
       </article>
     );
   }
   if (item.kind === "system") return <div className="system-line">{item.text}</div>;
-  if (item.kind === "error") return <div className="error-line"><AlertTriangle />{item.text}</div>;
+  if (item.kind === "error") {
+    return (
+      <div className="error-line copyable-inline">
+        <AlertTriangle />
+        <span>{item.text}</span>
+        {item.text && <CopyButton text={item.text} label="复制错误" />}
+      </div>
+    );
+  }
   if (item.kind === "document_job") {
     const progress = item.total ? Math.min(100, Math.round(((item.current ?? 0) / item.total) * 100)) : 0;
     const statusLabel = item.status === "complete"
@@ -5004,7 +5051,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
             {result !== undefined && (
               <section className="tool-card-section">
                 <h4>{item.isError ? "错误" : "执行结果"}</h4>
-                <ToolResultView toolName={item.title ?? "Tool"} result={result} />
+                <ToolResultView toolName={item.title ?? "Tool"} result={result} isError={item.isError} />
               </section>
             )}
             {presentation.fields.length === 0 && result === undefined && <div className="tool-empty">无需参数</div>}
@@ -5022,9 +5069,12 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
           {collapsed ? <ChevronRight /> : <ChevronDown />}
         </button>
         {!collapsed && (
-          <pre className="activity-body diff-view">
+          <CopyablePre
+            text={item.diff ?? "此事件没有附带 diff"}
+            className="activity-body diff-view"
+          >
             {item.diff ? diffLines(item.diff) : "此事件没有附带 diff"}
-          </pre>
+          </CopyablePre>
         )}
       </article>
     );
@@ -5034,7 +5084,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
       <article className="request-card">
         <div className="request-title"><ShieldAlert /><strong>{item.title}</strong>{durationLabel && <small className="activity-duration">{durationLabel}</small>}</div>
         {item.text && <p>{item.text}</p>}
-        <pre>{textFromUnknown(item.detail)}</pre>
+        <CopyablePre text={textFromUnknown(item.detail)} />
         {item.status === "pending" ? (
           <div className="request-actions">
             <button onClick={() => onPermission(item, false)}>拒绝</button>
@@ -5074,7 +5124,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     return (
       <article className="request-card plan-card">
         <div className="request-title"><Bot /><strong>{item.title}</strong></div>
-        <pre>{textFromUnknown(item.detail)}</pre>
+        <CopyablePre text={textFromUnknown(item.detail)} />
         <div className="request-actions">
           <button onClick={() => onPlan("cancel")}>取消</button>
           <button onClick={() => onPlan("revise")}>修改</button>

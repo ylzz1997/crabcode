@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Clock3, LoaderCircle, Search, Wrench } from "lucide-react";
 import { useMemo, useState, type CSSProperties } from "react";
+import { CopyButton } from "./CopyButton";
 import { getToolPresentation } from "./toolPresentation";
 import type { ChatItem } from "./types";
 
@@ -213,9 +214,9 @@ function TrajectoryRecordDetails({ record }: { record: TrajectoryRecord }) {
         <div><dt>耗时</dt><dd>{formatDuration(record.durationMs) || "未记录"}</dd></div>
         <div><dt>状态</dt><dd>{item.isError ? "失败" : item.status === "running" ? "运行中" : item.status ?? "完成"}</dd></div>
       </dl>
-      {input && <section><h4>调用参数</h4><pre>{input}</pre></section>}
-      {content && <section><h4>内容</h4><pre>{content}</pre></section>}
-      {output && <section><h4>{item.isError ? "错误" : "执行结果"}</h4><pre>{output}</pre></section>}
+      {input && <section><h4>调用参数</h4><div className="copyable-content"><pre>{input}</pre><CopyButton text={input} label="复制调用参数" /></div></section>}
+      {content && <section><h4>内容</h4><div className="copyable-content"><pre>{content}</pre><CopyButton text={content} label="复制内容" /></div></section>}
+      {output && <section><h4>{item.isError ? "错误" : "执行结果"}</h4><div className="copyable-content"><pre>{output}</pre><CopyButton text={output} label={item.isError ? "复制错误" : "复制执行结果"} /></div></section>}
     </div>
   );
 }

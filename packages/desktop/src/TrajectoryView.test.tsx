@@ -58,6 +58,13 @@ describe("trajectory projection", () => {
     expect(first.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector(".trajectory-record-details")?.textContent).toContain("Turn / Step");
 
+    act(() => calls.click());
+    const toolSummary = Array.from(container.querySelectorAll<HTMLButtonElement>(".trajectory-record-summary"))
+      .find((button) => button.textContent?.includes("Bash"))!;
+    act(() => toolSummary.click());
+    expect(container.querySelector('[aria-label="复制调用参数"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="复制执行结果"]')).not.toBeNull();
+
     act(() => root.unmount());
     container.remove();
   });
