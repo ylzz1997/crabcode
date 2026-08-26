@@ -21,6 +21,7 @@ import {
   formatDocumentReferenceLocation,
   resolveDefaultProjectId,
   resolveRememberedModel,
+  SessionActionsMenu,
   serializePendingFiles,
   ScheduleDeleteModal,
   ScheduledTasksView,
@@ -28,7 +29,7 @@ import {
 } from "./App";
 import type { GatewayApi } from "./gateway";
 import { favoriteEntries, resolveFavoriteEntries } from "./favorites";
-import type { BackgroundTaskInfo, ChatItem, ConnectionPreset, GatewayViewState, ScheduleJobInfo } from "./types";
+import type { BackgroundTaskInfo, ChatItem, ConnectionPreset, GatewayViewState, ScheduleJobInfo, SessionInfo, SessionStatus } from "./types";
 
 const documentCapabilities = {
   supported_extensions: [".pdf", ".docx"],
@@ -492,6 +493,128 @@ describe("ProjectActionsMenu", () => {
       .find((button) => button.textContent === "取消收藏项目")!;
     act(() => favoriteAction.click());
     expect(onToggleFavorite).toHaveBeenCalledOnce();
+  });
+});
+
+describe("SessionActionsMenu", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const info: SessionInfo = {
+    session_id: "session-123456789",
+    message_count: 8,
+    model: "gpt-5",
+    provider: "openai",
+    created_at: "2026-08-20T00:00:00Z",
+    title: "重要会话",
+    cwd: "/work/crab",
+    tokens_used: 12_000,
+    preview: "检查发布状态",
+  };
+  const status: SessionStatus = {
+    session_id: info.session_id,
+    cwd: info.cwd,
+    message_count: 10,
+    model: "gpt-5",
+    model_profile: "GPT-5 High",
+    provider: "openai",
+    mode: "agent",
+    reasoning_effort: "high",
+    permission_mode: "default",
+    context_used_tokens: 25_000,
+    context_window_tokens: 100_000,
+    context_remaining_tokens: 75_000,
+    context_used_percent: 25,
+    compact_count: 2,
+  };
+
+  beforeEach(() => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("keeps the overflow menu compact and opens live session details in a dialog", () => {
+    const onToggleFavorite = vi.fn();
+    const onDelete = vi.fn();
+    act(() => root.render(
+      <SessionActionsMenu
+        info={info}
+        status={status}
+        favorite
+        onToggleFavorite={onToggleFavorite}
+        onDelete={onDelete}
+      />,
+    ));
+
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+    expect(trigger.getAttribute("aria-label")).toBe("会话操作 重要会话");
+    act(() => trigger.click());
+
+    const menu = document.querySelector<HTMLElement>('.session-action-menu')!;
+    expect(Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).map((button) => button.textContent))
+      .toEqual(["取消收藏会话", "删除会话", "会话详情"]);
+    expect(menu.textContent).not.toContain(info.session_id);
+
+    act(() => menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[2].click());
+    expect(document.querySelector('.session-action-menu')).toBeNull();
+    const detailDialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="会话详情"]')!;
+    expect(detailDialog.textContent).toContain(info.session_id);
+    expect(detailDialog.textContent).toContain("25,000 tokens · 25.0%");
+    expect(detailDialog.textContent).toContain("总窗口 100,000 tokens · 剩余 75,000 tokens");
+    expect(detailDialog.textContent).toContain("10 条");
+    expect(detailDialog.textContent).toContain("2 次");
+    expect(detailDialog.textContent).toContain("GPT-5 High");
+    act(() => detailDialog.querySelector<HTMLButtonElement>('header button')!.click());
+
+    act(() => trigger.click());
+    act(() => document.querySelectorAll<HTMLButtonElement>('.session-action-menu [role="menuitem"]')[0].click());
+    expect(onToggleFavorite).toHaveBeenCalledOnce();
+    expect(document.querySelector('.session-action-menu')).toBeNull();
+
+    act(() => trigger.click());
+    act(() => document.querySelectorAll<HTMLButtonElement>('.session-action-menu [role="menuitem"]')[1].click());
+    expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to persisted context usage before live status is loaded", () => {
+    act(() => root.render(
+      <SessionActionsMenu
+        info={info}
+        status={null}
+        onToggleFavorite={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    ));
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!.click());
+    act(() => document.querySelectorAll<HTMLButtonElement>('.session-action-menu [role="menuitem"]')[2].click());
+    const detailDialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="会话详情"]')!;
+    expect(detailDialog.textContent).toContain("12,000 tokens");
+    expect(detailDialog.textContent).toContain("尚未加载上下文窗口上限");
+    expect(detailDialog.textContent).toContain("openai/gpt-5");
+    expect(detailDialog.textContent).toContain("8 条");
+  });
+
+  it("closes with Escape and returns focus to the trigger", () => {
+    act(() => root.render(
+      <SessionActionsMenu
+        info={info}
+        status={status}
+        onToggleFavorite={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    ));
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+    act(() => trigger.click());
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(document.querySelector('.session-action-menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 });
 

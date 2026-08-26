@@ -7876,7 +7876,7 @@ html[data-theme="light"] .document-actions-separator {
   width: auto;
   min-width: 0;
   flex: 1;
-  padding-right: 66px;
+  padding-right: 38px;
   background: transparent;
 }
 
@@ -7886,9 +7886,9 @@ html[data-theme="light"] .document-actions-separator {
   box-shadow: none;
 }
 
-.session-favorite-action,
-.session-delete {
+.session-menu-trigger {
   position: absolute;
+  right: 5px;
   top: 50%;
   z-index: 1;
   opacity: 0;
@@ -7900,54 +7900,25 @@ html[data-theme="light"] .document-actions-separator {
   box-shadow: none;
 }
 
-.session-favorite-action {
-  right: 34px;
-  color: #a98b58;
-}
-
-.session-favorite-action.active {
-  color: var(--orange);
-}
-
-.session-delete {
-  right: 5px;
-}
-
-.session-item-row:hover .session-favorite-action,
-.session-item-row:hover .session-delete,
-.session-item-row:focus-within .session-favorite-action,
-.session-item-row:focus-within .session-delete {
+.session-item-row:hover .session-menu-trigger,
+.session-item-row:focus-within .session-menu-trigger,
+.session-menu-trigger[aria-expanded="true"] {
   opacity: 1;
 }
 
-.session-favorite-action:hover:not(:disabled) {
+.session-menu-trigger:hover:not(:disabled) {
   border: 0;
-  background: #493820;
-  color: var(--orange);
+  background: #294246;
+  color: #dce9e4;
   transform: translateY(-50%);
   box-shadow: none;
 }
 
-.session-delete:hover:not(:disabled) {
-  border: 0;
-  background: #3d272b;
-  color: var(--red);
-  transform: translateY(-50%);
-  box-shadow: none;
-}
-
-.session-favorite-action:focus-visible,
-.session-favorite-action:active:not(:disabled),
-.session-delete:focus-visible,
-.session-delete:active:not(:disabled) {
+.session-menu-trigger:focus-visible,
+.session-menu-trigger:active:not(:disabled) {
   border: 0;
   transform: translateY(-50%);
   box-shadow: none;
-}
-
-.session-delete:disabled {
-  opacity: .55;
-  cursor: wait;
 }
 
 .favorite-session-list {
@@ -11807,21 +11778,15 @@ html[data-theme="light"] .sidebar .session-item-row.active .session-preview {
   color: var(--muted);
 }
 
-html[data-theme="light"] .sidebar .session-delete {
+html[data-theme="light"] .sidebar .session-menu-trigger {
   border-color: var(--border);
   background: var(--surface-hover);
   color: var(--muted);
 }
 
-html[data-theme="light"] .sidebar .session-favorite-action {
-  border-color: var(--border);
-  background: var(--surface-hover);
-  color: var(--orange);
-}
-
-html[data-theme="light"] .sidebar .session-delete:hover:not(:disabled) {
-  background: #fbe8e6;
-  color: var(--red);
+html[data-theme="light"] .sidebar .session-menu-trigger:hover:not(:disabled) {
+  background: var(--surface-active);
+  color: var(--text);
 }
 
 html[data-theme="light"] .favorite-session-item {
@@ -12397,6 +12362,267 @@ html[data-theme="light"] .project-action-menu>button.danger svg {
 }
 
 html[data-theme="light"] .project-action-separator {
+  background: var(--border-soft);
+}
+
+/* Session overflow menu and detail dialog */
+.session-action-menu {
+  position: fixed;
+  z-index: 90;
+  width: min(208px, calc(100vw - 16px));
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 14px;
+  background: rgba(24, 31, 30, .98);
+  box-shadow: 0 22px 64px rgba(0, 0, 0, .48), inset 0 1px rgba(255, 255, 255, .055);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+  backdrop-filter: blur(26px) saturate(135%);
+  animation: composer-menu-in 150ms ease-out both;
+}
+
+.session-action-buttons>button {
+  width: 100%;
+  height: 39px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #d7ded9;
+  text-align: left;
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.session-action-buttons>button:hover:not(:disabled),
+.session-action-buttons>button:focus-visible {
+  background: rgba(255, 255, 255, .075);
+  color: #f4f7f5;
+}
+
+.session-action-buttons>button:disabled {
+  opacity: .48;
+  cursor: wait;
+}
+
+.session-action-buttons>button svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: #aebbb5;
+}
+
+.session-action-buttons>button span {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 540;
+}
+
+.session-action-buttons>button:first-child svg {
+  color: var(--orange);
+}
+
+.session-action-buttons>button.danger,
+.session-action-buttons>button.danger svg {
+  color: #ff8585;
+}
+
+.session-action-separator {
+  height: 1px;
+  margin: 5px 8px;
+  background: rgba(255, 255, 255, .11);
+}
+
+.session-detail-dialog {
+  display: grid;
+  gap: 16px;
+}
+
+.session-detail-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.session-detail-heading-icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-active));
+  color: var(--accent);
+}
+
+.session-detail-heading-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.session-detail-heading>div {
+  min-width: 0;
+}
+
+.session-detail-heading strong,
+.session-detail-heading small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-detail-heading strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.session-detail-heading small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-context-card {
+  padding: 13px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--surface-active);
+}
+
+.session-context-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-context-heading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-context-heading strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.session-context-progress {
+  height: 5px;
+  margin: 11px 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.session-context-progress span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.session-context-card>small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.session-detail-list {
+  margin: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.session-detail-list>div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 39px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.session-detail-list dt,
+.session-detail-list dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.session-detail-list dt {
+  color: var(--muted);
+}
+
+.session-detail-list dd {
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.session-detail-copy-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.session-detail-copy-value code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  user-select: text;
+  white-space: nowrap;
+}
+
+.session-detail-copy.copy-button {
+  position: static;
+  flex: 0 0 25px;
+  opacity: .82;
+  pointer-events: auto;
+}
+
+html[data-theme="light"] .session-action-menu {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 18px 52px rgba(43, 55, 50, .2), inset 0 1px rgba(255, 255, 255, .8);
+}
+
+html[data-theme="light"] .session-action-buttons>button {
+  color: var(--text);
+}
+
+html[data-theme="light"] .session-action-buttons>button svg {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .session-action-buttons>button:first-child svg {
+  color: var(--orange);
+}
+
+html[data-theme="light"] .session-action-buttons>button:hover:not(:disabled),
+html[data-theme="light"] .session-action-buttons>button:focus-visible {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+html[data-theme="light"] .session-action-buttons>button.danger,
+html[data-theme="light"] .session-action-buttons>button.danger svg {
+  color: var(--red);
+}
+
+html[data-theme="light"] .session-action-separator {
   background: var(--border-soft);
 }
 
