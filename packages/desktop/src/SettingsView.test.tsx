@@ -8,6 +8,7 @@ import {
   SettingsView,
   type SettingsSectionId,
 } from "./SettingsView";
+import { composerModifierLabel } from "./ComposerEditor";
 import { BUILTIN_THEMES } from "./theme";
 import type { DocumentEngineInstallProgress } from "./native";
 import type {
@@ -248,7 +249,7 @@ describe("SettingsView", () => {
     ));
 
     const modifierMode = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="发送快捷键"] button'))
-      .find((button) => button.textContent?.includes("Ctrl/Cmd+Enter"))!;
+      .find((button) => button.textContent?.includes(composerModifierLabel()))!;
     act(() => modifierMode.click());
     expect(handlers.onConversationChange).toHaveBeenCalledWith({ composer_send_key: "mod_enter" });
   });

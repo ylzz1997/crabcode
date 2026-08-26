@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ModelSettingsPanel } from "./ModelSettingsPanel";
+import { composerModifierLabel } from "./ComposerEditor";
 import { ThemeRegistry, resolveActiveTheme } from "./theme";
 import {
   parseSkinPackage,
@@ -814,7 +815,7 @@ export function SettingsView({
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
                       <strong>发送快捷键</strong>
-                      <span>选择按 Enter 发送，或按 Ctrl/Cmd+Enter 发送。</span>
+                      <span>选择按 Enter 发送，或按 {composerModifierLabel()} 发送。</span>
                     </div>
                     <div className="settings-segmented" aria-label="发送快捷键">
                       {(["enter", "mod_enter"] as ComposerSendKey[]).map((key) => (
@@ -825,7 +826,7 @@ export function SettingsView({
                           aria-pressed={settings.composer_send_key === key}
                           onClick={() => onConversationChange({ composer_send_key: key })}
                         >
-                          {key === "enter" ? "Enter 发送" : "Ctrl/Cmd+Enter 发送"}
+                          {key === "enter" ? "Enter 发送" : `${composerModifierLabel()} 发送`}
                         </button>
                       ))}
                     </div>

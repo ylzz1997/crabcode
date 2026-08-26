@@ -77,7 +77,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import DocumentWorkspace from "./DocumentWorkspace";
-import { ComposerEditor, createComposerCommandOptions, type ComposerReferenceOption } from "./ComposerEditor";
+import { ComposerEditor, composerModifierLabel, createComposerCommandOptions, type ComposerReferenceOption } from "./ComposerEditor";
 import { CopyButton } from "./CopyButton";
 import { applyGatewayEvent } from "./events";
 import { normalizeMarkdownMathDelimiters } from "./markdownMath";
@@ -3361,7 +3361,7 @@ function App() {
                       ) : (
                         <button
                           className="round-action send"
-                          title={settings.composer_send_key === "mod_enter" ? "发送 (Ctrl/Cmd+Enter)" : "发送 (Enter)"}
+                          title={settings.composer_send_key === "mod_enter" ? `发送 (${composerModifierLabel()})` : "发送 (Enter)"}
                           disabled={(
                             !composer.trim()
                             && pendingImages.length === 0

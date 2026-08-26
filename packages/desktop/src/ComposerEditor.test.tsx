@@ -5,8 +5,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ComposerEditor,
+  composerModifierLabel,
   createComposerCommandOptions,
   extractComposerText,
+  isMacPlatform,
   resolveComposerCommandCompletion,
   type ComposerReferenceOption,
 } from "./ComposerEditor";
@@ -157,15 +159,44 @@ describe("ComposerEditor send shortcuts", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
+  it("inserts a line break with the system modifier in Enter-send mode", () => {
+    const editor = render("enter");
+    const modifier = isMacPlatform() ? { metaKey: true } : { ctrlKey: true };
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Enter",
+      ...modifier,
+      bubbles: true,
+      cancelable: true,
+    })));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(editor.querySelector("br")).not.toBeNull();
+  });
+
   it("sends with Ctrl/Cmd+Enter when configured", () => {
     const editor = render("mod_enter");
     act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
     expect(onSubmit).not.toHaveBeenCalled();
-    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })));
+    const modifier = isMacPlatform() ? { metaKey: true } : { ctrlKey: true };
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ...modifier, bubbles: true, cancelable: true })));
     expect(onSubmit).toHaveBeenCalledOnce();
-    onSubmit.mockClear();
-    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })));
-    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("inserts a visible line break when Enter is not the send key", () => {
+    const editor = render("mod_enter");
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(editor.querySelector("br")).not.toBeNull();
+  });
+
+  it("uses Command on macOS and Ctrl elsewhere", () => {
+    const originalPlatform = navigator.platform;
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    expect(isMacPlatform()).toBe(true);
+    expect(composerModifierLabel()).toBe("Command+Enter");
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "Linux x86_64" });
+    expect(isMacPlatform()).toBe(false);
+    expect(composerModifierLabel()).toBe("Ctrl+Enter");
+    Object.defineProperty(navigator, "platform", { configurable: true, value: originalPlatform });
   });
 });
 

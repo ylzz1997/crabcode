@@ -196,6 +196,32 @@ function setCaret(node: Node, offset: number) {
   selection.addRange(range);
 }
 
+export function isMacPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Macintosh|MacIntel|MacPPC|Mac68K/i.test(navigator.platform || navigator.userAgent);
+}
+
+export function composerModifierLabel(): string {
+  return isMacPlatform() ? "Command+Enter" : "Ctrl+Enter";
+}
+
+function insertComposerLineBreak(root: HTMLElement): void {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !root.contains(selection.getRangeAt(0).startContainer)) {
+    const breakNode = document.createElement("br");
+    root.append(breakNode);
+    setCaret(root, root.childNodes.length);
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer)) return;
+  range.deleteContents();
+  const breakNode = document.createElement("br");
+  range.insertNode(breakNode);
+  const parent = breakNode.parentNode ?? root;
+  setCaret(parent, Array.from(parent.childNodes).indexOf(breakNode) + 1);
+}
+
 function createMention(option: ComposerReferenceOption): HTMLElement {
   const pill = document.createElement("span");
   pill.className = `composer-inline-mention ${option.kind}`;
@@ -388,7 +414,8 @@ export function ComposerEditor({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
-    const modifierSubmit = event.key === "Enter" && (event.ctrlKey || event.metaKey);
+    const modifierSubmit = event.key === "Enter"
+      && (isMacPlatform() ? event.metaKey : event.ctrlKey);
     if (mentionQuery !== null) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         if (filteredReferences.length > 0) {
@@ -465,9 +492,23 @@ export function ComposerEditor({
         }
       }
     }
+    const shouldInsertLineBreak = event.key === "Enter" && (
+      (sendKey === "mod_enter" && !modifierSubmit)
+      || (sendKey === "enter" && modifierSubmit)
+    );
+    if (shouldInsertLineBreak) {
+      event.preventDefault();
+      closeMentions();
+      closeCommands();
+      const root = rootRef.current;
+      if (!root) return;
+      insertComposerLineBreak(root);
+      emitChange();
+      return;
+    }
     const shouldSubmit = sendKey === "mod_enter"
       ? modifierSubmit
-      : event.key === "Enter" && !event.shiftKey;
+      : event.key === "Enter" && !event.shiftKey && !modifierSubmit;
     if (shouldSubmit) {
       event.preventDefault();
       closeMentions();
