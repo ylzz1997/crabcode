@@ -119,6 +119,56 @@ describe("ComposerEditor mentions", () => {
   });
 });
 
+describe("ComposerEditor send shortcuts", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let onSubmit: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    onSubmit = vi.fn();
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function render(sendKey?: "enter" | "mod_enter") {
+    act(() => root.render(
+      <ComposerEditor
+        value=""
+        references={references}
+        placeholder="输入任务"
+        sendKey={sendKey}
+        onChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    ));
+    return container.querySelector<HTMLElement>(".composer-editor-input")!;
+  }
+
+  it("sends with Enter by default and does not require a modifier", () => {
+    const editor = render();
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("sends with Ctrl/Cmd+Enter when configured", () => {
+    const editor = render("mod_enter");
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(onSubmit).not.toHaveBeenCalled();
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })));
+    expect(onSubmit).toHaveBeenCalledOnce();
+    onSubmit.mockClear();
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })));
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+});
+
 describe("ComposerEditor slash commands", () => {
   let container: HTMLDivElement;
   let root: Root;

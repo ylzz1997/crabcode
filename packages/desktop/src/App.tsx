@@ -3289,6 +3289,7 @@ function App() {
                     value={composer}
                     references={composerReferences}
                     commands={composerCommands}
+                    sendKey={settings.composer_send_key}
                     onChange={setComposer}
                     onImages={(files) => void addImages(files)}
                     onSubmit={() => void sendMessage()}
@@ -3360,7 +3361,7 @@ function App() {
                       ) : (
                         <button
                           className="round-action send"
-                          title="发送"
+                          title={settings.composer_send_key === "mod_enter" ? "发送 (Ctrl/Cmd+Enter)" : "发送 (Enter)"}
                           disabled={(
                             !composer.trim()
                             && pendingImages.length === 0

@@ -69,6 +69,7 @@ const settings: DesktopSettings = {
   font_smoothing: true,
   show_turn_duration: true,
   turn_duration_format: "hms",
+  composer_send_key: "enter",
   file_upload_mode: "content",
   file_upload_max_size_mb: 5,
   dock_icon: "dark",
@@ -230,6 +231,26 @@ describe("SettingsView", () => {
 
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(1, { turn_duration_format: "seconds" });
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(2, { show_turn_duration: false });
+  });
+
+  it("changes the composer send shortcut", () => {
+    const handlers = callbacks();
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="general"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    const modifierMode = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="发送快捷键"] button'))
+      .find((button) => button.textContent?.includes("Ctrl/Cmd+Enter"))!;
+    act(() => modifierMode.click());
+    expect(handlers.onConversationChange).toHaveBeenCalledWith({ composer_send_key: "mod_enter" });
   });
 
   it("switches file uploads between content and path mode", () => {

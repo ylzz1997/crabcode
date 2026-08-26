@@ -14,6 +14,7 @@ import {
 } from "./theme";
 import type {
   CodeFontFamily,
+  ComposerSendKey,
   DesktopSettings,
   DiffMarkerStyle,
   DockIconChoice,
@@ -74,6 +75,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   font_smoothing: true,
   show_turn_duration: true,
   turn_duration_format: "hms",
+  composer_send_key: "enter",
   file_upload_mode: "content",
   file_upload_max_size_mb: 5,
   dock_icon: "dark",
@@ -186,6 +188,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     : raw.theme_mode === "system" ? "system" : legacy.auto_night_mode === false ? "light" : "system";
   const diffMarkerStyle: DiffMarkerStyle = raw.diff_marker_style === "symbols" ? "symbols" : "color";
   const turnDurationFormat: TurnDurationFormat = raw.turn_duration_format === "seconds" ? "seconds" : "hms";
+  const composerSendKey: ComposerSendKey = raw.composer_send_key === "mod_enter" ? "mod_enter" : "enter";
   const legacyLight = normalizeThemeProfile(legacy.light_theme, DEFAULT_LIGHT_THEME, legacy);
   const legacyDark = normalizeThemeProfile(legacy.dark_theme, DEFAULT_DARK_THEME, legacy);
   const parsedStoredThemes = Array.isArray(legacy.custom_theme_presets)
@@ -224,6 +227,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     font_smoothing: raw.font_smoothing !== false,
     show_turn_duration: raw.show_turn_duration !== false,
     turn_duration_format: turnDurationFormat,
+    composer_send_key: composerSendKey,
     file_upload_mode: raw.file_upload_mode === "path" ? "path" : "content",
     file_upload_max_size_mb: clampInteger(raw.file_upload_max_size_mb, 1, 100, 5),
     dock_icon: dockIcon,

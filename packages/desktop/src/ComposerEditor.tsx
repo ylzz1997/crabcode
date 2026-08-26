@@ -1,5 +1,6 @@
 import { FileText, Folder, Image as ImageIcon, Quote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import type { ComposerSendKey } from "./types";
 
 export type ComposerReferenceKind = "image" | "file" | "folder" | "document";
 
@@ -229,6 +230,7 @@ export function ComposerEditor({
   references,
   commands,
   placeholder,
+  sendKey = "enter",
   onChange,
   onImages,
   onSubmit,
@@ -237,6 +239,7 @@ export function ComposerEditor({
   references: ComposerReferenceOption[];
   commands?: ComposerCommandOption[];
   placeholder: string;
+  sendKey?: ComposerSendKey;
   onChange: (value: string) => void;
   onImages?: (files: File[]) => void;
   onSubmit: () => void;
@@ -385,6 +388,7 @@ export function ComposerEditor({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
+    const modifierSubmit = event.key === "Enter" && (event.ctrlKey || event.metaKey);
     if (mentionQuery !== null) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         if (filteredReferences.length > 0) {
@@ -395,7 +399,7 @@ export function ComposerEditor({
           return;
         }
       }
-      if (event.key === "Enter" || event.key === "Tab") {
+      if ((event.key === "Enter" || event.key === "Tab") && !modifierSubmit) {
         event.preventDefault();
         const reference = filteredReferences[activeOption] ?? filteredReferences[0];
         if (reference) insertMention(reference);
@@ -417,7 +421,7 @@ export function ComposerEditor({
         ));
         return;
       }
-      if (event.key === "Enter" || event.key === "Tab") {
+      if ((event.key === "Enter" || event.key === "Tab") && !modifierSubmit) {
         event.preventDefault();
         const option = slashCompletion.items[activeCommandOption] ?? slashCompletion.items[0];
         if (option) insertCommand(option);
@@ -461,7 +465,10 @@ export function ComposerEditor({
         }
       }
     }
-    if (event.key === "Enter" && !event.shiftKey) {
+    const shouldSubmit = sendKey === "mod_enter"
+      ? modifierSubmit
+      : event.key === "Enter" && !event.shiftKey;
+    if (shouldSubmit) {
       event.preventDefault();
       closeMentions();
       closeCommands();

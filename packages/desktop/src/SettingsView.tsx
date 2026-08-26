@@ -43,6 +43,7 @@ import {
 import type {
   CodeFontFamily,
   ConnectionPreset,
+  ComposerSendKey,
   DesktopSettings,
   DiffMarkerStyle,
   DockIconChoice,
@@ -72,8 +73,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   {
     id: "general",
     title: "常规",
-    description: "运行环境、文件上传与会话显示设置",
-    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式 文件 上传 内容 路径 引用 会话 显示 处理用时 耗时 仅秒数 时分秒",
+    description: "运行环境、文件上传与会话设置",
+    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式 文件 上传 内容 路径 引用 会话 显示 处理用时 耗时 仅秒数 时分秒 发送快捷键 Enter 回车 Ctrl Cmd Command",
   },
   {
     id: "appearance",
@@ -244,6 +245,7 @@ export type AppearanceSettingsUpdate = Partial<Pick<DesktopSettings,
 export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
   | "show_turn_duration"
   | "turn_duration_format"
+  | "composer_send_key"
   | "file_upload_mode"
   | "file_upload_max_size_mb"
 >>;
@@ -809,6 +811,25 @@ export function SettingsView({
                   <div><h2>会话</h2><p>控制对话完成后的状态信息。</p></div>
                 </div>
                 <div className="settings-group general-options-group">
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>发送快捷键</strong>
+                      <span>选择按 Enter 发送，或按 Ctrl/Cmd+Enter 发送。</span>
+                    </div>
+                    <div className="settings-segmented" aria-label="发送快捷键">
+                      {(["enter", "mod_enter"] as ComposerSendKey[]).map((key) => (
+                        <button
+                          key={key}
+                          className={settings.composer_send_key === key ? "active" : ""}
+                          type="button"
+                          aria-pressed={settings.composer_send_key === key}
+                          onClick={() => onConversationChange({ composer_send_key: key })}
+                        >
+                          {key === "enter" ? "Enter 发送" : "Ctrl/Cmd+Enter 发送"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
                       <strong>显示处理用时</strong>
