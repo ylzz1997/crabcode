@@ -12973,7 +12973,7 @@ html[data-theme="light"] .conversation-view-tabs button.active {
   overflow: hidden;
 }
 
-.app-shell>:not(.theme-visuals):not(.modal-backdrop) {
+.app-shell>:not(.theme-visuals):not(.modal-backdrop):not(.toast) {
   position: relative;
   z-index: 1;
 }
