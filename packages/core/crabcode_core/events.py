@@ -2720,6 +2720,31 @@ class CoreSession:
             create_user_message,
         )
 
+        # Repeated Enter/"继续" presses are common while a tool is running.
+        # Coalesce an identical pending guidance message so UI retries cannot
+        # turn into a burst of duplicate continuation turns.
+        if self._steering_messages:
+            previous = self._steering_messages[-1]
+            previous_images = (
+                [
+                    block.source
+                    for block in previous.content
+                    if isinstance(block, ImageBlock)
+                ]
+                if isinstance(previous.content, list)
+                else []
+            )
+            expected_images = [
+                {
+                    "type": "base64",
+                    "media_type": image.get("media_type", "image/png"),
+                    "data": image.get("data", ""),
+                }
+                for image in (images or [])
+            ]
+            if previous.text_content == text and previous_images == expected_images:
+                return True
+
         if images:
             content: list[Any] = []
             if text:

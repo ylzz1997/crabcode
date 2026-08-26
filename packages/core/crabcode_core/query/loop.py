@@ -62,6 +62,119 @@ from crabcode_core.types.tool import PermissionBehavior, PermissionResult, Tool,
 logger = get_logger(__name__)
 
 
+def _repair_unpaired_tool_calls(
+    messages: list[Message],
+) -> list[tuple[ToolUseBlock, Message]]:
+    """Normalize tool call/result ordering and close interrupted calls.
+
+    A provider requires every assistant ``tool_use`` to have a matching
+    ``tool_result`` before another user message.  Cancellation or a client
+    retry can leave results after an intervening user message, or leave the
+    assistant call without a result.  Move existing result messages next to
+    their call and insert a deterministic failure result for any missing ID.
+    """
+    result_messages: dict[str, Message] = {}
+    for message in messages:
+        content = message.content
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, ToolResultBlock) and block.tool_use_id:
+                result_messages.setdefault(block.tool_use_id, message)
+
+    repairs_by_assistant: dict[str, list[ToolUseBlock]] = {}
+    known_call_ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, AssistantMessage):
+            continue
+        for block in message.tool_use_blocks:
+            if not block.id:
+                continue
+            known_call_ids.add(block.id)
+            if block.id not in result_messages:
+                repairs_by_assistant.setdefault(message.uuid, []).append(block)
+
+    if not known_call_ids:
+        return []
+
+    repaired: list[tuple[ToolUseBlock, Message]] = []
+    rebuilt: list[Message] = []
+    emitted_result_messages: set[str] = set()
+    for message in messages:
+        content = message.content
+        if isinstance(content, list) and any(
+            isinstance(block, ToolResultBlock)
+            and block.tool_use_id in known_call_ids
+            for block in content
+        ) and message.uuid in emitted_result_messages:
+            continue
+
+        rebuilt.append(message)
+        if isinstance(content, list) and any(
+            isinstance(block, ToolResultBlock)
+            and block.tool_use_id in known_call_ids
+            for block in content
+        ) and not isinstance(message, AssistantMessage):
+            # A result that appeared before its assistant call is already in
+            # the right relative position; mark it so the assistant pass does
+            # not emit a duplicate copy later.
+            emitted_result_messages.add(message.uuid)
+
+        if isinstance(message, AssistantMessage):
+            for block in message.tool_use_blocks:
+                existing = result_messages.get(block.id)
+                if existing is not None:
+                    if existing.uuid not in emitted_result_messages:
+                        rebuilt.append(existing)
+                        emitted_result_messages.add(existing.uuid)
+                    continue
+                if block.id not in {
+                    candidate.id
+                    for candidate in repairs_by_assistant.get(message.uuid, [])
+                }:
+                    continue
+                result = create_tool_result_message(
+                    tool_use_id=block.id,
+                    result="Tool call was interrupted before a result was produced.",
+                    is_error=True,
+                    source_tool_assistant_uuid=message.uuid,
+                )
+                rebuilt.append(result)
+                repaired.append((block, result))
+
+    messages[:] = rebuilt
+    return repaired
+
+
+def _append_missing_tool_results(
+    messages: list[Message],
+    tool_use_blocks: list[ToolUseBlock],
+    assistant_uuid: str,
+) -> list[tuple[ToolUseBlock, Message]]:
+    """Close tool calls that were cancelled before their execution returned."""
+    result_ids = {
+        block.tool_use_id
+        for message in messages
+        if isinstance(message.content, list)
+        for block in message.content
+        if isinstance(block, ToolResultBlock)
+    }
+    repaired: list[tuple[ToolUseBlock, Message]] = []
+    for block in tool_use_blocks:
+        if not block.id or block.id in result_ids:
+            continue
+        result = create_tool_result_message(
+            tool_use_id=block.id,
+            result="Tool call was interrupted before a result was produced.",
+            is_error=True,
+            source_tool_assistant_uuid=assistant_uuid,
+        )
+        messages.append(result)
+        result_ids.add(block.id)
+        repaired.append((block, result))
+    return repaired
+
+
 def _format_exception_message(exc: Exception) -> str:
     """Return an actionable message even when an exception has an empty str()."""
     exception_name = type(exc).__name__
@@ -118,6 +231,8 @@ def _is_recoverable_api_error_message(message: str) -> bool:
         "temporarily unavailable",
         "server is overloaded",
         "server overloaded",
+        "stream ended without a terminal event",
+        "invalid responses sse payload",
     )
     if any(phrase in text for phrase in transient_phrases):
         return True
@@ -779,6 +894,30 @@ async def query_loop(
         params.messages[:] = messages
         params.tool_context.messages = messages
         return steering_messages
+
+    repaired_tool_calls = _repair_unpaired_tool_calls(messages)
+    if repaired_tool_calls:
+        params.messages[:] = messages
+        params.tool_context.messages = messages
+        logger.warning(
+            "Repaired %d unpaired tool call(s) before the next API request",
+            len(repaired_tool_calls),
+        )
+        yield ErrorEvent(
+            message=(
+                "检测到上一次任务有工具调用未返回结果，已标记为中断并恢复会话。"
+            ),
+            recoverable=True,
+            error_type="history_repaired",
+        )
+        for block, _result in repaired_tool_calls:
+            yield ToolResultEvent(
+                tool_use_id=block.id,
+                tool_name=block.name,
+                result="Tool call was interrupted before a result was produced.",
+                is_error=True,
+                tool_input=block.input,
+            )
 
     cfg = params.api_config
     adapter_config = getattr(params.api_adapter, "config", None)
@@ -1599,19 +1738,29 @@ async def query_loop(
                 response = buffered_permission_responses.pop(effective_block.id, None)
                 if response is None:
                     expected_ids = {candidate.id for candidate in tool_use_blocks}
-                    while True:
-                        candidate = await params.permission_queue.get()
-                        if not isinstance(candidate, PermissionResponseEvent):
-                            continue
-                        if candidate.agent_id is not None:
-                            continue
-                        if candidate.tool_use_id == effective_block.id:
-                            response = candidate
-                            break
-                        # Preserve an answer for another tool in this same
-                        # assistant response; discard IDs from an older turn.
-                        if candidate.tool_use_id in expected_ids:
-                            buffered_permission_responses[candidate.tool_use_id] = candidate
+                    try:
+                        while True:
+                            candidate = await params.permission_queue.get()
+                            if not isinstance(candidate, PermissionResponseEvent):
+                                continue
+                            if candidate.agent_id is not None:
+                                continue
+                            if candidate.tool_use_id == effective_block.id:
+                                response = candidate
+                                break
+                            # Preserve an answer for another tool in this same
+                            # assistant response; discard IDs from an older turn.
+                            if candidate.tool_use_id in expected_ids:
+                                buffered_permission_responses[candidate.tool_use_id] = candidate
+                    except asyncio.CancelledError:
+                        interrupted = _append_missing_tool_results(
+                            messages,
+                            tool_use_blocks,
+                            assistant_msg.uuid,
+                        )
+                        if interrupted:
+                            params.messages[:] = messages
+                        raise
                 assert response is not None
                 if response.allowed:
                     if response.always_allow:
@@ -1650,24 +1799,42 @@ async def query_loop(
         if approved_blocks:
             yield StreamModeEvent(mode="tool-running")
             should_end_turn_after_tools = False
-            async for item in _run_tools(
-                approved_blocks,
-                assistant_msg,
-                params.tools,
-                params.tool_context,
-                params.hook_manager,
-                params.tool_call_timeout,
-            ):
-                if isinstance(item, tuple):
-                    msgs, event = item
-                    messages.extend(msgs)
+            try:
+                async for item in _run_tools(
+                    approved_blocks,
+                    assistant_msg,
+                    params.tools,
+                    params.tool_context,
+                    params.hook_manager,
+                    params.tool_call_timeout,
+                ):
+                    if isinstance(item, tuple):
+                        msgs, event = item
+                        messages.extend(msgs)
+                        params.messages[:] = messages
+                        if event.tool_name == "SwitchMode" and not event.is_error:
+                            should_end_turn_after_tools = True
+                        yield event
+                    else:
+                        # Mid-execution event (e.g. ChoiceRequestEvent)
+                        yield item
+            except asyncio.CancelledError:
+                # A user interrupt or session shutdown can cancel a tool task
+                # after the assistant call was committed but before its result
+                # reached the projection. Close every remaining call so a
+                # later Responses request cannot be rejected for an orphan.
+                interrupted = _append_missing_tool_results(
+                    messages,
+                    approved_blocks,
+                    assistant_msg.uuid,
+                )
+                if interrupted:
                     params.messages[:] = messages
-                    if event.tool_name == "SwitchMode" and not event.is_error:
-                        should_end_turn_after_tools = True
-                    yield event
-                else:
-                    # Mid-execution event (e.g. ChoiceRequestEvent)
-                    yield item
+                    logger.warning(
+                        "Closed %d tool call(s) after tool execution cancellation",
+                        len(interrupted),
+                    )
+                raise
 
             if should_end_turn_after_tools:
                 yield _turn_complete_event("mode_switch_requested", messages)

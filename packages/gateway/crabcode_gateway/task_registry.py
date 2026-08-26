@@ -132,6 +132,43 @@ def get_operation_task(
     return owner
 
 
+def get_active_operation(
+    app_state: Any,
+    session_id: str,
+    *,
+    operation_scope: str | None = None,
+) -> tuple[str, asyncio.Task[Any]] | None:
+    """Return one live operation for a session, optionally by scope.
+
+    Foreground requests are serialized by ``CoreSession``.  Discovering an
+    existing task at the Gateway boundary lets callers reject a second request
+    instead of queueing another user message behind the active turn.
+    Callers should hold ``get_session_lock`` while using this helper.
+    """
+    ensure_task_state(app_state)
+    operations: dict[tuple[str, str], Any] = getattr(
+        app_state,
+        _OPERATION_TASKS_ATTR,
+    )
+    for (candidate_session_id, operation_id), owner in list(operations.items()):
+        if candidate_session_id != session_id:
+            continue
+        if not isinstance(owner, asyncio.Task):
+            continue
+        if owner.done():
+            if operations.get((candidate_session_id, operation_id)) is owner:
+                operations.pop((candidate_session_id, operation_id), None)
+            continue
+        if operation_scope is not None and getattr(
+            owner,
+            "_crabcode_operation_scope",
+            None,
+        ) != operation_scope:
+            continue
+        return operation_id, owner
+    return None
+
+
 def claim_operation(
     app_state: Any,
     session_id: str,

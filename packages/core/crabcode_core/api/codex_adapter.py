@@ -189,6 +189,27 @@ def _tools_to_responses(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return safe_utf8_json_tree(result)
 
 
+def _response_error_message(payload: Any) -> str | None:
+    """Extract a useful error string from proxy-specific response shapes."""
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("detail") or error.get("code")
+        if message:
+            return safe_utf8_str(str(message))
+    elif error:
+        return safe_utf8_str(str(error))
+    for key in ("message", "detail", "error_message"):
+        value = payload.get(key)
+        if value:
+            return safe_utf8_str(str(value))
+    response = payload.get("response")
+    if isinstance(response, dict):
+        return _response_error_message(response)
+    return None
+
+
 def _response_to_stream_chunks(response: Any) -> list[StreamChunk]:
     """Convert a non-stream Responses API object into stream chunks.
 
@@ -271,6 +292,21 @@ async def _iter_sse_payloads(
     current_event: str | None = None
     data_lines: list[str] = []
 
+    def parse_payload(data: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as exc:
+            return {
+                "type": "response.error",
+                "error": {"message": f"Invalid Responses SSE payload: {exc}"},
+            }
+        if not isinstance(payload, dict):
+            return {
+                "type": "response.error",
+                "error": {"message": "Invalid Responses SSE payload: expected an object"},
+            }
+        return payload
+
     async for raw_line in response.aiter_lines():
         line = raw_line.rstrip("\r")
 
@@ -278,7 +314,7 @@ async def _iter_sse_payloads(
             if data_lines:
                 data = "\n".join(data_lines)
                 if data and data != "[DONE]":
-                    yield current_event or "", json.loads(data)
+                    yield current_event or "", parse_payload(data)
                 data_lines = []
             current_event = line.split(":", 1)[1].strip()
             continue
@@ -287,19 +323,27 @@ async def _iter_sse_payloads(
             data_lines.append(line.split(":", 1)[1].lstrip())
             continue
 
+        # A few compatible gateways return one JSON object per line while
+        # still advertising a streaming response. Treat it as a response
+        # payload instead of silently dropping it and reporting an empty turn.
+        if line.startswith(("{", "[")):
+            yield current_event or "", parse_payload(line)
+            current_event = None
+            continue
+
         if line == "":
             if not data_lines:
                 continue
             data = "\n".join(data_lines)
             data_lines = []
             if data and data != "[DONE]":
-                yield current_event or "", json.loads(data)
+                yield current_event or "", parse_payload(data)
             current_event = None
 
     if data_lines:
         data = "\n".join(data_lines)
         if data and data != "[DONE]":
-            yield current_event or "", json.loads(data)
+            yield current_event or "", parse_payload(data)
 
 
 class CodexAdapter(APIAdapter):
@@ -376,6 +420,7 @@ class CodexAdapter(APIAdapter):
     ) -> AsyncGenerator[StreamChunk, None]:
         url = f"{self._base_url.rstrip('/')}/responses"
         active_calls: dict[str, dict[str, str]] = {}
+        saw_terminal_event = False
 
         async with httpx.AsyncClient(timeout=self.config.timeout) as client:
             async with client.stream(
@@ -401,6 +446,26 @@ class CodexAdapter(APIAdapter):
                         type="error",
                         error=safe_utf8_str(error_message),
                     )
+                    return
+
+                content_type = response.headers.get("content-type", "").lower()
+                if "event-stream" not in content_type and "json" in content_type:
+                    body = (await response.aread()).decode("utf-8", "replace").strip()
+                    try:
+                        payload = json.loads(body) if body else {}
+                    except json.JSONDecodeError:
+                        payload = {}
+                    error_message = _response_error_message(payload)
+                    if error_message:
+                        yield StreamChunk(type="error", error=error_message)
+                    else:
+                        yield StreamChunk(
+                            type="error",
+                            error=(
+                                "Responses endpoint returned JSON without a usable "
+                                "response or error payload"
+                            ),
+                        )
                     return
 
                 async for sse_event, payload in _iter_sse_payloads(response):
@@ -481,9 +546,13 @@ class CodexAdapter(APIAdapter):
                         )
 
                     elif event_type == "response.completed":
+                        saw_terminal_event = True
+                        response_payload = payload.get("response")
                         usage_payload = (
-                            payload.get("response", {}) or {}
-                        ).get("usage", {}) or {}
+                            response_payload.get("usage", {})
+                            if isinstance(response_payload, dict)
+                            else {}
+                        ) or {}
                         usage = normalize_openai_usage(usage_payload)
                         yield StreamChunk(
                             type="message_stop",
@@ -492,30 +561,42 @@ class CodexAdapter(APIAdapter):
                         )
 
                     elif event_type == "response.failed":
-                        error_payload = ((payload.get("response", {}) or {}).get("error", {}) or {})
+                        saw_terminal_event = True
+                        response_payload = payload.get("response")
+                        error_payload = (
+                            response_payload.get("error", {})
+                            if isinstance(response_payload, dict)
+                            else payload.get("error", {})
+                        ) or {}
+                        error_message = (
+                            _response_error_message({"error": error_payload})
+                            or "Response failed"
+                        )
                         yield StreamChunk(
                             type="error",
-                            error=safe_utf8_str(
-                                str(error_payload.get("message", "Response failed"))
-                            ),
+                            error=safe_utf8_str(error_message),
                         )
 
                     elif event_type == "response.incomplete":
+                        saw_terminal_event = True
                         yield StreamChunk(
                             type="error",
                             error="Response incomplete (max output tokens or content filter)",
                         )
 
                     elif event_type in {"response.error", "error"}:
-                        error_payload = payload.get("error", {})
-                        if isinstance(error_payload, dict):
-                            error_msg = error_payload.get("message", "")
-                        else:
-                            error_msg = str(error_payload)
+                        saw_terminal_event = True
+                        error_msg = _response_error_message(payload) or "Unknown error"
                         yield StreamChunk(
                             type="error",
-                            error=safe_utf8_str(error_msg or "Unknown error"),
+                            error=safe_utf8_str(error_msg),
                         )
+
+                if not saw_terminal_event:
+                    yield StreamChunk(
+                        type="error",
+                        error="Responses stream ended without a terminal event",
+                    )
 
     async def stream_message(
         self,
@@ -604,6 +685,7 @@ class CodexAdapter(APIAdapter):
         # Track active function calls by item_id
         active_calls: dict[str, dict[str, str]] = {}
         emitted_stream_event = False
+        saw_sdk_terminal_event = False
         try:
             stream = await self.client.responses.create(**sdk_params)
             async for event in stream:
@@ -690,6 +772,7 @@ class CodexAdapter(APIAdapter):
 
                 # Response completed
                 elif event_type == "response.completed":
+                    saw_sdk_terminal_event = True
                     usage = {}
                     response = event.response
                     if hasattr(response, "usage") and response.usage:
@@ -702,6 +785,7 @@ class CodexAdapter(APIAdapter):
 
                 # Response failed or incomplete
                 elif event_type == "response.failed":
+                    saw_sdk_terminal_event = True
                     error_msg = ""
                     if hasattr(event, "response") and hasattr(event.response, "error"):
                         err = event.response.error
@@ -712,10 +796,12 @@ class CodexAdapter(APIAdapter):
                     )
 
                 elif event_type == "response.incomplete":
+                    saw_sdk_terminal_event = True
                     yield StreamChunk(type="error", error="Response incomplete (max output tokens or content filter)")
 
                 # Error event
                 elif event_type == "response.error":
+                    saw_sdk_terminal_event = True
                     error_msg = ""
                     if hasattr(event, "error"):
                         err = event.error
@@ -723,6 +809,11 @@ class CodexAdapter(APIAdapter):
                     yield StreamChunk(
                         type="error", error=safe_utf8_str(error_msg or "Unknown error")
                     )
+            if not saw_sdk_terminal_event:
+                yield StreamChunk(
+                    type="error",
+                    error="Responses stream ended without a terminal event",
+                )
         except json.JSONDecodeError:
             if emitted_stream_event:
                 raise

@@ -36,6 +36,7 @@ from crabcode_gateway.task_registry import (
     cancel_owner_tasks,
     cancel_tasks,
     claim_operation,
+    get_active_operation,
     get_operation_task,
     operation_is_registered,
     OperationAlreadyRegistered,
@@ -2052,6 +2053,7 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
         return
 
     duplicate_operation = False
+    conflicting_operation_id: str | None = None
     async with get_session_lock(ws.app.state):
         # Re-check immediately before registration in case a future caller
         # moves task creation out of the first critical section.
@@ -2076,10 +2078,33 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
             else:
                 duplicate_operation = True
                 task = None
-        if not duplicate_operation and not (
-            getattr(ws.app.state, "gateway_closing", False)
-            or ws.app.state.sessions.get(session.session_id) is not session
-            or session.session_id in getattr(ws.app.state, "closing_sessions", set())
+        if (
+            not duplicate_operation
+            and not (
+                getattr(ws.app.state, "gateway_closing", False)
+                or ws.app.state.sessions.get(session.session_id) is not session
+                or session.session_id in getattr(ws.app.state, "closing_sessions", set())
+            )
+            and (active_foreground := get_active_operation(
+                ws.app.state,
+                session.session_id,
+                operation_scope="foreground",
+            )) is not None
+        ):
+            # A CoreSession serializes turns, but accepting another send here
+            # would append its user message after an in-flight tool call and
+            # leave the provider with an invalid call/result sequence. Clients
+            # should use steer_message for guidance during this operation.
+            conflicting_operation_id = active_foreground[0]
+            task = None
+        if (
+            not duplicate_operation
+            and conflicting_operation_id is None
+            and not (
+                getattr(ws.app.state, "gateway_closing", False)
+                or ws.app.state.sessions.get(session.session_id) is not session
+                or session.session_id in getattr(ws.app.state, "closing_sessions", set())
+            )
         ):
             task = asyncio.create_task(_run())
             track_task(
@@ -2095,7 +2120,11 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
         message = (
             f"operation already active: {operation_id}"
             if duplicate_operation
-            else "session is closing"
+            else (
+                f"foreground operation already active: {conflicting_operation_id}"
+                if conflicting_operation_id is not None
+                else "session is closing"
+            )
         )
         await _send_ws_command_error(
             ws,
@@ -2104,7 +2133,11 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
             request=msg,
             session_id=session.session_id,
             operation_id=operation_id,
-            error_type=("operation_conflict" if duplicate_operation else "session_closing"),
+            error_type=(
+                "operation_conflict"
+                if duplicate_operation or conflicting_operation_id is not None
+                else "session_closing"
+            ),
         )
         return
 

@@ -284,6 +284,30 @@ describe("Gateway event reducer", () => {
     expect(current.items).toEqual(running.items);
   });
 
+  it("clears busy state when a stale steering operation is rejected", () => {
+    const current = applyGatewayEvent(
+      {
+        ...state(),
+        busy: true,
+        runStartedAt: 1_000,
+        currentStep: { kind: "response" as const, label: "生成回复", startedAt: 1_000 },
+      },
+      {
+        type: "error",
+        command: "steer_message",
+        command_error: true,
+        error_type: "operation_not_found",
+        operation_id: "operation-1",
+        message: "operation not found or not foreground",
+      },
+    );
+
+    expect(current.busy).toBe(false);
+    expect(current.operationId).toBeNull();
+    expect(current.runStartedAt).toBeNull();
+    expect(current.currentStep).toBeNull();
+  });
+
   it("settles an optimistic document card when document action is rejected", () => {
     const running = {
       ...state(),
