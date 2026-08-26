@@ -2957,6 +2957,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.connection.modelName && models.includes(this.connection.modelName)
         ? this.connection.modelName
         : defaultModel;
+    const composerSendKey = cfg.get<string>("composerSendKey", "enter") === "enter"
+      ? "enter"
+      : "mod_enter";
     this.postMessage({
       type: "options",
       models,
@@ -2966,6 +2969,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       permissionMode: mode,
       pendingEditsVisibleFiles,
       fileUploadMaxSizeMb,
+      composerSendKey,
       connected: this.connection.connected,
     });
   }
@@ -6577,7 +6581,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           <button type="button" class="tb-stop-circle" id="stop-btn" title="中断当前任务" aria-label="中断当前任务" hidden>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
           </button>
-          <button type="button" class="tb-send-circle" id="send-btn" title="发送 (⌘↵ / Ctrl+Enter)" aria-label="发送">
+          <button type="button" class="tb-send-circle" id="send-btn" title="发送 (Enter)" aria-label="发送">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
           </button>
         </div>
@@ -6728,6 +6732,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let activeTurn = null;
     const turns = [];
     const SEND_ICON_HTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
+    let composerSendKey = 'enter';
+
+    function isMacPlatform() {
+      return /Macintosh|MacIntel|MacPPC|Mac68K/i.test(navigator.platform || navigator.userAgent || '');
+    }
+
+    function composerModifierLabel() {
+      return isMacPlatform() ? 'Command+Enter' : 'Ctrl+Enter';
+    }
+
+    function isComposerModifierSubmit(event) {
+      return event.key === 'Enter' && (isMacPlatform() ? event.metaKey : event.ctrlKey);
+    }
 
     // Pending attachments carry stable keys so inline @ capsules survive list reordering.
     const pendingImages = [];
@@ -6776,6 +6793,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function setComposerCaretAtEnd() {
       input.focus();
       setComposerCaret(input, input.childNodes.length);
+    }
+
+    function insertComposerLineBreak() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || !input.contains(selection.getRangeAt(0).startContainer)) {
+        const breakNode = document.createElement('br');
+        input.appendChild(breakNode);
+        setComposerCaret(input, input.childNodes.length);
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const breakNode = document.createElement('br');
+      range.insertNode(breakNode);
+      const parent = breakNode.parentNode || input;
+      setComposerCaret(parent, Array.prototype.indexOf.call(parent.childNodes, breakNode) + 1);
     }
 
     // ── Session management state ────────────────────────────────────
@@ -8149,10 +8182,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (stopBtn) stopBtn.hidden = !busy;
       if (sendBtn) {
         sendBtn.innerHTML = SEND_ICON_HTML;
-        sendBtn.title = busy ? '追加指令 (⌘↵ / Ctrl+Enter)' : '发送 (⌘↵ / Ctrl+Enter)';
         sendBtn.setAttribute('aria-label', busy ? '追加指令' : '发送');
       }
+      updateSendButtonTitle();
       updateComposerPlaceholder();
+    }
+
+    function updateSendButtonTitle() {
+      if (!sendBtn) return;
+      const action = isBusy ? '追加指令' : '发送';
+      const shortcut = composerSendKey === 'enter' ? 'Enter' : composerModifierLabel();
+      sendBtn.title = action + ' (' + shortcut + ')';
     }
 
     function renderSteeringQueue(messages) {
@@ -8469,6 +8509,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function applyOptions(msg) {
       hasReceivedOptions = true;
       maxTextFileSizeMb = Math.min(100, Math.max(1, Math.floor(Number(msg.fileUploadMaxSizeMb) || 5)));
+      composerSendKey = msg.composerSendKey === 'mod_enter' ? 'mod_enter' : 'enter';
+      updateSendButtonTitle();
       const models = msg.models || [];
       const previousValue = currentModelValue;
       if (models.length === 0) {
@@ -8949,7 +8991,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           setMentionActive((mentionActiveIndex + delta + mentionItems.length) % mentionItems.length);
           return;
         }
-        if ((e.key === 'Enter' || e.key === 'Tab') && mentionActiveIndex >= 0) {
+        if ((e.key === 'Enter' || e.key === 'Tab') && mentionActiveIndex >= 0 && !isComposerModifierSubmit(e)) {
           e.preventDefault();
           selectMentionItem(mentionActiveIndex);
           return;
@@ -8980,24 +9022,51 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
         }
       }
-      if (slashPopup.classList.contains('hidden')) return;
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSlashActive(Math.min(slashActiveIndex + 1, slashItems.length - 1));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSlashActive(Math.max(slashActiveIndex - 1, 0));
-      } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
-        if (slashActiveIndex >= 0) {
+      if (!slashPopup.classList.contains('hidden')) {
+        if (e.key === 'ArrowDown') {
           e.preventDefault();
-          selectSlashItem(slashActiveIndex);
+          setSlashActive(Math.min(slashActiveIndex + 1, slashItems.length - 1));
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setSlashActive(Math.max(slashActiveIndex - 1, 0));
+        } else if (e.key === 'Enter' && !isComposerModifierSubmit(e)) {
+          if (slashActiveIndex >= 0) {
+            e.preventDefault();
+            selectSlashItem(slashActiveIndex);
+            return;
+          }
+        } else if (e.key === 'Escape') {
+          closeSlashPopup();
+          return;
+        } else if (e.key === 'Tab') {
+          e.preventDefault();
+          const nextIdx = slashActiveIndex < 0 ? 0 : (slashActiveIndex + 1) % slashItems.length;
+          setSlashActive(nextIdx);
+          return;
         }
-      } else if (e.key === 'Escape') {
-        closeSlashPopup();
-      } else if (e.key === 'Tab') {
+      }
+
+      const modifierSubmit = isComposerModifierSubmit(e);
+      const shouldInsertLineBreak = e.key === 'Enter' && (
+        (composerSendKey === 'mod_enter' && !modifierSubmit)
+        || (composerSendKey === 'enter' && modifierSubmit)
+      );
+      if (shouldInsertLineBreak) {
         e.preventDefault();
-        const nextIdx = slashActiveIndex < 0 ? 0 : (slashActiveIndex + 1) % slashItems.length;
-        setSlashActive(nextIdx);
+        closeMentionPopup();
+        closeSlashPopup();
+        insertComposerLineBreak();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+      const shouldSubmit = composerSendKey === 'mod_enter'
+        ? modifierSubmit
+        : e.key === 'Enter' && !e.shiftKey && !modifierSubmit;
+      if (shouldSubmit) {
+        e.preventDefault();
+        closeMentionPopup();
+        closeSlashPopup();
+        send();
       }
     });
 
@@ -9799,10 +9868,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (isBusy) vscode.postMessage({ type: 'interrupt' });
       });
     }
-    input.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
-    });
-
     // ── Mode menu ────────────────────────────────────────────────
 
     let currentMode = 'agent';

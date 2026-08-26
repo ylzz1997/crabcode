@@ -138,6 +138,19 @@
           "maximum": 100,
           "description": "添加非图片文件并发送完整内容时的单文件大小上限（MB）"
         },
+        "crabcode.composerSendKey": {
+          "type": "string",
+          "enum": [
+            "enter",
+            "mod_enter"
+          ],
+          "enumDescriptions": [
+            "Enter 发送，系统对应的 Ctrl/Cmd+Enter 换行",
+            "系统对应的 Ctrl/Cmd+Enter 发送，Enter 换行"
+          ],
+          "default": "enter",
+          "description": "CrabCode 聊天输入框的发送快捷键"
+        },
         "crabcode.chatModels": {
           "type": "array",
           "items": {
