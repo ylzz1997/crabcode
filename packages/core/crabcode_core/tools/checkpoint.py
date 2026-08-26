@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
@@ -49,7 +50,11 @@ class CheckpointTool(Tool):
             )
 
         label = tool_input.get("label", "")
-        cp_id = session.checkpoint(label=label, messages=context.messages)
+        cp_id = await asyncio.to_thread(
+            session.checkpoint,
+            label=label,
+            messages=context.messages,
+        )
 
         if not cp_id:
             return ToolResult(
@@ -57,10 +62,17 @@ class CheckpointTool(Tool):
                 is_error=True,
             )
 
+        snapshot_included = bool(getattr(session, "last_checkpoint_snapshot_included", False))
         display = f"Checkpoint created: {cp_id[:8]}…"
         if label:
             display = f"Checkpoint created ({label}): {cp_id[:8]}…"
+        if not snapshot_included:
+            display += " (conversation only; file snapshot skipped by size or settings)"
         return ToolResult(
-            data={"checkpoint_id": cp_id, "label": label},
+            data={
+                "checkpoint_id": cp_id,
+                "label": label,
+                "snapshot_included": snapshot_included,
+            },
             result_for_model=f"{display} You can revert to this checkpoint later with the Revert tool using checkpoint_id '{cp_id[:8]}…'.",
         )

@@ -512,6 +512,7 @@ export interface CheckpointInfo {
   label?: string;
   timestamp?: string;
   files?: string[];
+  snapshot_id?: string | null;
 }
 
 export type ChatItemKind =

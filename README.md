@@ -962,6 +962,27 @@ CrabCode automatically tracks file-system changes made during a session, allowin
 - **Git repos** (preferred): uses `git write-tree` + `git update-ref` under `refs/crabcode/` — lightweight, zero-commit snapshots that don't pollute your git history.
 - **Non-git directories**: files are copied to `.crabcode/snapshots/` for tracking.
 
+**Snapshot safety settings:**
+
+File-system snapshots are enabled by default, with a cumulative workspace-size
+ceiling of 1024 MiB. Configure them in the project or user `settings.json`:
+
+```json
+{
+  "snapshot": {
+    "enabled": true,
+    "max_size_mb": 1024
+  }
+}
+```
+
+The scanner always skips the filesystem root and the user home directory. It
+also skips `.git`, `.crabcode`, dependency and cache directories. If the
+workspace exceeds `max_size_mb`, or `enabled` is `false`, only the file-system
+copy is skipped: the conversation checkpoint is still persisted. In that case
+`/revert` can roll back the conversation but reports that no file snapshot was
+available.
+
 **Gateway API:**
 
 | Endpoint | Method | Description |

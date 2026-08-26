@@ -410,7 +410,7 @@ export class GatewayApi {
     return this.request(`/snapshot/list?${new URLSearchParams({ session_id: sessionId })}`);
   }
 
-  createCheckpoint(sessionId: string, label = ""): Promise<{ checkpoint_id: string }> {
+  createCheckpoint(sessionId: string, label = ""): Promise<{ checkpoint_id: string; snapshot_included?: boolean }> {
     return this.request("/snapshot/checkpoint", {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId, label }),

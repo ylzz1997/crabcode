@@ -379,6 +379,16 @@ class SessionMetaStore:
         )
         conn.commit()
 
+    def restore(self, session_id: str) -> None:
+        """Clear archive state after an explicit session recovery."""
+        conn = self._conn_or_create()
+        conn.execute(
+            "UPDATE session_meta SET is_archived = 0, updated_at = ? WHERE id = ?",
+            (int(datetime.now(timezone.utc).timestamp()), session_id),
+        )
+        conn.execute("DELETE FROM session_tombstones WHERE id = ?", (session_id,))
+        conn.commit()
+
     def auto_archive(
         self,
         days: int = 30,

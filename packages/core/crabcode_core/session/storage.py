@@ -315,9 +315,10 @@ class SessionStorage:
             self._initialized = True
 
     def _transcript_has_archive_marker_locked(self) -> bool:
-        """Check legacy inline tombstones while the session lock is held."""
+        """Return the latest inline archive lifecycle state."""
         if not self._transcript_path.exists():
             return False
+        archived = False
         try:
             with _transcript_file_lock(self._transcript_path, exclusive=False):
                 with open(self._transcript_path, encoding="utf-8") as transcript:
@@ -326,11 +327,15 @@ class SessionStorage:
                             entry = json.loads(raw_line)
                         except json.JSONDecodeError:
                             continue
-                        if isinstance(entry, dict) and entry.get("type") == "session_archive":
-                            return True
+                        if not isinstance(entry, dict):
+                            continue
+                        if entry.get("type") == "session_archive":
+                            archived = True
+                        elif entry.get("type") == "session_restore":
+                            archived = False
         except FileNotFoundError:
             return False
-        return False
+        return archived
 
     def _write_tombstone_locked(self) -> None:
         """Commit the external archive marker while the session lock is held."""
@@ -621,6 +626,8 @@ class SessionStorage:
                             meta.update({key: value for key, value in entry.items() if key != "type"})
                         elif entry.get("type") == "session_archive":
                             meta["is_archived"] = True
+                        elif entry.get("type") == "session_restore":
+                            meta["is_archived"] = False
             except FileNotFoundError:
                 return {}
         return meta
@@ -880,6 +887,34 @@ class SessionStorage:
             self._archive_state_checked = True
             self._meta["is_archived"] = True
 
+    def restore_from_archive(self) -> None:
+        """Remove archive fences so an explicitly recovered session is writable."""
+        with _session_lifecycle_lock(self.cwd, self.session_id):
+            marker = get_session_tombstone_path(self.cwd, self.session_id)
+            marker.unlink(missing_ok=True)
+            if self._transcript_path.exists():
+                # Keep the audit record, but make the durable session active
+                # again for a user-requested recovery.
+                self._append_transcript_line_if_absent_locked(
+                    {
+                        "type": "session_restore",
+                        "session_id": self.session_id,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    lambda existing: existing.get("type") == "session_restore",
+                )
+            try:
+                from crabcode_core.session.meta_db import SessionMetaStore
+                store = SessionMetaStore()
+                try:
+                    store.restore(self.session_id)
+                finally:
+                    store.close()
+            except Exception:
+                logger.warning("Failed to clear restored session metadata", exc_info=True)
+            self._archive_state_checked = False
+            self._meta["is_archived"] = False
+
     def load_messages(
         self,
         *,
@@ -941,6 +976,9 @@ class SessionStorage:
 
                 if entry.get("type") == "session_archive":
                     archived = True
+                    continue
+                if entry.get("type") == "session_restore":
+                    archived = False
                     continue
 
                 # Capture the session_meta line but don't add it as a message.
@@ -1533,6 +1571,9 @@ class SessionStorage:
                                 continue
                             if entry.get("type") == "session_archive":
                                 archived = True
+                                continue
+                            if entry.get("type") == "session_restore":
+                                archived = False
                                 continue
 
                             # First non-meta user message is the preview

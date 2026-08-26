@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,8 +13,14 @@ from crabcode_gateway.task_registry import SessionOperationRejected, run_session
 router = APIRouter(prefix="/snapshot", tags=["snapshot"])
 
 
-async def _checkpoint(session: Any, label: str) -> str | None:
-    return session.checkpoint(label=label)
+async def _checkpoint(session: Any, label: str) -> tuple[str | None, bool]:
+    checkpoint_id = await asyncio.to_thread(session.checkpoint, label=label)
+    # Read the status in the same coroutine immediately after the worker
+    # returns, so concurrent checkpoint requests cannot overwrite the status
+    # before this request packages its response.
+    return checkpoint_id, bool(
+        getattr(session, "last_checkpoint_snapshot_included", False)
+    )
 
 
 async def _list_checkpoints(session: Any) -> list[dict[str, Any]]:
@@ -86,7 +93,7 @@ async def create_checkpoint(req: CheckpointRequest, request: Request) -> dict[st
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
-        cp_id = await run_session_operation(
+        cp_id, snapshot_included = await run_session_operation(
             request.app.state,
             session,
             lambda: _checkpoint(session, req.label),
@@ -95,7 +102,10 @@ async def create_checkpoint(req: CheckpointRequest, request: Request) -> dict[st
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not cp_id:
         raise HTTPException(status_code=400, detail="Failed to create checkpoint")
-    return {"checkpoint_id": cp_id, "snapshot_included": True}
+    return {
+        "checkpoint_id": cp_id,
+        "snapshot_included": snapshot_included,
+    }
 
 
 @router.get("/list")

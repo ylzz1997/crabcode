@@ -118,6 +118,9 @@ class CoreSession:
 
         self.last_context_used_tokens: int = 0
         self.last_context_window_tokens: int = 0
+        # Set by checkpoint() so API/tool callers can distinguish a
+        # conversation-only checkpoint from one that also captured files.
+        self.last_checkpoint_snapshot_included: bool = False
 
         self._api_adapter: Any = None
         self._session_storage: Any = None
@@ -766,6 +769,8 @@ class CoreSession:
                 team_manager=self._team_manager,
                 schedule_manager=self._schedule_manager,
                 session=self,
+                snapshot_enabled=merged.snapshot.enabled,
+                snapshot_max_size_mb=merged.snapshot.max_size_mb,
             )
             await tool.setup(ctx)
 
@@ -2269,6 +2274,8 @@ class CoreSession:
                 team_manager=self._team_manager,
                 schedule_manager=self._schedule_manager,
                 session=self,
+                snapshot_enabled=self.settings.snapshot.enabled,
+                snapshot_max_size_mb=self.settings.snapshot.max_size_mb,
             )
             try:
                 await tool.setup(context)
@@ -2953,6 +2960,8 @@ class CoreSession:
             team_manager=self._team_manager,
             schedule_manager=self._schedule_manager,
             session=self,
+            snapshot_enabled=self.settings.snapshot.enabled,
+            snapshot_max_size_mb=self.settings.snapshot.max_size_mb,
         )
 
         # Sync SwitchModeTool's current_mode so its prompt and validation
@@ -3534,9 +3543,17 @@ class CoreSession:
             return None
         # Create a file-system snapshot alongside the conversation checkpoint
         snapshot_id: str | None = None
+        self.last_checkpoint_snapshot_included = False
         try:
             from crabcode_core.snapshot.tracker import create_full_snapshot
-            snapshot_id = create_full_snapshot(self.cwd, self.session_id, label=label)
+            snapshot_id = create_full_snapshot(
+                self.cwd,
+                self.session_id,
+                label=label,
+                enabled=self.settings.snapshot.enabled,
+                max_size_mb=self.settings.snapshot.max_size_mb,
+            )
+            self.last_checkpoint_snapshot_included = bool(snapshot_id)
         except Exception:
             logger.debug("Failed to create file snapshot for checkpoint", exc_info=True)
         projection = self.messages if messages is None else messages

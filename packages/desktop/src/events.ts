@@ -586,13 +586,15 @@ export function applyGatewayEvent(
         && documentItemId
         && state.items.some((item) => item.id === documentItemId),
       );
+      const resumeCommandError = event.command_error && event.command === "resume_session";
       return {
         ...state,
         error: event.message ?? "Gateway error",
-        busy: documentCommandError ? false : state.busy,
-        operationId: documentCommandError ? null : state.operationId,
-        runStartedAt: documentCommandError ? null : state.runStartedAt,
-        currentStep: documentCommandError ? null : state.currentStep,
+        connected: resumeCommandError ? false : state.connected,
+        busy: documentCommandError || resumeCommandError ? false : state.busy,
+        operationId: documentCommandError || resumeCommandError ? null : state.operationId,
+        runStartedAt: documentCommandError || resumeCommandError ? null : state.runStartedAt,
+        currentStep: documentCommandError || resumeCommandError ? null : state.currentStep,
         // Gateway guarantees a turn_complete boundary after foreground errors.
         // Keep live cards and timers running until that boundary arrives.
         items: documentCommandError && documentItemId

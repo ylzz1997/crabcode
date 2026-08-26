@@ -7,6 +7,8 @@ can record file changes without managing a SnapshotManager instance themselves.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +21,84 @@ logger = get_logger(__name__)
 
 _CRABCODE_DIR = ".crabcode"
 _SNAPSHOTS_DIR = "snapshots"
+
+# A Bash call can be issued from a workspace container such as the user's
+# home directory.  Taking a file snapshot there would recursively copy the
+# whole machine-owned workspace and can exhaust disk space before the command
+# even starts.  These roots are navigation/workspace containers, not projects.
+def _is_broad_workspace(cwd: str) -> bool:
+    """Return whether *cwd* is too broad for an automatic file snapshot."""
+    try:
+        path = Path(cwd).expanduser().resolve()
+        home = Path.home().resolve()
+        if path == home or path == Path(path.anchor):
+            return True
+        return False
+    except (OSError, RuntimeError, ValueError):
+        # Snapshotting is best effort.  An unresolvable path should not block
+        # the command that requested it.
+        return True
+
+
+def _workspace_exceeds_limit(cwd: str, max_size_mb: int) -> bool:
+    """Return whether a workspace exceeds the snapshot size ceiling.
+
+    The walk is bounded: it stops at the first byte over the limit and skips
+    generated/dependency trees that SnapshotManager would not copy anyway.
+    Permission and stat failures fail closed so a damaged workspace cannot
+    trigger an unbounded snapshot.
+    """
+    if max_size_mb <= 0:
+        return True
+    limit = max_size_mb * 1024 * 1024
+    try:
+        root = Path(cwd).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return True
+    if not root.is_dir():
+        return True
+    skipped = {".git", ".crabcode", "__pycache__", "node_modules", ".venv", "venv"}
+    total = 0
+    walk_failed = False
+
+    def _on_walk_error(_error: OSError) -> None:
+        nonlocal walk_failed
+        walk_failed = True
+
+    try:
+        for current, dirs, files in os.walk(
+            root,
+            topdown=True,
+            onerror=_on_walk_error,
+            followlinks=False,
+        ):
+            if walk_failed:
+                return True
+            dirs[:] = [name for name in dirs if name not in skipped]
+            for name in files:
+                path = Path(current) / name
+                try:
+                    if path.is_symlink():
+                        continue
+                    file_stat = path.stat()
+                except OSError:
+                    return True
+                if not stat.S_ISREG(file_stat.st_mode):
+                    continue
+                total += file_stat.st_size
+                if total > limit:
+                    return True
+        if walk_failed:
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def _snapshot_is_allowed(cwd: str, enabled: bool, max_size_mb: int) -> bool:
+    if not enabled or _is_broad_workspace(cwd):
+        return False
+    return not _workspace_exceeds_limit(cwd, max_size_mb)
 
 
 @dataclass
@@ -87,11 +167,21 @@ def track_snapshot_for_file(
     })
 
 
-def pre_bash_snapshot(cwd: str, session_id: str) -> str | None:
+def pre_bash_snapshot(
+    cwd: str,
+    session_id: str,
+    *,
+    enabled: bool = True,
+    max_size_mb: int = 1024,
+) -> str | None:
     """Create a full working-directory snapshot before a bash command.
 
     Returns the snapshot ID, or ``None`` on failure.
     """
+    if not _snapshot_is_allowed(cwd, enabled, max_size_mb):
+        logger.info("Skipping Bash snapshot for workspace or size policy: %s", cwd)
+        return None
+
     try:
         mgr = SnapshotManager(cwd)
         mgr.init()
@@ -159,12 +249,23 @@ def restore_snapshot(cwd: str, snapshot_id: str) -> list[str]:
     return _restore_file_backups(cwd, snapshot_id)
 
 
-def create_full_snapshot(cwd: str, session_id: str, label: str = "") -> str | None:
+def create_full_snapshot(
+    cwd: str,
+    session_id: str,
+    label: str = "",
+    *,
+    enabled: bool = True,
+    max_size_mb: int = 1024,
+) -> str | None:
     """Create a full working-directory snapshot and return its ID.
 
     This is used by /checkpoint to create a file-system-level snapshot
     alongside the conversation checkpoint.
     """
+    if not _snapshot_is_allowed(cwd, enabled, max_size_mb):
+        logger.info("Skipping full snapshot for workspace or size policy: %s", cwd)
+        return None
+
     try:
         mgr = SnapshotManager(cwd)
         mgr.init()

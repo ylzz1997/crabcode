@@ -131,6 +131,7 @@ import {
 import type {
   BackgroundTaskInfo,
   ChatItem,
+  CheckpointInfo,
   ConnectionPreset,
   DesktopSettings,
   DocumentCapabilities,
@@ -2192,7 +2193,10 @@ function App() {
       }
       if (command === "/checkpoint") {
         const result = await api.createCheckpoint(commandSessionId(), args);
-        appendCommandMessage(`已创建检查点 ${result.checkpoint_id.slice(0, 8)}${args ? `（${args}）` : ""}`);
+        const snapshotNote = result.snapshot_included === false
+          ? "（仅保存对话，文件快照已跳过）"
+          : "";
+        appendCommandMessage(`已创建检查点 ${result.checkpoint_id.slice(0, 8)}${args ? `（${args}）` : ""}${snapshotNote}`);
         return true;
       }
       if (command === "/checkpoints") {
@@ -2414,7 +2418,15 @@ function App() {
       || previous.view !== workspaceView
       || previous.projectPath !== nextProjectPath
     );
-    if (changedFocus && !sameEmptyHandshake && previous.empty && !previous.busy) {
+    // Only discard a never-materialized handshake session. A real session ID
+    // is durable state and must never be archived as a side effect of focus
+    // changes or reconnects; the session list can lag behind the live state.
+    if (
+      changedFocus
+      && !sameEmptyHandshake
+      && previous.sessionId.startsWith("new-")
+      && !previous.busy
+    ) {
       void archiveSession(previous);
     }
 
@@ -5931,7 +5943,7 @@ function CheckpointModal({ api, sessionId, onClose, onRestored }: {
   onClose: () => void;
   onRestored: () => void;
 }) {
-  const [items, setItems] = useState<Array<{ id: string; label?: string; timestamp?: string; files?: string[] }> | null>(null);
+  const [items, setItems] = useState<CheckpointInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -5957,7 +5969,10 @@ function CheckpointModal({ api, sessionId, onClose, onRestored }: {
         {items?.map((item) => (
           <button key={item.id} disabled={busy} onClick={() => void restore(item.id)}>
             <History />
-            <span><strong>{item.label || item.id.slice(0, 8)}</strong><small>{item.timestamp || item.files?.join(", ")}</small></span>
+            <span>
+              <strong>{item.label || item.id.slice(0, 8)}</strong>
+              <small>{item.snapshot_id ? "文件快照已包含" : "仅保存对话"}</small>
+            </span>
             <RotateCcw />
           </button>
         ))}

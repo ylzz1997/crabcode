@@ -1900,8 +1900,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ session_id: sessionId, label }),
       });
       if (!response.ok) { this.addMessage("system", `创建检查点失败：${response.statusText}`); return; }
-      const data = (await response.json()) as { checkpoint_id: string };
-      this.addMessage("system", `检查点已创建：\`${data.checkpoint_id.slice(0, 8)}\`${label ? `（${label}）` : ""}`);
+      const data = (await response.json()) as { checkpoint_id: string; snapshot_included?: boolean };
+      const snapshotNote = data.snapshot_included === false ? "（仅保存对话，文件快照已跳过）" : "";
+      this.addMessage("system", `检查点已创建：\`${data.checkpoint_id.slice(0, 8)}\`${label ? `（${label}）` : ""}${snapshotNote}`);
     } catch { /* ignore */ }
   }
 

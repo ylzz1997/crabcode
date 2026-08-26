@@ -937,6 +937,25 @@ CrabCode 会自动追踪会话期间的文件变更，让你可以**撤销**代�
 - **Git 仓库**（首选）：使用 `git write-tree` + `git update-ref` 在 `refs/crabcode/` 下存储轻量级快照，不污染你的 git 历史。
 - **非 Git 目录**：文件被拷贝到 `.crabcode/snapshots/` 进行追踪。
 
+**快照安全配置：**
+
+文件系统快照默认开启，默认累计目录大小上限为 1024 MiB。可在项目级或用户级
+`settings.json` 中配置：
+
+```json
+{
+  "snapshot": {
+    "enabled": true,
+    "max_size_mb": 1024
+  }
+}
+```
+
+扫描始终跳过文件系统根目录和用户 Home 目录，也会跳过 `.git`、`.crabcode`、依赖
+目录和缓存目录。目录超过 `max_size_mb`，或将 `enabled` 设为 `false` 时，只跳过
+文件系统副本；conversation checkpoint 仍然会保存。此时 `/revert` 仍可回滚对话，
+但会提示没有可用的文件快照。
+
 **网关 API：**
 
 | 端点 | 方法 | 说明 |

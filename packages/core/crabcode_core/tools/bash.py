@@ -76,7 +76,16 @@ class BashTool(Tool):
         if context.session_id:
             try:
                 from crabcode_core.snapshot.tracker import pre_bash_snapshot
-                pre_bash_snapshot(context.cwd, context.session_id)
+                # Snapshot creation may walk/copy many files.  Keep that
+                # filesystem work off the Gateway event loop so a large
+                # project cannot starve WebSocket heartbeats and reconnects.
+                await asyncio.to_thread(
+                    pre_bash_snapshot,
+                    context.cwd,
+                    context.session_id,
+                    enabled=context.snapshot_enabled,
+                    max_size_mb=context.snapshot_max_size_mb,
+                )
             except Exception:
                 pass  # Best-effort; don't block bash if snapshot fails
 

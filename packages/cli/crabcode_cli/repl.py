@@ -4111,10 +4111,17 @@ async def _handle_command(
 
     if cmd == "/checkpoint":
         label = arg or ""
-        cp_id = session.checkpoint(label=label)
+        # File snapshots may scan/copy a large workspace.  Keep this blocking
+        # work off the REPL event loop so input handling and background events
+        # remain responsive while the checkpoint is created.
+        cp_id = await asyncio.to_thread(session.checkpoint, label=label)
         if cp_id:
             label_display = f" \"{label}\"" if label else ""
-            snap_indicator = " [dim](file snapshot included)[/]" if True else ""
+            snap_indicator = (
+                " [dim](file snapshot included)[/]"
+                if session.last_checkpoint_snapshot_included
+                else " [dim](conversation only; file snapshot skipped)[/]"
+            )
             console.print(
                 f"[green]✓[/] Checkpoint created{label_display}: [bold]{cp_id[:8]}…[/bold] "
                 f"(at message {len(session.messages)}){snap_indicator}"

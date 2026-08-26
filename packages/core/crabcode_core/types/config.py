@@ -191,6 +191,15 @@ class ScheduleSettings(BaseModel):
     log_retention_days: int = 30
 
 
+class SnapshotSettings(BaseModel):
+    """Controls optional file-system snapshots used by Bash and Checkpoint."""
+
+    enabled: bool = True
+    # The scanner stops as soon as this cumulative size is exceeded.  This is
+    # deliberately a safety ceiling rather than an exact disk-usage report.
+    max_size_mb: int = Field(default=1024, ge=1, le=1_048_576)
+
+
 class GatewaySecuritySettings(BaseModel):
     """Authentication settings for the HTTP/WebSocket/gRPC gateway."""
 
@@ -240,6 +249,7 @@ class CrabCodeSettings(BaseModel):
     team: TeamSettings = Field(default_factory=TeamSettings)
     cross_session: CrossSessionSettings = Field(default_factory=CrossSessionSettings)
     schedule: ScheduleSettings = Field(default_factory=ScheduleSettings)
+    snapshot: SnapshotSettings = Field(default_factory=SnapshotSettings)
     gateway: GatewaySettings = Field(default_factory=GatewaySettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)

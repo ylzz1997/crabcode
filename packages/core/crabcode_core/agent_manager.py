@@ -1470,6 +1470,8 @@ class AgentManager:
                         else self._team_manager
                     ),
                     schedule_manager=self._schedule_manager,
+                    snapshot_enabled=settings.snapshot.enabled,
+                    snapshot_max_size_mb=settings.snapshot.max_size_mb,
                 )
                 params = QueryParams(
                     messages=list(run.messages),

@@ -127,6 +127,32 @@ describe("Gateway event reducer", () => {
     expect(current.runStartedAt).toBeNull();
   });
 
+  it("clears stale execution state when session resume is rejected", () => {
+    const current = applyGatewayEvent(
+      {
+        ...state(),
+        busy: true,
+        connected: false,
+        error: "连接中断",
+        runStartedAt: 1_000,
+        currentStep: { kind: "response", label: "生成回复", startedAt: 1_000 },
+      },
+      {
+        type: "error",
+        command: "resume_session",
+        command_error: true,
+        error_type: "session_not_found",
+        message: "session not found",
+      },
+    );
+    expect(current.busy).toBe(false);
+    expect(current.connected).toBe(false);
+    expect(current.operationId).toBeNull();
+    expect(current.runStartedAt).toBeNull();
+    expect(current.currentStep).toBeNull();
+    expect(current.error).toBe("session not found");
+  });
+
   it("rebuilds structured history cards and hides internal task notifications", () => {
     const current = applyGatewayEvent(state(), {
       type: "session_history",

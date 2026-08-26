@@ -65,6 +65,8 @@ class ToolContext:
     team_manager: Any | None = None  # TeamManager — session-scoped
     schedule_manager: Any | None = None  # ScheduleManager — session-scoped
     session: Any | None = None  # CoreSession — for checkpoint/revert operations
+    snapshot_enabled: bool = True
+    snapshot_max_size_mb: int = 1024
 
 
 CanUseToolFn = Callable[
