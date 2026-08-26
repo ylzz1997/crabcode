@@ -159,6 +159,21 @@ describe("ComposerEditor send shortcuts", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
+  it("does not send while an IME composition is active", () => {
+    const editor = render();
+    act(() => editor.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("does not send the trailing Enter immediately after compositionend", () => {
+    const editor = render();
+    act(() => editor.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    act(() => editor.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("inserts a line break with the system modifier in Enter-send mode", () => {
     const editor = render("enter");
     const modifier = isMacPlatform() ? { metaKey: true } : { ctrlKey: true };

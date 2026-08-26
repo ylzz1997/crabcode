@@ -273,12 +273,20 @@ export function ComposerEditor({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const commandMenuRef = useRef<HTMLDivElement | null>(null);
   const lastEmittedRef = useRef("");
+  const composingRef = useRef(false);
+  const compositionResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerRef = useRef<MentionTrigger | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [activeOption, setActiveOption] = useState(0);
   const [menuPosition, setMenuPosition] = useState({ left: 12, top: 42 });
   const [slashCompletion, setSlashCompletion] = useState<SlashCompletion | null>(null);
   const [activeCommandOption, setActiveCommandOption] = useState(0);
+
+  useEffect(() => () => {
+    if (compositionResetTimerRef.current !== null) {
+      clearTimeout(compositionResetTimerRef.current);
+    }
+  }, []);
 
   const filteredReferences = useMemo(() => {
     const query = (mentionQuery ?? "").trim().toLocaleLowerCase();
@@ -413,7 +421,16 @@ export function ComposerEditor({
   }, [activeCommandOption, slashCompletion]);
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    const nativeEvent = event.nativeEvent;
+    // IME candidate confirmation can arrive as a normal Enter after
+    // compositionend (notably in Tauri's WebKit WebView). Keep it out of the
+    // send/completion handlers, including legacy keyCode=229 events.
+    if (
+      nativeEvent.isComposing
+      || composingRef.current
+      || nativeEvent.keyCode === 229
+      || nativeEvent.which === 229
+    ) return;
     const modifierSubmit = event.key === "Enter"
       && (isMacPlatform() ? event.metaKey : event.ctrlKey);
     if (mentionQuery !== null) {
@@ -541,6 +558,24 @@ export function ComposerEditor({
           const next = emitChange();
           updateMentionTrigger();
           updateSlashCompletion(next);
+        }}
+        onCompositionStart={() => {
+          if (compositionResetTimerRef.current !== null) {
+            clearTimeout(compositionResetTimerRef.current);
+            compositionResetTimerRef.current = null;
+          }
+          composingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          // Some WebViews dispatch the candidate-confirming Enter immediately
+          // after compositionend. Delay clearing by one task to catch it.
+          if (compositionResetTimerRef.current !== null) {
+            clearTimeout(compositionResetTimerRef.current);
+          }
+          compositionResetTimerRef.current = setTimeout(() => {
+            composingRef.current = false;
+            compositionResetTimerRef.current = null;
+          }, 0);
         }}
         onKeyDown={handleKeyDown}
         onKeyUp={(event) => {
