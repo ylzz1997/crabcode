@@ -2947,29 +2947,15 @@ function App() {
                             </span>
                             <span className="session-preview">{info.preview || formatDate(info.created_at)}</span>
                           </button>
-                          <button
-                            type="button"
-                            className={`icon-button tiny session-favorite-action ${favorite ? "active" : ""}`}
-                            title={favorite ? "取消收藏会话" : "收藏会话"}
-                            aria-label={`${favorite ? "取消收藏" : "收藏"}会话 ${info.title || "未命名会话"}`}
-                            aria-pressed={favorite}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
+                          <SessionActionsMenu
+                            info={info}
+                            status={view?.status ?? null}
+                            favorite={favorite}
+                            deleting={deleting}
+                            onToggleFavorite={() => {
                               if (activeProject) toggleFavoriteSession(activeProject.id, info.session_id);
                             }}
-                          >
-                            <Star fill={favorite ? "currentColor" : "none"} />
-                          </button>
-                          <button
-                            type="button"
-                            className="icon-button tiny session-delete"
-                            title="删除会话"
-                            aria-label={`删除会话 ${info.title || "未命名会话"}`}
-                            disabled={deleting}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
+                            onDelete={() => {
                               void archiveSession({
                                 connectionId: activeConnection!.id,
                                 cwd: info.cwd || activeProject?.path || "",
@@ -2977,9 +2963,7 @@ function App() {
                                 sessionId: info.session_id,
                               });
                             }}
-                          >
-                            {deleting ? <LoaderCircle className="spin" /> : <Trash2 />}
-                          </button>
+                          />
                         </div>
                       );
                     })}
@@ -4433,6 +4417,198 @@ export function ProjectActionsMenu({
         document.body,
       )}
     </>
+  );
+}
+
+export function SessionActionsMenu({
+  info,
+  status,
+  favorite = false,
+  deleting = false,
+  onToggleFavorite,
+  onDelete,
+}: {
+  info: SessionInfo;
+  status: SessionViewState["status"];
+  favorite?: boolean;
+  deleting?: boolean;
+  onToggleFavorite: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 8, left: 8 });
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const sessionTitle = info.title || "未命名会话";
+
+  const placeMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const gap = 8;
+    const menuWidth = 208;
+    const menuHeight = 148;
+    const fitsRight = rect.right + gap + menuWidth <= window.innerWidth - viewportPadding;
+    setPosition({
+      top: Math.min(
+        Math.max(viewportPadding, rect.top - 7),
+        Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding),
+      ),
+      left: fitsRight
+        ? rect.right + gap
+        : Math.max(viewportPadding, rect.left - menuWidth - gap),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const onViewportChange = () => placeMenu();
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, placeMenu]);
+
+  const choose = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        className="icon-button tiny session-menu-trigger"
+        type="button"
+        title={`会话操作 ${sessionTitle}`}
+        aria-label={`会话操作 ${sessionTitle}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) placeMenu();
+          setOpen((value) => !value);
+        }}
+      >
+        <MoreHorizontal />
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="session-action-menu"
+          role="menu"
+          aria-label={`${sessionTitle} 会话操作`}
+          style={position}
+        >
+          <div className="session-action-buttons">
+            <button type="button" role="menuitem" onClick={() => choose(onToggleFavorite)}>
+              <Star fill={favorite ? "currentColor" : "none"} />
+              <span>{favorite ? "取消收藏会话" : "收藏会话"}</span>
+            </button>
+            <button className="danger" type="button" role="menuitem" disabled={deleting} onClick={() => choose(onDelete)}>
+              {deleting ? <LoaderCircle className="spin" /> : <Trash2 />}
+              <span>{deleting ? "正在删除会话" : "删除会话"}</span>
+            </button>
+            <div className="session-action-separator" role="separator" />
+            <button type="button" role="menuitem" onClick={() => choose(() => setDetailsOpen(true))}>
+              <Activity />
+              <span>会话详情</span>
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+      {detailsOpen && createPortal(
+        <SessionDetailModal info={info} status={status} onClose={() => setDetailsOpen(false)} />,
+        document.body,
+      )}
+    </>
+  );
+}
+
+export function SessionDetailModal({
+  info,
+  status,
+  onClose,
+}: {
+  info: SessionInfo;
+  status: SessionViewState["status"];
+  onClose: () => void;
+}) {
+  const contextUsed = status?.context_used_tokens ?? info.tokens_used;
+  const contextWindow = status?.context_window_tokens ?? 0;
+  const contextRemaining = status?.context_remaining_tokens
+    ?? Math.max(0, contextWindow - contextUsed);
+  const contextPercent = contextWindow > 0
+    ? Math.min(100, Math.max(0, status?.context_used_percent ?? contextUsed / contextWindow * 100))
+    : null;
+  const modelLabel = status?.model_profile
+    || [status?.provider || info.provider, status?.model || info.model].filter(Boolean).join("/")
+    || "暂无";
+  const modeLabel = status
+    ? `${status.mode === "plan" ? "Plan" : "Agent"}${status.reasoning_effort ? ` · ${status.reasoning_effort}` : ""}`
+    : "暂无";
+
+  return (
+    <Modal title="会话详情" onClose={onClose}>
+      <div className="session-detail-dialog">
+        <div className="session-detail-heading">
+          <span className="session-detail-heading-icon"><Activity /></span>
+          <div>
+            <strong>{info.title || "未命名会话"}</strong>
+            <small>{modelLabel}</small>
+          </div>
+        </div>
+
+        <section className="session-context-card" aria-label="当前上下文用量">
+          <div className="session-context-heading">
+            <span>当前上下文</span>
+            <strong>{contextUsed.toLocaleString("zh-CN")} tokens{contextPercent === null ? "" : ` · ${contextPercent.toFixed(1)}%`}</strong>
+          </div>
+          {contextPercent !== null && (
+            <div className="session-context-progress"><span style={{ width: `${contextPercent}%` }} /></div>
+          )}
+          <small>{contextWindow > 0
+            ? `总窗口 ${contextWindow.toLocaleString("zh-CN")} tokens · 剩余 ${contextRemaining.toLocaleString("zh-CN")} tokens`
+            : "尚未加载上下文窗口上限"}</small>
+        </section>
+
+        <dl className="session-detail-list">
+          <div>
+            <dt>Session ID</dt>
+            <dd className="session-detail-copy-value">
+              <code title={info.session_id}>{info.session_id}</code>
+              <CopyButton text={info.session_id} label="复制 Session ID" className="session-detail-copy" />
+            </dd>
+          </div>
+          <div><dt>消息</dt><dd>{status?.message_count ?? info.message_count} 条</dd></div>
+          <div><dt>压缩次数</dt><dd>{status?.compact_count ?? 0} 次</dd></div>
+          <div><dt>模型</dt><dd title={modelLabel}>{modelLabel}</dd></div>
+          <div><dt>模式</dt><dd>{modeLabel}</dd></div>
+          <div><dt>创建时间</dt><dd>{info.created_at ? formatDateTime(info.created_at) : "暂无"}</dd></div>
+          <div><dt>工作目录</dt><dd title={info.cwd || undefined}>{info.cwd || "暂无"}</dd></div>
+          {info.forked_from_session_id && (
+            <div><dt>分叉自</dt><dd title={info.forked_from_session_id}>{info.forked_from_title || info.forked_from_session_id}</dd></div>
+          )}
+        </dl>
+      </div>
+    </Modal>
   );
 }
 
