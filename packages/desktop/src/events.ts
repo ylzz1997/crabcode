@@ -200,6 +200,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
             detail: result,
             input: {},
             result,
+            images,
             isError: block.is_error === true,
             tool_use_id: toolUseId,
             status: "complete",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,6 +21,11 @@ class PermissionBehavior(str, Enum):
 
 ToolEventCallback = Callable[[str, str, dict[str, Any]], None]
 """Signature: (tool_name, event_type, data)"""
+
+
+# Keep this aligned with the Gateway's ImageAttachment validation limit.  The
+# limit applies to decoded bytes, not the larger Base64 representation.
+MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024
 
 
 @dataclass
@@ -67,6 +73,32 @@ class ToolContext:
     session: Any | None = None  # CoreSession — for checkpoint/revert operations
     snapshot_enabled: bool = True
     snapshot_max_size_mb: int = 1024
+    # ImageContent emitted by a tool during this invocation.  This is kept on
+    # the per-call context so concurrent tools cannot leak attachments into
+    # one another.
+    emitted_images: list[dict[str, str]] = field(default_factory=list, repr=False)
+
+    def emit_image(self, data: bytes, mime_type: str) -> None:
+        """Append an inline image to this tool invocation's result.
+
+        This mirrors Codex's ``emitImage({ bytes, mimeType })`` boundary:
+        callers provide raw bytes and the transport carries a separate image
+        content block instead of embedding binary data in text or Markdown.
+        """
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("image data must be bytes")
+        raw = bytes(data)
+        if not raw:
+            raise ValueError("image data must not be empty")
+        if len(raw) > MAX_INLINE_IMAGE_BYTES:
+            raise ValueError("image data exceeds the 20MB limit")
+        media_type = str(mime_type or "").strip()
+        if not media_type.lower().startswith("image/"):
+            raise ValueError("mime_type must be an image MIME type")
+        self.emitted_images.append({
+            "media_type": media_type,
+            "data": base64.b64encode(raw).decode("ascii"),
+        })
 
 
 CanUseToolFn = Callable[

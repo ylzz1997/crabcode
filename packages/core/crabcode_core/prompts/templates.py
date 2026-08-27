@@ -55,6 +55,7 @@ TOOL_NAMES = {
     "web_fetch": "WebFetch",
     "web_search": "WebSearch",
     "browser": "Browser",
+    "image": "Image",
     "notebook_edit": "NotebookEdit",
     "todo_write": "TodoWrite",
     "checklist": "Checklist",

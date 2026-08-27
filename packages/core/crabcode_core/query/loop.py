@@ -452,7 +452,10 @@ async def _run_tools(
 
     async def execute_one(block: ToolUseBlock) -> tuple[list[Message], ToolResultEvent]:
         tool = _find_tool(tools, block.name)
-        call_context = replace(context, tool_use_id=block.id)
+        # Each invocation gets an isolated image sink.  This is the same
+        # per-tool boundary Codex uses for ``emitImage`` output and prevents
+        # concurrent tools from sharing attachments.
+        call_context = replace(context, tool_use_id=block.id, emitted_images=[])
         if not tool:
             msg = create_tool_result_message(
                 tool_use_id=block.id,
@@ -568,6 +571,16 @@ async def _run_tools(
                 result_for_model=f"Error executing tool: {e}",
                 is_error=True,
             )
+
+        if call_context.emitted_images:
+            result.images = [
+                *result.images,
+                *[
+                    image
+                    for image in call_context.emitted_images
+                    if image not in result.images
+                ],
+            ]
 
         if hook_manager:
             post_result = await hook_manager.run(

@@ -1609,6 +1609,7 @@ class AgentManager:
                     result_for_display=event.result_for_display,
                     tool_input=event.tool_input,
                     agent_id=agent_id,
+                    images=event.images,
                 ),
                 run=run,
             )

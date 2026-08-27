@@ -7479,6 +7479,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       grep: ['search', '搜索内容', 'G'], glob: ['search', '查找文件', '*'],
       codebasesearch: ['search', '语义搜索', 'S'], websearch: ['web', '搜索网页', '↗'],
       browser: ['web', '浏览器操作', '◎'], debugger: ['debug', '调试程序', 'D'],
+      image: ['image', '发送图片', '▧'],
       processdebugger: ['debug', '进程调试', 'P'], memory: ['memory', '管理记忆', 'M'],
       monitor: ['task', '启动监控', '◉'], tasklist: ['task', '查看后台任务', '≡'], taskstop: ['task', '停止后台任务', '■'],
       agent: ['agent', '启动 Agent', 'A'], agentstatus: ['agent', '查看 Agent', 'A'],
@@ -7499,7 +7500,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const TOOL_FIELD_LABELS = {
       action: '操作', file_path: '文件', path: '路径', target_file: '文件', target_directory: '目录', cwd: '工作目录', program: '程序',
       command: '命令', timeout: '超时', timeout_seconds: '超时', offset: '起始行', limit: '行数', old_string: '替换前', new_string: '替换后',
-      content: '内容', replace_all: '全部替换', pattern: '匹配模式', glob: '文件过滤', query: '查询', num_results: '结果数',
+      content: '内容', replace_all: '全部替换', pattern: '匹配模式', glob: '文件过滤', query: '查询', num_results: '结果数', mime_type: 'MIME 类型', mimeType: 'MIME 类型',
       case_insensitive: '忽略大小写', url: '网址', selector: '选择器', script: '脚本', text: '消息', prompt: '任务', description: '说明',
       objective: '目标', token_budget: 'Token 预算', status: '状态', target_mode: '目标模式', explanation: '原因', plan: '执行计划',
       session_id: 'Session', agent_id: 'Agent', agent_ids: 'Agents', task_id: '任务 ID', team_id: 'Team', to: '接收方', role: '角色',
@@ -7524,6 +7525,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       terminal: ['command', 'paths', 'linter', 'file_path', 'path', 'language', 'timeout'],
       search: ['query', 'pattern', 'path', 'target_directory', 'glob', 'num_results', 'case_insensitive'],
       web: ['action', 'url', 'selector', 'text', 'script', 'path', 'session_id', 'tab_id', 'headless', 'wait_until', 'return_format', 'timeout_seconds', 'options'],
+      image: ['path', 'mime_type', 'mimeType'],
       debug: ['action', 'session_id', 'program', 'pid', 'language', 'path', 'address', 'base_address', 'lines', 'thread_id', 'frame_id', 'expression', 'query', 'pattern', 'value', 'value_hex', 'patch_hex', 'args', 'cwd'],
       memory: ['action', 'title', 'query', 'content', 'memory_id', 'id'],
       task: ['action', 'task_id', 'description', 'command', 'ws', 'persistent', 'interval', 'timeout_ms', 'timeout'],
@@ -7566,7 +7568,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const action = rawAction ? (TOOL_ACTION_LABELS[rawAction.toLowerCase()] || rawAction) : '';
       const summaryKeys = {
         file: ['file_path', 'path', 'target_file'], terminal: ['command', 'paths', 'linter', 'file_path', 'path'], search: ['query', 'pattern', 'glob'],
-        web: ['url', 'selector', 'text', 'path'], debug: ['program', 'pid', 'path', 'expression', 'session_id'], memory: ['title', 'query', 'content'],
+        web: ['url', 'selector', 'text', 'path'], image: ['path', 'mime_type', 'mimeType'], debug: ['program', 'pid', 'path', 'expression', 'session_id'], memory: ['title', 'query', 'content'],
         task: ['description', 'command', 'task_id'], agent: ['description', 'name', 'prompt', 'agent_id', 'agent_ids'], message: ['to', 'text', 'question'],
         checkpoint: ['label', 'checkpoint_id'], checklist: ['title', 'checklist_id', 'item'], goal: ['objective', 'status'], mode: ['target_mode', 'explanation'],
         team: ['team_id', 'name', 'description', 'to', 'prompt'], schedule: ['name', 'job_id', 'schedule'], skill: ['skill_name', 'skill', 'name', 'path'],

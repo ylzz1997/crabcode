@@ -153,6 +153,7 @@ def _get_using_tools_section(enabled_tools: list[str]) -> str:
     codebase_search = TOOL_NAMES["codebase_search"]
     web_search = TOOL_NAMES["web_search"]
     browser = TOOL_NAMES["browser"]
+    image = TOOL_NAMES["image"]
 
     provided_tool_subitems = [
         f"To read files use {read} instead of cat, head, tail, or sed",
@@ -177,6 +178,10 @@ def _get_using_tools_section(enabled_tools: list[str]) -> str:
     if browser in enabled_tools:
         provided_tool_subitems.append(
             f"Use {browser} when you need to open a page in a real browser, interact with the DOM, fill forms, evaluate page-side JavaScript, or take screenshots. Prefer {web_search} for discovering URLs or web search results."
+        )
+    if image in enabled_tools:
+        provided_tool_subitems.append(
+            f"Use {image} after a tool creates or saves a local image that should be shown in the conversation. It emits the image as a separate inline content block; do not put local filesystem paths in Markdown."
         )
 
     write_vs_print_subitems = [

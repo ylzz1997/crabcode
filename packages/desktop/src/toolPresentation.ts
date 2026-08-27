@@ -3,6 +3,7 @@ export type ToolKind =
   | "terminal"
   | "search"
   | "web"
+  | "image"
   | "debug"
   | "memory"
   | "task"
@@ -59,6 +60,7 @@ const DEFINITIONS: Record<string, ToolDefinition> = {
   codebasesearch: { kind: "search", label: "语义搜索", glyph: "S" },
   websearch: { kind: "web", label: "搜索网页", glyph: "↗" },
   browser: { kind: "web", label: "浏览器操作", glyph: "◎" },
+  image: { kind: "image", label: "发送图片", glyph: "▧" },
   debugger: { kind: "debug", label: "调试程序", glyph: "D" },
   processdebugger: { kind: "debug", label: "进程调试", glyph: "P" },
   memory: { kind: "memory", label: "管理记忆", glyph: "M" },
@@ -103,6 +105,8 @@ const FIELD_LABELS: Record<string, string> = {
   action: "操作",
   file_path: "文件",
   path: "路径",
+  mime_type: "MIME 类型",
+  mimeType: "MIME 类型",
   target_file: "文件",
   target_directory: "目录",
   cwd: "工作目录",
@@ -231,6 +235,7 @@ const FIELD_ORDER: Partial<Record<ToolKind, string[]>> = {
   terminal: ["command", "paths", "linter", "file_path", "path", "language", "timeout"],
   search: ["query", "pattern", "path", "target_directory", "glob", "num_results", "case_insensitive"],
   web: ["action", "url", "selector", "text", "script", "path", "session_id", "tab_id", "headless", "wait_until", "return_format", "timeout_seconds", "options"],
+  image: ["path", "mime_type", "mimeType"],
   debug: ["action", "session_id", "program", "pid", "language", "path", "address", "base_address", "lines", "thread_id", "frame_id", "expression", "query", "pattern", "value", "value_hex", "patch_hex", "args", "cwd"],
   memory: ["action", "title", "query", "content", "memory_id", "id"],
   task: ["action", "task_id", "description", "command", "ws", "persistent", "interval", "timeout_ms", "timeout"],
@@ -354,6 +359,7 @@ function summaryFor(kind: ToolKind, input: Record<string, unknown>, action: stri
     terminal: ["command", "paths", "linter", "file_path", "path"],
     search: ["query", "pattern", "glob"],
     web: ["url", "selector", "text", "path"],
+    image: ["path", "mime_type", "mimeType"],
     debug: ["program", "pid", "path", "expression", "session_id"],
     memory: ["title", "query", "content"],
     task: ["description", "command", "task_id"],

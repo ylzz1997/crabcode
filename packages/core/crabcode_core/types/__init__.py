@@ -3,6 +3,7 @@
 from crabcode_core.types.message import (
     AssistantMessage,
     ContentBlock,
+    ImageBlock,
     Message,
     MessageRole,
     SystemMessage,
@@ -51,6 +52,7 @@ from crabcode_core.types.config import (
 __all__ = [
     "AssistantMessage",
     "ContentBlock",
+    "ImageBlock",
     "Message",
     "MessageRole",
     "SystemMessage",

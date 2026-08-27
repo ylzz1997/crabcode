@@ -16,6 +16,7 @@ def get_default_tools() -> list[Tool]:
     from crabcode_core.tools.checkpoint import CheckpointTool
     from crabcode_core.tools.bash import BashTool
     from crabcode_core.tools.browser import BrowserTool
+    from crabcode_core.tools.image import ImageTool
     from crabcode_core.tools.file_read import FileReadTool
     from crabcode_core.tools.file_edit import FileEditTool
     from crabcode_core.tools.file_write import FileWriteTool
@@ -61,6 +62,7 @@ def get_default_tools() -> list[Tool]:
         GlobTool(),
         WebSearchTool(),
         BrowserTool(),
+        ImageTool(),
         LintTool(),
         MemoryTool(),
         MonitorTool(monitor_manager),
