@@ -12496,6 +12496,19 @@ html[data-theme="light"] .project-action-separator {
   color: var(--orange);
 }
 
+.conversation-action-buttons>button:first-child svg {
+  color: #aebbb5;
+}
+
+.conversation-action-buttons>button.favorite-active,
+.conversation-action-buttons>button.favorite-active svg {
+  color: var(--orange);
+}
+
+.conversation-action-buttons>button:disabled {
+  cursor: not-allowed;
+}
+
 .session-action-buttons>button.danger,
 .session-action-buttons>button.danger svg {
   color: #ff8585;
@@ -12679,6 +12692,15 @@ html[data-theme="light"] .session-action-buttons>button svg {
 }
 
 html[data-theme="light"] .session-action-buttons>button:first-child svg {
+  color: var(--orange);
+}
+
+html[data-theme="light"] .conversation-action-buttons>button:first-child svg {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .conversation-action-buttons>button.favorite-active,
+html[data-theme="light"] .conversation-action-buttons>button.favorite-active svg {
   color: var(--orange);
 }
 
@@ -13416,4 +13438,902 @@ html[data-theme-visuals="true"] :is(.composer-box, .welcome-composer)::after {
 
 .tool-card-body .message-images {
   margin-top: 12px;
+}
+
+/* Project file workspace */
+.main-panel.project-files-mode {
+  --project-files-effective-width: 0px;
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) var(--project-files-effective-width);
+  grid-template-rows: 58px minmax(0, 1fr);
+  transition: grid-template-columns 320ms var(--ease-fluid), background-color 260ms ease;
+}
+
+.main-panel.project-files-mode.project-files-open {
+  --project-files-effective-width: min(var(--project-files-width, 640px), calc(100% - 420px));
+}
+
+.project-files-resizing .main-panel.project-files-mode {
+  transition: none;
+}
+
+.project-files-mode>.conversation-header {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.project-files-mode>.messages,
+.project-files-mode>.trajectory-view {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.project-files-mode>.empty-workspace {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
+.project-files-mode>.composer-wrap {
+  left: max(24px, calc((100% - var(--project-files-effective-width) - 760px) / 2));
+  right: calc(var(--project-files-effective-width) + max(24px, calc((100% - var(--project-files-effective-width) - 760px) / 2)));
+}
+
+.project-files-workspace {
+  position: relative;
+  z-index: 7;
+  min-width: 0;
+  min-height: 0;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) 250px;
+  grid-template-rows: 44px minmax(0, 1fr);
+  overflow: hidden;
+  border-left: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--bg) 96%, var(--panel));
+  box-shadow: -12px 0 30px rgba(0, 0, 0, .1);
+  animation: project-files-workspace-in 300ms var(--ease-fluid) both;
+  transform-origin: right center;
+  transition: grid-template-columns 300ms var(--ease-fluid);
+}
+
+.project-files-workspace.tree-collapsed {
+  grid-template-columns: minmax(0, 1fr) 0;
+}
+
+.project-file-tabs-bar {
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+}
+
+.project-file-tabs {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 5px 6px;
+  scrollbar-width: none;
+}
+
+.project-file-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.project-file-tab {
+  min-width: 92px;
+  max-width: 190px;
+  height: 33px;
+  flex: 0 1 170px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--subtle);
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.project-file-tab:hover {
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.project-file-tab.active {
+  border-color: var(--border-soft);
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+.project-file-tab.empty {
+  gap: 7px;
+  padding: 0 10px;
+  font-size: 10.5px;
+}
+
+.project-file-tab.empty svg,
+.project-file-tab>button[role="tab"]>svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.project-file-tab>button[role="tab"] {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 5px 0 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.project-file-tab>button[role="tab"]>span,
+.project-file-tab.empty>span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-file-tab-close,
+.project-file-new-tab {
+  border: 0;
+  background: transparent;
+  color: var(--subtle);
+  cursor: pointer;
+}
+
+.project-file-tab-close {
+  width: 25px;
+  height: 100%;
+  flex: 0 0 25px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.project-file-tab-close:hover,
+.project-file-new-tab:hover {
+  color: var(--text);
+}
+
+.project-file-tab-close svg,
+.project-file-new-tab svg {
+  width: 14px;
+  height: 14px;
+}
+
+.project-file-new-tab {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.project-file-new-tab:hover {
+  background: var(--surface-hover);
+}
+
+.project-file-tabs-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 7px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.project-file-tab-tooltip {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 24px));
+  padding: 10px 16px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(0, 0, 0, .12);
+  border-radius: 12px;
+  background: rgba(239, 241, 240, .98);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .24);
+  color: #252827;
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  animation: project-file-tab-tooltip-in 140ms ease-out both;
+}
+
+@keyframes project-file-tab-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+}
+
+.project-files-resizer {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 7px;
+  cursor: col-resize;
+}
+
+.project-files-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  content: "";
+  background: transparent;
+  transition: background-color 140ms ease;
+}
+
+.project-files-resizer:hover::after,
+.project-files-resizing .project-files-resizer::after {
+  background: var(--accent);
+}
+
+.project-files-resizing,
+.project-files-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.project-file-preview,
+.project-file-explorer {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-file-preview {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.project-file-explorer {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.project-file-preview {
+  animation: project-file-preview-in 300ms var(--ease-fluid) both;
+}
+
+.project-file-preview>header,
+.project-file-explorer>header {
+  height: 58px;
+  flex: 0 0 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.project-file-preview>header {
+  padding: 6px 10px 6px 14px;
+}
+
+.project-file-preview-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.project-file-preview-title>svg {
+  color: var(--muted);
+}
+
+.project-file-preview-title>span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.project-file-preview-title strong,
+.project-file-preview-title small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-file-preview-title strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.project-file-preview-title small {
+  max-width: 38vw;
+  color: var(--subtle);
+  font-size: 9.5px;
+}
+
+.project-file-preview-actions,
+.project-file-explorer>header>div {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.project-file-view-toggle {
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.project-file-view-toggle button {
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.project-file-view-toggle button.active {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+.project-file-reference {
+  height: 29px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.project-file-reference:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.project-file-reference.active,
+.project-file-reference:disabled {
+  border-color: color-mix(in srgb, var(--green) 36%, var(--border));
+  background: var(--green-soft);
+  color: var(--green);
+  cursor: default;
+}
+
+.project-file-reference svg {
+  width: 13px;
+  height: 13px;
+}
+
+.project-file-preview-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg) 98%, var(--surface));
+}
+
+.project-file-preview-empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--subtle);
+  text-align: center;
+}
+
+.project-file-preview-empty>svg {
+  width: 28px;
+  height: 28px;
+}
+
+.project-file-preview-empty strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-file-preview-empty span {
+  max-width: 320px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.project-file-preview-empty.error>svg,
+.project-file-preview-empty.error strong {
+  color: var(--orange);
+}
+
+.project-file-image {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background-image:
+    linear-gradient(45deg, color-mix(in srgb, var(--border-soft) 42%, transparent) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--border-soft) 42%, transparent) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--border-soft) 42%, transparent) 75%),
+    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--border-soft) 42%, transparent) 75%);
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  background-size: 12px 12px;
+}
+
+.project-file-image img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 105px);
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, .22);
+}
+
+.project-file-plain,
+.project-file-code {
+  min-width: max-content;
+  min-height: 100%;
+  margin: 0;
+  padding: 18px 20px 40px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: var(--code-font-size)/1.62 var(--code-font-family);
+  tab-size: 2;
+}
+
+.project-file-code .linenumber {
+  min-width: 2.5em !important;
+  padding-right: 1em !important;
+  color: var(--subtle) !important;
+  font-style: normal !important;
+  opacity: .65;
+}
+
+.project-file-code .token.comment,
+.project-file-code .token.prolog,
+.project-file-code .token.doctype,
+.project-file-code .token.cdata {
+  color: #718a82;
+}
+
+.project-file-code .token.punctuation,
+.project-file-code .token.operator {
+  color: #aab8b3;
+}
+
+.project-file-code .token.property,
+.project-file-code .token.tag,
+.project-file-code .token.boolean,
+.project-file-code .token.number,
+.project-file-code .token.constant,
+.project-file-code .token.symbol {
+  color: #e28b70;
+}
+
+.project-file-code .token.selector,
+.project-file-code .token.attr-name,
+.project-file-code .token.string,
+.project-file-code .token.char,
+.project-file-code .token.builtin {
+  color: #9dc98e;
+}
+
+.project-file-code .token.atrule,
+.project-file-code .token.attr-value,
+.project-file-code .token.keyword,
+.project-file-code .token.function,
+.project-file-code .token.class-name {
+  color: #8eb8dc;
+}
+
+.project-file-code .token.regex,
+.project-file-code .token.important,
+.project-file-code .token.variable {
+  color: #d3ac79;
+}
+
+.project-file-markdown {
+  width: min(100%, 860px);
+  margin: 0 auto;
+  padding: 28px clamp(22px, 5vw, 54px) 80px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.72;
+}
+
+.project-file-markdown h1,
+.project-file-markdown h2,
+.project-file-markdown h3 {
+  margin: 1.45em 0 .65em;
+  color: var(--text);
+  line-height: 1.25;
+}
+
+.project-file-markdown h1:first-child,
+.project-file-markdown h2:first-child,
+.project-file-markdown h3:first-child {
+  margin-top: 0;
+}
+
+.project-file-markdown h1 {
+  font-size: 25px;
+}
+
+.project-file-markdown h2 {
+  padding-bottom: .35em;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 19px;
+}
+
+.project-file-markdown h3 {
+  font-size: 15px;
+}
+
+.project-file-markdown p,
+.project-file-markdown ul,
+.project-file-markdown ol,
+.project-file-markdown blockquote {
+  margin: .8em 0;
+}
+
+.project-file-markdown blockquote {
+  padding-left: 13px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.project-file-markdown code {
+  border-radius: 4px;
+  background: var(--code-bg);
+  font-family: var(--code-font-family);
+  font-size: .92em;
+}
+
+.project-file-markdown :not(pre)>code {
+  padding: 2px 4px;
+}
+
+.project-file-markdown pre {
+  overflow: auto;
+  padding: 13px 15px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--code-bg);
+}
+
+.project-file-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.project-file-markdown th,
+.project-file-markdown td {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.project-markdown-image-placeholder {
+  color: var(--subtle);
+  font-style: italic;
+}
+
+.project-file-explorer {
+  overflow: hidden;
+  border-left: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+  opacity: 1;
+  transform: translateX(0);
+  visibility: visible;
+  transition:
+    border-color 180ms ease,
+    opacity 180ms ease,
+    transform 300ms var(--ease-fluid),
+    visibility 0s linear;
+}
+
+.project-files-workspace.tree-collapsed .project-file-explorer {
+  border-left-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(18px);
+  visibility: hidden;
+  transition:
+    border-color 180ms ease,
+    opacity 150ms ease,
+    transform 260ms var(--ease-fluid),
+    visibility 0s linear 260ms;
+}
+
+.project-file-explorer>header {
+  padding: 0 7px 0 12px;
+}
+
+.project-file-explorer>header>strong {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.project-file-filter {
+  height: 32px;
+  flex: 0 0 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 9px 8px 7px;
+  padding: 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--subtle);
+}
+
+.project-file-filter:focus-within {
+  border-color: var(--accent);
+}
+
+.project-file-filter svg {
+  width: 13px;
+  height: 13px;
+}
+
+.project-file-filter input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 10.5px;
+}
+
+.project-file-tree {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 1px 6px 16px;
+}
+
+.project-tree-row {
+  width: 100%;
+  height: 28px;
+  display: grid;
+  grid-template-columns: 14px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px 0 calc(5px + var(--project-tree-depth, 0) * 13px);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-tree-row:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.project-tree-row.file.selected {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+.project-tree-row>svg {
+  width: 14px;
+  height: 14px;
+}
+
+.project-tree-row.directory>svg:first-child {
+  width: 11px;
+  height: 11px;
+  color: var(--subtle);
+}
+
+.project-tree-row.directory>svg:nth-child(2) {
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
+.project-tree-row.file>svg {
+  color: var(--subtle);
+}
+
+.project-tree-file-spacer {
+  width: 11px;
+}
+
+.project-tree-row>span:nth-last-child(2),
+.project-tree-row>span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+
+.project-tree-row>small {
+  color: var(--subtle);
+  font-size: 8px;
+}
+
+.project-tree-error,
+.project-tree-empty {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px 5px calc(22px + var(--project-tree-depth, 0) * 13px);
+  color: var(--subtle);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.project-tree-error {
+  color: var(--orange);
+}
+
+.project-tree-error svg {
+  width: 12px;
+  height: 12px;
+}
+
+.project-files-floating-toggle {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  right: 14px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.project-files-floating-toggle:hover {
+  color: var(--text);
+}
+
+.project-files-drawer-backdrop {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  border: 0;
+  background: rgba(4, 7, 6, .42);
+  backdrop-filter: blur(3px);
+  animation: project-files-backdrop-in 220ms ease-out both;
+}
+
+.project-files-workspace.drawer {
+  position: absolute;
+  z-index: 11;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(var(--project-files-width, 640px), calc(100% - 28px));
+  grid-template-columns: minmax(230px, 1fr) min(250px, 42%);
+  border-left-color: var(--border);
+  box-shadow: -24px 0 70px rgba(0, 0, 0, .4);
+}
+
+html[data-theme="light"] .project-files-workspace {
+  background: color-mix(in srgb, var(--bg) 94%, var(--panel));
+  box-shadow: -10px 0 26px rgba(20, 31, 28, .08);
+}
+
+html[data-theme="light"] .project-file-explorer {
+  background: color-mix(in srgb, var(--panel) 72%, var(--bg));
+}
+
+html[data-theme="light"] .project-file-code .token.comment,
+html[data-theme="light"] .project-file-code .token.prolog,
+html[data-theme="light"] .project-file-code .token.doctype,
+html[data-theme="light"] .project-file-code .token.cdata {
+  color: #6f7d78;
+}
+
+html[data-theme="light"] .project-file-code .token.property,
+html[data-theme="light"] .project-file-code .token.tag,
+html[data-theme="light"] .project-file-code .token.boolean,
+html[data-theme="light"] .project-file-code .token.number,
+html[data-theme="light"] .project-file-code .token.constant,
+html[data-theme="light"] .project-file-code .token.symbol {
+  color: #b55238;
+}
+
+html[data-theme="light"] .project-file-code .token.selector,
+html[data-theme="light"] .project-file-code .token.attr-name,
+html[data-theme="light"] .project-file-code .token.string,
+html[data-theme="light"] .project-file-code .token.char,
+html[data-theme="light"] .project-file-code .token.builtin {
+  color: #39703b;
+}
+
+html[data-theme="light"] .project-file-code .token.atrule,
+html[data-theme="light"] .project-file-code .token.attr-value,
+html[data-theme="light"] .project-file-code .token.keyword,
+html[data-theme="light"] .project-file-code .token.function,
+html[data-theme="light"] .project-file-code .token.class-name {
+  color: #265f9c;
+}
+
+@media (max-width: 1279px) {
+  .project-files-workspace.drawer {
+    animation: project-files-drawer-in 280ms var(--ease-fluid) both;
+  }
+}
+
+@keyframes project-files-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+}
+
+@keyframes project-files-workspace-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+@keyframes project-file-preview-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+
+@keyframes project-files-backdrop-in {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-panel.project-files-mode,
+  .project-files-workspace,
+  .project-file-preview,
+  .project-file-tab-tooltip,
+  .project-files-drawer-backdrop {
+    animation: none !important;
+    transition: none !important;
+  }
 }

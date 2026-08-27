@@ -62,6 +62,8 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   }],
   python_path: null,
   sidebar_width: 280,
+  project_files_width: 640,
+  project_files_max_tabs: 5,
   document_agent_width: 400,
   document_agent_collapsed: false,
   document_show_original_text: false,
@@ -266,6 +268,8 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     file_upload_mode: raw.file_upload_mode === "path" ? "path" : "content",
     file_upload_max_size_mb: clampInteger(raw.file_upload_max_size_mb, 1, 100, 5),
     dock_icon: dockIcon,
+    project_files_width: clampInteger(raw.project_files_width, 480, 1_000, 640),
+    project_files_max_tabs: clampInteger(raw.project_files_max_tabs, 1, 50, 5),
     document_agent_width: clampInteger(raw.document_agent_width, 320, 4_000, 400),
     document_agent_collapsed: raw.document_agent_collapsed === true,
     document_show_original_text: raw.document_show_original_text === true,
@@ -326,6 +330,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
     "contrast",
     "light_theme",
     "dark_theme",
+    "project_files_open",
   ]) delete withoutLegacyAppearance[key];
   return withoutLegacyAppearance;
 }

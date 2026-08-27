@@ -48,6 +48,8 @@ fn default_settings() -> Value {
         }],
         "python_path": null,
         "sidebar_width": 280,
+        "project_files_width": 640,
+        "project_files_max_tabs": 5,
         "document_agent_width": 400,
         "document_agent_collapsed": false,
         "document_show_original_text": false,
@@ -287,7 +289,12 @@ pub fn read_credential(credential_ref: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_export_filename;
+    use super::{default_settings, safe_export_filename};
+
+    #[test]
+    fn project_file_tabs_default_to_five() {
+        assert_eq!(default_settings()["project_files_max_tabs"], 5);
+    }
 
     #[test]
     fn theme_export_filenames_are_basenames_with_known_suffixes() {

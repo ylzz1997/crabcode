@@ -119,6 +119,29 @@ export class GatewayApi {
     });
   }
 
+  async workspaceFile(path: string, retry = true): Promise<Blob> {
+    await this.authenticate();
+    const headers = new Headers();
+    if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+    const query = new URLSearchParams({ path });
+    const response = await fetch(new URL(`workspace/file?${query}`, this.baseUrl), { headers });
+    if (response.status === 401 && retry) {
+      await this.authenticate(true);
+      return this.workspaceFile(path, false);
+    }
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        const payload = await response.json() as { detail?: string };
+        detail = payload.detail || detail;
+      } catch {
+        // Keep the status text when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+    return response.blob();
+  }
+
   documentCapabilities(): Promise<DocumentCapabilities> {
     return this.request("/document/capabilities");
   }

@@ -55,6 +55,8 @@ const settings: DesktopSettings = {
   ],
   python_path: null,
   sidebar_width: 280,
+  project_files_width: 640,
+  project_files_max_tabs: 5,
   document_agent_width: 400,
   document_agent_collapsed: false,
   document_show_original_text: false,
@@ -113,6 +115,7 @@ describe("settings search", () => {
     expect(filterSettingsSections("字体平滑").map((section) => section.id)).toEqual(["appearance"]);
     expect(filterSettingsSections("对比度").map((section) => section.id)).toEqual(["appearance"]);
     expect(filterSettingsSections("处理用时").map((section) => section.id)).toEqual(["general"]);
+    expect(filterSettingsSections("最大标签数").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("并行请求").map((section) => section.id)).toEqual(["document"]);
     expect(filterSettingsSections("显示原文").map((section) => section.id)).toEqual(["document"]);
     expect(filterSettingsSections("Provider").map((section) => section.id)).toEqual(["models"]);
@@ -278,6 +281,11 @@ describe("SettingsView", () => {
     act(() => changeInput(maximum, "12"));
     act(() => maximum.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
     expect(handlers.onConversationChange).toHaveBeenCalledWith({ file_upload_max_size_mb: 12 });
+
+    const tabs = container.querySelector<HTMLInputElement>('[aria-label="文件查看最大标签数"]')!;
+    act(() => changeInput(tabs, "60"));
+    act(() => tabs.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    expect(handlers.onConversationChange).toHaveBeenCalledWith({ project_files_max_tabs: 50 });
   });
 
   it("shows document translation controls and updates their values", () => {

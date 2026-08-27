@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import mimetypes
 import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from crabcode_gateway.schemas import (
     WorkspaceDirectoryEntry,
@@ -16,6 +18,26 @@ from crabcode_gateway.schemas import (
 )
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
+
+MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
+MAX_IMAGE_PREVIEW_BYTES = 10 * 1024 * 1024
+_IMAGE_PREVIEW_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+_TEXT_PREVIEW_EXTENSIONS = {
+    ".bash", ".bat", ".c", ".cc", ".cfg", ".cjs", ".cmd", ".conf", ".cpp",
+    ".css", ".cts", ".cxx", ".env", ".fish", ".gitattributes", ".gitignore",
+    ".go", ".gql", ".graphql", ".h", ".hpp", ".htm", ".html", ".ini", ".java",
+    ".js", ".json", ".jsonc", ".jsx", ".kt", ".kts", ".less", ".lock", ".md",
+    ".markdown", ".mdx", ".mjs", ".mts", ".php", ".proto", ".ps1", ".py", ".pyi",
+    ".rb", ".rs", ".sass", ".scss", ".sh", ".sql", ".svg", ".swift", ".toml",
+    ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml", ".zsh",
+}
+_TEXT_PREVIEW_FILENAMES = {
+    ".dockerignore", ".editorconfig", ".eslintignore", ".eslintrc", ".gitattributes",
+    ".gitignore", ".npmrc", ".prettierignore", ".prettierrc", ".rgignore",
+    ".stylelintignore", ".stylelintrc", "dockerfile", "gemfile", "license", "makefile",
+    "procfile", "readme",
+}
+_MARKDOWN_PREVIEW_EXTENSIONS = {".md", ".markdown", ".mdx"}
 
 
 def _is_within(path: Path, roots: tuple[Path, ...]) -> bool:
@@ -46,6 +68,45 @@ def _resolve_directory(value: str, roots: tuple[Path, ...]) -> Path:
     if not _is_within(resolved, roots):
         raise HTTPException(status_code=403, detail="Directory is outside the allowed browse roots")
     return resolved
+
+
+def _resolve_preview_file(value: str, roots: tuple[Path, ...]) -> Path:
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="path must be absolute")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="Unable to resolve file") from exc
+    if not _is_within(resolved, roots):
+        raise HTTPException(status_code=403, detail="File is outside the allowed browse roots")
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail="path must be a regular file")
+    return resolved
+
+
+def _preview_media_type(path: Path) -> tuple[str, int]:
+    suffix = path.suffix.casefold()
+    name = path.name.casefold()
+    if suffix in _IMAGE_PREVIEW_EXTENSIONS:
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return media_type, MAX_IMAGE_PREVIEW_BYTES
+    if (
+        suffix in _TEXT_PREVIEW_EXTENSIONS
+        or name in _TEXT_PREVIEW_FILENAMES
+        or name.startswith(".env")
+    ):
+        media_type = (
+            "text/markdown"
+            if suffix in _MARKDOWN_PREVIEW_EXTENSIONS
+            else mimetypes.guess_type(path.name)[0] or "text/plain"
+        )
+        if media_type == "image/svg+xml":
+            media_type = "text/plain"
+        return media_type, MAX_TEXT_PREVIEW_BYTES
+    raise HTTPException(status_code=415, detail="File type is not supported for preview")
 
 
 def _create_directory(value: str, roots: tuple[Path, ...]) -> Path:
@@ -179,6 +240,20 @@ async def list_directories(
         directories=directories,
         files=files,
     )
+
+
+@router.get("/file", response_class=FileResponse)
+async def workspace_file(path: str, request: Request) -> FileResponse:
+    candidate = _resolve_preview_file(path, _workspace_roots(request))
+    media_type, max_bytes = _preview_media_type(candidate)
+    try:
+        size = candidate.stat().st_size
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="Unable to inspect file") from exc
+    if size > max_bytes:
+        limit = "10 MiB" if max_bytes == MAX_IMAGE_PREVIEW_BYTES else "2 MiB"
+        raise HTTPException(status_code=413, detail=f"File exceeds the {limit} preview limit")
+    return FileResponse(candidate, media_type=media_type)
 
 
 @router.post("/directories/create", response_model=WorkspaceDirectoryEntry)

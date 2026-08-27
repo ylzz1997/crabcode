@@ -60,6 +60,8 @@ describe("desktop settings migration", () => {
       composer_send_key: "enter",
       file_upload_mode: "content",
       file_upload_max_size_mb: 5,
+      project_files_width: 640,
+      project_files_max_tabs: 5,
       document_agent_width: 400,
       document_agent_collapsed: false,
       document_show_original_text: false,
@@ -78,6 +80,28 @@ describe("desktop settings migration", () => {
     expect(migrated.connections[0].last_model_profile).toBeNull();
     expect(migrated.connections[0].document_workspace_root).toBeNull();
     expect(migrated.connections[0].last_project_id).toBe("/work/crab");
+  });
+
+  it("normalizes the project file workspace settings", () => {
+    const hidden = normalizeSettings({
+      schema_version: 4,
+      connections: [],
+      project_files_open: true,
+      project_files_width: 120,
+      project_files_max_tabs: 0,
+    } as unknown as DesktopSettings);
+    const oversized = normalizeSettings({
+      schema_version: 4,
+      connections: [],
+      project_files_width: 4_000,
+      project_files_max_tabs: 200,
+    } as unknown as DesktopSettings);
+
+    expect(hidden.project_files_width).toBe(480);
+    expect(hidden.project_files_max_tabs).toBe(1);
+    expect("project_files_open" in hidden).toBe(false);
+    expect(oversized.project_files_width).toBe(1_000);
+    expect(oversized.project_files_max_tabs).toBe(50);
   });
 
   it("migrates legacy session favorites into the root of the favorite tree", () => {
@@ -246,6 +270,7 @@ describe("desktop settings migration", () => {
       composer_send_key: "mod_enter",
       file_upload_mode: "path",
       file_upload_max_size_mb: 250,
+      project_files_max_tabs: 200,
       dock_icon: "light",
       document_show_original_text: true,
       document_translation_concurrency: 99,
@@ -270,6 +295,7 @@ describe("desktop settings migration", () => {
       composer_send_key: "mod_enter",
       file_upload_mode: "path",
       file_upload_max_size_mb: 100,
+      project_files_max_tabs: 50,
       document_show_original_text: true,
       document_translation_concurrency: 8,
       document_translation_batch_size: 10,

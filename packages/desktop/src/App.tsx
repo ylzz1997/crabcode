@@ -31,6 +31,8 @@ import {
   Pause,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Pencil,
   Play,
   Plus,
@@ -100,6 +102,13 @@ import {
 } from "./favorites";
 import { GatewayApi, SessionChannel } from "./gateway";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
+import {
+  activateProjectFileTab,
+  closeProjectFileTab,
+  limitProjectFileTabs,
+  ProjectFilesWorkspace,
+  type ProjectFileTabsState,
+} from "./ProjectFilesWorkspace";
 import { TrajectoryView } from "./TrajectoryView";
 import { getToolPresentation, parseChecklistResult, type ToolField } from "./toolPresentation";
 import {
@@ -257,6 +266,10 @@ export function shouldAutoOpenDocumentSession(
     && projectKind === "document"
     && !activeSessionKey
     && gatewayStatus === "online";
+}
+
+export function shouldUseWideProjectFilesLayout(width: number): boolean {
+  return width >= 1280;
 }
 type PendingImage = {
   id: string;
@@ -644,6 +657,11 @@ function App() {
   const [sessions, setSessions] = useState<SessionMap>({});
   const [activeSessions, setActiveSessions] = useState<Record<string, string | null>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [projectFilesWidth, setProjectFilesWidth] = useState(640);
+  const [wideProjectFilesLayout, setWideProjectFilesLayout] = useState(() => shouldUseWideProjectFilesLayout(window.innerWidth));
+  const [projectFilesOpen, setProjectFilesOpen] = useState(false);
+  const [projectFileTreeOpen, setProjectFileTreeOpen] = useState(false);
+  const [projectFileTabs, setProjectFileTabs] = useState<ProjectFileTabsState>({ files: [], activePath: null });
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
@@ -700,6 +718,20 @@ function App() {
   settingsRef.current = settings;
   gatewaysRef.current = gateways;
 
+  useEffect(() => {
+    const updateLayout = () => setWideProjectFilesLayout(shouldUseWideProjectFilesLayout(window.innerWidth));
+    window.addEventListener("resize", updateLayout);
+    return () => window.removeEventListener("resize", updateLayout);
+  }, []);
+
+  useEffect(() => {
+    if (settings) setProjectFilesWidth(settings.project_files_width);
+  }, [settings?.project_files_width]);
+
+  useEffect(() => {
+    setProjectFileTabs((current) => limitProjectFileTabs(current, settings?.project_files_max_tabs ?? 5));
+  }, [settings?.project_files_max_tabs]);
+
   const activeConnection = useMemo(() => {
     if (!settings) return null;
     return settings.connections.find((item) => item.id === settings.active_connection_id)
@@ -712,6 +744,11 @@ function App() {
   ) ?? activeConnection?.projects.find(
     (item) => item.path === activeConnection.last_project_path,
   ) ?? activeConnection?.projects[0] ?? null;
+  useEffect(() => {
+    setProjectFilesOpen(false);
+    setProjectFileTreeOpen(false);
+    setProjectFileTabs({ files: [], activePath: null });
+  }, [wideProjectFilesLayout, workspaceView, activeConnection?.id, activeProject?.id]);
   const defaultProjectId = activeConnection
     ? resolveDefaultProjectId(activeConnection.projects, activeGateway?.workspace?.startup_cwd)
     : null;
@@ -719,6 +756,7 @@ function App() {
   const activeSession = activeSessionKey ? sessions[activeSessionKey] : null;
   const activeChannel = activeSessionKey ? channelRef.current.get(activeSessionKey) : null;
   const activeConversationView = activeSessionKey ? conversationViews[activeSessionKey] ?? "chat" : "chat";
+  const selectedProjectFile = projectFileTabs.files.find((file) => file.path === projectFileTabs.activePath) ?? null;
   const activeList = activeProject?.directories.length
     ? activeGateway?.sessionsByProject[activeProject.path] ?? []
     : [];
@@ -2466,6 +2504,21 @@ function App() {
     ? permissionSelections[activeSessionKey] || normalizePermissionMode(activeSession?.status?.permission_mode)
     : "default";
   const documentMode = workspaceView === "chat" && activeProject?.kind === "document";
+  const projectFilesEligible = workspaceView === "chat"
+    && activeProject?.kind === "project"
+    && Boolean(activeConnection && apiRef.current.get(activeConnection.id))
+    && activeGateway?.status === "online";
+  const projectFilesWideLayout = projectFilesEligible && wideProjectFilesLayout;
+  const projectFilesWideOpen = projectFilesEligible
+    && wideProjectFilesLayout
+    && projectFilesOpen;
+  const projectFilesDrawerVisible = projectFilesEligible
+    && !wideProjectFilesLayout
+    && projectFilesOpen;
+  const projectFilesVisible = projectFilesWideOpen || projectFilesDrawerVisible;
+  const referencedProjectFilePaths = useMemo(() => new Set(
+    pendingFiles.flatMap((file) => file.mode === "path" && file.path ? [file.path] : []),
+  ), [pendingFiles]);
   const composerReferences = useMemo<ComposerReferenceOption[]>(() => [
     ...pendingImages.map((image) => ({
       key: `image:${image.id}`,
@@ -3108,12 +3161,14 @@ function App() {
         </aside>
 
         <main
-          className={`main-panel ${documentMode ? "document-mode" : ""} ${settings.document_agent_collapsed ? "document-agent-collapsed" : ""}`}
+          className={`main-panel ${documentMode ? "document-mode" : ""} ${settings.document_agent_collapsed ? "document-agent-collapsed" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
           style={documentMode ? {
             gridTemplateColumns: settings.document_agent_collapsed
               ? "minmax(0, 1fr) 44px"
               : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 400}px, calc(100% - 180px))`,
-          } : undefined}
+          } : projectFilesWideLayout ? {
+            "--project-files-width": `${projectFilesWidth}px`,
+          } as CSSProperties : undefined}
         >
           {documentMode && activeProject && activeConnection && apiRef.current.get(activeConnection.id) && (
             <DocumentWorkspace
@@ -3291,19 +3346,26 @@ function App() {
                       onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size + 1 }))}
                     ><ZoomIn /></button>
                   </div>
-                  <button className="icon-button" title="检查点" onClick={() => setCheckpointModal(true)}>
-                    <History />
-                  </button>
-                  <button
-                    className={`icon-button ${activeSessionFavorite ? "favorite-active" : ""}`}
-                    title={activeSessionFavorite ? "取消收藏会话" : "收藏会话"}
-                    aria-label={activeSessionFavorite ? "取消收藏会话" : "收藏会话"}
-                    aria-pressed={activeSessionFavorite}
-                    disabled={activeSession.id.startsWith("new-")}
-                    onClick={() => activeProject && toggleFavoriteSession(activeProject.id, activeSession.id)}
-                  >
-                    <Star fill={activeSessionFavorite ? "currentColor" : "none"} />
-                  </button>
+                  <ConversationActionsMenu
+                    key={activeSessionKey}
+                    sessionTitle={activeSession.title}
+                    favorite={activeSessionFavorite}
+                    favoriteDisabled={activeSession.id.startsWith("new-")}
+                    onCheckpoint={() => setCheckpointModal(true)}
+                    onToggleFavorite={() => activeProject && toggleFavoriteSession(activeProject.id, activeSession.id)}
+                  />
+                  {projectFilesEligible && (
+                    <button
+                      className={`icon-button ${projectFilesVisible ? "active" : ""}`}
+                      type="button"
+                      title={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
+                      aria-label={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
+                      aria-pressed={projectFilesVisible}
+                      onClick={() => setProjectFilesOpen((value) => !value)}
+                    >
+                      {projectFilesVisible ? <PanelRightClose /> : <PanelRightOpen />}
+                    </button>
+                  )}
                 </div>
               </div>
               {activeConversationView === "trajectory" ? (
@@ -3498,6 +3560,57 @@ function App() {
                 </div>
               </div>
             </>
+          )}
+          {projectFilesEligible && !activeSession && !projectFilesVisible && (
+            <button
+              className="project-files-floating-toggle"
+              type="button"
+              title="浏览文件"
+              onClick={() => setProjectFilesOpen(true)}
+            ><PanelRightOpen /><span>文件</span></button>
+          )}
+          {projectFilesDrawerVisible && (
+            <button
+              className="project-files-drawer-backdrop"
+              type="button"
+              aria-label="关闭文件工作区"
+              onClick={() => setProjectFilesOpen(false)}
+            />
+          )}
+          {projectFilesVisible && activeConnection && activeProject && apiRef.current.get(activeConnection.id) && (
+            <ProjectFilesWorkspace
+              key={`${activeConnection.id}:${activeProject.id}`}
+              api={apiRef.current.get(activeConnection.id)!}
+              projectName={activeProject.name}
+              directories={activeProject.directories}
+              drawer={projectFilesDrawerVisible}
+              treeOpen={projectFileTreeOpen}
+              width={projectFilesWidth}
+              openFiles={projectFileTabs.files}
+              selectedFile={selectedProjectFile}
+              referencedPaths={referencedProjectFilePaths}
+              onClose={() => setProjectFilesOpen(false)}
+              onToggleTree={() => setProjectFileTreeOpen((value) => !value)}
+              onSelectFile={(file) => setProjectFileTabs((current) => (
+                activateProjectFileTab(current, file, settings.project_files_max_tabs)
+              ))}
+              onCloseFile={(path) => setProjectFileTabs((current) => closeProjectFileTab(current, path))}
+              onReference={(file) => setPendingFiles((current) => (
+                current.some((item) => item.mode === "path" && item.path === file.path)
+                  ? current
+                  : [...current, {
+                    id: crypto.randomUUID(),
+                    name: file.name,
+                    mediaType: "",
+                    mode: "path",
+                    path: file.path,
+                    size: file.size,
+                    text: "",
+                  }]
+              ))}
+              onWidthChange={setProjectFilesWidth}
+              onWidthCommit={(width) => commitSettings((current) => ({ ...current, project_files_width: width }))}
+            />
           )}
         </main>
       </div>
@@ -4419,6 +4532,123 @@ function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<H
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [close, open, ref]);
+}
+
+export function ConversationActionsMenu({
+  sessionTitle,
+  favorite = false,
+  favoriteDisabled = false,
+  onCheckpoint,
+  onToggleFavorite,
+}: {
+  sessionTitle: string;
+  favorite?: boolean;
+  favoriteDisabled?: boolean;
+  onCheckpoint: () => void;
+  onToggleFavorite: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 8, left: 8 });
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const title = sessionTitle || "未命名会话";
+
+  const placeMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const gap = 8;
+    const menuWidth = 208;
+    const menuHeight = 90;
+    setPosition({
+      top: Math.min(
+        rect.bottom + gap,
+        Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding),
+      ),
+      left: Math.min(
+        Math.max(viewportPadding, rect.right - menuWidth),
+        Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding),
+      ),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const onViewportChange = () => placeMenu();
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, placeMenu]);
+
+  const choose = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        className="icon-button conversation-menu-trigger"
+        type="button"
+        title="更多会话操作"
+        aria-label="更多会话操作"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) placeMenu();
+          setOpen((value) => !value);
+        }}
+      >
+        <MoreHorizontal />
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="session-action-menu conversation-action-menu"
+          role="menu"
+          aria-label={`${title} 更多操作`}
+          style={position}
+        >
+          <div className="session-action-buttons conversation-action-buttons">
+            <button type="button" role="menuitem" onClick={() => choose(onCheckpoint)}>
+              <History />
+              <span>检查点</span>
+            </button>
+            <button
+              className={favorite ? "favorite-active" : ""}
+              type="button"
+              role="menuitem"
+              aria-pressed={favorite}
+              disabled={favoriteDisabled}
+              onClick={() => choose(onToggleFavorite)}
+            >
+              <Star fill={favorite ? "currentColor" : "none"} />
+              <span>{favorite ? "取消收藏会话" : "收藏会话"}</span>
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 export function ProjectActionsMenu({

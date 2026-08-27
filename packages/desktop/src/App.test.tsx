@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ChatItemView,
   collectFavoriteSessions,
+  ConversationActionsMenu,
   defaultProjectDirectory,
   FavoritesView,
   formatTurnDuration,
@@ -26,6 +27,7 @@ import {
   ScheduleDeleteModal,
   ScheduledTasksView,
   shouldAutoOpenDocumentSession,
+  shouldUseWideProjectFilesLayout,
 } from "./App";
 import type { GatewayApi } from "./gateway";
 import { favoriteEntries, resolveFavoriteEntries } from "./favorites";
@@ -46,6 +48,13 @@ describe("document session auto-open", () => {
     expect(shouldAutoOpenDocumentSession("scheduled", true, "document", null, "online")).toBe(false);
     expect(shouldAutoOpenDocumentSession("favorites", true, "document", null, "online")).toBe(false);
     expect(shouldAutoOpenDocumentSession("plugins", true, "document", null, "online")).toBe(false);
+  });
+});
+
+describe("project file workspace layout", () => {
+  it("uses the persistent three-column layout only on wide windows", () => {
+    expect(shouldUseWideProjectFilesLayout(1279)).toBe(false);
+    expect(shouldUseWideProjectFilesLayout(1280)).toBe(true);
   });
 });
 
@@ -493,6 +502,74 @@ describe("ProjectActionsMenu", () => {
       .find((button) => button.textContent === "取消收藏项目")!;
     act(() => favoriteAction.click());
     expect(onToggleFavorite).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ConversationActionsMenu", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("combines checkpoint and favorite actions into one overflow menu", () => {
+    const onCheckpoint = vi.fn();
+    const onToggleFavorite = vi.fn();
+    act(() => root.render(
+      <ConversationActionsMenu
+        sessionTitle="新会话"
+        onCheckpoint={onCheckpoint}
+        onToggleFavorite={onToggleFavorite}
+      />,
+    ));
+
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="更多会话操作"]')!;
+    expect(container.querySelectorAll("button")).toHaveLength(1);
+    act(() => trigger.click());
+
+    const menu = document.querySelector<HTMLElement>('.conversation-action-menu')!;
+    expect(Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).map((button) => button.textContent))
+      .toEqual(["检查点", "收藏会话"]);
+
+    act(() => menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[0].click());
+    expect(onCheckpoint).toHaveBeenCalledOnce();
+    expect(document.querySelector('.conversation-action-menu')).toBeNull();
+
+    act(() => trigger.click());
+    act(() => document.querySelector<HTMLButtonElement>('.conversation-action-menu [role="menuitem"]:last-child')!.click());
+    expect(onToggleFavorite).toHaveBeenCalledOnce();
+  });
+
+  it("shows favorite state, disables it for unsaved sessions, and closes on Escape", () => {
+    act(() => root.render(
+      <ConversationActionsMenu
+        sessionTitle="新会话"
+        favorite
+        favoriteDisabled
+        onCheckpoint={vi.fn()}
+        onToggleFavorite={vi.fn()}
+      />,
+    ));
+
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="更多会话操作"]')!;
+    act(() => trigger.click());
+    const favorite = document.querySelector<HTMLButtonElement>('.conversation-action-menu [role="menuitem"]:last-child')!;
+    expect(favorite.textContent).toBe("取消收藏会话");
+    expect(favorite.disabled).toBe(true);
+    expect(favorite.getAttribute("aria-pressed")).toBe("true");
+
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(document.querySelector('.conversation-action-menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 });
 

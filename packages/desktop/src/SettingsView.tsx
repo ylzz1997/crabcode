@@ -74,8 +74,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   {
     id: "general",
     title: "常规",
-    description: "运行环境、文件上传与会话设置",
-    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式 文件 上传 内容 路径 引用 会话 显示 处理用时 耗时 仅秒数 时分秒 发送快捷键 Enter 回车 Ctrl Cmd Command",
+    description: "运行环境、文件上传、文件查看与会话设置",
+    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 浏览器模式 文件 上传 内容 路径 引用 查看 浏览 标签 标签页 最大标签数 最大数量 上限 会话 显示 处理用时 耗时 仅秒数 时分秒 发送快捷键 Enter 回车 Ctrl Cmd Command",
   },
   {
     id: "appearance",
@@ -249,6 +249,7 @@ export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
   | "composer_send_key"
   | "file_upload_mode"
   | "file_upload_max_size_mb"
+  | "project_files_max_tabs"
 >>;
 
 export type DocumentSettingsUpdate = Partial<Pick<DesktopSettings,
@@ -804,6 +805,26 @@ export function SettingsView({
                       maximum={100}
                       step={1}
                       onChange={(value) => onConversationChange({ file_upload_max_size_mb: value })}
+                    />
+                  </div>
+                </div>
+
+                <div className="settings-section-heading general-spaced-heading">
+                  <div><h2>文件查看</h2><p>控制项目文件查看区的标签行为。</p></div>
+                </div>
+                <div className="settings-group general-options-group">
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>最大标签数</strong>
+                      <span>最多同时打开 1–50 个文件；超过上限时替换最早打开的标签。</span>
+                    </div>
+                    <NumberSettingInput
+                      label="文件查看最大标签数"
+                      value={settings.project_files_max_tabs}
+                      minimum={1}
+                      maximum={50}
+                      step={1}
+                      onChange={(value) => onConversationChange({ project_files_max_tabs: value })}
                     />
                   </div>
                 </div>

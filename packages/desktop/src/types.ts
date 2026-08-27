@@ -70,6 +70,8 @@ export interface DesktopSettings {
   connections: ConnectionPreset[];
   python_path: string | null;
   sidebar_width: number;
+  project_files_width: number;
+  project_files_max_tabs: number;
   document_agent_width: number;
   document_agent_collapsed: boolean;
   document_show_original_text: boolean;
