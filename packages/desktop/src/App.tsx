@@ -1226,8 +1226,9 @@ function App() {
     const initial: SessionViewState = {
       id: info?.session_id ?? key.split(":").slice(1).join(":"),
       cwd: project.path,
-      title: info?.title || "新会话",
+      title: info ? (info.title || "未命名会话") : "新会话",
       items: [],
+      loading: Boolean(info),
       busy: false,
       connected: false,
       operationId: null,
@@ -1242,7 +1243,14 @@ function App() {
       return {
         ...current,
         [key]: previous
-          ? { ...previous, cwd: project.path, title: info?.title || previous.title, connected: false, error: null }
+          ? {
+              ...previous,
+              cwd: project.path,
+              title: info ? (info.title || "未命名会话") : previous.title,
+              loading: Boolean(info) && previous.items.length === 0,
+              connected: false,
+              error: null,
+            }
           : initial,
       };
     });
@@ -1372,7 +1380,15 @@ function App() {
       onState: (connected, error) => {
         if (!isCurrentChannel()) return;
         setSessions((current) => current[key]
-          ? { ...current, [key]: { ...current[key], connected, error: error ?? null } }
+          ? {
+              ...current,
+              [key]: {
+                ...current[key],
+                loading: error ? false : current[key].loading,
+                connected,
+                error: error ?? null,
+              },
+            }
           : current);
       },
     });
@@ -1876,6 +1892,7 @@ function App() {
       || !activeChannel
       || !activeSessionKey
       || !activeSession
+      || activeSession.loading
     ) return;
     if (
       text.startsWith("/")
@@ -3304,7 +3321,10 @@ function App() {
             <>
               <div className="conversation-header">
                 <div className="conversation-title">
-                  <h1>{activeSession.title}</h1>
+                  <h1 className={activeSession.loading ? "session-loading-title" : undefined}>
+                    {activeSession.loading && <LoaderCircle className="spin" />}
+                    {activeSession.loading ? "正在加载会话" : activeSession.title}
+                  </h1>
                   <span>{activeSession.cwd}</span>
                   {activeForkOrigin && (
                     <small className="conversation-origin">来自“{activeForkOrigin}” · 分叉</small>
@@ -3368,7 +3388,15 @@ function App() {
                   )}
                 </div>
               </div>
-              {activeConversationView === "trajectory" ? (
+              {activeSession.loading ? (
+                <div className="messages">
+                  <div className="conversation-empty session-loading-state" role="status" aria-live="polite">
+                    <LoaderCircle className="spin" />
+                    <h2>正在加载会话</h2>
+                    <p>正在恢复历史消息和会话状态…</p>
+                  </div>
+                </div>
+              ) : activeConversationView === "trajectory" ? (
                 <TrajectoryView items={activeSession.items} now={runClock} />
               ) : <div className="messages">
                 {activeSession.items.length === 0 && (
@@ -3416,7 +3444,7 @@ function App() {
                 <div className="composer-context">
                   <span><Folder />{activeProject?.name}</span>
                   <span><Server />{activeConnection?.name}</span>
-                  {!activeSession.connected && (
+                  {!activeSession.loading && !activeSession.connected && (
                     <span
                       className="danger connection-state"
                       title={activeSession.error || "会话连接已断开，Crab Desktop 正在重连"}
@@ -3474,12 +3502,12 @@ function App() {
                     onChange={setComposer}
                     onImages={(files) => void addImages(files)}
                     onSubmit={() => void sendMessage()}
-                    placeholder={activeSession.busy ? "输入内容以引导当前任务" : "输入任务"}
+                    placeholder={activeSession.loading ? "会话加载完成后即可输入" : activeSession.busy ? "输入内容以引导当前任务" : "输入任务"}
                   />
                   <div className="composer-toolbar">
                     <div className="toolbar-left">
                       <ComposerAddMenu
-                        disabled={!activeSession.connected}
+                        disabled={activeSession.loading || !activeSession.connected}
                         planActive={activeSession.status?.mode === "plan"}
                         ultraActive={Boolean(activeSession.status?.ultra_mode)}
                         onImages={(files) => void addImages(files)}
@@ -3495,17 +3523,17 @@ function App() {
                         models={activeGateway?.models ?? []}
                         value={activeModel}
                         fallback={activeSession.status?.model || "默认模型"}
-                        disabled={!activeSession.connected}
+                        disabled={activeSession.loading || !activeSession.connected}
                         onChange={selectModel}
                       />
                       <ReasoningEffortPicker
                         value={activeSession.status?.reasoning_effort}
-                        disabled={!activeSession.connected}
+                        disabled={activeSession.loading || !activeSession.connected}
                         onChange={selectReasoningEffort}
                       />
                       <PermissionPicker
                         value={activePermissionMode}
-                        disabled={!activeSession.connected}
+                        disabled={activeSession.loading || !activeSession.connected}
                         onChange={selectPermissionMode}
                       />
                       {activeSession.status?.mode === "plan" && (
@@ -3549,7 +3577,7 @@ function App() {
                             && pendingFiles.length === 0
                             && pendingFolders.length === 0
                             && pendingDocumentReferences.length === 0
-                          ) || !activeSession.connected}
+                          ) || activeSession.loading || !activeSession.connected}
                           onClick={() => void sendMessage()}
                         >
                           <Send />

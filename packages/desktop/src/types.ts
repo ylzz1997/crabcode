@@ -592,6 +592,7 @@ export interface SessionViewState {
   cwd: string;
   title: string;
   items: ChatItem[];
+  loading: boolean;
   busy: boolean;
   connected: boolean;
   operationId: string | null;

@@ -8,6 +8,7 @@ function state(): SessionViewState {
     cwd: "/work/project",
     title: "Test",
     items: [],
+    loading: false,
     busy: false,
     connected: true,
     operationId: "operation-1",
@@ -108,6 +109,7 @@ describe("Gateway event reducer", () => {
     const current = applyGatewayEvent(
       {
         ...state(),
+        loading: true,
         busy: true,
         connected: false,
         error: "连接中断",
@@ -120,6 +122,7 @@ describe("Gateway event reducer", () => {
       },
     );
     expect(current.connected).toBe(true);
+    expect(current.loading).toBe(false);
     expect(current.busy).toBe(false);
     expect(current.operationId).toBeNull();
     expect(current.error).toBeNull();
@@ -131,6 +134,7 @@ describe("Gateway event reducer", () => {
     const current = applyGatewayEvent(
       {
         ...state(),
+        loading: true,
         busy: true,
         connected: false,
         error: "连接中断",
@@ -146,6 +150,7 @@ describe("Gateway event reducer", () => {
       },
     );
     expect(current.busy).toBe(false);
+    expect(current.loading).toBe(false);
     expect(current.connected).toBe(false);
     expect(current.operationId).toBeNull();
     expect(current.runStartedAt).toBeNull();

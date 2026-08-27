@@ -323,6 +323,7 @@ export function applyGatewayEvent(
       const messages = historyItems(event.messages ?? []);
       return {
         ...state,
+        loading: false,
         connected: true,
         busy: false,
         operationId: null,
@@ -603,6 +604,7 @@ export function applyGatewayEvent(
       const clearsTurn = documentCommandError || resumeCommandError || staleForegroundCommandError;
       return {
         ...state,
+        loading: false,
         error: event.message ?? "Gateway error",
         connected: resumeCommandError ? false : state.connected,
         busy: clearsTurn ? false : state.busy,

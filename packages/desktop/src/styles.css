@@ -492,6 +492,19 @@ svg {
   font-weight: 650;
 }
 
+.conversation-title h1.session-loading-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+}
+
+.session-loading-title svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
 .conversation-title span {
   display: block;
   margin-top: 3px;
@@ -1545,6 +1558,23 @@ button.primary:hover,
   color: var(--text);
   font-size: 21px;
   font-weight: 520;
+}
+
+.session-loading-state>svg {
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+}
+
+.session-loading-state h2 {
+  margin-top: 12px;
+  font-size: 17px;
+}
+
+.session-loading-state p {
+  margin: 7px 0 0;
+  color: var(--subtle);
+  font-size: 12px;
 }
 
 .composer-wrap {
