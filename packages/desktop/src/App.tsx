@@ -145,6 +145,7 @@ import type {
   ProjectPreset,
   ReasoningEffort,
   ScheduleJobInfo,
+  SessionPreferences,
   SessionInfo,
   SessionViewState,
   SkillInfo,
@@ -694,6 +695,10 @@ function App() {
   const autoOpeningDocumentRef = useRef<string | null>(null);
   const focusedSessionRef = useRef<FocusedSessionSnapshot | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const settingsRef = useRef<DesktopSettings | null>(null);
+  const gatewaysRef = useRef<GatewayMap>({});
+  settingsRef.current = settings;
+  gatewaysRef.current = gateways;
 
   const activeConnection = useMemo(() => {
     if (!settings) return null;
@@ -979,6 +984,79 @@ function App() {
     }
   }, []);
 
+  const updateSessionPreferences = useCallback((
+    connectionId: string,
+    projectId: string,
+    sessionId: string,
+    changes: Partial<SessionPreferences>,
+  ) => {
+    if (!sessionId || sessionId.startsWith("new-")) return;
+    updateConnection(connectionId, (connection) => ({
+      ...connection,
+      projects: connection.projects.map((project) => {
+        if (project.id !== projectId) return project;
+        const previous = project.session_preferences?.[sessionId] ?? {};
+        return {
+          ...project,
+          session_preferences: {
+            ...(project.session_preferences ?? {}),
+            [sessionId]: { ...previous, ...changes },
+          },
+        };
+      }),
+    }));
+  }, [updateConnection]);
+
+  const restoreSessionPreferences = useCallback(async (
+    connectionId: string,
+    key: string,
+    channel: SessionChannel,
+    sessionId: string,
+    preferences: SessionPreferences | undefined,
+    models: GatewayModel[],
+  ) => {
+    await updateSessionStatus(connectionId, key, sessionId, true);
+    if (!preferences || channel.isDisposed) return;
+    try {
+      const model = preferences.model_profile
+        && models.some((item) => item.name === preferences.model_profile)
+        ? preferences.model_profile
+        : undefined;
+      if (model) channel.switchModel(model);
+      if (preferences.reasoning_effort) channel.setReasoningEffort(preferences.reasoning_effort);
+      if (typeof preferences.ultra_mode === "boolean") channel.setUltraMode(preferences.ultra_mode);
+      if (preferences.mode) channel.switchMode(preferences.mode);
+      if (preferences.permission_mode) channel.setPermissionMode(preferences.permission_mode);
+      setModelSelections((current) => model ? { ...current, [key]: model } : current);
+      if (preferences.permission_mode) {
+        setPermissionSelections((current) => ({
+          ...current,
+          [key]: normalizePermissionMode(preferences.permission_mode),
+        }));
+      }
+      setSessions((current) => {
+        const session = current[key];
+        if (!session?.status) return current;
+        return {
+          ...current,
+          [key]: {
+            ...session,
+            status: {
+              ...session.status,
+              ...(model ? { model_profile: model } : {}),
+              ...(preferences.reasoning_effort ? { reasoning_effort: preferences.reasoning_effort } : {}),
+              ...(typeof preferences.ultra_mode === "boolean" ? { ultra_mode: preferences.ultra_mode } : {}),
+              ...(preferences.mode ? { mode: preferences.mode } : {}),
+              ...(preferences.permission_mode ? { permission_mode: preferences.permission_mode } : {}),
+            },
+          },
+        };
+      });
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  }, [updateSessionStatus]);
+
   const removeSessionState = useCallback((target: SessionCleanupTarget) => {
     channelRef.current.get(target.key)?.dispose();
     channelRef.current.delete(target.key);
@@ -1046,10 +1124,14 @@ function App() {
           ...connection,
           projects: connection.projects.map((project) => (
             project.path === target.cwd
-              ? {
-                ...project,
-                last_session_id: project.last_session_id === target.sessionId ? null : project.last_session_id,
-              }
+              ? (() => {
+                const { [target.sessionId]: _, ...sessionPreferences } = project.session_preferences ?? {};
+                return {
+                  ...project,
+                  last_session_id: project.last_session_id === target.sessionId ? null : project.last_session_id,
+                  session_preferences: sessionPreferences,
+                };
+              })()
               : project
           )),
         }, removeFavoriteEntries(favoriteEntries(connection), (entry) => entry.type === "session"
@@ -1145,12 +1227,27 @@ function App() {
             ...current,
             last_model_profile: event.model_profile!,
           }));
+          if (channel.sessionId) {
+            updateSessionPreferences(connection.id, project.id, channel.sessionId, {
+              model_profile: event.model_profile,
+            });
+          }
         }
         if (event.type === "permission_mode_change" && event.permission_mode) {
           setPermissionSelections((current) => ({
             ...current,
             [key]: normalizePermissionMode(event.permission_mode),
           }));
+          if (channel.sessionId) {
+            updateSessionPreferences(connection.id, project.id, channel.sessionId, {
+              permission_mode: event.permission_mode,
+            });
+          }
+        }
+        if (event.type === "mode_change" && event.mode && channel.sessionId) {
+          updateSessionPreferences(connection.id, project.id, channel.sessionId, {
+            mode: event.mode,
+          });
         }
         if (
           event.type === "document_selection_translation"
@@ -1162,10 +1259,6 @@ function App() {
           const state = current[key];
           return state ? { ...current, [key]: applyGatewayEvent(state, event) } : current;
         });
-        if (event.type === "server.connected") {
-          const id = event.properties?.session_id;
-          if (typeof id === "string") void updateSessionStatus(connection.id, key, id, true);
-        }
         if (
           channel.sessionId
           && (event.type === "turn_complete" || event.type === "compact" || event.type === "agent_state")
@@ -1226,7 +1319,17 @@ function App() {
             : item),
         }));
         void refreshProjectSessions(connection.id, project.path);
-        void updateSessionStatus(connection.id, key, id);
+        void restoreSessionPreferences(
+          connection.id,
+          key,
+          channel,
+          id,
+          settingsRef.current?.connections
+            .find((item) => item.id === connection.id)
+            ?.projects.find((item) => item.id === project.id)
+            ?.session_preferences?.[id],
+          gatewaysRef.current[connection.id]?.models ?? [],
+        );
       },
       onState: (connected, error) => {
         if (!isCurrentChannel()) return;
@@ -1237,7 +1340,14 @@ function App() {
     });
     channelRef.current.set(key, channel);
     void channel.connect();
-  }, [gateways, refreshProjectSessions, updateConnection, updateSessionStatus]);
+  }, [
+    gateways,
+    refreshProjectSessions,
+    restoreSessionPreferences,
+    updateConnection,
+    updateSessionPreferences,
+    updateSessionStatus,
+  ]);
 
   const forkSessionFromMessage = useCallback(async (item: ChatItem) => {
     if (
@@ -1917,9 +2027,12 @@ function App() {
   };
 
   const selectReasoningEffort = (effort: ReasoningEffort) => {
-    if (!activeChannel || !activeSessionKey) return;
+    if (!activeChannel || !activeSessionKey || !activeConnection || !activeProject || !activeSession) return;
     try {
       activeChannel.setReasoningEffort(effort);
+      updateSessionPreferences(activeConnection.id, activeProject.id, activeSession.id, {
+        reasoning_effort: effort,
+      });
       setSessions((current) => {
         const session = current[activeSessionKey];
         if (!session?.status) return current;
@@ -1937,9 +2050,10 @@ function App() {
   };
 
   const selectMode = (mode: "agent" | "plan") => {
-    if (!activeChannel || !activeSessionKey) return;
+    if (!activeChannel || !activeSessionKey || !activeConnection || !activeProject || !activeSession) return;
     try {
       activeChannel.switchMode(mode);
+      updateSessionPreferences(activeConnection.id, activeProject.id, activeSession.id, { mode });
       setSessions((current) => {
         const session = current[activeSessionKey];
         if (!session?.status) return current;
@@ -1957,9 +2071,12 @@ function App() {
   };
 
   const selectUltraMode = (enabled: boolean) => {
-    if (!activeChannel || !activeSessionKey) return;
+    if (!activeChannel || !activeSessionKey || !activeConnection || !activeProject || !activeSession) return;
     try {
       activeChannel.setUltraMode(enabled);
+      updateSessionPreferences(activeConnection.id, activeProject.id, activeSession.id, {
+        ultra_mode: enabled,
+      });
       setSessions((current) => {
         const session = current[activeSessionKey];
         if (!session?.status) return current;
@@ -1977,10 +2094,13 @@ function App() {
   };
 
   const selectModel = (name: string) => {
-    if (!activeChannel || !activeSessionKey || !name) return;
+    if (!activeChannel || !activeSessionKey || !activeConnection || !activeProject || !activeSession || !name) return;
     try {
       activeChannel.switchModel(name);
       setModelSelections((current) => ({ ...current, [activeSessionKey]: name }));
+      updateSessionPreferences(activeConnection.id, activeProject.id, activeSession.id, {
+        model_profile: name,
+      });
       setSessions((current) => {
         const session = current[activeSessionKey];
         if (!session?.status) return current;
@@ -1998,9 +2118,12 @@ function App() {
   };
 
   const selectPermissionMode = (mode: PermissionMode) => {
-    if (!activeChannel || !activeSessionKey) return;
+    if (!activeChannel || !activeSessionKey || !activeConnection || !activeProject || !activeSession) return;
     try {
       activeChannel.setPermissionMode(mode);
+      updateSessionPreferences(activeConnection.id, activeProject.id, activeSession.id, {
+        permission_mode: mode,
+      });
       setPermissionSelections((current) => ({ ...current, [activeSessionKey]: mode }));
       setSessions((current) => {
         const session = current[activeSessionKey];
@@ -4811,7 +4934,7 @@ function ReasoningEffortPicker({
       </button>
       {open && (
         <div className="picker-menu effort-picker-menu" role="menu" aria-label="思考强度">
-          <div className="picker-menu-heading"><span>思考强度</span><small>仅作用于当前会话</small></div>
+          <div className="picker-menu-heading"><span>思考强度</span><small>随会话保存</small></div>
           <div className="effort-options">
             {REASONING_EFFORT_OPTIONS.map((option) => (
               <button

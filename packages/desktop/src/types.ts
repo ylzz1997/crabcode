@@ -7,7 +7,18 @@ export interface ProjectPreset {
   is_default?: boolean;
   last_session_id: string | null;
   favorite_session_ids?: string[];
+  session_preferences?: Record<string, SessionPreferences>;
   document_view?: DocumentViewState;
+}
+
+export interface SessionPreferences {
+  // Runtime controls are not part of Gateway session metadata, so Desktop
+  // keeps them alongside the project/session selector.
+  model_profile?: string | null;
+  reasoning_effort?: ReasoningEffort | null;
+  ultra_mode?: boolean;
+  mode?: "agent" | "plan";
+  permission_mode?: string;
 }
 
 export interface DocumentViewState {

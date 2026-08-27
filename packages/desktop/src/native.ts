@@ -25,6 +25,8 @@ import type {
   ThemeSemanticColors,
   TurnDurationFormat,
   UiFontFamily,
+  ReasoningEffort,
+  SessionPreferences,
 } from "./types";
 
 interface AuthResult {
@@ -102,6 +104,39 @@ function normalizeDocumentView(raw: Partial<DocumentViewState> | undefined): Doc
     scroll_top: clampNumber(raw.scroll_top, 0, Number.MAX_SAFE_INTEGER, 0),
     scroll_left: clampNumber(raw.scroll_left, 0, Number.MAX_SAFE_INTEGER, 0),
   };
+}
+
+const REASONING_EFFORTS = new Set<ReasoningEffort>([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+function normalizeSessionPreferences(raw: unknown): Record<string, SessionPreferences> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const normalized: Record<string, SessionPreferences> = {};
+  for (const [sessionId, value] of Object.entries(raw)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const candidate = value as Record<string, unknown>;
+    const preference: SessionPreferences = {};
+    if (typeof candidate.model_profile === "string" && candidate.model_profile.trim()) {
+      preference.model_profile = candidate.model_profile;
+    }
+    if (typeof candidate.reasoning_effort === "string" && REASONING_EFFORTS.has(candidate.reasoning_effort as ReasoningEffort)) {
+      preference.reasoning_effort = candidate.reasoning_effort as ReasoningEffort;
+    }
+    if (typeof candidate.ultra_mode === "boolean") preference.ultra_mode = candidate.ultra_mode;
+    if (candidate.mode === "agent" || candidate.mode === "plan") preference.mode = candidate.mode;
+    if (typeof candidate.permission_mode === "string" && candidate.permission_mode.trim()) {
+      preference.permission_mode = candidate.permission_mode;
+    }
+    if (Object.keys(preference).length > 0 && sessionId.trim()) normalized[sessionId] = preference;
+  }
+  return normalized;
 }
 
 interface LegacyAppearanceSettings {
@@ -253,6 +288,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
           favorite_session_ids: Array.isArray(project.favorite_session_ids)
             ? [...new Set(project.favorite_session_ids.filter((id): id is string => typeof id === "string" && id.length > 0))]
             : [],
+          session_preferences: normalizeSessionPreferences(project.session_preferences),
           document_view: normalizeDocumentView(project.document_view),
         };
       });

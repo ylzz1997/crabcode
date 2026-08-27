@@ -133,6 +133,50 @@ describe("desktop settings migration", () => {
     expect(normalizeSettings(configured).connections[0].last_model_profile).toBe("fast");
   });
 
+  it("normalizes per-session conversation preferences", () => {
+    const configured = {
+      schema_version: 4,
+      active_connection_id: "local",
+      connection_order: ["local"],
+      connections: [{
+        id: "local",
+        name: "Local",
+        base_url: "http://127.0.0.1:4096",
+        credential_ref: null,
+        allow_insecure_remote: false,
+        projects: [{
+          id: "project-1",
+          path: "/work/crab",
+          name: "Crab",
+          directories: ["/work/crab"],
+          last_session_id: "session-1",
+          session_preferences: {
+            "session-1": {
+              model_profile: "fast",
+              reasoning_effort: "high",
+              ultra_mode: true,
+              mode: "plan",
+              permission_mode: "ask",
+            },
+            "session-2": { reasoning_effort: "invalid", mode: "other" },
+          },
+        }],
+        last_project_path: "/work/crab",
+        last_project_id: "project-1",
+      }],
+    } as unknown as DesktopSettings;
+
+    expect(normalizeSettings(configured).connections[0].projects[0].session_preferences).toEqual({
+      "session-1": {
+        model_profile: "fast",
+        reasoning_effort: "high",
+        ultra_mode: true,
+        mode: "plan",
+        permission_mode: "ask",
+      },
+    });
+  });
+
   it("normalizes remembered document zoom and scroll positions", () => {
     const configured = {
       schema_version: 3,
