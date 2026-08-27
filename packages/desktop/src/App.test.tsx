@@ -27,6 +27,7 @@ import {
   ScheduleDeleteModal,
   ScheduledTasksView,
   shouldAutoOpenDocumentSession,
+  shouldCollapseDocumentAgent,
   shouldUseWideProjectFilesLayout,
 } from "./App";
 import type { GatewayApi } from "./gateway";
@@ -48,6 +49,14 @@ describe("document session auto-open", () => {
     expect(shouldAutoOpenDocumentSession("scheduled", true, "document", null, "online")).toBe(false);
     expect(shouldAutoOpenDocumentSession("favorites", true, "document", null, "online")).toBe(false);
     expect(shouldAutoOpenDocumentSession("plugins", true, "document", null, "online")).toBe(false);
+  });
+});
+
+describe("document Agent layout", () => {
+  it("never applies the document collapse setting to a normal project", () => {
+    expect(shouldCollapseDocumentAgent(false, true)).toBe(false);
+    expect(shouldCollapseDocumentAgent(true, true)).toBe(true);
+    expect(shouldCollapseDocumentAgent(true, false)).toBe(false);
   });
 });
 

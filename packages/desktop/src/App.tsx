@@ -271,6 +271,10 @@ export function shouldAutoOpenDocumentSession(
 export function shouldUseWideProjectFilesLayout(width: number): boolean {
   return width >= 1280;
 }
+
+export function shouldCollapseDocumentAgent(documentMode: boolean, collapsedSetting: boolean): boolean {
+  return documentMode && collapsedSetting;
+}
 type PendingImage = {
   id: string;
   name: string;
@@ -2521,6 +2525,10 @@ function App() {
     ? permissionSelections[activeSessionKey] || normalizePermissionMode(activeSession?.status?.permission_mode)
     : "default";
   const documentMode = workspaceView === "chat" && activeProject?.kind === "document";
+  const documentAgentCollapsed = shouldCollapseDocumentAgent(
+    documentMode,
+    settings?.document_agent_collapsed === true,
+  );
   const projectFilesEligible = workspaceView === "chat"
     && activeProject?.kind === "project"
     && Boolean(activeConnection && apiRef.current.get(activeConnection.id))
@@ -3178,9 +3186,9 @@ function App() {
         </aside>
 
         <main
-          className={`main-panel ${documentMode ? "document-mode" : ""} ${settings.document_agent_collapsed ? "document-agent-collapsed" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
+          className={`main-panel ${documentMode ? "document-mode" : ""} ${documentAgentCollapsed ? "document-agent-collapsed" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
           style={documentMode ? {
-            gridTemplateColumns: settings.document_agent_collapsed
+            gridTemplateColumns: documentAgentCollapsed
               ? "minmax(0, 1fr) 44px"
               : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 400}px, calc(100% - 180px))`,
           } : projectFilesWideLayout ? {
@@ -3194,7 +3202,7 @@ function App() {
               project={activeProject}
               documentView={activeProject.document_view}
               agentWidth={settings.document_agent_width ?? 400}
-              agentCollapsed={settings.document_agent_collapsed === true}
+              agentCollapsed={documentAgentCollapsed}
               showOriginalText={settings.document_show_original_text === true}
               translationConcurrency={settings.document_translation_concurrency}
               translationBatchSize={settings.document_translation_batch_size}

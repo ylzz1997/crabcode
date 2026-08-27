@@ -5560,10 +5560,10 @@ body {
   grid-row: 1 / -1;
 }
 
-.document-agent-collapsed>.conversation-header,
-.document-agent-collapsed>.messages,
-.document-agent-collapsed>.composer-wrap,
-.document-agent-collapsed>.empty-workspace {
+.document-mode.document-agent-collapsed>.conversation-header,
+.document-mode.document-agent-collapsed>.messages,
+.document-mode.document-agent-collapsed>.composer-wrap,
+.document-mode.document-agent-collapsed>.empty-workspace {
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
