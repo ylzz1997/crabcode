@@ -5899,10 +5899,6 @@ html[data-theme="light"] .document-actions-separator {
   background: var(--border-soft);
 }
 
-.document-agent-toggle {
-  flex: 0 0 auto;
-}
-
 .document-agent-resize {
   position: absolute;
   top: 0;

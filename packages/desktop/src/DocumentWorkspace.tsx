@@ -11,7 +11,6 @@ import {
   LoaderCircle,
   Minus,
   MoreHorizontal,
-  PanelRightClose,
   PanelRightOpen,
   Pencil,
   Plus,
@@ -2378,9 +2377,6 @@ export default function DocumentWorkspace({
             ><Code2 />Raw</button>
           </div>
         )}
-        <button className="icon-button document-agent-toggle" title="折叠 Agent" onClick={() => onAgentCollapsed(true)}>
-          <PanelRightClose />
-        </button>
       </header>
 
       {clearTranslationConfirm && createPortal((
