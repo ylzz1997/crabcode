@@ -5508,7 +5508,10 @@ body {
 .main-panel.document-mode {
   display: grid;
   grid-template-rows: 58px minmax(0, 1fr) auto;
-  transition: grid-template-columns 240ms var(--ease-fluid);
+  overflow: hidden;
+  /* The project-files and document layouts reuse this element with unrelated
+     column definitions. Interpolating between them shifts the entire workspace. */
+  transition: background-color 260ms ease;
 }
 
 .document-workspace {
