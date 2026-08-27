@@ -666,6 +666,7 @@ function App() {
   const [projectFilesOpen, setProjectFilesOpen] = useState(false);
   const [projectFileTreeOpen, setProjectFileTreeOpen] = useState(false);
   const [projectFileTabs, setProjectFileTabs] = useState<ProjectFileTabsState>({ files: [], activePath: null });
+  const [documentAgentTransitioning, setDocumentAgentTransitioning] = useState(false);
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
@@ -719,6 +720,7 @@ function App() {
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const settingsRef = useRef<DesktopSettings | null>(null);
   const gatewaysRef = useRef<GatewayMap>({});
+  const documentAgentTransitionTimerRef = useRef<number | null>(null);
   settingsRef.current = settings;
   gatewaysRef.current = gateways;
 
@@ -925,6 +927,24 @@ function App() {
       void saveSettings(next).catch((error) => setGlobalError(String(error)));
       return next;
     });
+  }, []);
+
+  const updateDocumentAgentCollapsed = useCallback((collapsed: boolean) => {
+    setDocumentAgentTransitioning(true);
+    commitSettings((current) => ({ ...current, document_agent_collapsed: collapsed }));
+    if (documentAgentTransitionTimerRef.current !== null) {
+      window.clearTimeout(documentAgentTransitionTimerRef.current);
+    }
+    documentAgentTransitionTimerRef.current = window.setTimeout(() => {
+      documentAgentTransitionTimerRef.current = null;
+      setDocumentAgentTransitioning(false);
+    }, 300);
+  }, [commitSettings]);
+
+  useEffect(() => () => {
+    if (documentAgentTransitionTimerRef.current !== null) {
+      window.clearTimeout(documentAgentTransitionTimerRef.current);
+    }
   }, []);
 
   const updateConnection = useCallback((
@@ -3186,7 +3206,7 @@ function App() {
         </aside>
 
         <main
-          className={`main-panel ${documentMode ? "document-mode" : ""} ${documentAgentCollapsed ? "document-agent-collapsed" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
+          className={`main-panel ${documentMode ? "document-mode" : ""} ${documentAgentCollapsed ? "document-agent-collapsed" : ""} ${documentMode && documentAgentTransitioning ? "document-agent-transitioning" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
           style={documentMode ? {
             gridTemplateColumns: documentAgentCollapsed
               ? "minmax(0, 1fr) 44px"
@@ -3210,7 +3230,7 @@ function App() {
               sessionError={activeSession?.error ?? null}
               selectionTranslationEvent={activeSessionKey ? selectionTranslationEvents[activeSessionKey] ?? null : null}
               onAgentWidth={(width) => commitSettings((current) => ({ ...current, document_agent_width: width }))}
-              onAgentCollapsed={(collapsed) => commitSettings((current) => ({ ...current, document_agent_collapsed: collapsed }))}
+              onAgentCollapsed={updateDocumentAgentCollapsed}
               onDocumentViewState={(connectionId, projectId, state) => updateConnection(connectionId, (connection) => ({
                 ...connection,
                 projects: connection.projects.map((project) => project.id === projectId
@@ -3388,7 +3408,7 @@ function App() {
                       type="button"
                       title="收起 Agent"
                       aria-label="收起 Agent"
-                      onClick={() => commitSettings((current) => ({ ...current, document_agent_collapsed: true }))}
+                      onClick={() => updateDocumentAgentCollapsed(true)}
                     >
                       <PanelRightClose />
                     </button>

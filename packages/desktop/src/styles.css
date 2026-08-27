@@ -5514,6 +5514,12 @@ body {
   transition: background-color 260ms ease;
 }
 
+.main-panel.document-mode.document-agent-transitioning {
+  transition:
+    grid-template-columns 280ms var(--ease-fluid),
+    background-color 260ms ease;
+}
+
 .document-workspace {
   position: relative;
   min-width: 0;
@@ -5570,6 +5576,13 @@ body {
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
+}
+
+.document-mode.document-agent-transitioning>.conversation-header,
+.document-mode.document-agent-transitioning>.messages,
+.document-mode.document-agent-transitioning>.composer-wrap,
+.document-mode.document-agent-transitioning>.empty-workspace {
+  transition: opacity 180ms ease;
 }
 
 .document-toolbar {
@@ -5936,6 +5949,14 @@ html[data-theme="light"] .document-actions-separator {
   background: var(--panel);
   color: var(--muted);
   cursor: pointer;
+  animation: document-agent-rail-in 200ms ease-out both;
+}
+
+@keyframes document-agent-rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
 }
 
 .document-agent-rail span {
