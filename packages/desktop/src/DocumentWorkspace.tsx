@@ -2546,7 +2546,14 @@ export default function DocumentWorkspace({
         </div>
       )}
 
-      {!agentCollapsed && <button className="document-agent-resize" aria-label="调整 Agent 面板宽度" onPointerDown={startResize} />}
+      {!agentCollapsed && (
+        <button
+          type="button"
+          className="document-agent-resize"
+          aria-label="调整 Agent 面板宽度"
+          onPointerDown={startResize}
+        />
+      )}
       {agentCollapsed && (
         <button className="document-agent-rail" title="展开 Agent" onClick={() => onAgentCollapsed(false)}>
           <PanelRightOpen /><span>Agent</span>

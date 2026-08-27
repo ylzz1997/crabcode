@@ -5908,7 +5908,8 @@ html[data-theme="light"] .document-actions-separator {
   height: 100%;
   border: 0;
   background: transparent;
-  cursor: col-resize;
+  cursor: col-resize !important;
+  touch-action: none;
 }
 
 .document-agent-resize:hover {

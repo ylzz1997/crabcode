@@ -3374,6 +3374,17 @@ function App() {
                     onCheckpoint={() => setCheckpointModal(true)}
                     onToggleFavorite={() => activeProject && toggleFavoriteSession(activeProject.id, activeSession.id)}
                   />
+                  {documentMode && (
+                    <button
+                      className="icon-button"
+                      type="button"
+                      title="收起 Agent"
+                      aria-label="收起 Agent"
+                      onClick={() => commitSettings((current) => ({ ...current, document_agent_collapsed: true }))}
+                    >
+                      <PanelRightClose />
+                    </button>
+                  )}
                   {projectFilesEligible && (
                     <button
                       className={`icon-button ${projectFilesVisible ? "active" : ""}`}
