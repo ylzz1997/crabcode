@@ -521,6 +521,13 @@ describe("SettingsView", () => {
     expect(container.querySelector('[aria-label^="编辑"]')).toBeNull();
     expect(container.querySelector('[aria-label^="删除"]')).toBeNull();
 
+    const groupToggles = container.querySelectorAll<HTMLButtonElement>(".model-settings-group-toggle");
+    expect(groupToggles).toHaveLength(2);
+    expect(groupToggles[1].getAttribute("aria-expanded")).toBe("true");
+    act(() => groupToggles[1].click());
+    expect(groupToggles[1].getAttribute("aria-expanded")).toBe("false");
+    expect(groupToggles[1].closest(".model-settings-group")?.classList.contains("is-collapsed")).toBe(true);
+
     act(() => container.querySelector<HTMLButtonElement>(".model-refresh-command")!.click());
     expect(refresh).toHaveBeenCalledOnce();
 
@@ -528,6 +535,9 @@ describe("SettingsView", () => {
     act(() => changeInput(search, "anthropic"));
     expect(container.querySelectorAll(".model-settings-group > button")).toHaveLength(1);
     expect(container.querySelector(".model-settings-group > button")?.textContent).toContain("claude");
+    expect(container.querySelector(".model-settings-group-toggle")?.getAttribute("aria-expanded")).toBe("true");
+    act(() => changeInput(search, ""));
+    expect(container.querySelectorAll(".model-settings-group-toggle")[1].getAttribute("aria-expanded")).toBe("false");
   });
 
   it("changes the theme mode and built-in Dock icon", async () => {

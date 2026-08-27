@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   Layers3,
   LoaderCircle,
@@ -154,6 +155,7 @@ export function ModelSettingsPanel({
 }: ModelSettingsPanelProps) {
   const [query, setQuery] = useState("");
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const grouped = useMemo(() => data ? groupModelSettings(data, query) : [], [data, query]);
   const visibleModels = grouped.flatMap((group) => group.models);
 
@@ -170,6 +172,20 @@ export function ModelSettingsPanel({
   const selected = data?.models.find((model) => model.name === selectedName) ?? null;
   const selectedGroup = selected?.group ? data?.groups[selected.group] ?? {} : {};
   const online = gateway?.status === "online";
+
+  const groupKey = (name: string | null) => name === null ? "__ungrouped__" : `group:${name}`;
+  const isGroupCollapsed = (name: string | null) => (
+    query.trim().length === 0 && collapsedGroups.has(groupKey(name))
+  );
+  const toggleGroup = (name: string | null) => {
+    const key = groupKey(name);
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   return (
     <section className="settings-section model-settings-section" aria-labelledby="model-settings-title">
@@ -238,14 +254,27 @@ export function ModelSettingsPanel({
           <div className="model-settings-browser">
             <div className="model-settings-groups" aria-label="模型列表">
               {grouped.map((group) => (
-                <section className="model-settings-group" key={group.name ?? "__ungrouped__"}>
+                <section
+                  className={`model-settings-group ${isGroupCollapsed(group.name) ? "is-collapsed" : ""}`}
+                  id={`model-group-${groupKey(group.name)}`}
+                  key={groupKey(group.name)}
+                >
                   <header>
-                    <span className="model-group-icon"><Layers3 /></span>
-                    <span>
-                      <strong>{group.name ?? "未分组"}</strong>
-                      <small title={groupSummary(group.config)}>{groupSummary(group.config)}</small>
-                    </span>
-                    <em>{group.models.length}</em>
+                    <button
+                      className="model-settings-group-toggle"
+                      type="button"
+                      aria-controls={`model-group-${groupKey(group.name)}`}
+                      aria-expanded={!isGroupCollapsed(group.name)}
+                      onClick={() => toggleGroup(group.name)}
+                    >
+                      <span className="model-group-icon"><Layers3 /></span>
+                      <span>
+                        <strong>{group.name ?? "未分组"}</strong>
+                        <small title={groupSummary(group.config)}>{groupSummary(group.config)}</small>
+                      </span>
+                      <em>{group.models.length}</em>
+                      <ChevronDown aria-hidden="true" />
+                    </button>
                   </header>
                   {group.models.map((model) => (
                     <button

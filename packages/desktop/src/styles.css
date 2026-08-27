@@ -8458,11 +8458,26 @@ html[data-theme="light"] .document-actions-separator {
 
 .model-settings-group > header {
   min-height: 57px;
+  padding: 0;
+  background: #132225;
+}
+
+.model-settings-group-toggle {
+  width: 100%;
+  min-height: 57px;
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 9px 10px;
-  background: #132225;
+  border: 0;
+  background: transparent;
+  color: #708983;
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-settings-group-toggle:hover {
+  background: #17292c;
 }
 
 .model-group-icon {
@@ -8482,7 +8497,7 @@ html[data-theme="light"] .document-actions-separator {
   height: 14px;
 }
 
-.model-settings-group > header > span:nth-child(2),
+.model-settings-group-toggle > span:nth-child(2),
 .model-settings-group > button > span {
   min-width: 0;
   flex: 1;
@@ -8491,13 +8506,13 @@ html[data-theme="light"] .document-actions-separator {
   gap: 3px;
 }
 
-.model-settings-group > header strong {
+.model-settings-group-toggle strong {
   color: #bac9c4;
   font-size: 10.5px;
   font-weight: 650;
 }
 
-.model-settings-group > header small {
+.model-settings-group-toggle small {
   overflow: hidden;
   color: #637d77;
   font-size: 9px;
@@ -8505,7 +8520,7 @@ html[data-theme="light"] .document-actions-separator {
   white-space: nowrap;
 }
 
-.model-settings-group > header > em {
+.model-settings-group-toggle > em {
   min-width: 20px;
   padding: 2px 5px;
   border-radius: 9px;
@@ -8519,6 +8534,7 @@ html[data-theme="light"] .document-actions-separator {
 .model-settings-group > button {
   width: 100%;
   min-height: 58px;
+  max-height: 58px;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -8528,7 +8544,53 @@ html[data-theme="light"] .document-actions-separator {
   background: transparent;
   color: #708983;
   cursor: pointer;
+  overflow: hidden;
   text-align: left;
+  transition:
+    max-height 240ms ease,
+    min-height 240ms ease,
+    padding 240ms ease,
+    border-color 240ms ease,
+    opacity 180ms ease,
+    visibility 0s linear 0s;
+}
+
+.model-settings-group-toggle > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: #52706a;
+  transition: transform 220ms ease;
+}
+
+.model-settings-group.is-collapsed .model-settings-group-toggle > svg {
+  transform: rotate(-90deg);
+}
+
+.model-settings-group.is-collapsed > button {
+  min-height: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    max-height 240ms ease,
+    min-height 240ms ease,
+    padding 240ms ease,
+    border-color 240ms ease,
+    opacity 180ms ease,
+    visibility 0s linear 240ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-settings-group > button,
+  .model-settings-group-toggle > svg {
+    transition-duration: 0s;
+    transition-delay: 0s;
+  }
 }
 
 .model-settings-group > button:hover {
@@ -8855,6 +8917,7 @@ html[data-theme="light"] :is(
   .model-settings-loading svg,
   .model-settings-empty > svg,
   .model-settings-search svg,
+  .model-settings-group-toggle > svg,
   .model-settings-group > button > svg
 ) {
   color: var(--muted);
@@ -8895,6 +8958,7 @@ html[data-theme="light"] .model-settings-group > header {
   background: var(--surface-active);
 }
 
+html[data-theme="light"] .model-settings-group-toggle,
 html[data-theme="light"] .model-settings-group > header small,
 html[data-theme="light"] .model-settings-group > button small,
 html[data-theme="light"] .model-settings-detail > header small,
@@ -8905,16 +8969,23 @@ html[data-theme="light"] .model-settings-sources {
   color: var(--muted);
 }
 
-html[data-theme="light"] .model-settings-group > header strong,
-html[data-theme="light"] .model-settings-group > header small,
+html[data-theme="light"] .model-settings-group-toggle strong,
 html[data-theme="light"] .model-group-icon {
   color: var(--text);
 }
 
-html[data-theme="light"] .model-settings-group > header > em {
+html[data-theme="light"] .model-settings-group-toggle > em {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
+}
+
+html[data-theme="light"] .model-settings-group-toggle:hover {
+  background: var(--surface-hover);
+}
+
+html[data-theme="light"] .model-settings-group.is-collapsed > button {
+  border-top-color: transparent;
 }
 
 html[data-theme="light"] .model-settings-detail > header > em {
