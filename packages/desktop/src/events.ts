@@ -334,6 +334,7 @@ export function applyGatewayEvent(
     case "stream_text":
       return {
         ...state,
+        error: null,
         busy: true,
         runStartedAt: state.runStartedAt ?? now,
         currentStep: state.currentStep?.kind === "response"
@@ -348,6 +349,7 @@ export function applyGatewayEvent(
     case "thinking":
       return {
         ...state,
+        error: null,
         busy: true,
         runStartedAt: state.runStartedAt ?? now,
         currentStep: state.currentStep?.kind === "thinking"
@@ -362,6 +364,7 @@ export function applyGatewayEvent(
     case "tool_use":
       return {
         ...state,
+        error: null,
         busy: true,
         runStartedAt: state.runStartedAt ?? now,
         currentStep: { kind: "tool", label: event.tool_name ?? "执行工具", startedAt: now },

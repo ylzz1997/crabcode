@@ -1752,7 +1752,7 @@ async def query_loop(
                             # assistant response; discard IDs from an older turn.
                             if candidate.tool_use_id in expected_ids:
                                 buffered_permission_responses[candidate.tool_use_id] = candidate
-                    except asyncio.CancelledError:
+                    except (asyncio.CancelledError, GeneratorExit):
                         interrupted = _append_missing_tool_results(
                             messages,
                             tool_use_blocks,
@@ -1818,7 +1818,7 @@ async def query_loop(
                     else:
                         # Mid-execution event (e.g. ChoiceRequestEvent)
                         yield item
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, GeneratorExit):
                 # A user interrupt or session shutdown can cancel a tool task
                 # after the assistant call was committed but before its result
                 # reached the projection. Close every remaining call so a

@@ -326,6 +326,8 @@ async def _iter_sse_payloads(
         # A few compatible gateways return one JSON object per line while
         # still advertising a streaming response. Treat it as a response
         # payload instead of silently dropping it and reporting an empty turn.
+        if line == "[DONE]":
+            continue
         if line.startswith(("{", "[")):
             yield current_event or "", parse_payload(line)
             current_event = None
@@ -590,6 +592,16 @@ class CodexAdapter(APIAdapter):
                         yield StreamChunk(
                             type="error",
                             error=safe_utf8_str(error_msg),
+                        )
+
+                    elif _response_error_message(payload):
+                        # Some proxies wrap an error in a non-standard SSE
+                        # event name. Preserve the payload instead of
+                        # reducing it to a generic empty-stream failure.
+                        saw_terminal_event = True
+                        yield StreamChunk(
+                            type="error",
+                            error=_response_error_message(payload) or "Unknown error",
                         )
 
                 if not saw_terminal_event:
