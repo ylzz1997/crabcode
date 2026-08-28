@@ -8462,7 +8462,7 @@ html[data-theme="light"] .document-actions-separator {
   font-size: 12px;
 }
 
-.model-settings-empty span {
+.model-settings-empty > span {
   color: #6d857f;
 }
 
