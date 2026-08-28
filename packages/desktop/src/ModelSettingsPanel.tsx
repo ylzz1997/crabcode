@@ -43,6 +43,14 @@ interface ModelGroupView {
   models: ModelSettingsEntry[];
 }
 
+const FORMAT_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "anthropic", label: "Anthropic Messages (/v1/messages)" },
+  { value: "openai", label: "Chat Completions (/chat/completions)" },
+  { value: "codex", label: "Responses (/responses)" },
+];
+
+const FORMAT_LABELS = new Map(FORMAT_OPTIONS.map((option) => [option.value, option.label]));
+
 const DETAIL_FIELDS: Array<{ key: string; label: string }> = [
   { key: "provider", label: "Provider" },
   { key: "model", label: "模型 ID" },
@@ -63,12 +71,12 @@ const EDIT_FIELDS: Array<{
   key: string;
   label: string;
   type?: "number" | "boolean" | "select" | "json";
-  options?: string[];
+  options?: Array<string | { value: string; label: string }>;
 }> = [
   { key: "provider", label: "Provider" },
   { key: "model", label: "模型 ID" },
   { key: "base_url", label: "Base URL" },
-  { key: "format", label: "API 格式" },
+  { key: "format", label: "API 格式", type: "select", options: FORMAT_OPTIONS },
   { key: "api_key_env", label: "API Key 环境变量" },
   { key: "codex_auth_path", label: "Codex 认证文件" },
   { key: "reasoning_effort", label: "推理强度", type: "select", options: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] },
@@ -106,6 +114,14 @@ function valueText(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function optionValue(option: string | { value: string; label: string }): string {
+  return typeof option === "string" ? option : option.value;
+}
+
+function optionLabel(option: string | { value: string; label: string }): string {
+  return typeof option === "string" ? option : option.label;
 }
 
 function compactPath(path: string): string {
@@ -180,10 +196,12 @@ function DetailOrigin({ model, groupConfig }: {
         const hasEffectiveValue = Object.prototype.hasOwnProperty.call(model.effective, key)
           && model.effective[key] !== null
           && model.effective[key] !== "";
+        const displayValue = valueText(model.effective[key]);
+        const shownValue = key === "format" && FORMAT_LABELS.has(displayValue) ? FORMAT_LABELS.get(displayValue) : displayValue;
         return (
           <div className="model-detail-field" key={key}>
             <span>{label}</span>
-            <strong title={valueText(model.effective[key])}>{valueText(model.effective[key])}</strong>
+            <strong title={displayValue}>{shownValue}</strong>
             <small className={configured ? "override" : inherited ? "inherited" : "default"}>
               {configured ? "模型覆盖" : inherited ? `继承 ${model.group}` : hasEffectiveValue ? "默认值" : "未配置"}
             </small>
@@ -348,7 +366,12 @@ function ModelSettingsEditor({
                     <span>{field.label}</span>
                     <select value={typeof value === "string" ? value : ""} onChange={(event) => setValue(field.key, event.target.value)}>
                       <option value="">未设置</option>
-                      {field.options?.map((option) => <option value={option} key={option}>{option}</option>)}
+                      {field.options?.map((option) => (
+                        <option value={optionValue(option)} key={optionValue(option)}>{optionLabel(option)}</option>
+                      ))}
+                      {typeof value === "string" && value !== "" && !field.options?.some((option) => optionValue(option) === value) && (
+                        <option value={value}>{value}</option>
+                      )}
                     </select>
                   </label>
                 );
