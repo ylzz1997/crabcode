@@ -4,6 +4,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_os = "macos"))]
+use tauri::Manager;
+
 const KEYRING_SERVICE: &str = "io.crabcode.desktop";
 
 fn settings_path() -> Result<PathBuf, String> {
