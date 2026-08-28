@@ -16,6 +16,7 @@ import type {
   DocumentCapabilities,
   GatewayViewState,
   ModelSettingsResponse,
+  RuntimeSettingsResponse,
 } from "./types";
 
 const settings: DesktopSettings = {
@@ -118,6 +119,8 @@ describe("settings search", () => {
     expect(filterSettingsSections("最大标签数").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("并行请求").map((section) => section.id)).toEqual(["document"]);
     expect(filterSettingsSections("显示原文").map((section) => section.id)).toEqual(["document"]);
+    expect(filterSettingsSections("快照").map((section) => section.id)).toEqual(["runtime"]);
+    expect(filterSettingsSections("额外工具").map((section) => section.id)).toEqual(["runtime"]);
     expect(filterSettingsSections("Provider").map((section) => section.id)).toEqual(["models"]);
     expect(filterSettingsSections("配置组").map((section) => section.id)).toEqual(["models"]);
     expect(filterSettingsSections("Yuri Head").map((section) => section.id)).toEqual(["about"]);
@@ -162,6 +165,7 @@ describe("SettingsView", () => {
     onNewConnection: vi.fn(),
     onEditConnection: vi.fn(),
     onDeleteConnection: vi.fn(),
+    onMutateRuntimeSettings: vi.fn().mockResolvedValue(undefined),
     onNewProject: vi.fn(),
     onEditProject: vi.fn(),
   });
@@ -398,6 +402,52 @@ describe("SettingsView", () => {
     act(() => renderSettings("installing-remounted", "install", installingProgress));
     expect(container.querySelector('[role="progressbar"]')?.textContent).toContain("36%");
     expect(container.textContent).toContain("正在安装…");
+  });
+
+  it("edits remote snapshot settings and extra tools by configuration layer", async () => {
+    const handlers = callbacks();
+    const runtimeSettings: RuntimeSettingsResponse = {
+      cwd: "/work/crabcode",
+      snapshot_enabled: true,
+      snapshot_max_size_mb: 1024,
+      extra_tools: ["pkg.UserTool"],
+      extra_tools_by_source: { userSettings: ["pkg.UserTool"] },
+      sources: ["/Users/test/.crabcode/settings.json"],
+      warnings: [],
+      editable_sources: [
+        { id: "userSettings", label: "用户配置", path: "/Users/test/.crabcode/settings.json", exists: true, writable: true },
+        { id: "projectSettings", label: "项目配置", path: "/work/crabcode/.crabcode/settings.json", exists: false, writable: true },
+      ],
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    act(() => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="runtime"
+        onSectionChange={vi.fn()}
+        runtimeSettings={runtimeSettings}
+        onRefreshRuntimeSettings={vi.fn()}
+      />,
+    ));
+
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="启用文件快照"]')!.click());
+    const size = container.querySelector<HTMLInputElement>('[aria-label="快照最大大小（MiB）"]')!;
+    act(() => changeInput(size, "2048"));
+    await act(async () => size.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    const toolInput = container.querySelector<HTMLInputElement>('[aria-label="额外工具导入路径"]')!;
+    act(() => changeInput(toolInput, "pkg.ProjectTool"));
+    await act(async () => toolInput.form?.requestSubmit());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="移除额外工具 pkg.UserTool"]')!.click());
+
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_snapshot", snapshot_enabled: false, source: "projectSettings" }));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_snapshot", snapshot_max_size_mb: 2048, source: "projectSettings" }));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "add_extra_tool", tool_path: "pkg.ProjectTool", source: "projectSettings" }));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "remove_extra_tool", tool_path: "pkg.UserTool", source: "userSettings" }));
+    confirm.mockRestore();
   });
 
   it("shows a host-side command instead of remote execution for remote gateways", () => {

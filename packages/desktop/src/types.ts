@@ -480,6 +480,31 @@ export interface ModelSettingsMutation {
   remove_fields?: string[];
 }
 
+export interface RuntimeSettingsResponse {
+  cwd: string;
+  snapshot_enabled: boolean;
+  snapshot_max_size_mb: number;
+  extra_tools: string[];
+  extra_tools_by_source: Record<string, string[]>;
+  sources: string[];
+  warnings: string[];
+  editable_sources?: ModelSettingsSource[];
+}
+
+export type RuntimeSettingsMutationAction =
+  | "set_snapshot"
+  | "add_extra_tool"
+  | "remove_extra_tool";
+
+export interface RuntimeSettingsMutation {
+  action: RuntimeSettingsMutationAction;
+  source: ModelSettingsSource["id"];
+  cwd?: string;
+  snapshot_enabled?: boolean;
+  snapshot_max_size_mb?: number;
+  tool_path?: string;
+}
+
 export interface GoalInfo {
   objective: string;
   status: "active" | "paused" | "complete" | "blocked";

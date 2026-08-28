@@ -31,6 +31,10 @@ The Models settings section queries the active Gateway for raw named-model
 fields, group inheritance, and effective configuration, and can create, edit,
 delete, or set the default model in the selected user, project, or local
 settings layer.
+The Runtime & Tools settings section edits remote file-snapshot behavior and
+the `extra_tools` import-path list in the selected layer. Disabling file
+snapshots does not disable conversation checkpoints; changes apply to new or
+reconnected sessions.
 
 ## Build and test
 

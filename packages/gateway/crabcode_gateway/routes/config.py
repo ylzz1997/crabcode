@@ -26,6 +26,8 @@ from crabcode_gateway.schemas import (
     ModelSettingsMutationRequest,
     ModelSettingsResponse,
     ModelSettingsSource,
+    RuntimeSettingsMutationRequest,
+    RuntimeSettingsResponse,
     SetPermissionModeRequest,
     SetReasoningEffortRequest,
     SetUltraModeRequest,
@@ -305,6 +307,83 @@ def _model_settings_from_files(cwd: str) -> ModelSettingsResponse:
     )
 
 
+def _runtime_settings_from_files(cwd: str) -> RuntimeSettingsResponse:
+    """Read effective snapshot and extra-tool settings by configuration layer."""
+    from crabcode_core.config.manager import SETTING_SOURCES
+    from crabcode_core.types.config import CrabCodeSettings
+    from pydantic import ValidationError
+
+    manager = ConfigManager(cwd=cwd)
+    merged: dict[str, Any] = {}
+    sources: list[str] = []
+    extra_tools_by_source: dict[str, list[str]] = {}
+
+    for source_name in SETTING_SOURCES:
+        raw = manager.get_settings_for_source(source_name)
+        if raw is None:
+            continue
+        relevant = {
+            key: raw[key]
+            for key in ("snapshot", "extra_tools")
+            if key in raw
+        }
+        if not relevant:
+            continue
+        source_path = manager.settings_file_paths.get(source_name)
+        if source_path:
+            sources.append(source_path)
+        raw_tools = raw.get("extra_tools")
+        if isinstance(raw_tools, list):
+            extra_tools_by_source[source_name] = [
+                item for item in raw_tools if isinstance(item, str)
+            ]
+        merged = _merge_model_settings(merged, relevant)
+
+    try:
+        settings = CrabCodeSettings.model_validate(merged)
+    except ValidationError as exc:
+        messages = []
+        for error in exc.errors(include_input=False, include_url=False)[:5]:
+            location = ".".join(str(part) for part in error.get("loc", ()))
+            message = str(error.get("msg", "invalid value"))
+            messages.append(f"{location}: {message}" if location else message)
+        raise HTTPException(
+            status_code=422,
+            detail="运行与工具配置无效：" + "; ".join(messages),
+        ) from exc
+
+    editable_sources = []
+    for source_name, label in (
+        ("userSettings", "用户配置"),
+        ("projectSettings", "项目配置"),
+        ("localSettings", "项目本地配置"),
+    ):
+        source_path = manager.settings_file_paths.get(source_name)
+        if not source_path:
+            continue
+        path = Path(source_path)
+        editable_sources.append(
+            ModelSettingsSource(
+                id=source_name,
+                label=label,
+                path=str(path),
+                exists=path.is_file(),
+                writable=_is_writable_settings_path(path),
+            )
+        )
+
+    return RuntimeSettingsResponse(
+        cwd=cwd,
+        snapshot_enabled=settings.snapshot.enabled,
+        snapshot_max_size_mb=settings.snapshot.max_size_mb,
+        extra_tools=list(settings.extra_tools),
+        extra_tools_by_source=extra_tools_by_source,
+        sources=sources,
+        warnings=[],
+        editable_sources=editable_sources,
+    )
+
+
 def _resolve_model_settings_cwd(request: Request, cwd: str | None) -> str:
     resolved_cwd = os.getcwd()
     if cwd:
@@ -475,6 +554,64 @@ def _mutate_model_settings(request: Request, req: ModelSettingsMutationRequest) 
     return _model_settings_from_files(cwd)
 
 
+def _validate_extra_tool_path(tool_path: str | None) -> str:
+    if not tool_path or not tool_path.strip():
+        raise HTTPException(status_code=400, detail="tool_path is required")
+    value = tool_path.strip()
+    if any(char.isspace() for char in value) or len(value) > 240:
+        raise HTTPException(status_code=400, detail="tool_path must be a compact import path")
+    return value
+
+
+def _mutate_runtime_settings(
+    request: Request,
+    req: RuntimeSettingsMutationRequest,
+) -> RuntimeSettingsResponse:
+    cwd = _resolve_model_settings_cwd(request, req.cwd)
+    path = _settings_mutation_path(cwd, req.source)
+    current = _read_settings_object(path)
+
+    if req.action == "set_snapshot":
+        snapshot = current.get("snapshot")
+        if snapshot is None:
+            snapshot = {}
+            current["snapshot"] = snapshot
+        if not isinstance(snapshot, dict):
+            raise HTTPException(status_code=422, detail="snapshot must be a JSON object")
+        if req.snapshot_enabled is not None:
+            snapshot["enabled"] = req.snapshot_enabled
+        if req.snapshot_max_size_mb is not None:
+            snapshot["max_size_mb"] = req.snapshot_max_size_mb
+        try:
+            from crabcode_core.types.config import SnapshotSettings
+
+            SnapshotSettings.model_validate(snapshot)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"快照配置无效：{exc}") from exc
+    else:
+        tool_path = _validate_extra_tool_path(req.tool_path)
+        extra_tools = current.get("extra_tools")
+        if extra_tools is None:
+            extra_tools = []
+            current["extra_tools"] = extra_tools
+        if (
+            not isinstance(extra_tools, list)
+            or any(not isinstance(item, str) for item in extra_tools)
+        ):
+            raise HTTPException(status_code=422, detail="extra_tools must be a list of import paths")
+        if req.action == "add_extra_tool":
+            if tool_path not in extra_tools:
+                extra_tools.append(tool_path)
+        else:
+            extra_tools[:] = [item for item in extra_tools if item != tool_path]
+            if not extra_tools:
+                current.pop("extra_tools", None)
+
+    _atomic_write_settings(path, current)
+    ConfigManager(cwd=cwd).reset_cache()
+    return _runtime_settings_from_files(cwd)
+
+
 @router.get("/config/models", response_model=list[ModelInfo])
 async def list_models(
     request: Request,
@@ -533,6 +670,29 @@ async def mutate_model_settings(
         request.app.state.model_settings_lock = lock
     async with lock:
         return _mutate_model_settings(request, req)
+
+
+@router.get("/config/runtime-settings", response_model=RuntimeSettingsResponse)
+async def get_runtime_settings(
+    request: Request,
+    cwd: str | None = None,
+) -> RuntimeSettingsResponse:
+    """Inspect snapshot and extra-tool settings and available mutation layers."""
+    return _runtime_settings_from_files(_resolve_model_settings_cwd(request, cwd))
+
+
+@router.post("/config/runtime-settings", response_model=RuntimeSettingsResponse)
+async def mutate_runtime_settings(
+    req: RuntimeSettingsMutationRequest,
+    request: Request,
+) -> RuntimeSettingsResponse:
+    """Update snapshot or extra-tool settings in a selected layer."""
+    lock = getattr(request.app.state, "model_settings_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        request.app.state.model_settings_lock = lock
+    async with lock:
+        return _mutate_runtime_settings(request, req)
 
 
 @router.post("/config/switch-model")

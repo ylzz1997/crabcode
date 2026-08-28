@@ -22,10 +22,12 @@ import {
   Trash2,
   Upload,
   WifiOff,
+  Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ModelSettingsPanel } from "./ModelSettingsPanel";
+import { RuntimeSettingsPanel } from "./RuntimeSettingsPanel";
 import { composerModifierLabel } from "./ComposerEditor";
 import { ThemeRegistry, resolveActiveTheme } from "./theme";
 import {
@@ -53,6 +55,8 @@ import type {
   GatewayViewState,
   ModelSettingsMutation,
   ModelSettingsResponse,
+  RuntimeSettingsMutation,
+  RuntimeSettingsResponse,
   ProjectPreset,
   ThemeMode,
   ThemePreset,
@@ -62,7 +66,7 @@ import type {
 } from "./types";
 import desktopPackage from "../package.json";
 
-export type SettingsSectionId = "general" | "appearance" | "document" | "connections" | "models" | "projects" | "about";
+export type SettingsSectionId = "general" | "appearance" | "document" | "runtime" | "connections" | "models" | "projects" | "about";
 
 interface SettingsSectionDefinition {
   id: SettingsSectionId;
@@ -89,6 +93,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     title: "文档",
     description: "文档翻译请求与批处理设置",
     searchText: "文档 翻译 原文 显示原文 复制 并行请求 并行 请求 批次 Block 数 单次请求 批大小",
+  },
+  {
+    id: "runtime",
+    title: "运行与工具",
+    description: "文件快照与额外工具配置",
+    searchText: "运行 快照 文件快照 checkpoint 检查点 snapshot 最大大小 启用 额外工具 extra tools import path 工具",
   },
   {
     id: "connections",
@@ -130,6 +140,7 @@ const SECTION_ICONS = {
   general: SlidersHorizontal,
   appearance: Paintbrush,
   document: FileText,
+  runtime: Wrench,
   connections: Server,
   models: Bot,
   projects: FolderCog,
@@ -225,6 +236,11 @@ interface SettingsViewProps {
   modelSettingsError?: string | null;
   onRefreshModelSettings?: () => void;
   onMutateModelSettings?: (mutation: ModelSettingsMutation) => Promise<void>;
+  runtimeSettings?: RuntimeSettingsResponse | null;
+  runtimeSettingsLoading?: boolean;
+  runtimeSettingsError?: string | null;
+  onRefreshRuntimeSettings?: () => void;
+  onMutateRuntimeSettings?: (mutation: RuntimeSettingsMutation) => Promise<void>;
   onNewProject: () => void;
   onEditProject: (project: ProjectPreset) => void;
   onDocumentWorkspaceRoot?: (connectionId: string, path: string | null) => void;
@@ -484,6 +500,11 @@ export function SettingsView({
   modelSettingsError = null,
   onRefreshModelSettings = () => {},
   onMutateModelSettings,
+  runtimeSettings = null,
+  runtimeSettingsLoading = false,
+  runtimeSettingsError = null,
+  onRefreshRuntimeSettings = () => {},
+  onMutateRuntimeSettings,
   onNewProject,
   onEditProject,
   onDocumentWorkspaceRoot,
@@ -1356,6 +1377,19 @@ export function SettingsView({
                   </div>
                 </div>
               </section>
+            )}
+
+            {activeSection === "runtime" && (
+              <RuntimeSettingsPanel
+                activeConnection={activeConnection}
+                activeProject={activeProject}
+                gateway={activeGateway}
+                data={runtimeSettings}
+                loading={runtimeSettingsLoading}
+                error={runtimeSettingsError}
+                onRefresh={onRefreshRuntimeSettings}
+                onMutate={onMutateRuntimeSettings}
+              />
             )}
 
             {activeSection === "connections" && (

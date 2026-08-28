@@ -152,6 +152,8 @@ import type {
   GatewayViewState,
   ModelSettingsResponse,
   ModelSettingsMutation,
+  RuntimeSettingsResponse,
+  RuntimeSettingsMutation,
   ProjectPreset,
   ReasoningEffort,
   ScheduleJobInfo,
@@ -177,6 +179,12 @@ type PluginData = { skills: SkillInfo[]; tools: ToolInfo[] };
 type ModelSettingsLoadState = {
   key: string;
   data: ModelSettingsResponse | null;
+  loading: boolean;
+  error: string | null;
+};
+type RuntimeSettingsLoadState = {
+  key: string;
+  data: RuntimeSettingsResponse | null;
   loading: boolean;
   error: string | null;
 };
@@ -708,6 +716,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("general");
   const [modelSettingsState, setModelSettingsState] = useState<ModelSettingsLoadState | null>(null);
+  const [runtimeSettingsState, setRuntimeSettingsState] = useState<RuntimeSettingsLoadState | null>(null);
   const [connectionModal, setConnectionModal] = useState<"new" | string | null>(null);
   const [checkpointModal, setCheckpointModal] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -919,6 +928,48 @@ function App() {
           }
         : current);
     }
+  }, []);
+
+  const refreshRuntimeSettings = useCallback(async (connectionId: string, cwd?: string) => {
+    const key = `${connectionId}\u0000${cwd ?? ""}`;
+    const api = apiRef.current.get(connectionId);
+    if (!api) {
+      setRuntimeSettingsState({ key, data: null, loading: false, error: "Gateway 尚未连接" });
+      return;
+    }
+    setRuntimeSettingsState((current) => ({
+      key,
+      data: current?.key === key ? current.data : null,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const data = await api.runtimeSettings(cwd);
+      setRuntimeSettingsState((current) => current?.key === key
+        ? { key, data, loading: false, error: null }
+        : current);
+    } catch (error) {
+      setRuntimeSettingsState((current) => current?.key === key
+        ? {
+            key,
+            data: current.data,
+            loading: false,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        : current);
+    }
+  }, []);
+
+  const mutateRuntimeSettings = useCallback(async (
+    connectionId: string,
+    mutation: RuntimeSettingsMutation,
+  ) => {
+    const api = apiRef.current.get(connectionId);
+    if (!api) throw new Error("Gateway 尚未连接");
+    const data = await api.mutateRuntimeSettings(mutation);
+    const cwd = mutation.cwd ?? "";
+    const key = `${connectionId}\u0000${cwd}`;
+    setRuntimeSettingsState({ key, data, loading: false, error: null });
   }, []);
 
   const mutateModelSettings = useCallback(async (
@@ -1814,6 +1865,23 @@ function App() {
     activeGateway?.status,
     activeProject?.path,
     refreshModelSettings,
+    settingsOpen,
+    settingsSection,
+  ]);
+
+  useEffect(() => {
+    if (
+      !settingsOpen
+      || settingsSection !== "runtime"
+      || !activeConnection
+      || activeGateway?.status !== "online"
+    ) return;
+    void refreshRuntimeSettings(activeConnection.id, activeProject?.path);
+  }, [
+    activeConnection?.id,
+    activeGateway?.status,
+    activeProject?.path,
+    refreshRuntimeSettings,
     settingsOpen,
     settingsSection,
   ]);
@@ -2791,6 +2859,12 @@ function App() {
   const activeModelSettingsState = modelSettingsState?.key === activeModelSettingsKey
     ? modelSettingsState
     : null;
+  const activeRuntimeSettingsKey = activeConnection
+    ? `${activeConnection.id}\u0000${activeProject?.path ?? ""}`
+    : null;
+  const activeRuntimeSettingsState = runtimeSettingsState?.key === activeRuntimeSettingsKey
+    ? runtimeSettingsState
+    : null;
 
   return (
     <div className="app-shell">
@@ -2860,6 +2934,16 @@ function App() {
           onMutateModelSettings={(mutation) => {
             if (!activeConnection) return Promise.reject(new Error("未选择 Gateway"));
             return mutateModelSettings(activeConnection.id, mutation);
+          }}
+          runtimeSettings={activeRuntimeSettingsState?.data ?? null}
+          runtimeSettingsLoading={activeRuntimeSettingsState?.loading ?? false}
+          runtimeSettingsError={activeRuntimeSettingsState?.error ?? null}
+          onRefreshRuntimeSettings={() => {
+            if (activeConnection) void refreshRuntimeSettings(activeConnection.id, activeProject?.path);
+          }}
+          onMutateRuntimeSettings={(mutation) => {
+            if (!activeConnection) return Promise.reject(new Error("未选择 Gateway"));
+            return mutateRuntimeSettings(activeConnection.id, mutation);
           }}
           onNewProject={beginNewProject}
           onEditProject={setProjectModal}

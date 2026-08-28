@@ -230,6 +230,30 @@ class ModelSettingsMutationRequest(BaseModel):
         return self
 
 
+class RuntimeSettingsMutationRequest(BaseModel):
+    """A focused mutation for snapshot and extra-tool settings."""
+
+    action: Literal["set_snapshot", "add_extra_tool", "remove_extra_tool"]
+    source: Literal["userSettings", "projectSettings", "localSettings"] = "projectSettings"
+    cwd: str | None = None
+    snapshot_enabled: bool | None = None
+    snapshot_max_size_mb: int | None = Field(default=None, ge=1, le=1_048_576)
+    tool_path: str | None = None
+
+    @model_validator(mode="after")
+    def validate_mutation(self) -> "RuntimeSettingsMutationRequest":
+        if self.action == "set_snapshot":
+            if self.snapshot_enabled is None and self.snapshot_max_size_mb is None:
+                raise ValueError("snapshot_enabled or snapshot_max_size_mb is required")
+        else:
+            if self.tool_path is None or not self.tool_path.strip():
+                raise ValueError("tool_path is required for extra tool mutations")
+            self.tool_path = self.tool_path.strip()
+            if len(self.tool_path) > 240:
+                raise ValueError("tool_path is too long")
+        return self
+
+
 class GoalRequest(BaseModel):
     action: Literal[
         "set", "edit", "pause", "resume", "complete", "blocked", "clear"
@@ -919,6 +943,19 @@ class ModelSettingsResponse(BaseModel):
     sources: list[str] = Field(default_factory=list)
     groups: dict[str, dict[str, Any]] = Field(default_factory=dict)
     models: list[ModelSettingsEntry] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    editable_sources: list[ModelSettingsSource] = Field(default_factory=list)
+
+
+class RuntimeSettingsResponse(BaseModel):
+    """Effective snapshot and extra-tool settings visible from a workspace."""
+
+    cwd: str
+    snapshot_enabled: bool = True
+    snapshot_max_size_mb: int = 1024
+    extra_tools: list[str] = Field(default_factory=list)
+    extra_tools_by_source: dict[str, list[str]] = Field(default_factory=dict)
+    sources: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     editable_sources: list[ModelSettingsSource] = Field(default_factory=list)
 

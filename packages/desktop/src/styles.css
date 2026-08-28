@@ -11478,6 +11478,241 @@ html[data-theme="light"] .model-detail-field > small.default {
   border-top: 1px solid var(--border-soft);
 }
 
+/* Remote Gateway runtime and extra-tool settings. */
+.runtime-settings-section {
+  color: var(--text);
+}
+
+.runtime-context-bar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.runtime-context-bar svg {
+  width: 13px;
+  height: 13px;
+  vertical-align: -3px;
+}
+
+.runtime-context-bar strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.runtime-context-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--border-soft);
+}
+
+.runtime-source-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.runtime-source-picker select {
+  max-width: 180px;
+  height: 27px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.runtime-settings-group + .runtime-settings-group {
+  margin-top: 14px;
+}
+
+.runtime-settings-group .settings-row+.settings-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.settings-subsection-heading {
+  min-height: 48px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 16px 9px;
+}
+
+.settings-subsection-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-subsection-heading p {
+  max-width: 580px;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.settings-subsection-heading > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.runtime-tool-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.runtime-tool-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px 13px;
+}
+
+.runtime-tool-form input {
+  min-width: 0;
+  height: 34px;
+  flex: 1;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: 0;
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--code-font-family);
+  font-size: 11px;
+}
+
+.runtime-tool-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.runtime-tool-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0 16px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.runtime-tool-row {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.runtime-tool-row code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--code-font-family);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-tool-row small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.runtime-tool-empty,
+.runtime-settings-note {
+  padding: 12px 16px 14px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.runtime-settings-note {
+  padding-top: 9px;
+  line-height: 1.45;
+}
+
+.runtime-settings-sources {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 9px;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.runtime-settings-sources code {
+  max-width: 65%;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--code-font-family);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .runtime-context-bar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .runtime-source-picker {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .runtime-source-picker select {
+    flex: 1;
+  }
+
+  .runtime-tool-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .runtime-tool-form .settings-command {
+    width: 100%;
+  }
+
+  .runtime-tool-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 10px 0;
+  }
+
+  .runtime-tool-row code {
+    flex-basis: calc(100% - 38px);
+  }
+
+  .runtime-tool-row small {
+    flex-basis: calc(100% - 38px);
+    padding-left: 1px;
+  }
+}
+
 .settings-switch {
   width: 40px;
   height: 23px;

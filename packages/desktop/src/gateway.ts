@@ -14,6 +14,8 @@ import type {
   GoalState,
   ModelSettingsResponse,
   ModelSettingsMutation,
+  RuntimeSettingsResponse,
+  RuntimeSettingsMutation,
   ReasoningEffort,
   ScheduleJobInfo,
   SessionInfo,
@@ -336,6 +338,18 @@ export class GatewayApi {
 
   mutateModelSettings(mutation: ModelSettingsMutation): Promise<ModelSettingsResponse> {
     return this.request("/config/model-settings", {
+      method: "POST",
+      body: JSON.stringify(mutation),
+    });
+  }
+
+  runtimeSettings(cwd?: string): Promise<RuntimeSettingsResponse> {
+    const query = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+    return this.request(`/config/runtime-settings${query}`);
+  }
+
+  mutateRuntimeSettings(mutation: RuntimeSettingsMutation): Promise<RuntimeSettingsResponse> {
+    return this.request("/config/runtime-settings", {
       method: "POST",
       body: JSON.stringify(mutation),
     });
