@@ -27,8 +27,10 @@ from localhost must also be allowed by the Gateway's `--cors` setting.
 
 Tauri writes non-secret UI state to `~/.crabcode/settings_desktop.json`.
 Gateway model and tool settings continue to use the normal `settings.json`.
-The Models settings section is read-only: it queries the active Gateway for
-the raw named-model fields, group inheritance, and effective configuration.
+The Models settings section queries the active Gateway for raw named-model
+fields, group inheritance, and effective configuration, and can create, edit,
+delete, or set the default model in the selected user, project, or local
+settings layer.
 
 ## Build and test
 

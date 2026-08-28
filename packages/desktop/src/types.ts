@@ -451,6 +451,33 @@ export interface ModelSettingsResponse {
   groups: Record<string, Record<string, unknown>>;
   models: ModelSettingsEntry[];
   warnings: string[];
+  editable_sources?: ModelSettingsSource[];
+}
+
+export type ModelSettingsMutationAction =
+  | "upsert_model"
+  | "delete_model"
+  | "upsert_group"
+  | "delete_group"
+  | "set_default_model"
+  | "clear_default_model";
+
+export interface ModelSettingsSource {
+  id: "userSettings" | "projectSettings" | "localSettings";
+  label: string;
+  path: string;
+  exists: boolean;
+  writable: boolean;
+}
+
+export interface ModelSettingsMutation {
+  action: ModelSettingsMutationAction;
+  source: ModelSettingsSource["id"];
+  cwd?: string;
+  name?: string;
+  previous_name?: string;
+  config?: Record<string, unknown>;
+  remove_fields?: string[];
 }
 
 export interface GoalInfo {

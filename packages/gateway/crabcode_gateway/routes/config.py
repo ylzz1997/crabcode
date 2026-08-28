@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import stat
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,9 @@ from crabcode_gateway.schemas import (
     GoalState,
     ModelInfo,
     ModelSettingsEntry,
+    ModelSettingsMutationRequest,
     ModelSettingsResponse,
+    ModelSettingsSource,
     SetPermissionModeRequest,
     SetReasoningEffortRequest,
     SetUltraModeRequest,
@@ -150,6 +153,17 @@ def _merge_model_settings(base: dict[str, Any], override: dict[str, Any]) -> dic
     """Merge model settings with the same nested-object semantics as ConfigManager."""
     result = dict(base)
     for key, value in override.items():
+        normalized_key = str(key).lower().replace("-", "_")
+        if (
+            value == "[redacted]"
+            and not normalized_key.endswith("_env")
+            and not normalized_key.endswith("_path")
+            and any(part in normalized_key for part in _SENSITIVE_CONFIG_KEYS)
+        ):
+            # GET responses redact secrets. Treating that marker as an update
+            # would destroy the original credential during an otherwise
+            # unrelated edit, including nested headers/extra_body objects.
+            continue
         current = result.get(key)
         if isinstance(current, dict) and isinstance(value, dict):
             result[key] = _merge_model_settings(current, value)
@@ -185,6 +199,13 @@ def _redact_model_settings(value: Any, key: str = "") -> Any:
     if isinstance(value, list):
         return [_redact_model_settings(child) for child in value]
     return value
+
+
+def _is_writable_settings_path(path: Path) -> bool:
+    candidate = path
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    return os.access(candidate, os.W_OK)
 
 
 def _model_settings_from_files(cwd: str) -> ModelSettingsResponse:
@@ -253,6 +274,26 @@ def _model_settings_from_files(cwd: str) -> ModelSettingsResponse:
     if settings.default_model and settings.default_model not in raw_models:
         warnings.append(f"默认模型“{settings.default_model}”不存在")
 
+    editable_sources = []
+    for source_name, label in (
+        ("userSettings", "用户配置"),
+        ("projectSettings", "项目配置"),
+        ("localSettings", "项目本地配置"),
+    ):
+        source_path = manager.settings_file_paths.get(source_name)
+        if not source_path:
+            continue
+        path = Path(source_path)
+        editable_sources.append(
+            ModelSettingsSource(
+                id=source_name,
+                label=label,
+                path=str(path),
+                exists=path.is_file(),
+                writable=_is_writable_settings_path(path),
+            )
+        )
+
     return ModelSettingsResponse(
         cwd=cwd,
         default_model=settings.default_model,
@@ -260,7 +301,178 @@ def _model_settings_from_files(cwd: str) -> ModelSettingsResponse:
         groups=_redact_model_settings(raw_groups),
         models=entries,
         warnings=warnings,
+        editable_sources=editable_sources,
     )
+
+
+def _resolve_model_settings_cwd(request: Request, cwd: str | None) -> str:
+    resolved_cwd = os.getcwd()
+    if cwd:
+        from crabcode_gateway.routes.workspace import _resolve_directory, _workspace_roots
+
+        resolved_cwd = str(_resolve_directory(cwd, _workspace_roots(request)))
+    return resolved_cwd
+
+
+def _validate_model_settings_name(name: str | None) -> str:
+    if not name or not name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    value = name.strip()
+    if value in {".", ".."} or any(char in value for char in "/\\"):
+        raise HTTPException(status_code=400, detail="name must be a simple configuration name")
+    if len(value) > 120:
+        raise HTTPException(status_code=400, detail="name is too long")
+    return value
+
+
+def _settings_mutation_path(cwd: str, source: str) -> Path:
+    manager = ConfigManager(cwd=cwd)
+    path_str = manager.settings_file_paths.get(source)
+    if not path_str or source in {"flagSettings", "policySettings"}:
+        raise HTTPException(status_code=400, detail="settings source is not writable")
+    path = Path(path_str)
+    # Project layers must remain inside the selected workspace. User settings
+    # intentionally live in the Gateway user's home directory.
+    if source in {"projectSettings", "localSettings"}:
+        expected_parent = (Path(cwd).resolve() / ".crabcode").resolve()
+        try:
+            path.parent.resolve().relative_to(expected_parent)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="settings source is outside the workspace") from exc
+    return path
+
+
+def _read_settings_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(errors="replace"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(status_code=422, detail="settings file is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail="settings file must contain a JSON object")
+    return value
+
+
+def _atomic_write_settings(path: Path, value: dict[str, Any]) -> None:
+    payload = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    temporary: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists():
+            temporary.chmod(stat.S_IMODE(path.stat().st_mode))
+        os.replace(temporary, path)
+    except OSError as exc:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise HTTPException(status_code=403, detail="settings file is not writable") from exc
+
+
+def _mutate_model_settings(request: Request, req: ModelSettingsMutationRequest) -> ModelSettingsResponse:
+    cwd = _resolve_model_settings_cwd(request, req.cwd)
+    path = _settings_mutation_path(cwd, req.source)
+    current = _read_settings_object(path)
+    action = req.action
+
+    if action in {"upsert_model", "delete_model"}:
+        name = _validate_model_settings_name(req.name)
+        models = current.get("models")
+        if models is None:
+            models = {}
+            current["models"] = models
+        if not isinstance(models, dict):
+            raise HTTPException(status_code=422, detail="models must be a JSON object")
+        if action == "delete_model":
+            models.pop(name, None)
+            if not models:
+                current.pop("models", None)
+            if current.get("default_model") == name:
+                current["default_model"] = None
+        else:
+            config = req.config or {}
+            if not isinstance(config, dict):
+                raise HTTPException(status_code=422, detail="model config must be a JSON object")
+            existing = models.get(name, {})
+            if not isinstance(existing, dict):
+                existing = {}
+            merged = _merge_model_settings(existing, config)
+            for field_name in req.remove_fields:
+                if isinstance(field_name, str):
+                    merged.pop(field_name, None)
+            try:
+                from crabcode_core.types.config import ApiConfig
+
+                ApiConfig.model_validate(merged)
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"模型配置无效：{exc}") from exc
+            models[name] = merged
+            if req.previous_name and req.previous_name.strip() != name:
+                models.pop(_validate_model_settings_name(req.previous_name), None)
+    elif action in {"upsert_group", "delete_group"}:
+        name = _validate_model_settings_name(req.name)
+        groups = current.get("groups")
+        if groups is None:
+            groups = {}
+            current["groups"] = groups
+        if not isinstance(groups, dict):
+            raise HTTPException(status_code=422, detail="groups must be a JSON object")
+        if action == "delete_group":
+            groups.pop(name, None)
+            if not groups:
+                current.pop("groups", None)
+        else:
+            config = req.config or {}
+            existing = groups.get(name, {})
+            if not isinstance(existing, dict):
+                existing = {}
+            merged = _merge_model_settings(existing, config)
+            for field_name in req.remove_fields:
+                if isinstance(field_name, str):
+                    merged.pop(field_name, None)
+            try:
+                from crabcode_core.types.config import ApiConfig
+
+                ApiConfig.model_validate(merged)
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"配置组无效：{exc}") from exc
+            groups[name] = merged
+            if req.previous_name and req.previous_name.strip() != name:
+                previous_name = _validate_model_settings_name(req.previous_name)
+                groups.pop(previous_name, None)
+                models = current.get("models")
+                if isinstance(models, dict):
+                    for model_config in models.values():
+                        if isinstance(model_config, dict) and model_config.get("group") == previous_name:
+                            model_config["group"] = name
+    elif action == "set_default_model":
+        name = _validate_model_settings_name(req.name)
+        preview = _model_settings_from_files(cwd)
+        if not any(model.name == name for model in preview.models):
+            raise HTTPException(status_code=400, detail=f"模型“{name}”不存在")
+        current["default_model"] = name
+    elif action == "clear_default_model":
+        # Keep an explicit null in this layer so a lower-priority default does
+        # not silently become active again after the user clears it here.
+        current["default_model"] = None
+
+    _atomic_write_settings(path, current)
+    ConfigManager(cwd=cwd).reset_cache()
+    return _model_settings_from_files(cwd)
 
 
 @router.get("/config/models", response_model=list[ModelInfo])
@@ -305,13 +517,22 @@ async def get_model_settings(
     request: Request,
     cwd: str | None = None,
 ) -> ModelSettingsResponse:
-    """Inspect named model settings without exposing a mutation path."""
-    resolved_cwd = os.getcwd()
-    if cwd:
-        from crabcode_gateway.routes.workspace import _resolve_directory, _workspace_roots
+    """Inspect named model settings and available mutation layers."""
+    return _model_settings_from_files(_resolve_model_settings_cwd(request, cwd))
 
-        resolved_cwd = str(_resolve_directory(cwd, _workspace_roots(request)))
-    return _model_settings_from_files(resolved_cwd)
+
+@router.post("/config/model-settings", response_model=ModelSettingsResponse)
+async def mutate_model_settings(
+    req: ModelSettingsMutationRequest,
+    request: Request,
+) -> ModelSettingsResponse:
+    """Create, update, or remove a named model/group configuration."""
+    lock = getattr(request.app.state, "model_settings_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        request.app.state.model_settings_lock = lock
+    async with lock:
+        return _mutate_model_settings(request, req)
 
 
 @router.post("/config/switch-model")

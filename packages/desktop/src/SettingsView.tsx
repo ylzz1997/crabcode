@@ -51,6 +51,7 @@ import type {
   DocumentCapabilities,
   FileUploadMode,
   GatewayViewState,
+  ModelSettingsMutation,
   ModelSettingsResponse,
   ProjectPreset,
   ThemeMode,
@@ -98,8 +99,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   {
     id: "models",
     title: "模型",
-    description: "查询模型、配置组与最终生效参数",
-    searchText: "模型 Models Group 配置组 Provider Base URL 推理 Thinking Token 上下文 继承 默认模型 查询 刷新",
+    description: "查看并编辑模型、配置组与最终生效参数",
+    searchText: "模型 Models Group 配置组 Provider Base URL 推理 Thinking Token 上下文 继承 默认模型 查看 编辑 新增 删除 查询 刷新",
   },
   {
     id: "projects",
@@ -223,6 +224,7 @@ interface SettingsViewProps {
   modelSettingsLoading?: boolean;
   modelSettingsError?: string | null;
   onRefreshModelSettings?: () => void;
+  onMutateModelSettings?: (mutation: ModelSettingsMutation) => Promise<void>;
   onNewProject: () => void;
   onEditProject: (project: ProjectPreset) => void;
   onDocumentWorkspaceRoot?: (connectionId: string, path: string | null) => void;
@@ -481,6 +483,7 @@ export function SettingsView({
   modelSettingsLoading = false,
   modelSettingsError = null,
   onRefreshModelSettings = () => {},
+  onMutateModelSettings,
   onNewProject,
   onEditProject,
   onDocumentWorkspaceRoot,
@@ -1434,6 +1437,7 @@ export function SettingsView({
                 loading={modelSettingsLoading}
                 error={modelSettingsError}
                 onRefresh={onRefreshModelSettings}
+                onMutate={onMutateModelSettings}
               />
             )}
 

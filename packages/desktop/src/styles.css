@@ -8347,7 +8347,7 @@ html[data-theme="light"] .document-actions-separator {
   }
 }
 
-/* Read-only model catalog in Settings. */
+/* Model catalog and visual configuration editor in Settings. */
 .model-settings-section {
   --model-border: #274144;
   --model-panel: #111d20;
@@ -8356,6 +8356,35 @@ html[data-theme="light"] .document-actions-separator {
 
 .model-refresh-command {
   min-width: 92px;
+}
+
+.model-settings-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.model-source-picker {
+  min-width: 132px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: #718a84;
+  font-size: 9px;
+}
+
+.model-source-picker select {
+  max-width: 180px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid #2b494c;
+  border-radius: 5px;
+  background: #132326;
+  color: #cbd8d2;
+  font-size: 9px;
 }
 
 .model-context-bar {
@@ -8511,6 +8540,38 @@ html[data-theme="light"] .document-actions-separator {
   min-height: 57px;
   padding: 0;
   background: #132225;
+}
+
+.model-group-header-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.model-group-header-row > .model-settings-group-toggle {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-group-actions,
+.model-detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 0;
+}
+
+.model-group-actions .icon-button,
+.model-detail-actions .icon-button {
+  width: 25px;
+  height: 25px;
+  min-width: 25px;
+  padding: 0;
+}
+
+.model-group-actions svg,
+.model-detail-actions svg {
+  width: 12px;
+  height: 12px;
 }
 
 .model-settings-group-toggle {
@@ -8702,6 +8763,13 @@ html[data-theme="light"] .document-actions-separator {
   align-items: center;
   gap: 11px;
   margin-bottom: 17px;
+}
+
+.model-detail-commands {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin: -7px 0 12px;
 }
 
 .model-detail-icon {
@@ -8912,6 +8980,170 @@ html[data-theme="light"] .document-actions-separator {
   font-size: 8.5px;
 }
 
+.model-editor-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 10, 11, .72);
+}
+
+.model-editor {
+  width: min(760px, 100%);
+  max-height: min(780px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #3b5c5e;
+  border-radius: 8px;
+  background: #101d20;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .42);
+}
+
+.model-editor > header,
+.model-editor > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 15px;
+  border-bottom: 1px solid #243e41;
+}
+
+.model-editor > header > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.model-editor > header strong {
+  color: #e0ebe6;
+  font-size: 13px;
+}
+
+.model-editor > header small {
+  color: #718a84;
+  font-size: 9px;
+}
+
+.model-editor-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 15px;
+}
+
+.model-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 12px;
+  margin-top: 10px;
+}
+
+.model-editor-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-editor-field > span {
+  color: #829a94;
+  font-size: 9px;
+}
+
+.model-editor-field input,
+.model-editor-field select,
+.model-editor-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #2b494c;
+  border-radius: 5px;
+  outline: 0;
+  background: #0c1719;
+  color: #e3ece8;
+  font-family: var(--code-font-family);
+  font-size: 10px;
+}
+
+.model-editor-field input,
+.model-editor-field select {
+  height: 30px;
+  padding: 0 8px;
+}
+
+.model-editor-field textarea {
+  min-height: 62px;
+  padding: 7px 8px;
+  resize: vertical;
+}
+
+.model-editor-field input:focus,
+.model-editor-field select:focus,
+.model-editor-field textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(91, 212, 177, .08);
+}
+
+.model-editor-name {
+  max-width: 390px;
+}
+
+.model-editor-field.wide {
+  grid-column: 1 / -1;
+}
+
+.model-editor-checkbox {
+  min-height: 30px;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding-top: 17px;
+}
+
+.model-editor-checkbox input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
+.model-editor > footer {
+  justify-content: flex-end;
+  border-top: 1px solid #243e41;
+  border-bottom: 0;
+}
+
+html[data-theme="light"] .model-source-picker,
+html[data-theme="light"] .model-editor > header small,
+html[data-theme="light"] .model-editor-field > span {
+  color: var(--muted);
+}
+
+html[data-theme="light"] .model-source-picker select,
+html[data-theme="light"] .model-editor-field input,
+html[data-theme="light"] .model-editor-field select,
+html[data-theme="light"] .model-editor-field textarea {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+html[data-theme="light"] .model-editor {
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+html[data-theme="light"] .model-editor > header strong {
+  color: var(--text);
+}
+
+html[data-theme="light"] .model-editor > header,
+html[data-theme="light"] .model-editor > footer {
+  border-color: var(--border-soft);
+}
+
 html[data-theme="light"] .model-settings-section {
   --model-border: var(--border);
   --model-panel: var(--panel);
@@ -9088,6 +9320,25 @@ html[data-theme="light"] .model-detail-field > small.default {
 }
 
 @media (max-width: 680px) {
+  .model-settings-heading-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .model-source-picker {
+    width: 100%;
+    margin: 4px 0 0;
+  }
+
+  .model-source-picker select {
+    flex: 1;
+    max-width: none;
+  }
+
+  .model-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .model-context-bar {
     flex-wrap: wrap;
   }

@@ -220,7 +220,7 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/permission/respond` | POST | Respond to a permission request |
 | `/choice/respond` | POST | Respond to a choice request |
 | `/config/models` | GET | List available models |
-| `/config/model-settings` | GET | Inspect raw and effective model settings for a working directory |
+| `/config/model-settings` | GET/POST | Inspect and mutate raw/effective model settings for a working directory |
 | `/config/switch-model` | POST | Switch model |
 | `/config/switch-mode` | POST | Switch agent/plan mode |
 | `/config/reasoning-effort` | POST | Set reasoning effort |
@@ -261,6 +261,11 @@ Use HTTPS/WSS whenever the gateway is exposed beyond the local machine.
 | `/snapshot/undo` | POST | Revert the latest checkpoint |
 | `/event` | GET (SSE) | Real-time event stream with 10s heartbeat |
 | `/ws` | WebSocket | Bidirectional channel (preferred for VSCode) |
+
+`POST /config/model-settings` accepts `action` values `upsert_model`,
+`delete_model`, `upsert_group`, `delete_group`, `set_default_model`, and
+`clear_default_model`. Mutations target `userSettings`, `projectSettings`, or
+`localSettings`; project layers require a `cwd` within the Gateway workspace.
 
 **WebSocket `/ws`** supports the complete interactive command path: session lifecycle (`new_session`, `resume_session`), messages and steering, interrupt, permission/choice responses, workspace context, model/mode/permission changes, and plan actions. `new_session` and `resume_session` accept the same five API override fields as the HTTP lifecycle endpoints. Overrides are rejected for an already-loaded resume target so one client cannot silently replace another client's runtime. A connection remains subscribed to every session it explicitly selects, so background events from an earlier session remain visible after the active UI switches to another one; unrelated sessions are still filtered out. Foreground and plan commands carry an `operation_id`: steering and interrupt should send that ID to avoid targeting a newer turn. Command-validation failures use a typed, non-terminal error envelope, while every admitted operation finishes with exactly one `turn_complete` event. A complete client must also consume structured session history and the session-tagged `agent_state`, `agent_output`, `team_message`, `team_state`, `task_update`, `schedule_run`, `compact`, permission/choice response, file-change, snapshot, and revert events. Schedule CRUD uses the HTTP endpoints above; clients do not need to poll for execution completion.
 

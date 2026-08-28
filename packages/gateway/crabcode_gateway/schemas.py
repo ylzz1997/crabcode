@@ -200,6 +200,36 @@ class SetPermissionModeRequest(BaseModel):
     session_id: str | None = None
 
 
+class ModelSettingsMutationRequest(BaseModel):
+    """A focused mutation of the named model configuration catalog."""
+
+    action: Literal[
+        "upsert_model",
+        "delete_model",
+        "upsert_group",
+        "delete_group",
+        "set_default_model",
+        "clear_default_model",
+    ]
+    source: Literal["userSettings", "projectSettings", "localSettings"] = "projectSettings"
+    cwd: str | None = None
+    name: str | None = None
+    previous_name: str | None = None
+    config: dict[str, Any] | None = None
+    remove_fields: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_mutation(self) -> "ModelSettingsMutationRequest":
+        needs_name = self.action not in {"clear_default_model"}
+        if needs_name and (self.name is None or not self.name.strip()):
+            raise ValueError("name is required for this model settings action")
+        if self.action in {"upsert_model", "upsert_group"} and self.config is None:
+            raise ValueError("config is required when creating or updating settings")
+        if self.name is not None:
+            self.name = self.name.strip()
+        return self
+
+
 class GoalRequest(BaseModel):
     action: Literal[
         "set", "edit", "pause", "resume", "complete", "blocked", "clear"
@@ -871,8 +901,18 @@ class ModelSettingsEntry(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
+class ModelSettingsSource(BaseModel):
+    """A settings layer that can be selected as a mutation target."""
+
+    id: Literal["userSettings", "projectSettings", "localSettings"]
+    label: str
+    path: str
+    exists: bool = False
+    writable: bool = True
+
+
 class ModelSettingsResponse(BaseModel):
-    """Read-only model configuration visible from one working directory."""
+    """Model configuration visible from one working directory."""
 
     cwd: str
     default_model: str | None = None
@@ -880,6 +920,7 @@ class ModelSettingsResponse(BaseModel):
     groups: dict[str, dict[str, Any]] = Field(default_factory=dict)
     models: list[ModelSettingsEntry] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    editable_sources: list[ModelSettingsSource] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

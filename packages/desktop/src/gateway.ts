@@ -13,6 +13,7 @@ import type {
   GatewayModel,
   GoalState,
   ModelSettingsResponse,
+  ModelSettingsMutation,
   ReasoningEffort,
   ScheduleJobInfo,
   SessionInfo,
@@ -331,6 +332,13 @@ export class GatewayApi {
   modelSettings(cwd?: string): Promise<ModelSettingsResponse> {
     const query = cwd ? `?${new URLSearchParams({ cwd })}` : "";
     return this.request(`/config/model-settings${query}`);
+  }
+
+  mutateModelSettings(mutation: ModelSettingsMutation): Promise<ModelSettingsResponse> {
+    return this.request("/config/model-settings", {
+      method: "POST",
+      body: JSON.stringify(mutation),
+    });
   }
 
   goal(sessionId: string): Promise<GoalState> {

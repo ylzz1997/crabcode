@@ -126,6 +126,7 @@ class GatewayServer:
         )
         app.state.session_lock = asyncio.Lock()
         app.state.session_load_lock = asyncio.Lock()
+        app.state.model_settings_lock = asyncio.Lock()
         ensure_task_state(app.state)
         app.state.gateway_closing = False
         # gRPC is a separate transport and cannot see FastAPI middleware; make

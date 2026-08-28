@@ -212,7 +212,7 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/permission/respond` | POST | 回复权限请求 |
 | `/choice/respond` | POST | 回复选择请求 |
 | `/config/models` | GET | 列出可用模型 |
-| `/config/model-settings` | GET | 查询工作目录的原始及最终生效模型配置 |
+| `/config/model-settings` | GET/POST | 查询并修改工作目录的原始及最终生效模型配置 |
 | `/config/switch-model` | POST | 切换模型 |
 | `/config/switch-mode` | POST | 切换 agent/plan 模式 |
 | `/config/reasoning-effort` | POST | 设置推理强度 |
@@ -254,6 +254,12 @@ challenge 60 秒失效且只能使用一次；密码连续失败 5 次会限流 
 | `/event` | GET (SSE) | 实时事件流（10 秒心跳） |
 | `/ws` | WebSocket | 双向通信（VSCode 扩展首选） |
 
+`POST /config/model-settings` 的 `action` 支持
+`upsert_model`、`delete_model`、`upsert_group`、`delete_group`、
+`set_default_model` 和 `clear_default_model`。修改目标可以是
+`userSettings`、`projectSettings` 或 `localSettings`；项目层配置必须提供位于
+Gateway 允许工作区内的 `cwd`。
+
 **WebSocket `/ws`** 覆盖完整交互命令链路：会话新建/恢复（`new_session`、`resume_session`）、消息与 steering、中断、权限/选择回复、工作区上下文、模型/模式/权限切换和计划操作。`new_session` 与 `resume_session` 接受和 HTTP 生命周期端点相同的五个 API 覆盖字段；目标会话已经加载时会拒绝覆盖，避免一个客户端静默替换另一个客户端正在使用的 runtime。一个连接会持续订阅它显式选择过的所有 session，因此界面切换后仍能收到旧 session 的后台事件，同时不会暴露未选择的其他 session。前台与计划命令携带 `operation_id`；steering 和 interrupt 应回传该 ID，避免误投到更新的轮次。命令校验失败使用有类型、非终止性的 error envelope；每个已受理 operation 最终只以一个 `turn_complete` 结束。完整客户端还必须消费结构化会话历史，以及带 session 标识的 `agent_state`、`agent_output`、`team_message`、`team_state`、`task_update`、`schedule_run`、`compact`、权限/选择回复、文件变更、snapshot 和 revert 事件。Schedule 的增删改查使用上面的 HTTP 端点，客户端无需轮询执行结果。
 
 ### Crab Desktop 与浏览器界面
@@ -273,6 +279,10 @@ Desktop 和 VS Code 扩展中的每条已完成助手回复都可以分叉到新
 Tauri 将不含敏感信息的 UI 状态写入
 `~/.crabcode/settings_desktop.json`；Gateway 模型和工具配置仍使用原有
 `settings.json` 配置层。
+在 Desktop 的“设置 → 模型”中，可以直接查看并编辑远程 Gateway 的命名模型和
+配置组，执行新增、修改、删除、重命名以及默认模型设置，并选择写入用户、项目或
+项目本地配置层。已加载的 session 不会热重载底层配置，修改主要对新建或重新连接
+的 session 生效。
 
 直接执行 `! <cmd>` 被刻意限定为可信客户端能力：CLI 在本地进程中执行，VSCode 扩展发送到本地集成终端。Gateway 不提供该端点，因为这会形成绕过权限系统的远程 Shell。
 

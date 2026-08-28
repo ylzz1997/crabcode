@@ -151,6 +151,7 @@ import type {
   GatewayModel,
   GatewayViewState,
   ModelSettingsResponse,
+  ModelSettingsMutation,
   ProjectPreset,
   ReasoningEffort,
   ScheduleJobInfo,
@@ -917,6 +918,49 @@ function App() {
             error: error instanceof Error ? error.message : String(error),
           }
         : current);
+    }
+  }, []);
+
+  const mutateModelSettings = useCallback(async (
+    connectionId: string,
+    mutation: ModelSettingsMutation,
+  ) => {
+    const api = apiRef.current.get(connectionId);
+    if (!api) throw new Error("Gateway 尚未连接");
+    const key = `${connectionId}\u0000${mutation.cwd ?? ""}`;
+    setModelSettingsState((current) => ({
+      key,
+      data: current?.key === key ? current.data : null,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const data = await api.mutateModelSettings(mutation);
+      const models = data.models.map((entry) => {
+        const provider = typeof entry.effective.provider === "string" ? entry.effective.provider : "";
+        const model = typeof entry.effective.model === "string" ? entry.effective.model : "";
+        return {
+          name: entry.name,
+          description: [provider, model].filter(Boolean).join("/") || entry.name,
+          group: entry.group ?? "default",
+        };
+      });
+      setGateways((current) => current[connectionId]
+        ? { ...current, [connectionId]: { ...current[connectionId], models } }
+        : current);
+      setModelSettingsState((current) => current?.key === key
+        ? { key, data, loading: false, error: null }
+        : current);
+    } catch (error) {
+      setModelSettingsState((current) => current?.key === key
+        ? {
+            key,
+            data: current.data,
+            loading: false,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        : current);
+      throw error;
     }
   }, []);
 
@@ -2812,6 +2856,10 @@ function App() {
           modelSettingsError={activeModelSettingsState?.error ?? null}
           onRefreshModelSettings={() => {
             if (activeConnection) void refreshModelSettings(activeConnection.id, activeProject?.path);
+          }}
+          onMutateModelSettings={(mutation) => {
+            if (!activeConnection) return Promise.reject(new Error("未选择 Gateway"));
+            return mutateModelSettings(activeConnection.id, mutation);
           }}
           onNewProject={beginNewProject}
           onEditProject={setProjectModal}
