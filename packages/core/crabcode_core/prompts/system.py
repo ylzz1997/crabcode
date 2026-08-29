@@ -444,7 +444,12 @@ def get_system_prompt(
     if not shell:
         shell = os.environ.get("SHELL", "unknown").split("/")[-1]
     if not os_version:
-        os_version = f"{os.uname().sysname} {os.uname().release}"
+        if sys.platform == "win32":
+            # Windows 11 self-reports as 10.0; distinguish by build number.
+            build = sys.getwindowsversion().build
+            os_version = f"Windows {'11' if build >= 22000 else '10'}"
+        else:
+            os_version = f"{os.uname().sysname} {os.uname().release}"
 
     is_plan = agent_mode == "plan"
 
