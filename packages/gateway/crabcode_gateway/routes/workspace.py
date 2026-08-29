@@ -137,12 +137,25 @@ def _create_directory(value: str, roots: tuple[Path, ...]) -> Path:
     return resolved
 
 
+def _windows_drive_roots() -> list[Path]:
+    """Existing drive letters, so Windows pickers can reach any disk without per-drive config."""
+    if os.name != "nt":
+        return []
+    drives: list[Path] = []
+    for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        candidate = Path(f"{letter}:\\")
+        if candidate.exists():
+            drives.append(candidate)
+    return drives
+
+
 def build_workspace_info(startup_cwd: str, configured_roots: list[str]) -> WorkspaceInfo:
     home = Path.home().resolve()
     cwd = Path(startup_cwd).resolve()
     roots: list[Path] = []
     candidates = [home, cwd]
     candidates.extend(Path(value).expanduser() for value in configured_roots)
+    candidates.extend(_windows_drive_roots())
     for candidate in candidates:
         try:
             resolved = candidate.resolve(strict=True)
