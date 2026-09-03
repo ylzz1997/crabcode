@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.text_io import normalize_newlines, read_utf8_text, write_utf8_text
 from crabcode_core.tools.diff_utils import compute_diff, format_edit_summary
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
@@ -80,11 +81,19 @@ class FileWriteTool(Tool):
 
         is_new = not path.exists()
         old_content = ""
+        newline: str | None = None
+        has_bom = False
         if not is_new:
             try:
-                old_content = path.read_text(errors="replace")
+                source = read_utf8_text(path)
+                old_content = source.text
+                newline = source.newline
+                has_bom = source.has_bom
             except Exception:
                 logger.debug("Failed to read existing file before overwrite: %s", path, exc_info=True)
+
+        if newline is not None:
+            content = normalize_newlines(content, newline)
 
         # Track snapshot before writing
         if context.session_id:
@@ -102,7 +111,7 @@ class FileWriteTool(Tool):
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            write_utf8_text(path, content, has_bom=has_bom)
         except Exception as e:
             return ToolResult(
                 result_for_model=f"Error writing file: {e}",

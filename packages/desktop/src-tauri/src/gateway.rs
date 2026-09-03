@@ -3,8 +3,10 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::net::{IpAddr, ToSocketAddrs};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
@@ -15,6 +17,42 @@ use url::Url;
 const MIN_PYTHON_MAJOR: u32 = 3;
 const MIN_PYTHON_MINOR: u32 = 10;
 const GATEWAY_PROTOCOL: i64 = 1;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn configure_python_utf8(command: &mut Command) {
+    command
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
+}
+
+fn stop_child_tree(child: &mut Child) -> io::Result<()> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let pid = child.id().to_string();
+        let status = Command::new("taskkill")
+            .args(["/PID", pid.as_str(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        if status.is_ok_and(|value| value.success()) {
+            let _ = child.wait();
+            return Ok(());
+        }
+    }
+
+    if child.try_wait()?.is_none() {
+        child.kill()?;
+        let _ = child.wait();
+    }
+    Ok(())
+}
 
 #[derive(Default)]
 pub struct GatewayProcesses(Mutex<HashMap<String, Child>>);
@@ -23,8 +61,7 @@ impl GatewayProcesses {
     pub fn stop_all(&self) {
         if let Ok(mut processes) = self.0.lock() {
             for (_, mut child) in processes.drain() {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = stop_child_tree(&mut child);
             }
         }
     }
@@ -262,7 +299,9 @@ fn run_document_engine_command(
     arguments: &[&str],
 ) -> Result<Value, String> {
     let python = detect_document_engine_python(python_path)?;
-    let output = Command::new(&python)
+    let mut command = Command::new(&python);
+    configure_python_utf8(&mut command);
+    let output = command
         .args(["-m", "crabcode_cli", "document-engine"])
         .args(arguments)
         .output()
@@ -337,6 +376,7 @@ fn run_document_engine_install_command(
 ) -> Result<Value, String> {
     let python = detect_document_engine_python(python_path.as_deref())?;
     let mut command = Command::new(&python);
+    configure_python_utf8(&mut command);
     command
         .args(["-m", "crabcode_cli", "document-engine", "install", "--json"])
         .stdout(Stdio::piped())
@@ -567,10 +607,7 @@ pub fn shutdown_gateway(
     let Some(mut child) = child else {
         return Ok(false);
     };
-    child
-        .kill()
-        .map_err(|error| format!("Unable to stop Gateway: {error}"))?;
-    let _ = child.wait();
+    stop_child_tree(&mut child).map_err(|error| format!("Unable to stop Gateway: {error}"))?;
     Ok(true)
 }
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.text_io import read_utf8_text, write_utf8_text
 from crabcode_core.types.config import (
     CrabCodeSettings,
     GatewaySecuritySettings,
@@ -91,10 +92,10 @@ class ConfigManager:
                 continue
 
             try:
-                raw = json.loads(path.read_text(errors="replace"))
+                raw = json.loads(read_utf8_text(path).text)
                 if isinstance(raw, dict):
                     merged = _merge_settings(merged, raw)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError, UnicodeError):
                 logger.warning("Failed to load settings source: %s", path, exc_info=True)
                 continue
 
@@ -181,9 +182,9 @@ class ConfigManager:
             return None
 
         try:
-            raw = json.loads(path.read_text(errors="replace"))
+            raw = json.loads(read_utf8_text(path).text)
             return raw if isinstance(raw, dict) else None
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeError):
             logger.warning("Failed to read settings source: %s", path, exc_info=True)
             return None
 
@@ -204,13 +205,23 @@ class ConfigManager:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         existing: dict[str, Any] = {}
+        newline = "\n"
+        has_bom = False
         if path.exists():
             try:
-                existing = json.loads(path.read_text(errors="replace"))
-            except (json.JSONDecodeError, OSError):
+                source = read_utf8_text(path)
+                existing = json.loads(source.text)
+                newline = source.newline or newline
+                has_bom = source.has_bom
+            except (json.JSONDecodeError, OSError, UnicodeError):
                 logger.warning("Failed to read existing settings before update: %s", path, exc_info=True)
 
         merged = _merge_settings(existing, settings)
-        path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n")
+        write_utf8_text(
+            path,
+            json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
+            newline=newline,
+            has_bom=has_bom,
+        )
 
         self.reset_cache()

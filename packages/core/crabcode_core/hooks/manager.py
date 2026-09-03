@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from typing import Any
 
+from crabcode_core.subprocess_utils import (
+    decode_subprocess_output,
+    shell_command,
+    subprocess_group_options,
+    terminate_process_tree,
+)
+
 
 @dataclass
 class HookRunResult:
@@ -237,19 +244,19 @@ class HookManager:
         }
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
+            proc = await asyncio.create_subprocess_exec(
+                *shell_command(command),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=proc_env,
+                **subprocess_group_options(),
             )
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
                 timed_out = False
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                await terminate_process_tree(proc)
                 stdout_b = b""
                 stderr_b = f"Hook timed out after {timeout}s".encode()
                 timed_out = True
@@ -260,8 +267,8 @@ class HookManager:
                 "detail": f"hook-start-error: {exc}",
             }
 
-        stdout = stdout_b.decode("utf-8", errors="replace").strip()
-        stderr = stderr_b.decode("utf-8", errors="replace").strip()
+        stdout = decode_subprocess_output(stdout_b).strip()
+        stderr = decode_subprocess_output(stderr_b).strip()
         exit_code = proc.returncode if proc.returncode is not None else 1
 
         if timed_out:
