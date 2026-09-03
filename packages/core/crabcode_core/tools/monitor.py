@@ -6,7 +6,6 @@ import asyncio
 import ipaddress
 import os
 import re
-import signal
 import socket
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +16,12 @@ from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
 from crabcode_core.session.storage import get_task_output_path
+from crabcode_core.subprocess_utils import (
+    decode_subprocess_output,
+    shell_command,
+    subprocess_group_options,
+    terminate_process_tree,
+)
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 
@@ -253,23 +258,20 @@ class MonitorManager:
         env: dict[str, str],
         cwd: str,
     ) -> int:
-        subprocess_options: dict[str, Any] = {}
-        if os.name != "nt":
-            subprocess_options["start_new_session"] = True
-        run.process = await asyncio.create_subprocess_shell(
-            command,
+        run.process = await asyncio.create_subprocess_exec(
+            *shell_command(command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
             env=env,
-            **subprocess_options,
+            **subprocess_group_options(),
         )
         assert run.process.stdout is not None
         while True:
             raw = await run.process.stdout.readline()
             if not raw:
                 break
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            line = decode_subprocess_output(raw).rstrip("\r\n")
             await self._emit_line(run, line)
         return await run.process.wait()
 
@@ -420,24 +422,7 @@ class MonitorManager:
         process = run.process
         if process is None or process.returncode is not None:
             return
-        if os.name != "nt":
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        else:  # pragma: no cover - exercised on Windows
-            process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=2)
-        except asyncio.TimeoutError:
-            if os.name != "nt":
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:  # pragma: no cover - exercised on Windows
-                process.kill()
-            await process.wait()
+        await terminate_process_tree(process, timeout=2)
 
 
 class MonitorTool(Tool):

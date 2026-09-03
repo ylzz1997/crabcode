@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import os
 import stat
@@ -16,6 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from crabcode_core.config.manager import ConfigManager
 from crabcode_core.skills.loader import load_skills
+from crabcode_core.text_io import normalize_newlines, read_utf8_text
 from crabcode_gateway.session_registry import get_session_lock
 from crabcode_gateway.schemas import (
     ContextPushRequest,
@@ -425,8 +427,8 @@ def _read_settings_object(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        value = json.loads(path.read_text(errors="replace"))
-    except (json.JSONDecodeError, OSError) as exc:
+        value = json.loads(read_utf8_text(path).text)
+    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
         raise HTTPException(status_code=422, detail="settings file is not valid JSON") from exc
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="settings file must contain a JSON object")
@@ -435,19 +437,28 @@ def _read_settings_object(path: Path) -> dict[str, Any]:
 
 def _atomic_write_settings(path: Path, value: dict[str, Any]) -> None:
     payload = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    newline = "\n"
+    has_bom = False
+    if path.exists():
+        source = read_utf8_text(path)
+        newline = source.newline or newline
+        has_bom = source.has_bom
+    payload = normalize_newlines(payload, newline)
+    raw_payload = payload.encode("utf-8")
+    if has_bom:
+        raw_payload = codecs.BOM_UTF8 + raw_payload
     temporary: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
+            "wb",
             dir=path.parent,
             prefix=f".{path.name}.",
             suffix=".tmp",
             delete=False,
         ) as handle:
             temporary = Path(handle.name)
-            handle.write(payload)
+            handle.write(raw_payload)
             handle.flush()
             os.fsync(handle.fileno())
         if path.exists():

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.text_io import read_utf8_text
 from crabcode_core.tools._input_helpers import first_non_empty_str
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
@@ -92,7 +93,7 @@ class FileReadTool(Tool):
             )
 
         try:
-            content = path.read_text(errors="replace")
+            content = read_utf8_text(path).text
         except Exception as e:
             return ToolResult(
                 result_for_model=f"Error reading file: {e}",

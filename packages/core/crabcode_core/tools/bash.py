@@ -6,6 +6,12 @@ import asyncio
 import os
 from typing import Any
 
+from crabcode_core.subprocess_utils import (
+    decode_subprocess_output,
+    shell_command,
+    subprocess_group_options,
+    terminate_process_tree,
+)
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 
@@ -35,10 +41,11 @@ class BashTool(Tool):
             "running scripts, git operations, and other terminal tasks. "
             "Prefer dedicated tools (Read, Edit, Write, Glob, Grep) over "
             "bash when they can accomplish the task.\n\n"
-            "Commands run in the user's shell with their environment. "
+            "Commands run in an explicit Bash-compatible shell on Unix and "
+            "PowerShell on Windows, with the user's environment. "
             "The command is executed in the working directory of the "
-            "current session. The shell is stateful across calls — "
-            "environment variables and directory changes persist.\n\n"
+            "current session. Each call starts a new shell, so environment "
+            "variables and directory changes do not persist across calls.\n\n"
             "Guidelines:\n"
             "- Always quote file paths that contain spaces with double "
             'quotes: cd "/path/with spaces" (correct) vs cd /path/with '
@@ -49,7 +56,8 @@ class BashTool(Tool):
             "- When issuing multiple independent commands, call Bash "
             "multiple times in parallel rather than chaining with &&.\n"
             "- If commands depend on each other and must run sequentially, "
-            "chain them with && in a single call.\n"
+            "use the active platform shell's conditional chaining syntax in "
+            "a single call.\n"
             "- Do NOT use interactive commands (e.g., git rebase -i, "
             "vim, nano) — they require user input that is not supported.\n"
             "- If a command fails, read the error output carefully before "
@@ -90,12 +98,13 @@ class BashTool(Tool):
                 pass  # Best-effort; don't block bash if snapshot fails
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
+            proc = await asyncio.create_subprocess_exec(
+                *shell_command(command),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=context.cwd,
                 env=env,
+                **subprocess_group_options(),
             )
 
             try:
@@ -104,20 +113,18 @@ class BashTool(Tool):
                 )
             except asyncio.TimeoutError:
                 if proc.returncode is None:
-                    proc.kill()
-                    await proc.wait()
+                    await terminate_process_tree(proc)
                 return ToolResult(
                     result_for_model=f"Command timed out after {timeout}s",
                     is_error=True,
                 )
             except asyncio.CancelledError:
                 if proc.returncode is None:
-                    proc.kill()
-                    await proc.wait()
+                    await terminate_process_tree(proc)
                 raise
 
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
-            stderr = stderr_bytes.decode("utf-8", errors="replace")
+            stdout = decode_subprocess_output(stdout_bytes)
+            stderr = decode_subprocess_output(stderr_bytes)
             exit_code = proc.returncode or 0
 
             max_chars = 100_000

@@ -1,9 +1,10 @@
 """Same-machine transport for messages between independent CrabCode sessions.
 
-Each live session publishes a small registry record and listens on a Unix
-domain socket.  Registry files provide discovery; the socket is the delivery
-and acknowledgement boundary.  Message contents never include transcripts or
-files and are always tagged with their originating session.
+Each live session publishes a small registry record and listens on a local
+transport: a Unix domain socket on POSIX or loopback TCP on Windows. Registry
+files provide discovery; the transport is the delivery and acknowledgement
+boundary. Message contents never include transcripts or files and are always
+tagged with their originating session.
 """
 
 from __future__ import annotations
@@ -20,10 +21,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.subprocess_utils import is_process_running
 
 logger = get_logger(__name__)
 
@@ -127,7 +130,7 @@ class PeerRuntime:
         # directory when necessary.
         socket_root = self._registry_root
         socket_probe = socket_root / ("x" * 24 + ".sock")
-        if len(os.fsencode(socket_probe)) >= 100:
+        if os.name != "nt" and len(os.fsencode(socket_probe)) >= 100:
             uid = os.getuid() if hasattr(os, "getuid") else os.getpid()
             temp_root = Path("/private/tmp") if sys.platform == "darwin" else Path("/tmp")
             socket_root = temp_root / f"crabcode-peers-{uid}"
@@ -136,6 +139,7 @@ class PeerRuntime:
         self._socket_path = self._socket_root / (
             hashlib.sha256(socket_key.encode()).hexdigest()[:24] + ".sock"
         )
+        self._endpoint = str(self._socket_path)
         self._auth_token = secrets.token_urlsafe(32)
         self._close_lock = asyncio.Lock()
         self._seen_message_ids: dict[str, float] = {}
@@ -147,10 +151,10 @@ class PeerRuntime:
         return self._record.model_copy(deep=True) if self._record else None
 
     async def start(self) -> None:
-        """Bind the inbox socket and atomically publish this session."""
+        """Bind the inbox transport and atomically publish this session."""
         if self._server is not None:
             return
-        if not hasattr(asyncio, "start_unix_server"):
+        if os.name != "nt" and not hasattr(asyncio, "start_unix_server"):
             raise RuntimeError("Cross-session messaging requires Unix domain sockets")
 
         self._registry_root.mkdir(parents=True, exist_ok=True)
@@ -162,19 +166,30 @@ class PeerRuntime:
             logger.debug("Could not restrict peer registry permissions", exc_info=True)
 
         try:
-            self._socket_path.unlink(missing_ok=True)
-            self._server = await asyncio.start_unix_server(
-                self._handle_client,
-                path=str(self._socket_path),
-                limit=self._max_message_size_bytes + 16_384,
-            )
-            os.chmod(self._socket_path, 0o600)
+            if os.name == "nt":
+                self._server = await asyncio.start_server(
+                    self._handle_client,
+                    host="127.0.0.1",
+                    port=0,
+                    limit=self._max_message_size_bytes + 16_384,
+                )
+                address = self._server.sockets[0].getsockname()
+                self._endpoint = f"tcp://127.0.0.1:{address[1]}"
+            else:
+                self._socket_path.unlink(missing_ok=True)
+                self._server = await asyncio.start_unix_server(
+                    self._handle_client,
+                    path=str(self._socket_path),
+                    limit=self._max_message_size_bytes + 16_384,
+                )
+                os.chmod(self._socket_path, 0o600)
+                self._endpoint = str(self._socket_path)
             record = PeerRecord(
                 session_id=self.session_id,
                 name=self.name,
                 cwd=self.cwd,
                 pid=os.getpid(),
-                socket_path=str(self._socket_path),
+                socket_path=self._endpoint,
                 auth_token=self._auth_token,
                 permission_class=self._permission_class_provider(),
             )
@@ -185,7 +200,8 @@ class PeerRuntime:
                 self._server.close()
                 await self._server.wait_closed()
                 self._server = None
-            self._socket_path.unlink(missing_ok=True)
+            if os.name != "nt":
+                self._socket_path.unlink(missing_ok=True)
             raise
 
     async def close(self) -> None:
@@ -197,7 +213,8 @@ class PeerRuntime:
                 server.close()
                 await server.wait_closed()
             self._remove_own_record()
-            self._socket_path.unlink(missing_ok=True)
+            if os.name != "nt":
+                self._socket_path.unlink(missing_ok=True)
             self._record = None
 
     def close_nowait(self) -> None:
@@ -207,7 +224,8 @@ class PeerRuntime:
         if server is not None:
             server.close()
         self._remove_own_record()
-        self._socket_path.unlink(missing_ok=True)
+        if os.name != "nt":
+            self._socket_path.unlink(missing_ok=True)
         self._record = None
 
     def list_peers(self) -> list[PeerRecord]:
@@ -259,8 +277,15 @@ class PeerRuntime:
         )
         writer: asyncio.StreamWriter | None = None
         try:
+            if peer.socket_path.startswith("tcp://"):
+                address = urlsplit(peer.socket_path)
+                if address.hostname != "127.0.0.1" or address.port is None:
+                    raise ValueError("Peer TCP endpoint is not local")
+                connection = asyncio.open_connection(address.hostname, address.port)
+            else:
+                connection = asyncio.open_unix_connection(peer.socket_path)
             reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(peer.socket_path),
+                connection,
                 timeout=self._connect_timeout,
             )
             assert writer is not None
@@ -451,33 +476,29 @@ class PeerRuntime:
             )
         except Exception:
             return
-        if current.socket_path == str(self._socket_path):
+        if current.socket_path == self._endpoint:
             self._registry_path.unlink(missing_ok=True)
 
     @staticmethod
     def _record_is_live(record: PeerRecord) -> bool:
-        if not Path(record.socket_path).exists():
+        if (
+            not record.socket_path.startswith("tcp://")
+            and not Path(record.socket_path).exists()
+        ):
             return False
-        try:
-            os.kill(record.pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-        return True
+        return is_process_running(record.pid)
 
     def _remove_stale_record(self, path: Path, record: PeerRecord) -> None:
         try:
             path.unlink(missing_ok=True)
-            socket_path = Path(record.socket_path)
-            allowed_roots = {
-                self._registry_root.resolve(),
-                self._socket_root.resolve(),
-            }
-            if socket_path.parent.resolve() in allowed_roots:
-                socket_path.unlink(missing_ok=True)
+            if not record.socket_path.startswith("tcp://"):
+                socket_path = Path(record.socket_path)
+                allowed_roots = {
+                    self._registry_root.resolve(),
+                    self._socket_root.resolve(),
+                }
+                if socket_path.parent.resolve() in allowed_roots:
+                    socket_path.unlink(missing_ok=True)
         except OSError:
             logger.debug("Could not prune stale peer %s", record.session_id, exc_info=True)
 

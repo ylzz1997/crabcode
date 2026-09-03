@@ -14,10 +14,14 @@ import asyncio
 import json
 import os
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.subprocess_utils import (
+    subprocess_group_options,
+    terminate_process_tree,
+)
 
 logger = get_logger(__name__)
 
@@ -123,6 +127,7 @@ class LSPClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._env,
+            **subprocess_group_options(),
         )
 
         # Start the reader loop in the background
@@ -305,11 +310,7 @@ class LSPClient:
 
         # Kill the process if still running
         if self._process is not None and self._process.returncode is None:
-            self._process.terminate()
-            try:
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self._process.kill()
+            await terminate_process_tree(self._process, timeout=5.0)
 
         # Cancel the reader task
         if self._reader_task is not None and not self._reader_task.done():
@@ -682,13 +683,21 @@ def _path_to_uri(path: str) -> str:
 
 def _uri_to_path(uri: str) -> str:
     """Convert a file:// URI back to a filesystem path."""
-    if uri.startswith("file://"):
-        # Handle both file:///path and file://host/path
-        from urllib.parse import unquote, urlparse
+    from urllib.parse import unquote, urlparse
+    from urllib.request import url2pathname
 
-        parsed = urlparse(uri)
-        return unquote(parsed.path)
-    return uri
+    parsed = urlparse(uri)
+    if parsed.scheme != "file":
+        return uri
+
+    path = url2pathname(parsed.path)
+    host = unquote(parsed.netloc)
+    if host and host.lower() != "localhost":
+        if os.name == "nt":
+            tail = path.lstrip("/\\")
+            return str(PureWindowsPath(f"//{host}/{tail}"))
+        return f"//{host}{path}"
+    return path
 
 
 # Map of common file extensions to LSP language identifiers

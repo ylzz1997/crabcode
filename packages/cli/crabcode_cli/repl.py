@@ -38,6 +38,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from crabcode_cli.banner import print_banner
+from crabcode_core.subprocess_utils import shell_command
 from crabcode_core.events import CoreSession
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import (
@@ -2087,7 +2088,7 @@ async def run_repl(
                 cmd = user_input[2:]
                 import subprocess
                 async with in_terminal():
-                    subprocess.run(cmd, shell=True, cwd=cwd, capture_output=False)
+                    subprocess.run(shell_command(cmd), cwd=cwd, capture_output=False)
                 continue
 
             streamed_text = ""

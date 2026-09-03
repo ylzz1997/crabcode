@@ -1810,7 +1810,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const target = requestedPath?.trim();
       const targetPath = target
         ? resolveLocalPath(target, workspaceRoot)
-        : path.join(workspaceRoot ?? "/tmp", filename);
+        : path.join(workspaceRoot ?? os.tmpdir(), filename);
       const uri = vscode.Uri.file(targetPath);
       await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf-8"));
       this.addMessage("system", `会话已导出：\`${uri.fsPath}\``);

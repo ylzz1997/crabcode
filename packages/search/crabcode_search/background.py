@@ -12,6 +12,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.subprocess_utils import is_process_running
+
 # Must be set before ANY native library (FAISS / PyTorch) loads libomp.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -300,15 +302,7 @@ def _read_pid(pid_file: Path) -> int | None:
 
 
 def _pid_is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return is_process_running(pid)
 
 
 def _is_stale(status_file: Path) -> bool:

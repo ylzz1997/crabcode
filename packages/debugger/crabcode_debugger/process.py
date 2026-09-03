@@ -12,6 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.subprocess_utils import (
+    decode_subprocess_output,
+    powershell_command,
+    subprocess_group_options,
+    terminate_process_tree,
+)
 from crabcode_debugger.memory import MemoryInspector
 
 
@@ -86,16 +92,16 @@ async def _run(
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **subprocess_group_options(),
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return (
             proc.returncode or 0,
-            stdout_bytes.decode("utf-8", errors="replace"),
-            stderr_bytes.decode("utf-8", errors="replace"),
+            decode_subprocess_output(stdout_bytes),
+            decode_subprocess_output(stderr_bytes),
         )
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        await terminate_process_tree(proc)
         return -1, "", f"command timed out after {timeout}s"
     except FileNotFoundError:
         return -1, "", f"command not found: {command[0]}"
@@ -544,11 +550,17 @@ class ProcessInspector:
         if system == "windows":
             if normalized in {"terminate", "term", "sigterm"}:
                 if shutil.which("taskkill"):
-                    code, stdout, stderr = await _run(["taskkill", "/PID", str(pid)], timeout=self.timeout)
+                    code, stdout, stderr = await _run(
+                        ["taskkill", "/PID", str(pid), "/T"],
+                        timeout=self.timeout,
+                    )
                     return self._command_result("terminate", code, stdout, stderr)
                 return {"error": "taskkill not found"}
             if shutil.which("taskkill"):
-                code, stdout, stderr = await _run(["taskkill", "/F", "/PID", str(pid)], timeout=self.timeout)
+                code, stdout, stderr = await _run(
+                    ["taskkill", "/F", "/PID", str(pid), "/T"],
+                    timeout=self.timeout,
+                )
                 return self._command_result("kill", code, stdout, stderr)
             return {"error": "taskkill not found"}
 
@@ -596,7 +608,10 @@ class ProcessInspector:
             "Get-CimInstance Win32_Process | "
             "Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
         )
-        code, stdout, stderr = await _run([shell, "-NoProfile", "-Command", script], timeout=self.timeout)
+        code, stdout, stderr = await _run(
+            powershell_command(shell, script),
+            timeout=self.timeout,
+        )
         if code != 0:
             return [ProcessInfo(pid=-1, ppid=None, name="powershell", command=stderr, status="error")]
         import json
@@ -654,7 +669,10 @@ class ProcessInspector:
             f"Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\" | "
             "Select-Object ProcessId,ParentProcessId,Name,CommandLine,ExecutablePath | ConvertTo-Json -Compress"
         )
-        code, stdout, stderr = await _run([shell, "-NoProfile", "-Command", script], timeout=self.timeout)
+        code, stdout, stderr = await _run(
+            powershell_command(shell, script),
+            timeout=self.timeout,
+        )
         if code != 0:
             return {"pid": pid, "error": stderr.strip()}
         return {"pid": pid, "process": stdout.strip()}

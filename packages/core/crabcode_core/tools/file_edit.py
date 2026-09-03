@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.text_io import normalize_newlines, read_utf8_text, write_utf8_text
 from crabcode_core.tools.diff_utils import compute_diff, format_edit_summary
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
@@ -117,14 +119,22 @@ class FileEditTool(Tool):
             )
 
         try:
-            content = path.read_text(errors="replace")
+            source = read_utf8_text(path)
+            content = source.text
         except Exception as e:
             return ToolResult(
                 result_for_model=f"Error reading file: {e}",
                 is_error=True,
             )
 
-        count = content.count(old_string)
+        normalized_old = normalize_newlines(old_string, "\n")
+        pattern = re.compile(
+            r"(?:\r\n|\r|\n)".join(
+                re.escape(part) for part in normalized_old.split("\n")
+            )
+        )
+        matches = list(pattern.finditer(content))
+        count = len(matches)
 
         if count == 0:
             # Give the model a head start: show the first 120 chars of the
@@ -154,10 +164,30 @@ class FileEditTool(Tool):
                 is_error=True,
             )
 
+        def render_replacement(match: re.Match[str]) -> str:
+            matched = match.group(0)
+            replacement_newline = source.newline
+            if "\r\n" in matched:
+                replacement_newline = "\r\n"
+            elif "\n" in matched:
+                replacement_newline = "\n"
+            elif "\r" in matched:
+                replacement_newline = "\r"
+            return (
+                normalize_newlines(new_string, replacement_newline)
+                if replacement_newline is not None
+                else new_string
+            )
+
         if replace_all:
-            new_content = content.replace(old_string, new_string)
+            new_content = pattern.sub(render_replacement, content)
         else:
-            new_content = content.replace(old_string, new_string, 1)
+            match = matches[0]
+            new_content = (
+                content[:match.start()]
+                + render_replacement(match)
+                + content[match.end():]
+            )
 
         # Track snapshot before writing
         if context.session_id:
@@ -174,7 +204,7 @@ class FileEditTool(Tool):
                 logger.debug("Failed to track snapshot for edit", exc_info=True)
 
         try:
-            path.write_text(new_content)
+            write_utf8_text(path, new_content, has_bom=source.has_bom)
         except Exception as e:
             return ToolResult(
                 result_for_model=f"Error writing file: {e}",

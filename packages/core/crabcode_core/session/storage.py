@@ -26,10 +26,15 @@ class SessionArchivedError(RuntimeError):
     """Raised when a writer targets a durably archived session."""
 
 
-try:  # POSIX file locking; the process-local fallback keeps Windows usable.
+try:  # POSIX file locking.
     import fcntl  # type: ignore
 except ImportError:  # pragma: no cover - exercised only on Windows
     fcntl = None  # type: ignore[assignment]
+
+try:  # Windows byte-range locking for cooperating CrabCode processes.
+    import msvcrt  # type: ignore
+except ImportError:  # pragma: no cover - exercised only on POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 _TRANSCRIPT_LOCK_GUARD = threading.Lock()
 _TRANSCRIPT_LOCKS: dict[str, threading.Lock] = {}
@@ -52,11 +57,22 @@ def _transcript_file_lock(path: Path, *, exclusive: bool):
             if fcntl is not None:
                 mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
                 fcntl.flock(lock_file.fileno(), mode)
+            elif msvcrt is not None:
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write("\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                mode = msvcrt.LK_LOCK if exclusive else msvcrt.LK_RLCK
+                msvcrt.locking(lock_file.fileno(), mode, 1)
             try:
                 yield
             finally:
                 if fcntl is not None:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                elif msvcrt is not None:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def get_config_home() -> Path:
@@ -86,6 +102,12 @@ def _project_path_hash(cwd: str) -> str:
 def _legacy_project_dir(cwd: str) -> Path:
     """Return the pre-hash project directory used by older CrabCode builds."""
     return get_projects_dir() / _sanitize_path(os.path.abspath(cwd))
+
+
+def _hashed_project_dir(cwd: str, prefix_length: int) -> Path:
+    absolute = os.path.abspath(cwd)
+    prefix = _sanitize_path(absolute)[:prefix_length]
+    return get_projects_dir() / f"{prefix}--{_project_path_hash(absolute)}"
 
 
 def _validate_component(value: str, label: str) -> str:
@@ -143,16 +165,22 @@ def _is_message_entry(entry: dict[str, Any]) -> bool:
 
 def get_project_dir(cwd: str) -> Path:
     """Get the collision-resistant project-specific session directory."""
-    absolute = os.path.abspath(cwd)
-    prefix = _sanitize_path(absolute)[:175]
-    return get_projects_dir() / f"{prefix}--{_project_path_hash(absolute)}"
+    return _hashed_project_dir(cwd, 64)
+
+
+def _previous_hashed_project_dir(cwd: str) -> Path:
+    """Return the longer hashed directory used by CrabCode 0.1.4 and earlier."""
+    return _hashed_project_dir(cwd, 175)
 
 
 def _project_dirs_for_read(cwd: str) -> list[Path]:
     """Return the current project directory plus its legacy compatibility path."""
-    current = get_project_dir(cwd)
-    legacy = _legacy_project_dir(cwd)
-    return [current] if current == legacy else [current, legacy]
+    directories = [
+        get_project_dir(cwd),
+        _previous_hashed_project_dir(cwd),
+        _legacy_project_dir(cwd),
+    ]
+    return list(dict.fromkeys(directories))
 
 
 def _transcript_declared_cwd(path: Path) -> str | None:
@@ -179,17 +207,18 @@ def _transcript_declared_cwd(path: Path) -> str | None:
 def _session_project_dir(cwd: str, session_id: str) -> Path:
     """Resolve an existing legacy transcript, while placing new sessions safely."""
     validated_id = _validate_component(session_id, "session id")
-    current = get_project_dir(cwd)
-    current_transcript = current / f"{validated_id}.jsonl"
-    if current_transcript.exists():
-        return current
-
+    directories = _project_dirs_for_read(cwd)
+    current = directories[0]
     legacy = _legacy_project_dir(cwd)
-    legacy_transcript = legacy / f"{validated_id}.jsonl"
-    if legacy != current and legacy_transcript.exists():
-        declared_cwd = _transcript_declared_cwd(legacy_transcript)
+    for directory in directories:
+        transcript = directory / f"{validated_id}.jsonl"
+        if not transcript.exists():
+            continue
+        if directory != legacy:
+            return directory
+        declared_cwd = _transcript_declared_cwd(transcript)
         if declared_cwd is None or declared_cwd == os.path.abspath(cwd):
-            return legacy
+            return directory
     return current
 
 
@@ -1554,7 +1583,7 @@ class SessionStorage:
                 meta_info: dict[str, Any] = {}
                 archived = False
                 with _transcript_file_lock(path, exclusive=False):
-                    with open(path) as f:
+                    with open(path, encoding="utf-8") as f:
                         for line in f:
                             line = line.strip()
                             if not line:

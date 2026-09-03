@@ -32,7 +32,7 @@ const normalize = (value) => value.trim().toLowerCase().replace(/[\s.-]/g, "");
 const desktopSource = readFileSync(join(repositoryRoot, "packages/desktop/src/toolPresentation.ts"), "utf8");
 const desktopNames = registryNames(
   desktopSource,
-  /const DEFINITIONS:[^=]+\s= \{([\s\S]*?)\n\};\n\nconst FIELD_LABELS/,
+  /const DEFINITIONS:[^=]+\s= \{([\s\S]*?)\r?\n\};\r?\n\r?\nconst FIELD_LABELS/,
   "Desktop",
 );
 
@@ -40,7 +40,7 @@ const chatPanelPath = join(repositoryRoot, "packages/vscode/src/chatPanel.ts");
 const chatPanel = readFileSync(chatPanelPath, "utf8");
 const vscodeNames = registryNames(
   chatPanel,
-  /const TOOL_PRESENTATIONS = \{([\s\S]*?)\n    \};/,
+  /const TOOL_PRESENTATIONS = \{([\s\S]*?)\r?\n    \};/,
   "VS Code",
 );
 
