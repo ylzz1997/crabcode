@@ -8,7 +8,7 @@ import * as http from "http";
 import * as https from "https";
 import * as net from "net";
 import * as path from "path";
-import { execFile, spawn, type ChildProcess } from "child_process";
+import { execFile, spawn, spawnSync, type ChildProcess } from "child_process";
 import * as vscode from "vscode";
 
 const GATEWAY_PKG = "crabcode[gateway]";
@@ -57,7 +57,13 @@ function execAsync(
   opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { ...opts, timeout: 15_000 }, (err, stdout, stderr) => {
+    const env = {
+      ...process.env,
+      ...opts?.env,
+      PYTHONUTF8: "1",
+      PYTHONIOENCODING: "utf-8",
+    };
+    execFile(cmd, args, { ...opts, env, timeout: 15_000, windowsHide: true }, (err, stdout, stderr) => {
       resolve({
         stdout: (stdout ?? "").trim(),
         stderr: (stderr ?? "").trim(),
@@ -473,6 +479,12 @@ async function installGateway(
   return new Promise((resolve) => {
     const proc = spawn(python, ["-m", "pip", "install", "--upgrade", packageSpec], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        PYTHONUTF8: "1",
+        PYTHONIOENCODING: "utf-8",
+      },
+      windowsHide: true,
     });
 
     proc.stdout?.on("data", (d: Buffer) => outputChannel.append(d.toString()));
@@ -551,7 +563,13 @@ export class GatewayProcess implements vscode.Disposable {
         stdio: ["ignore", "pipe", "pipe"],
         detached: false,
         cwd: launchOptions?.cwd,
-        env: launchOptions?.env,
+        env: {
+          ...process.env,
+          ...launchOptions?.env,
+          PYTHONUTF8: "1",
+          PYTHONIOENCODING: "utf-8",
+        },
+        windowsHide: true,
       },
     );
     this.proc = child;
@@ -602,8 +620,20 @@ export class GatewayProcess implements vscode.Disposable {
 
   stop(): void {
     if (this.proc) {
-      this.proc.kill();
+      const child = this.proc;
       this.proc = null;
+      if (process.platform === "win32" && child.pid) {
+        const result = spawnSync(
+          "taskkill",
+          ["/PID", String(child.pid), "/T", "/F"],
+          { stdio: "ignore", windowsHide: true },
+        );
+        if (result.status !== 0 && child.exitCode === null) {
+          child.kill();
+        }
+      } else {
+        child.kill();
+      }
     }
     this._running = false;
   }

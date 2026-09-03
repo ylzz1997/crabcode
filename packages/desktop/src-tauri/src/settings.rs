@@ -140,10 +140,25 @@ pub fn save_desktop_settings(settings: Value) -> Result<(), String> {
 }
 
 fn safe_export_filename(filename: &str) -> bool {
+    let stem = filename
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '.'])
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
     !filename.is_empty()
         && filename.len() <= 160
-        && !filename.contains(['/', '\\', '\0'])
-        && Path::new(filename).file_name().and_then(|value| value.to_str()) == Some(filename)
+        && !filename.contains(['/', '\\', '\0', '<', '>', ':', '"', '|', '?', '*'])
+        && !filename.ends_with([' ', '.'])
+        && !reserved
+        && Path::new(filename)
+            .file_name()
+            .and_then(|value| value.to_str())
+            == Some(filename)
         && (filename.ends_with(".crabtheme.json") || filename.ends_with(".crabskin"))
 }
 
@@ -196,8 +211,7 @@ pub fn set_dock_icon(
     choice: String,
     png_bytes: Option<Vec<u8>>,
 ) -> Result<(), String> {
-    if choice == "custom" && png_bytes.is_some() {
-        let bytes = png_bytes.expect("custom icon bytes were checked");
+    if let ("custom", Some(bytes)) = (choice.as_str(), png_bytes) {
         if bytes.len() > 5 * 1024 * 1024 {
             return Err("Custom Dock icon cannot exceed 5MB".to_string());
         }
@@ -305,6 +319,9 @@ mod tests {
         assert!(safe_export_filename("graphite.crabtheme.json"));
         assert!(!safe_export_filename("../escape.crabskin"));
         assert!(!safe_export_filename("nested/theme.crabtheme.json"));
+        assert!(!safe_export_filename("bad:name.crabskin"));
+        assert!(!safe_export_filename("CON.crabskin"));
+        assert!(!safe_export_filename("lpt9.crabtheme.json"));
         assert!(!safe_export_filename("theme.zip"));
     }
 }

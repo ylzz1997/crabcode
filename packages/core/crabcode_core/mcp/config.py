@@ -35,7 +35,7 @@ def load_mcp_configs(cwd: str) -> dict[str, McpServerConfig]:
         if not path.exists():
             continue
         try:
-            raw = json.loads(path.read_text(errors="replace"))
+            raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
             if isinstance(raw, dict):
                 servers = raw.get("mcpServers", raw)
                 if isinstance(servers, dict):

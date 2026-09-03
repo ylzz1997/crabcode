@@ -147,4 +147,27 @@ describe("favorite tree", () => {
       children: [{ kind: "project" }, { kind: "session", session: { title: "发布检查" } }],
     });
   });
+
+  it("resolves favorites through case-insensitive Windows session-map keys", () => {
+    const windowsProject = { ...project, path: "C:\\Work\\Crab" };
+    const connection = {
+      projects: [windowsProject],
+      favorite_items: [{
+        id: "session-favorite",
+        type: "session",
+        project_id: windowsProject.id,
+        session_id: "session-1",
+      }],
+    } as unknown as ConnectionPreset;
+    const gateway = {
+      sessionsByProject: {
+        "c:\\work\\crab": [{ session_id: "session-1", title: "Windows session" }],
+      },
+    } as unknown as GatewayViewState;
+
+    expect(resolveFavoriteEntries(connection, gateway)).toMatchObject([{
+      kind: "session",
+      session: { title: "Windows session" },
+    }]);
+  });
 });

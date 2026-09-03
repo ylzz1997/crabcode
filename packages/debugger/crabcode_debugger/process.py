@@ -15,6 +15,7 @@ from typing import Any
 from crabcode_core.subprocess_utils import (
     decode_subprocess_output,
     powershell_command,
+    resolve_executable_command,
     subprocess_group_options,
     terminate_process_tree,
 )
@@ -87,8 +88,9 @@ async def _run(
     timeout: float = 10,
 ) -> tuple[int, str, str]:
     try:
+        launch_command = resolve_executable_command(command)
         proc = await asyncio.create_subprocess_exec(
-            *command,
+            *launch_command,
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -286,7 +288,7 @@ class ProcessInspector:
         if system == "linux":
             path = Path(f"/proc/{pid}/maps")
             try:
-                text = path.read_text(errors="replace")
+                text = path.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
                 return {"error": str(exc)}
             return {"pid": pid, "maps": text}
@@ -656,7 +658,9 @@ class ProcessInspector:
             except OSError:
                 pass
             try:
-                info["status"] = proc_dir.joinpath("status").read_text(errors="replace")
+                info["status"] = proc_dir.joinpath("status").read_text(
+                    encoding="utf-8", errors="replace"
+                )
             except OSError:
                 pass
         return info

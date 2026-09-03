@@ -10,12 +10,13 @@ import asyncio
 import json
 import os
 import tempfile
-import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from crabcode_core.file_lock import file_lock
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.path_validation import validate_path_component
 from crabcode_core.team.models import (
     TeamConfig,
     TeamMessage,
@@ -24,21 +25,6 @@ from crabcode_core.team.models import (
 logger = get_logger(__name__)
 
 _MAX_MESSAGE_SIZE_BYTES = 10_000  # 10KB default
-
-try:  # POSIX file locking; the fallback keeps Windows imports usable.
-    import fcntl  # type: ignore
-except ImportError:  # pragma: no cover - exercised only on Windows
-    fcntl = None  # type: ignore[assignment]
-
-_PROCESS_FILE_LOCK_GUARD = threading.Lock()
-_PROCESS_FILE_LOCKS: dict[str, threading.Lock] = {}
-
-
-def _process_file_lock(path: Path) -> threading.Lock:
-    key = str(path.resolve())
-    with _PROCESS_FILE_LOCK_GUARD:
-        return _PROCESS_FILE_LOCKS.setdefault(key, threading.Lock())
-
 
 @contextmanager
 def _team_file_lock(
@@ -56,19 +42,8 @@ def _team_file_lock(
     """
     storage_root.mkdir(parents=True, exist_ok=True)
     lock_path = storage_root / f".{team_name}.team.lock"
-    process_lock = _process_file_lock(lock_path)
-    with process_lock:
-        with open(lock_path, "a", encoding="utf-8") as lock_file:
-            if fcntl is not None:
-                fcntl.flock(
-                    lock_file.fileno(),
-                    fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
-                )
-            try:
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    with file_lock(lock_path, exclusive=not shared):
+        yield
 
 
 class TeamMessageBus:
@@ -127,15 +102,7 @@ class TeamMessageBus:
     @staticmethod
     def _validate_component(value: str, label: str) -> None:
         """Reject path separators and traversal components used in inbox paths."""
-        if (
-            not isinstance(value, str)
-            or not value
-            or "\x00" in value
-            or value in {".", ".."}
-        ):
-            raise ValueError(f"Invalid {label}")
-        if Path(value).is_absolute() or "/" in value or "\\" in value:
-            raise ValueError(f"Invalid {label}: path separators are not allowed")
+        validate_path_component(value, label)
 
     # ------------------------------------------------------------------
     # Registration
@@ -594,19 +561,11 @@ class TeamMessageBus:
         with _team_file_lock(storage_root, team_name):
             path.parent.mkdir(parents=True, exist_ok=True)
             lock_path = path.with_name(f".{path.name}.lock")
-            process_lock = _process_file_lock(lock_path)
-            with process_lock:
-                with open(lock_path, "a", encoding="utf-8") as lock_file:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                    try:
-                        with open(path, "a", encoding="utf-8") as f:
-                            f.write(line)
-                            f.flush()
-                            os.fsync(f.fileno())
-                    finally:
-                        if fcntl is not None:
-                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            with file_lock(lock_path):
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(line)
+                    f.flush()
+                    os.fsync(f.fileno())
 
     async def _persist_inbox(
         self,
@@ -641,50 +600,42 @@ class TeamMessageBus:
         with _team_file_lock(storage_root, team_name):
             path.parent.mkdir(parents=True, exist_ok=True)
             lock_path = path.with_name(f".{path.name}.lock")
-            process_lock = _process_file_lock(lock_path)
-            with process_lock:
-                with open(lock_path, "a", encoding="utf-8") as lock_file:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                    try:
-                        # Merge lines appended by another bus/process since this
-                        # instance loaded its inbox.  A plain rewrite would
-                        # otherwise erase those messages even though append and
-                        # rewrite each held a file lock.
-                        current = (
-                            path.read_text(encoding="utf-8")
-                            if path.exists()
-                            else ""
-                        )
-                        merged = TeamMessageBus._merge_jsonl(current, content)
+            with file_lock(lock_path):
+                # Merge lines appended by another bus/process since this
+                # instance loaded its inbox. A plain rewrite would otherwise
+                # erase those messages even though append and rewrite each
+                # held a file lock.
+                current = (
+                    path.read_text(encoding="utf-8")
+                    if path.exists()
+                    else ""
+                )
+                merged = TeamMessageBus._merge_jsonl(current, content)
 
-                        # Replace atomically so a crash or concurrent reader never
-                        # observes a half-written JSONL file.
-                        tmp_path: str | None = None
+                # Replace atomically so a crash or concurrent reader never
+                # observes a half-written JSONL file.
+                tmp_path: str | None = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        dir=path.parent,
+                        prefix=f".{path.name}.",
+                        suffix=".tmp",
+                        delete=False,
+                    ) as f:
+                        tmp_path = f.name
+                        f.write(merged)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp_path, path)
+                    tmp_path = None
+                finally:
+                    if tmp_path is not None:
                         try:
-                            with tempfile.NamedTemporaryFile(
-                                mode="w",
-                                encoding="utf-8",
-                                dir=path.parent,
-                                prefix=f".{path.name}.",
-                                suffix=".tmp",
-                                delete=False,
-                            ) as f:
-                                tmp_path = f.name
-                                f.write(merged)
-                                f.flush()
-                                os.fsync(f.fileno())
-                            os.replace(tmp_path, path)
-                            tmp_path = None
-                        finally:
-                            if tmp_path is not None:
-                                try:
-                                    os.unlink(tmp_path)
-                                except OSError:
-                                    pass
-                    finally:
-                        if fcntl is not None:
-                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
         return merged
 
     @staticmethod
@@ -828,16 +779,8 @@ class TeamMessageBus:
         team_name = path.parent.name
         with _team_file_lock(storage_root, team_name, shared=True):
             lock_path = path.with_name(f".{path.name}.lock")
-            process_lock = _process_file_lock(lock_path)
-            with process_lock:
-                with open(lock_path, "a", encoding="utf-8") as lock_file:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
-                    try:
-                        return path.read_text(encoding="utf-8")
-                    finally:
-                        if fcntl is not None:
-                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            with file_lock(lock_path, exclusive=False):
+                return path.read_text(encoding="utf-8")
 
     # ------------------------------------------------------------------
     # Cleanup

@@ -1074,7 +1074,10 @@ def _discover_logs(cwd: Path) -> dict[str, Path]:
     if safe_legacy is not None:
         result.setdefault("search", safe_legacy)
     # Gateway startup logs are useful even before a CoreSession exists.
-    for candidate in (Path.home() / ".crabcode" / "gateway.log", Path("/tmp/crabcode-gateway.log")):
+    candidates = [Path.home() / ".crabcode" / "gateway.log"]
+    if os.name != "nt":
+        candidates.append(Path("/tmp/crabcode-gateway.log"))
+    for candidate in candidates:
         safe_candidate = _known_log_path(candidate)
         if safe_candidate is not None:
             result.setdefault("gateway", safe_candidate)

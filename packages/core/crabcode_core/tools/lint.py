@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.subprocess_utils import (
+    resolve_executable_command,
+    subprocess_group_options,
+    terminate_process_tree,
+)
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 logger = get_logger(__name__)
@@ -109,7 +114,7 @@ def _has_pyproject_section(cwd: str, section_names: set[str]) -> bool:
     if not pyproject.exists():
         return False
     try:
-        text = pyproject.read_text(errors="replace")
+        text = pyproject.read_text(encoding="utf-8", errors="replace")
         return any(f"[tool.{s}]" in text for s in section_names)
     except Exception:
         logger.debug("Failed to read %s while detecting lint config", pyproject, exc_info=True)
@@ -186,7 +191,7 @@ async def _run_linter(
     target_flag = cfg.get("target_flag")
     suffix_args = cfg.get("suffix_args", [])
 
-    full_cmd = list(cmd)
+    full_cmd = resolve_executable_command(list(cmd))
     if not is_project_level:
         if target_flag:
             full_cmd.extend([target_flag, ",".join(targets)])
@@ -201,6 +206,7 @@ async def _run_linter(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            **subprocess_group_options(),
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             proc.communicate(), timeout=timeout
@@ -213,13 +219,11 @@ async def _run_linter(
         return stdout, stderr, proc.returncode or 0
     except asyncio.TimeoutError:
         if proc is not None and proc.returncode is None:
-            proc.kill()
-            await proc.wait()
+            await terminate_process_tree(proc)
         return "", f"Linter timed out after {timeout}s", -1
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
-            proc.kill()
-            await proc.wait()
+            await terminate_process_tree(proc)
         raise
     except FileNotFoundError:
         return "", f"Linter command not found: {cmd[0]}", -1

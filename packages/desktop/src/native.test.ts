@@ -82,6 +82,31 @@ describe("desktop settings migration", () => {
     expect(migrated.connections[0].last_project_id).toBe("/work/crab");
   });
 
+  it("restores a Windows project when the remembered path casing differs", () => {
+    const migrated = normalizeSettings({
+      schema_version: 4,
+      connections: [{
+        id: "local",
+        name: "Local",
+        base_url: "http://127.0.0.1:4096",
+        credential_ref: null,
+        allow_insecure_remote: false,
+        projects: [{
+          id: "project-1",
+          kind: "project",
+          path: "C:\\Work\\Crab",
+          name: "Crab",
+          directories: ["C:\\Work\\Crab"],
+          last_session_id: null,
+        }],
+        last_project_path: "c:\\work\\crab",
+        last_project_id: null,
+      }],
+    } as unknown as DesktopSettings);
+
+    expect(migrated.connections[0].last_project_id).toBe("project-1");
+  });
+
   it("normalizes the project file workspace settings", () => {
     const hidden = normalizeSettings({
       schema_version: 4,

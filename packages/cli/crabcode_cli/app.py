@@ -26,6 +26,14 @@ app.add_typer(document_engine_app, name="document-engine")
 logger = get_logger(__name__)
 
 
+def _configure_utf8_stdio() -> None:
+    """Use UTF-8 for terminal and protocol streams on every platform."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 @document_engine_app.command("status")
 def document_engine_status_cmd(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
@@ -676,6 +684,7 @@ def stats(
 
 
 def entry() -> None:
+    _configure_utf8_stdio()
     known_subcommands = {"main", "sessions", "stats", "gateway", "acp", "document-engine"}
     args = sys.argv[1:]
     # Preserve root --help so users can still discover all subcommands.

@@ -24,6 +24,8 @@ fn configure_python_utf8(command: &mut Command) {
     command
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 fn stop_child_tree(child: &mut Child) -> io::Result<()> {
@@ -239,7 +241,9 @@ fn probe_health(base: &Url, credential_ref: Option<&str>) -> Result<Option<Value
 }
 
 fn python_version(candidate: &str) -> Option<(u32, u32)> {
-    let output = Command::new(candidate).arg("--version").output().ok()?;
+    let mut command = Command::new(candidate);
+    configure_python_utf8(&mut command);
+    let output = command.arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -474,7 +478,9 @@ pub fn remove_document_engine(python_path: Option<String>) -> Result<Value, Stri
 
 fn installed_gateway_version(python: &str) -> Option<String> {
     let script = "import crabcode_gateway; print(getattr(crabcode_gateway, '__version__', ''))";
-    let output = Command::new(python).args(["-c", script]).output().ok()?;
+    let mut command = Command::new(python);
+    configure_python_utf8(&mut command);
+    let output = command.args(["-c", script]).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -484,7 +490,9 @@ fn installed_gateway_version(python: &str) -> Option<String> {
 
 fn install_gateway(python: &str) -> Result<(), String> {
     let package = format!("crabcode[gateway]=={}", env!("CARGO_PKG_VERSION"));
-    let output = Command::new(python)
+    let mut command = Command::new(python);
+    configure_python_utf8(&mut command);
+    let output = command
         .args(["-m", "pip", "install", "--upgrade", &package])
         .output()
         .map_err(|error| format!("Unable to start pip: {error}"))?;
@@ -536,6 +544,7 @@ pub fn ensure_local_gateway(
     let host = base.host_str().unwrap_or("127.0.0.1");
     let port = base.port_or_known_default().unwrap_or(4096).to_string();
     let mut command = Command::new(&python);
+    configure_python_utf8(&mut command);
     command.args([
         "-m",
         "crabcode_cli",

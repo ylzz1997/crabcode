@@ -21,10 +21,19 @@ export interface WorkspaceDirectoryEntry {
   is_symlink?: boolean;
 }
 
+export interface WorkspaceFileEntry {
+  name: string;
+  path: string;
+  size?: number;
+  hidden?: boolean;
+  is_symlink?: boolean;
+}
+
 export interface WorkspaceDirectoryListing {
   path: string;
   parent?: string | null;
   directories?: WorkspaceDirectoryEntry[];
+  files?: WorkspaceFileEntry[];
 }
 
 /** Observable state for the optional semantic-search indexer. */
@@ -87,6 +96,26 @@ export interface TeamTaskSummary {
   failed?: number;
 }
 
+/** One named model as configured and after group inheritance. */
+export interface ModelSettingsEntry {
+  name: string;
+  group?: string | null;
+  is_default?: boolean;
+  configured?: Record<string, unknown>;
+  effective?: Record<string, unknown>;
+  overridden_fields?: string[];
+  sources?: string[];
+}
+
+/** A settings layer that can be selected as a mutation target. */
+export interface ModelSettingsSource {
+  id: "userSettings" | "projectSettings" | "localSettings";
+  label: string;
+  path: string;
+  exists?: boolean;
+  writable?: boolean;
+}
+
 /** Complete persisted message shape used when replaying a session. */
 export interface SessionMessagePayload {
   uuid: string;
@@ -116,6 +145,7 @@ export interface SendMessageRequest {
 
 export interface NewSessionRequest {
   cwd?: string | null;
+  additional_directories?: string[];
   model?: string | null;
   provider?: string | null;
   base_url?: string | null;
@@ -125,6 +155,7 @@ export interface NewSessionRequest {
 
 export interface ResumeSessionRequest {
   session_id: string;
+  additional_directories?: string[];
   model?: string | null;
   provider?: string | null;
   base_url?: string | null;
@@ -216,6 +247,27 @@ export interface SetPermissionModeRequest {
   session_id?: string | null;
 }
 
+/** A focused mutation of the named model configuration catalog. */
+export interface ModelSettingsMutationRequest {
+  action: "upsert_model" | "delete_model" | "upsert_group" | "delete_group" | "set_default_model" | "clear_default_model";
+  source?: "userSettings" | "projectSettings" | "localSettings";
+  cwd?: string | null;
+  name?: string | null;
+  previous_name?: string | null;
+  config?: Record<string, unknown> | null;
+  remove_fields?: string[];
+}
+
+/** A focused mutation for snapshot and extra-tool settings. */
+export interface RuntimeSettingsMutationRequest {
+  action: "set_snapshot" | "add_extra_tool" | "remove_extra_tool";
+  source?: "userSettings" | "projectSettings" | "localSettings";
+  cwd?: string | null;
+  snapshot_enabled?: boolean | null;
+  snapshot_max_size_mb?: number | null;
+  tool_path?: string | null;
+}
+
 export interface GoalRequest {
   action?: "set" | "edit" | "pause" | "resume" | "complete" | "blocked" | "clear";
   objective?: string | null;
@@ -255,6 +307,7 @@ export interface ScheduleCreateRequest {
 export interface ScheduleJobRequest {
   job_id: string;
   session_id?: string | null;
+  scope?: "global" | null;
 }
 
 export interface PeerSendRequest {
@@ -403,6 +456,10 @@ export interface ExportSessionRequest {
   format?: "md" | "json";
 }
 
+export interface WorkspaceDirectoryCreateRequest {
+  path: string;
+}
+
 
 // ── Response / info types ────────────────────────────────────────────
 export interface SessionInfo {
@@ -424,6 +481,7 @@ export interface WorkspaceInfo {
   startup_cwd: string;
   home: string;
   browse_roots?: string[];
+  documents_dir?: string;
 }
 
 export interface GoalInfo {
@@ -496,6 +554,7 @@ export interface MonitorInfo {
 export interface BackgroundTaskInfo {
   task_id: string;
   session_id?: string;
+  cwd?: string;
   description?: string;
   task_type?: string;
   source?: string;
@@ -530,6 +589,7 @@ export interface ScheduleJobInfo {
   timeout?: number | null;
   model_profile?: string | null;
   extra?: Record<string, unknown>;
+  running?: boolean;
 }
 
 export interface ScheduleRunInfo {
@@ -645,6 +705,29 @@ export interface ModelInfo {
   name: string;
   description?: string;
   group?: string;
+}
+
+/** Model configuration visible from one working directory. */
+export interface ModelSettingsResponse {
+  cwd: string;
+  default_model?: string | null;
+  sources?: string[];
+  groups?: Record<string, Record<string, unknown>>;
+  models?: ModelSettingsEntry[];
+  warnings?: string[];
+  editable_sources?: ModelSettingsSource[];
+}
+
+/** Effective snapshot and extra-tool settings visible from a workspace. */
+export interface RuntimeSettingsResponse {
+  cwd: string;
+  snapshot_enabled?: boolean;
+  snapshot_max_size_mb?: number;
+  extra_tools?: string[];
+  extra_tools_by_source?: Record<string, string[]>;
+  sources?: string[];
+  warnings?: string[];
+  editable_sources?: ModelSettingsSource[];
 }
 
 export interface HealthResponse {
@@ -814,6 +897,33 @@ export interface SteeringAppliedPayload {
   count?: number;
 }
 
+export interface DocumentJobPayload {
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  action: string;
+  status: string;
+  type: "document_job";
+  locale?: string;
+  language?: string;
+  source?: string;
+  current?: number;
+  total?: number;
+  message?: string;
+}
+
+export interface DocumentSelectionTranslationPayload {
+  session_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  operation_id: string;
+  locale: string;
+  source_text: string;
+  translated_text: string;
+  type: "document_selection_translation";
+  status?: string;
+  message?: string;
+}
+
 export interface AgentStatePayload {
   session_id?: string;
   operation_id?: string;
@@ -846,6 +956,22 @@ export interface ModeChangePayload {
   mode: string;
   type: "mode_change";
   reason?: string;
+}
+
+export interface ModelChangePayload {
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  session_id: string;
+  model_profile: string;
+  type: "model_change";
+}
+
+export interface PermissionModeChangePayload {
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  session_id: string;
+  permission_mode: "default" | "ask" | "ai_review" | "run_everything";
+  type: "permission_mode_change";
 }
 
 export interface PlanReadyPayload {
@@ -996,9 +1122,13 @@ export type EventPayload =
     TurnCompletePayload |
     StreamModePayload |
     SteeringAppliedPayload |
+    DocumentJobPayload |
+    DocumentSelectionTranslationPayload |
     AgentStatePayload |
     AgentOutputPayload |
     ModeChangePayload |
+    ModelChangePayload |
+    PermissionModeChangePayload |
     PlanReadyPayload |
     PeerMessagePayload |
     TeamMessagePayload |

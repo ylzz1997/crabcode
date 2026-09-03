@@ -5,6 +5,11 @@
   "version": "0.1.4",
   "publisher": "crabcode",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ylzz1997/crabcode.git",
+    "directory": "packages/vscode"
+  },
   "icon": "logo.png",
   "engines": {
     "vscode": "^1.85.0"
@@ -230,11 +235,12 @@
     "package": "vsce package"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.5.14",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   }

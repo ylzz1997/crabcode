@@ -15,25 +15,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from crabcode_core.file_lock import file_lock
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.path_validation import validate_path_component
 from crabcode_core.team.models import TeamMessage
 
 logger = get_logger(__name__)
-
-try:  # POSIX file locking; keep imports usable on Windows.
-    import fcntl  # type: ignore
-except ImportError:  # pragma: no cover
-    fcntl = None  # type: ignore[assignment]
-
-_PROCESS_FILE_LOCK_GUARD = threading.Lock()
-_PROCESS_FILE_LOCKS: dict[str, threading.Lock] = {}
-
-
-def _process_file_lock(path: Path) -> threading.Lock:
-    key = str(path.resolve())
-    with _PROCESS_FILE_LOCK_GUARD:
-        return _PROCESS_FILE_LOCKS.setdefault(key, threading.Lock())
-
 
 class InboxStorage:
     """Manages JSONL inbox files for a team's agents.
@@ -52,15 +39,7 @@ class InboxStorage:
 
     @staticmethod
     def _validate_component(value: str, label: str) -> None:
-        if (
-            not isinstance(value, str)
-            or not value
-            or "\x00" in value
-            or value in {".", ".."}
-        ):
-            raise ValueError(f"Invalid {label}")
-        if Path(value).is_absolute() or "/" in value or "\\" in value:
-            raise ValueError(f"Invalid {label}: path separators are not allowed")
+        validate_path_component(value, label)
 
     def _lock_for(self, team_name: str, agent_id: str) -> threading.Lock:
         return self._locks.setdefault((team_name, agent_id), threading.Lock())
@@ -76,19 +55,8 @@ class InboxStorage:
         """
         self._root.mkdir(parents=True, exist_ok=True)
         lock_path = self._root / f".{team_name}.team.lock"
-        process_lock = _process_file_lock(lock_path)
-        with process_lock:
-            with open(lock_path, "a", encoding="utf-8") as lock_file:
-                if fcntl is not None:
-                    fcntl.flock(
-                        lock_file.fileno(),
-                        fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
-                    )
-                try:
-                    yield
-                finally:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with file_lock(lock_path, exclusive=not shared):
+            yield
 
     def inbox_path(self, team_name: str, agent_id: str) -> Path:
         self._validate_component(team_name, "team name")
@@ -103,18 +71,11 @@ class InboxStorage:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 line = message.model_dump_json() + "\n"
                 lock_path = path.with_name(f".{path.name}.lock")
-                with _process_file_lock(lock_path):
-                    with open(lock_path, "a", encoding="utf-8") as lock_file:
-                        if fcntl is not None:
-                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                        try:
-                            with open(path, "a", encoding="utf-8") as f:
-                                f.write(line)
-                                f.flush()
-                                os.fsync(f.fileno())
-                        finally:
-                            if fcntl is not None:
-                                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                with file_lock(lock_path):
+                    with open(path, "a", encoding="utf-8") as f:
+                        f.write(line)
+                        f.flush()
+                        os.fsync(f.fileno())
 
     async def async_write(self, team_name: str, agent_id: str, message: TeamMessage) -> None:
         """Async version of write."""
@@ -146,23 +107,16 @@ class InboxStorage:
         """Read a file while its caller holds the logical inbox lock."""
         messages: list[TeamMessage] = []
         lock_path = path.with_name(f".{path.name}.lock")
-        with _process_file_lock(lock_path):
-            with open(lock_path, "a", encoding="utf-8") as lock_file:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                messages.append(TeamMessage.model_validate_json(line))
-                            except Exception:
-                                logger.debug("Skipping invalid inbox line", exc_info=True)
-                finally:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with file_lock(lock_path, exclusive=False):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        messages.append(TeamMessage.model_validate_json(line))
+                    except Exception:
+                        logger.debug("Skipping invalid inbox line", exc_info=True)
         return messages
 
     def mark_read(self, team_name: str, agent_id: str, message_ids: set[str] | None = None) -> int:
@@ -205,44 +159,37 @@ class InboxStorage:
         lines = [msg.model_dump_json() + "\n" for msg in messages]
         path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = path.with_name(f".{path.name}.lock")
-        with _process_file_lock(lock_path):
-            with open(lock_path, "a", encoding="utf-8") as lock_file:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        with file_lock(lock_path):
+            current = ""
+            if path.exists():
                 try:
+                    current = path.read_text(encoding="utf-8")
+                except OSError:
                     current = ""
-                    if path.exists():
-                        try:
-                            current = path.read_text(encoding="utf-8")
-                        except OSError:
-                            current = ""
-                    desired = "".join(lines)
-                    merged = self._merge_jsonl(current, desired)
-                    tmp_path: str | None = None
+            desired = "".join(lines)
+            merged = self._merge_jsonl(current, desired)
+            tmp_path: str | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as f:
+                    tmp_path = f.name
+                    f.write(merged)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, path)
+                tmp_path = None
+            finally:
+                if tmp_path is not None:
                     try:
-                        with tempfile.NamedTemporaryFile(
-                            mode="w",
-                            encoding="utf-8",
-                            dir=path.parent,
-                            prefix=f".{path.name}.",
-                            suffix=".tmp",
-                            delete=False,
-                        ) as f:
-                            tmp_path = f.name
-                            f.write(merged)
-                            f.flush()
-                            os.fsync(f.fileno())
-                        os.replace(tmp_path, path)
-                        tmp_path = None
-                    finally:
-                        if tmp_path is not None:
-                            try:
-                                os.unlink(tmp_path)
-                            except OSError:
-                                pass
-                finally:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
     @staticmethod
     def _merge_jsonl(current: str, desired: str) -> str:

@@ -73,7 +73,7 @@ def _authorized_keys(path: str) -> dict[str, Any]:
     if serialization is None or not expanded.is_file():
         return keys
     try:
-        lines = expanded.read_text(errors="replace").splitlines()
+        lines = expanded.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return keys
     for line in lines:

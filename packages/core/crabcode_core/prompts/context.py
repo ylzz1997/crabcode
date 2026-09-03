@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.subprocess_utils import decode_subprocess_output, subprocess_group_options
 
 logger = get_logger(__name__)
 
@@ -25,9 +26,10 @@ async def _run_git(*args: str, cwd: str = ".") -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            **subprocess_group_options(),
         )
         stdout, _ = await proc.communicate()
-        return stdout.decode().strip()
+        return decode_subprocess_output(stdout).strip()
     except Exception:
         logger.debug("Git command failed: git %s", " ".join(args), exc_info=True)
         return ""
@@ -90,7 +92,8 @@ def get_system_context(cwd: str = ".") -> dict[str, str]:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=5,
+            **subprocess_group_options(),
         )
         is_git = result.stdout.strip() == "true"
     except Exception:
@@ -108,19 +111,22 @@ def get_system_context(cwd: str = ".") -> dict[str, str]:
 
             branch = subprocess.run(
                 ["git", "branch", "--show-current"],
-                capture_output=True, text=True, cwd=cwd, timeout=5,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=5,
+                **subprocess_group_options(),
             ).stdout.strip()
             parts.append(f"Current branch: {branch}")
 
             status = subprocess.run(
                 ["git", "--no-optional-locks", "status", "--short"],
-                capture_output=True, text=True, cwd=cwd, timeout=5,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=5,
+                **subprocess_group_options(),
             ).stdout.strip()
             parts.append(f"Status:\n{status or '(clean)'}")
 
             log = subprocess.run(
                 ["git", "--no-optional-locks", "log", "--oneline", "-n", "5"],
-                capture_output=True, text=True, cwd=cwd, timeout=5,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=5,
+                **subprocess_group_options(),
             ).stdout.strip()
             parts.append(f"Recent commits:\n{log}")
 
@@ -161,14 +167,14 @@ def _load_claude_md(cwd: str) -> str | None:
     home_claude_md = home / ".claude" / "CLAUDE.md"
     if home_claude_md.exists():
         try:
-            contents.append(home_claude_md.read_text(errors="replace"))
+            contents.append(home_claude_md.read_text(encoding="utf-8", errors="replace"))
         except Exception:
             logger.warning("Failed to read %s", home_claude_md, exc_info=True)
 
     crabcode_md = home / ".crabcode" / "CLAUDE.md"
     if crabcode_md.exists():
         try:
-            contents.append(crabcode_md.read_text(errors="replace"))
+            contents.append(crabcode_md.read_text(encoding="utf-8", errors="replace"))
         except Exception:
             logger.warning("Failed to read %s", crabcode_md, exc_info=True)
 
@@ -179,7 +185,9 @@ def _load_claude_md(cwd: str) -> str | None:
             candidate = current / name
             if candidate.exists():
                 try:
-                    project_files.append(candidate.read_text(errors="replace"))
+                    project_files.append(
+                        candidate.read_text(encoding="utf-8", errors="replace")
+                    )
                 except Exception:
                     logger.warning("Failed to read %s", candidate, exc_info=True)
         if (current / ".git").exists():

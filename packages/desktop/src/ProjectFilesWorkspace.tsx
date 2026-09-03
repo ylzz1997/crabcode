@@ -33,7 +33,10 @@ import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import remarkGfm from "remark-gfm";
 import type { GatewayApi } from "./gateway";
+import { projectPathKey, sameProjectPath } from "./pathUtils";
 import type { WorkspaceDirectoryEntry, WorkspaceDirectoryListing, WorkspaceFileEntry } from "./types";
+
+export { projectPathKey } from "./pathUtils";
 
 SyntaxHighlighter.registerLanguage("bash", bash);
 SyntaxHighlighter.registerLanguage("css", css);
@@ -110,7 +113,7 @@ export function limitProjectFileTabs(
   const files = state.files.slice(-limit);
   return {
     files,
-    activePath: files.some((file) => file.path === state.activePath)
+    activePath: files.some((file) => sameProjectPath(file.path, state.activePath))
       ? state.activePath
       : files[files.length - 1]?.path ?? null,
   };
@@ -121,7 +124,7 @@ export function activateProjectFileTab(
   file: WorkspaceFileEntry,
   maxTabs = 5,
 ): ProjectFileTabsState {
-  const existing = state.files.findIndex((item) => item.path === file.path);
+  const existing = state.files.findIndex((item) => sameProjectPath(item.path, file.path));
   const limit = normalizeProjectFileTabLimit(maxTabs);
   const retained = existing < 0
     ? limit > 1 ? state.files.slice(-(limit - 1)) : []
@@ -138,12 +141,12 @@ export function closeProjectFileTab(
   state: ProjectFileTabsState,
   path: string,
 ): ProjectFileTabsState {
-  const index = state.files.findIndex((file) => file.path === path);
+  const index = state.files.findIndex((file) => sameProjectPath(file.path, path));
   if (index < 0) return state;
-  const files = state.files.filter((file) => file.path !== path);
+  const files = state.files.filter((file) => !sameProjectPath(file.path, path));
   return {
     files,
-    activePath: state.activePath === path
+    activePath: sameProjectPath(state.activePath, path)
       ? files[Math.min(index, files.length - 1)]?.path ?? null
       : state.activePath,
   };
@@ -154,12 +157,21 @@ function basename(path: string): string {
 }
 
 export function projectFileDisplayPath(path: string, roots: string[]): string {
+  const normalizedPath = projectPathKey(path);
   const matchingRoot = roots
     .map((root) => root.replace(/[\\/]+$/, ""))
-    .filter((root) => root && (path === root || path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)))
+    .filter((root) => {
+      const normalizedRoot = projectPathKey(root);
+      return root && (
+        normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`)
+      );
+    })
     .sort((left, right) => right.length - left.length)[0];
   if (!matchingRoot) return path;
-  const relative = path.slice(matchingRoot.length).replace(/^[\\/]+/, "");
+  const relative = path
+    .slice(matchingRoot.length)
+    .replace(/^[\\/]+/, "")
+    .replace(/\\/g, "/");
   const rootName = basename(matchingRoot);
   if (!relative) return rootName;
   return rootName === "/" ? `/${relative}` : `${rootName}/${relative}`;
@@ -446,7 +458,7 @@ export function ProjectFilesWorkspace({
               .filter((file) => !normalizedFilter || file.name.toLowerCase().includes(normalizedFilter))
               .map((file) => (
                 <button
-                  className={`project-tree-row file ${selectedFile?.path === file.path ? "selected" : ""}`}
+                  className={`project-tree-row file ${sameProjectPath(selectedFile?.path ?? null, file.path) ? "selected" : ""}`}
                   style={{ "--project-tree-depth": depth + 1 } as CSSProperties}
                   type="button"
                   title={`${file.path}\n${formatFileSize(file.size)}`}
@@ -530,7 +542,7 @@ export function ProjectFilesWorkspace({
             </div>
           )}
           {openFiles.map((file) => {
-            const active = selectedFile?.path === file.path;
+            const active = sameProjectPath(selectedFile?.path ?? null, file.path);
             return (
               <div
                 className={`project-file-tab ${active ? "active" : ""}`}

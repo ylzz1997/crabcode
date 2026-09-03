@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from crabcode_core.subprocess_utils import is_process_running
+from crabcode_core.subprocess_utils import is_process_running, subprocess_group_options
 
 # Must be set before ANY native library (FAISS / PyTorch) loads libomp.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -87,6 +87,8 @@ def maybe_spawn_background_indexer(
 
     env = os.environ.copy()
     env["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
 
     with open(log_file, "ab") as log:
@@ -97,6 +99,7 @@ def maybe_spawn_background_indexer(
             stderr=log,
             close_fds=True,
             env=env,
+            **subprocess_group_options(),
         )
 
     _write_status(

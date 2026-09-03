@@ -432,7 +432,7 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="Check if generated file is up-to-date")
     args = parser.parse_args()
 
-    source = SCHEMAS_PATH.read_text()
+    source = SCHEMAS_PATH.read_text(encoding="utf-8")
     models, event_payload_variants = extract_models(source)
     generated = generate_ts(models, event_payload_variants)
 
@@ -440,7 +440,7 @@ def main() -> None:
         if not OUTPUT_PATH.exists():
             print(f"FAIL: {OUTPUT_PATH} does not exist", file=sys.stderr)
             sys.exit(1)
-        existing = OUTPUT_PATH.read_text()
+        existing = OUTPUT_PATH.read_text(encoding="utf-8")
         if existing != generated:
             print(
                 f"FAIL: {OUTPUT_PATH} is out-of-date. Run: python packages/vscode/scripts/gen-types.py",
@@ -451,7 +451,7 @@ def main() -> None:
         sys.exit(0)
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(generated)
+    OUTPUT_PATH.write_text(generated, encoding="utf-8")
     print(f"Generated {OUTPUT_PATH}")
 
 

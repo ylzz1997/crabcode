@@ -19,6 +19,7 @@ from typing import Any
 
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.subprocess_utils import (
+    resolve_executable_command,
     subprocess_group_options,
     terminate_process_tree,
 )
@@ -121,8 +122,9 @@ class LSPClient:
             raise RuntimeError("LSP client already initialised")
 
         # Launch the server process
+        launch_command = resolve_executable_command(self._command)
         self._process = await asyncio.create_subprocess_exec(
-            *self._command,
+            *launch_command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

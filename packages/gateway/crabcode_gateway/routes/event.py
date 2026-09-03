@@ -20,6 +20,10 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from sse_starlette.sse import EventSourceResponse
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.subprocess_utils import (
+    subprocess_group_options,
+    terminate_process_tree,
+)
 from crabcode_gateway.event_bus import EventBus
 from crabcode_gateway.schemas import (
     ChoiceResponsePayload,
@@ -564,6 +568,7 @@ async def _translate_document_precise(
         or key.startswith("DYLD_")
         or key.startswith("LD_")
     }
+    worker_env["PYTHONUTF8"] = "1"
     worker_env["PYTHONIOENCODING"] = "utf-8"
     process = await asyncio.create_subprocess_exec(
         *worker_command,
@@ -571,6 +576,7 @@ async def _translate_document_precise(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=worker_env,
+        **subprocess_group_options(),
     )
     assert process.stdin is not None and process.stdout is not None and process.stderr is not None
 
@@ -703,10 +709,7 @@ async def _translate_document_precise(
         except Exception:
             pass
         if process.returncode is None:
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
+            await terminate_process_tree(process)
         raise
     finally:
         for task in request_tasks:
@@ -714,17 +717,7 @@ async def _translate_document_precise(
         if request_tasks:
             await asyncio.gather(*request_tasks, return_exceptions=True)
         if process.returncode is None:
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=3)
-            except (TimeoutError, ProcessLookupError):
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
+            await terminate_process_tree(process, timeout=3)
         process.stdin.close()
         if not stderr_task.done():
             stderr_task.cancel()

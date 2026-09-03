@@ -40,6 +40,10 @@ pip install crabcode[search,bedrock]
 pip install crabcode[browser,search]
 ```
 
+On Windows PowerShell, set environment variables with
+`$env:ANTHROPIC_API_KEY = "YourKey"` (and use the same `$env:NAME` form for
+the provider-specific keys below).
+
 ### Development
 
 ```bash
@@ -579,13 +583,13 @@ Example:
     "pre_tool_call": [
       {
         "matcher": "Bash",
-        "command": "echo '[pre] tool=$CRABCODE_HOOK_TOOL_NAME'"
+        "command": "python -c \"import os; print('[pre] tool=' + os.getenv('CRABCODE_HOOK_TOOL_NAME', ''))\""
       }
     ],
     "post_tool_call": [
       {
         "matcher": "Bash",
-        "command": "echo '[post] tool=$CRABCODE_HOOK_TOOL_NAME'"
+        "command": "python -c \"import os; print('[post] tool=' + os.getenv('CRABCODE_HOOK_TOOL_NAME', ''))\""
       }
     ],
     "user_prompt_submit": [
@@ -596,7 +600,7 @@ Example:
     "pre_compact": [
       {
         "matcher": "manual",
-        "command": "echo '[compact] trigger is in $CRABCODE_HOOK_PAYLOAD'"
+        "command": "python -c \"import os; print('[compact] trigger is in ' + os.getenv('CRABCODE_HOOK_PAYLOAD', ''))\""
       }
     ]
   }

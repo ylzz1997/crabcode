@@ -434,6 +434,7 @@ def get_system_prompt(
     and task-execution sections are suppressed.
     """
     import os
+    import shutil
     import sys
 
     if profile is None:
@@ -442,7 +443,15 @@ def get_system_prompt(
     if not platform:
         platform = sys.platform
     if not shell:
-        shell = os.environ.get("SHELL", "unknown").split("/")[-1]
+        if os.name == "nt":
+            executable = (
+                shutil.which("pwsh")
+                or shutil.which("powershell")
+                or os.environ.get("COMSPEC")
+            )
+            shell = os.path.basename(executable) if executable else "unknown"
+        else:
+            shell = os.environ.get("SHELL", "unknown").split("/")[-1]
     if not os_version:
         if sys.platform == "win32":
             # Windows 11 self-reports as 10.0; distinguish by build number.

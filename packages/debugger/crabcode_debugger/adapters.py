@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.subprocess_utils import (
+    resolve_executable_command,
+    subprocess_group_options,
+)
+
 
 _EXTENSION_LANGUAGE_MAP: dict[str, str] = {
     ".c": "cpp",
@@ -193,11 +198,12 @@ class AdapterRegistry:
         if probe:
             try:
                 result = subprocess.run(
-                    probe,
+                    resolve_executable_command(probe),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=self._timeout,
                     check=False,
+                    **subprocess_group_options(),
                 )
             except Exception as exc:
                 return AdapterStatus(

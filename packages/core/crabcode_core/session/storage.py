@@ -8,14 +8,16 @@ import os
 import re
 import shutil
 import subprocess
-import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from crabcode_core.file_lock import file_lock
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.path_validation import validate_path_component
+from crabcode_core.subprocess_utils import subprocess_group_options
 from crabcode_core.types.message import Message
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree
 
@@ -26,53 +28,12 @@ class SessionArchivedError(RuntimeError):
     """Raised when a writer targets a durably archived session."""
 
 
-try:  # POSIX file locking.
-    import fcntl  # type: ignore
-except ImportError:  # pragma: no cover - exercised only on Windows
-    fcntl = None  # type: ignore[assignment]
-
-try:  # Windows byte-range locking for cooperating CrabCode processes.
-    import msvcrt  # type: ignore
-except ImportError:  # pragma: no cover - exercised only on POSIX
-    msvcrt = None  # type: ignore[assignment]
-
-_TRANSCRIPT_LOCK_GUARD = threading.Lock()
-_TRANSCRIPT_LOCKS: dict[str, threading.Lock] = {}
-
-
-def _transcript_process_lock(path: Path) -> threading.Lock:
-    key = str(path.resolve())
-    with _TRANSCRIPT_LOCK_GUARD:
-        return _TRANSCRIPT_LOCKS.setdefault(key, threading.Lock())
-
-
 @contextmanager
 def _transcript_file_lock(path: Path, *, exclusive: bool):
     """Serialize transcript access across threads and cooperating processes."""
     lock_path = path.with_name(f".{path.name}.lock")
-    process_lock = _transcript_process_lock(lock_path)
-    with process_lock:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(lock_path, "a", encoding="utf-8") as lock_file:
-            if fcntl is not None:
-                mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-                fcntl.flock(lock_file.fileno(), mode)
-            elif msvcrt is not None:
-                lock_file.seek(0, os.SEEK_END)
-                if lock_file.tell() == 0:
-                    lock_file.write("\0")
-                    lock_file.flush()
-                lock_file.seek(0)
-                mode = msvcrt.LK_LOCK if exclusive else msvcrt.LK_RLCK
-                msvcrt.locking(lock_file.fileno(), mode, 1)
-            try:
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                elif msvcrt is not None:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    with file_lock(lock_path, exclusive=exclusive):
+        yield
 
 
 def get_config_home() -> Path:
@@ -93,21 +54,42 @@ def _sanitize_path(path: str) -> str:
     return sanitized
 
 
+def _windows_extended_path(path: Path) -> Path:
+    """Return an extended-length path for legacy Windows session locations."""
+    if os.name != "nt":
+        return path
+    raw = os.path.abspath(str(path))
+    if raw.startswith("\\\\?\\"):
+        return Path(raw)
+    if raw.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + raw[2:])
+    return Path("\\\\?\\" + raw)
+
+
 def _project_path_hash(cwd: str) -> str:
     """Return a stable collision-resistant key for an absolute project path."""
-    absolute = os.path.abspath(cwd)
-    return hashlib.sha256(os.fsencode(absolute)).hexdigest()[:20]
+    identity = os.path.normcase(os.path.abspath(cwd))
+    return hashlib.sha256(os.fsencode(identity)).hexdigest()[:20]
 
 
 def _legacy_project_dir(cwd: str) -> Path:
     """Return the pre-hash project directory used by older CrabCode builds."""
-    return get_projects_dir() / _sanitize_path(os.path.abspath(cwd))
+    path = get_projects_dir() / _sanitize_path(os.path.abspath(cwd))
+    return _windows_extended_path(path)
 
 
 def _hashed_project_dir(cwd: str, prefix_length: int) -> Path:
+    identity = os.path.normcase(os.path.abspath(cwd))
+    prefix = _sanitize_path(identity)[:prefix_length]
+    return get_projects_dir() / f"{prefix}--{_project_path_hash(identity)}"
+
+
+def _case_sensitive_hashed_project_dir(cwd: str, prefix_length: int) -> Path:
+    """Return the pre-Windows-normalization hashed directory."""
     absolute = os.path.abspath(cwd)
     prefix = _sanitize_path(absolute)[:prefix_length]
-    return get_projects_dir() / f"{prefix}--{_project_path_hash(absolute)}"
+    digest = hashlib.sha256(os.fsencode(absolute)).hexdigest()[:20]
+    return get_projects_dir() / f"{prefix}--{digest}"
 
 
 def _validate_component(value: str, label: str) -> str:
@@ -118,13 +100,7 @@ def _validate_component(value: str, label: str) -> str:
     distinct IDs collide, so reject path separators and other filesystem
     control components at the storage boundary instead.
     """
-    if not isinstance(value, str) or not value or value in {".", ".."}:
-        raise ValueError(f"Invalid {label}")
-    if Path(value).is_absolute() or "/" in value or "\\" in value:
-        raise ValueError(f"Invalid {label}: path separators are not allowed")
-    if any(ord(char) < 32 for char in value):
-        raise ValueError(f"Invalid {label}: control characters are not allowed")
-    return value
+    return validate_path_component(value, label)
 
 
 def _dump_jsonl_line(obj: Any) -> str:
@@ -170,13 +146,19 @@ def get_project_dir(cwd: str) -> Path:
 
 def _previous_hashed_project_dir(cwd: str) -> Path:
     """Return the longer hashed directory used by CrabCode 0.1.4 and earlier."""
-    return _hashed_project_dir(cwd, 175)
+    return _windows_extended_path(_case_sensitive_hashed_project_dir(cwd, 175))
+
+
+def _case_sensitive_project_dir(cwd: str) -> Path:
+    """Return the previous 64-character, case-sensitive project directory."""
+    return _windows_extended_path(_case_sensitive_hashed_project_dir(cwd, 64))
 
 
 def _project_dirs_for_read(cwd: str) -> list[Path]:
     """Return the current project directory plus its legacy compatibility path."""
     directories = [
         get_project_dir(cwd),
+        _case_sensitive_project_dir(cwd),
         _previous_hashed_project_dir(cwd),
         _legacy_project_dir(cwd),
     ]
@@ -217,7 +199,9 @@ def _session_project_dir(cwd: str, session_id: str) -> Path:
         if directory != legacy:
             return directory
         declared_cwd = _transcript_declared_cwd(transcript)
-        if declared_cwd is None or declared_cwd == os.path.abspath(cwd):
+        if declared_cwd is None or os.path.normcase(declared_cwd) == os.path.normcase(
+            os.path.abspath(cwd)
+        ):
             return directory
     return current
 
@@ -299,17 +283,20 @@ def _get_git_info(cwd: str) -> dict[str, str | None]:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=5,
+            **subprocess_group_options(),
         )
         if result.stdout.strip() != "true":
             return info
         branch = subprocess.run(
             ["git", "branch", "--show-current"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=5,
+            **subprocess_group_options(),
         ).stdout.strip()
         sha = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=5,
+            **subprocess_group_options(),
         ).stdout.strip()
         if branch:
             info["git_branch"] = branch
@@ -1617,7 +1604,8 @@ class SessionStorage:
                 if (
                     isinstance(declared_cwd, str)
                     and declared_cwd
-                    and os.path.abspath(declared_cwd) != abs_cwd
+                    and os.path.normcase(os.path.abspath(declared_cwd))
+                    != os.path.normcase(abs_cwd)
                 ):
                     continue
                 if archived or meta_info.get("is_archived"):
@@ -1736,7 +1724,10 @@ def purge_session_artifacts(cwd: str, session_id: str) -> None:
             if project_dir == legacy_dir:
                 legacy_transcript = project_dir / f"{validated_id}.jsonl"
                 declared_cwd = _transcript_declared_cwd(legacy_transcript)
-                if declared_cwd is not None and declared_cwd != absolute_cwd:
+                if (
+                    declared_cwd is not None
+                    and os.path.normcase(declared_cwd) != os.path.normcase(absolute_cwd)
+                ):
                     continue
             artifacts = (
                 (project_dir / f"{validated_id}.jsonl", False),

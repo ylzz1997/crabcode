@@ -9,6 +9,12 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from crabcode_core.subprocess_utils import (
+    resolve_executable_command,
+    subprocess_group_options,
+    terminate_process_tree,
+)
+
 
 class DAPError(Exception):
     """Raised when a DAP request fails."""
@@ -54,13 +60,15 @@ class DAPClient:
             if self._process.returncode is None:
                 return
             raise DAPError(f"debug adapter exited with code {self._process.returncode}")
+        launch_command = resolve_executable_command(self.command)
         self._process = await asyncio.create_subprocess_exec(
-            *self.command,
+            *launch_command,
             cwd=self.cwd,
             env=self.env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **subprocess_group_options(),
         )
         self._reader_task = asyncio.create_task(self._reader_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
@@ -91,12 +99,7 @@ class DAPClient:
         self._stderr_task = None
 
         if self._process and self._process.returncode is None:
-            self._process.terminate()
-            try:
-                await asyncio.wait_for(self._process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                self._process.kill()
-                await self._process.wait()
+            await terminate_process_tree(self._process)
         self._process = None
 
     async def request(

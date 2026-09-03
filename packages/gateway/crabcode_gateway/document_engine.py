@@ -26,6 +26,7 @@ from typing import Any, Callable
 
 import httpx
 
+from crabcode_core.subprocess_utils import subprocess_group_options
 from crabcode_gateway import __version__ as CRABCODE_VERSION
 
 
@@ -37,6 +38,25 @@ ENGINE_WORKER_NAME = "document-worker.py"
 MAX_ENGINE_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024
 ESTIMATED_ENGINE_BUNDLE_BYTES = 550 * 1024 * 1024
 ProgressCallback = Callable[[str], None]
+
+
+def _run_text_command(
+    command: list[str],
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[str]:
+    """Run an engine helper with deterministic UTF-8 and no Windows popup."""
+    environment = os.environ.copy()
+    environment["PYTHONUTF8"] = "1"
+    environment["PYTHONIOENCODING"] = "utf-8"
+    return subprocess.run(
+        command,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        **subprocess_group_options(),
+        **kwargs,
+    )
 
 
 def document_engine_root() -> Path:
@@ -105,7 +125,7 @@ def _verify_asset_manifest(root: Path) -> str | None:
 
 def _verify_engine_runtime(root: Path) -> str | None:
     try:
-        check = subprocess.run(
+        check = _run_text_command(
             [
                 str(_venv_python(root)),
                 "-c",
@@ -117,7 +137,6 @@ def _verify_engine_runtime(root: Path) -> str | None:
                 ),
             ],
             capture_output=True,
-            text=True,
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
@@ -328,10 +347,9 @@ def _extract_and_verify_bundle(bundle: Path, destination: Path) -> dict[str, Any
 
 def _create_engine_venv(stage: Path, notify: ProgressCallback) -> Path:
     notify("正在创建独立 Python 环境")
-    created = subprocess.run(
+    created = _run_text_command(
         [sys.executable, "-m", "venv", str(stage / "venv")],
         capture_output=True,
-        text=True,
     )
     if created.returncode != 0:
         raise RuntimeError(created.stderr.strip() or "unable to create document engine environment")
@@ -402,7 +420,7 @@ def _install_document_engine_from_official_source(
     try:
         engine_python = _create_engine_venv(stage, notify)
         notify("正在从 BabelDOC 官方源安装程序与依赖")
-        install = subprocess.run(
+        install = _run_text_command(
             [
                 str(engine_python),
                 "-m",
@@ -413,7 +431,6 @@ def _install_document_engine_from_official_source(
                 f"BabelDOC=={BABELDOC_VERSION}",
             ],
             capture_output=True,
-            text=True,
         )
         if install.returncode != 0:
             raise RuntimeError(install.stderr.strip() or "BabelDOC installation failed")
@@ -421,7 +438,7 @@ def _install_document_engine_from_official_source(
         assets = stage / "assets"
         assets.mkdir()
         notify("正在下载并校验 BabelDOC 官方模型与字体")
-        warmup = subprocess.run(
+        warmup = _run_text_command(
             [
                 str(engine_python),
                 "-c",
@@ -438,7 +455,6 @@ def _install_document_engine_from_official_source(
                 str(assets),
             ],
             capture_output=True,
-            text=True,
         )
         if warmup.returncode != 0:
             raise RuntimeError(warmup.stderr.strip() or warmup.stdout.strip() or "BabelDOC asset download failed")
@@ -500,7 +516,7 @@ def _install_document_engine(
         try:
             engine_python = _create_engine_venv(stage, notify)
             notify("正在安装高精度 PDF 引擎")
-            install = subprocess.run(
+            install = _run_text_command(
                 [
                     str(engine_python),
                     "-m",
@@ -512,11 +528,10 @@ def _install_document_engine(
                     f"BabelDOC=={BABELDOC_VERSION}",
                 ],
                 capture_output=True,
-                text=True,
             )
             if install.returncode != 0:
                 raise RuntimeError(install.stderr.strip() or "offline engine installation failed")
-            install_crabcode = subprocess.run(
+            install_crabcode = _run_text_command(
                 [
                     str(engine_python),
                     "-m",
@@ -529,7 +544,6 @@ def _install_document_engine(
                     f"crabcode=={CRABCODE_VERSION}",
                 ],
                 capture_output=True,
-                text=True,
             )
             if install_crabcode.returncode != 0:
                 raise RuntimeError(install_crabcode.stderr.strip() or "offline CrabCode worker installation failed")

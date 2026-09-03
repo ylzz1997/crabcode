@@ -17,7 +17,7 @@ from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 class BashTool(Tool):
     name = "Bash"
-    description = "Execute a bash command in the shell."
+    description = "Execute a command in the active platform shell."
     is_read_only = False
     is_concurrency_safe = False
     input_schema = {
@@ -25,7 +25,7 @@ class BashTool(Tool):
         "properties": {
             "command": {
                 "type": "string",
-                "description": "The bash command to execute.",
+                "description": "The platform-shell command to execute.",
             },
             "timeout": {
                 "type": "integer",
@@ -36,8 +36,15 @@ class BashTool(Tool):
     }
 
     async def get_prompt(self, **kwargs: Any) -> str:
+        windows_chaining = (
+            "- On Windows, commands run in PowerShell. Do not assume `&&` is "
+            "available because Windows PowerShell 5.1 does not support it; "
+            "use `; if ($?) { ... }` for conditional sequencing.\n"
+            if os.name == "nt"
+            else ""
+        )
         return (
-            "Execute a bash command in the shell. Use for system commands, "
+            "Execute a command in the active platform shell. Use for system commands, "
             "running scripts, git operations, and other terminal tasks. "
             "Prefer dedicated tools (Read, Edit, Write, Glob, Grep) over "
             "bash when they can accomplish the task.\n\n"
@@ -58,6 +65,7 @@ class BashTool(Tool):
             "- If commands depend on each other and must run sequentially, "
             "use the active platform shell's conditional chaining syntax in "
             "a single call.\n"
+            f"{windows_chaining}"
             "- Do NOT use interactive commands (e.g., git rebase -i, "
             "vim, nano) — they require user input that is not supported.\n"
             "- If a command fails, read the error output carefully before "

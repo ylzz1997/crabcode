@@ -28,6 +28,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, HttpUrl
 from pypdf import PdfReader
 
+from crabcode_core.path_validation import validate_path_component
+from crabcode_core.subprocess_utils import (
+    decode_subprocess_output,
+    subprocess_group_options,
+    terminate_process_tree,
+)
 from crabcode_gateway.schemas import WorkspaceInfo
 
 
@@ -167,7 +173,12 @@ def _validated_workspace(value: str, roots: tuple[Path, ...]) -> Path:
 def _safe_name(value: str, fallback: str = "document") -> str:
     name = Path(value.replace("\\", "/")).name.strip()
     name = re.sub(r"[<>:\"/\\|?*\x00-\x1f]", "-", name).rstrip(". ")
-    return name[:180] or fallback
+    name = name[:180] or fallback
+    try:
+        validate_path_component(name, "document filename")
+    except ValueError:
+        name = f"_{name}"[:180]
+    return name
 
 
 def _file_extension(filename: str) -> str:
@@ -314,16 +325,19 @@ async def _convert_to_pdf(source: Path, extension: str, internal: Path) -> Path:
         str(conversion_input),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **subprocess_group_options(),
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
     except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.wait()
+        await terminate_process_tree(process)
         raise HTTPException(status_code=504, detail="Document conversion timed out") from exc
+    except asyncio.CancelledError:
+        await terminate_process_tree(process)
+        raise
     candidates = list(output_dir.glob("*.pdf"))
     if process.returncode != 0 or len(candidates) != 1:
-        detail = (stderr or stdout).decode("utf-8", errors="replace").strip()[-500:]
+        detail = decode_subprocess_output(stderr or stdout).strip()[-500:]
         raise HTTPException(status_code=422, detail=f"Document conversion failed: {detail or 'no PDF produced'}")
     shutil.move(str(candidates[0]), rendered)
     return rendered

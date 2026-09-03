@@ -6,6 +6,7 @@ import type {
   ProjectPreset,
   SessionInfo,
 } from "./types";
+import { projectPathKey } from "./pathUtils";
 
 export type FavoriteViewEntry =
   | { kind: "folder"; entry: FavoriteFolder; children: FavoriteViewEntry[] }
@@ -112,7 +113,13 @@ export function resolveFavoriteEntries(
     const project = connection.projects.find((item) => item.id === entry.project_id);
     if (!project) return [];
     if (entry.type === "project") return [{ kind: "project", entry, project }];
-    const session = (gateway.sessionsByProject[project.path] ?? [])
+    const projectKey = projectPathKey(project.path);
+    const projectSessions = gateway.sessionsByProject[project.path]
+      ?? Object.entries(gateway.sessionsByProject).find(
+        ([path]) => projectPathKey(path) === projectKey,
+      )?.[1]
+      ?? [];
+    const session = projectSessions
       .find((item) => item.session_id === entry.session_id);
     return session ? [{ kind: "session", entry, project, session }] : [];
   });

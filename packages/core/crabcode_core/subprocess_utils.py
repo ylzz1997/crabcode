@@ -20,6 +20,22 @@ _POWERSHELL_UTF8_SETUP = (
 )
 
 
+def resolve_executable_command(command: list[str]) -> list[str]:
+    """Resolve the executable token, including Windows ``.cmd`` shims.
+
+    Windows ``CreateProcess`` does not apply ``PATHEXT`` consistently for a
+    bare command passed to ``subprocess``/``asyncio``. ``shutil.which`` does,
+    so replacing the first token makes npm-installed launchers work without a
+    shell and keeps argument handling safe.
+    """
+    if not command:
+        raise ValueError("command must not be empty")
+    if os.name != "nt":
+        return list(command)
+    resolved = shutil.which(command[0])
+    return [resolved or command[0], *command[1:]]
+
+
 def shell_command(command: str) -> list[str]:
     """Return an explicit platform shell invocation with UTF-8 output."""
     if os.name == "nt":
@@ -49,7 +65,13 @@ def powershell_command(executable: str, command: str) -> list[str]:
 
 def subprocess_group_options() -> dict[str, Any]:
     """Options used for processes that may need tree-wide cancellation."""
-    return {"start_new_session": True} if os.name != "nt" else {}
+    if os.name != "nt":
+        return {"start_new_session": True}
+    # CrabCode subprocesses are non-interactive and communicate through pipes.
+    # Prevent console programs spawned by the GUI/Gateway from flashing a new
+    # terminal window on Windows.
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": creation_flags} if creation_flags else {}
 
 
 def decode_subprocess_output(data: bytes) -> str:

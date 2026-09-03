@@ -40,6 +40,9 @@ pip install crabcode[search,bedrock]
 pip install crabcode[browser,search]
 ```
 
+Windows PowerShell 请使用 `$env:ANTHROPIC_API_KEY = "YourKey"` 设置环境变量；
+下文其它供应商的 Key 同样使用 `$env:变量名` 形式。
+
 ### 开发模式
 
 ```bash
@@ -568,13 +571,13 @@ CrabCode 会估算完整请求（system prompt、消息、工具调用/结果、
     "pre_tool_call": [
       {
         "matcher": "Bash",
-        "command": "echo '[pre] tool=$CRABCODE_HOOK_TOOL_NAME'"
+        "command": "python -c \"import os; print('[pre] tool=' + os.getenv('CRABCODE_HOOK_TOOL_NAME', ''))\""
       }
     ],
     "post_tool_call": [
       {
         "matcher": "Bash",
-        "command": "echo '[post] tool=$CRABCODE_HOOK_TOOL_NAME'"
+        "command": "python -c \"import os; print('[post] tool=' + os.getenv('CRABCODE_HOOK_TOOL_NAME', ''))\""
       }
     ],
     "user_prompt_submit": [
@@ -585,7 +588,7 @@ CrabCode 会估算完整请求（system prompt、消息、工具调用/结果、
     "pre_compact": [
       {
         "matcher": "manual",
-        "command": "echo '[compact] trigger 位于 $CRABCODE_HOOK_PAYLOAD'"
+        "command": "python -c \"import os; print('[compact] trigger 位于 ' + os.getenv('CRABCODE_HOOK_PAYLOAD', ''))\""
       }
     ]
   }

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { legacyFavoriteEntries, normalizeFavoriteEntries } from "./favorites";
+import { projectPathKey } from "./pathUtils";
 import {
   DEFAULT_DARK_THEME,
   DEFAULT_LIGHT_THEME,
@@ -312,7 +313,8 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
         projects,
         favorite_items: favoriteItems,
         last_project_id: connection.last_project_id
-          ?? projects.find((project) => project.path === connection.last_project_path)?.id
+          ?? projects.find((project) => typeof connection.last_project_path === "string"
+            && projectPathKey(project.path) === projectPathKey(connection.last_project_path))?.id
           ?? connection.last_project_path
           ?? null,
       };

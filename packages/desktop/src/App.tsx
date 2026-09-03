@@ -106,6 +106,7 @@ import {
   activateProjectFileTab,
   closeProjectFileTab,
   limitProjectFileTabs,
+  projectPathKey,
   ProjectFilesWorkspace,
   type ProjectFileTabsState,
 } from "./ProjectFilesWorkspace";
@@ -488,8 +489,19 @@ function basename(path: string): string {
 }
 
 function comparablePath(path: string): string {
-  const normalized = path.trim().replace(/[\\/]+$/, "").replace(/\\/g, "/");
-  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+  return projectPathKey(path.trim());
+}
+
+function sessionsForProject(
+  sessionsByProject: Record<string, SessionInfo[]>,
+  projectPath: string,
+): SessionInfo[] {
+  const direct = sessionsByProject[projectPath];
+  if (direct) return direct;
+  const key = projectPathKey(projectPath);
+  return Object.entries(sessionsByProject).find(
+    ([candidate]) => projectPathKey(candidate) === key,
+  )?.[1] ?? [];
 }
 
 export function defaultProjectDirectory(home: string, name: string): string {
@@ -758,7 +770,8 @@ function App() {
   const activeProject = activeConnection?.projects.find(
     (item) => item.id === activeConnection.last_project_id,
   ) ?? activeConnection?.projects.find(
-    (item) => item.path === activeConnection.last_project_path,
+    (item) => typeof activeConnection.last_project_path === "string"
+      && projectPathKey(item.path) === projectPathKey(activeConnection.last_project_path),
   ) ?? activeConnection?.projects[0] ?? null;
   useEffect(() => {
     setProjectFilesOpen(false);
@@ -772,9 +785,12 @@ function App() {
   const activeSession = activeSessionKey ? sessions[activeSessionKey] : null;
   const activeChannel = activeSessionKey ? channelRef.current.get(activeSessionKey) : null;
   const activeConversationView = activeSessionKey ? conversationViews[activeSessionKey] ?? "chat" : "chat";
-  const selectedProjectFile = projectFileTabs.files.find((file) => file.path === projectFileTabs.activePath) ?? null;
+  const selectedProjectFile = projectFileTabs.files.find(
+    (file) => projectFileTabs.activePath !== null
+      && projectPathKey(file.path) === projectPathKey(projectFileTabs.activePath),
+  ) ?? null;
   const activeList = activeProject?.directories.length
-    ? activeGateway?.sessionsByProject[activeProject.path] ?? []
+    ? sessionsForProject(activeGateway?.sessionsByProject ?? {}, activeProject.path)
     : [];
   // The HTTP session list is persisted metadata and can briefly lag behind
   // the live WebSocket state (especially while the first title is generated).
@@ -784,7 +800,7 @@ function App() {
     if (
       !activeSession
       || !activeProject
-      || activeSession.cwd !== activeProject.path
+      || projectPathKey(activeSession.cwd) !== projectPathKey(activeProject.path)
       || activeSession.id.startsWith("new-")
       || activeSession.items.length === 0
     ) return activeList;
@@ -1096,21 +1112,26 @@ function App() {
   const refreshProjectSessions = useCallback(async (connectionId: string, cwd: string) => {
     const api = apiRef.current.get(connectionId);
     if (!api) return;
-    const refreshKey = `${connectionId}\u0000${cwd}`;
+    const refreshKey = `${connectionId}\u0000${projectPathKey(cwd)}`;
     const version = (sessionRefreshVersionRef.current.get(refreshKey) ?? 0) + 1;
     sessionRefreshVersionRef.current.set(refreshKey, version);
     const list = await api.sessions(cwd);
     if (sessionRefreshVersionRef.current.get(refreshKey) !== version) return;
-    setGateways((current) => ({
-      ...current,
-      [connectionId]: {
-        ...(current[connectionId] ?? EMPTY_GATEWAY),
-        sessionsByProject: {
-          ...(current[connectionId]?.sessionsByProject ?? {}),
-          [cwd]: list,
+    setGateways((current) => {
+      const existing = current[connectionId]?.sessionsByProject ?? {};
+      const key = projectPathKey(cwd);
+      const sessionsByProject = Object.fromEntries(
+        Object.entries(existing).filter(([path]) => projectPathKey(path) !== key),
+      );
+      sessionsByProject[cwd] = list;
+      return {
+        ...current,
+        [connectionId]: {
+          ...(current[connectionId] ?? EMPTY_GATEWAY),
+          sessionsByProject,
         },
-      },
-    }));
+      };
+    });
   }, []);
 
   const updateSessionStatus = useCallback(async (
@@ -1280,7 +1301,7 @@ function App() {
         ? withFavoriteItems({
           ...connection,
           projects: connection.projects.map((project) => (
-            project.path === target.cwd
+            projectPathKey(project.path) === projectPathKey(target.cwd)
               ? (() => {
                 const { [target.sessionId]: _, ...sessionPreferences } = project.session_preferences ?? {};
                 return {
@@ -1293,7 +1314,8 @@ function App() {
           )),
         }, removeFavoriteEntries(favoriteEntries(connection), (entry) => entry.type === "session"
           && entry.session_id === target.sessionId
-          && connection.projects.some((project) => project.id === entry.project_id && project.path === target.cwd)))
+          && connection.projects.some((project) => project.id === entry.project_id
+            && projectPathKey(project.path) === projectPathKey(target.cwd))))
         : connection),
     }));
 
@@ -1707,7 +1729,10 @@ function App() {
   useEffect(() => {
     if (!activeConnection || activeGateway?.status !== "online") return;
     const cwd = activeProject?.path ?? activeGateway.workspace?.startup_cwd;
-    const sessionId = activeSession && activeSession.cwd === cwd ? activeSession.id : undefined;
+    const sessionId = activeSession && cwd
+      && projectPathKey(activeSession.cwd) === projectPathKey(cwd)
+      ? activeSession.id
+      : undefined;
     void refreshSchedules(activeConnection.id);
     void refreshPlugins(activeConnection.id, sessionId, cwd);
   }, [
@@ -1942,7 +1967,8 @@ function App() {
     });
     const lastId = project.last_session_id;
     if (lastId) {
-      const info = activeGateway?.sessionsByProject[project.path]?.find((item) => item.session_id === lastId);
+      const info = sessionsForProject(activeGateway?.sessionsByProject ?? {}, project.path)
+        .find((item) => item.session_id === lastId);
       if (info) {
         openSession(activeConnection, project, info);
         return;
@@ -2367,7 +2393,8 @@ function App() {
   function resolveVisibleSession(selector: string): { project: ProjectPreset; session: SessionInfo } | null {
     if (!activeConnection || !activeGateway) return null;
     const candidates = activeConnection.projects.flatMap((project) => (
-      (activeGateway.sessionsByProject[project.path] ?? []).map((session) => ({ project, session }))
+      sessionsForProject(activeGateway.sessionsByProject, project.path)
+        .map((session) => ({ project, session }))
     ));
     const exact = candidates.find(({ session }) => session.session_id === selector);
     if (exact) return exact;
@@ -2644,7 +2671,8 @@ function App() {
   const favoriteItemCount = countFavoriteItems(activeFavoriteEntries);
   const activeJobs = activeConnection ? scheduleJobs[activeConnection.id] ?? [] : [];
   const activeMonitorTasks = activeConnection ? monitorTasks[activeConnection.id] ?? [] : [];
-  const resourceSessionId = activeSession && activeSession.cwd === activeProject?.path
+  const resourceSessionId = activeSession && activeProject
+    && projectPathKey(activeSession.cwd) === projectPathKey(activeProject.path)
     ? activeSession.id
     : undefined;
   const activePluginData = activeConnection
@@ -2743,13 +2771,13 @@ function App() {
       && previous.sessionId.startsWith("new-")
       && !activeSession.id.startsWith("new-")
       && activeSessionKey === sessionKey(activeConnection?.id ?? "", activeSession.id)
-      && activeSession.cwd === previous.cwd
+      && projectPathKey(activeSession.cwd) === projectPathKey(previous.cwd)
       && activeSession.items.length === 0,
     );
     const changedFocus = previous && (
       previous.key !== activeSessionKey
       || previous.view !== workspaceView
-      || previous.projectPath !== nextProjectPath
+      || projectPathKey(previous.projectPath) !== projectPathKey(nextProjectPath)
     );
     // Only discard a never-materialized handshake session. A real session ID
     // is durable state and must never be archived as a side effect of focus
@@ -3795,7 +3823,8 @@ function App() {
               ))}
               onCloseFile={(path) => setProjectFileTabs((current) => closeProjectFileTab(current, path))}
               onReference={(file) => setPendingFiles((current) => (
-                current.some((item) => item.mode === "path" && item.path === file.path)
+                current.some((item) => item.mode === "path" && item.path
+                  && projectPathKey(item.path) === projectPathKey(file.path))
                   ? current
                   : [...current, {
                     id: crypto.randomUUID(),
@@ -3902,11 +3931,13 @@ function App() {
           onClose={() => setProjectModal(null)}
           onSave={(project) => {
             const previousProject = projectModal === "new" ? null : projectModal;
-            if (previousProject && previousProject.id === activeProject?.id && previousProject.path !== project.path) {
+            if (previousProject && previousProject.id === activeProject?.id
+              && projectPathKey(previousProject.path) !== projectPathKey(project.path)) {
               setActiveSessions((current) => ({ ...current, [activeConnection.id]: null }));
             }
             updateConnection(activeConnection.id, (connection) => {
-              const changedPrimaryPath = Boolean(previousProject && previousProject.path !== project.path);
+              const changedPrimaryPath = Boolean(previousProject
+                && projectPathKey(previousProject.path) !== projectPathKey(project.path));
               const favoriteItems = changedPrimaryPath
                 ? removeFavoriteEntries(favoriteEntries(connection), (entry) => (
                   entry.type === "session" && entry.project_id === project.id
@@ -3946,7 +3977,8 @@ function App() {
             if (kind === "folder") {
               setPendingFolders((current) => current.includes(path) ? current : [...current, path]);
             } else {
-              setPendingFiles((current) => current.some((file) => file.mode === "path" && file.path === path)
+              setPendingFiles((current) => current.some((file) => file.mode === "path" && file.path
+                && projectPathKey(file.path) === projectPathKey(path))
                 ? current
                 : [...current, {
                   id: crypto.randomUUID(),
@@ -4074,12 +4106,16 @@ export function ScheduledTasksView({
       && !task.agent_id
     ))
     .map((task) => {
-      const project = projects.find((item) => item.path === task.cwd)
+      const taskCwd = task.cwd;
+      const project = (typeof taskCwd === "string" ? projects.find(
+        (item) => projectPathKey(item.path) === projectPathKey(taskCwd),
+      ) : undefined)
         ?? projects.find((item) => (
-          sessionsByProject[item.path]?.some((session) => session.session_id === task.session_id)
+          sessionsForProject(sessionsByProject, item.path)
+            .some((session) => session.session_id === task.session_id)
         ))
         ?? null;
-      const session = (project ? sessionsByProject[project.path] : undefined)
+      const session = (project ? sessionsForProject(sessionsByProject, project.path) : undefined)
         ?.find((item) => item.session_id === task.session_id)
         ?? Object.values(sessionsByProject).flat()
           .find((item) => item.session_id === task.session_id)
@@ -6413,8 +6449,14 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
         name: name.trim() || suggestedName,
         directories: savedDirectories,
         is_default: project?.is_default === true,
-        last_session_id: project?.path === primaryPath ? project.last_session_id : null,
-        favorite_session_ids: project?.path === primaryPath ? project.favorite_session_ids ?? [] : [],
+        last_session_id: project
+          && projectPathKey(project.path) === projectPathKey(primaryPath)
+          ? project.last_session_id
+          : null,
+        favorite_session_ids: project
+          && projectPathKey(project.path) === projectPathKey(primaryPath)
+          ? project.favorite_session_ids ?? []
+          : [],
       });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -6431,7 +6473,9 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
         selectLabel="加入此目录"
         onClose={() => setChoosingDirectory(false)}
         onSelect={(path) => {
-          setDirectories((current) => current.includes(path) ? current : [...current, path]);
+          setDirectories((current) => current.some(
+            (item) => projectPathKey(item) === projectPathKey(path),
+          ) ? current : [...current, path]);
           setError(null);
           setChoosingDirectory(false);
         }}
@@ -6535,7 +6579,8 @@ export function DirectoryModal({
       .then(setListing)
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
   }, [allowFiles, api, path, showHidden]);
-  const selectedFileEntry = listing?.files?.find((file) => file.path === selectedFile) ?? null;
+  const selectedFileEntry = listing?.files?.find((file) => selectedFile !== null
+    && projectPathKey(file.path) === projectPathKey(selectedFile)) ?? null;
   return (
     <Modal title={title} onClose={onClose} wide>
       <div className="directory-roots">
@@ -6560,7 +6605,8 @@ export function DirectoryModal({
         {allowFiles && (listing?.files ?? []).map((file) => (
           <button
             key={file.path}
-            className={selectedFile === file.path ? "selected" : ""}
+            className={selectedFile !== null
+              && projectPathKey(selectedFile) === projectPathKey(file.path) ? "selected" : ""}
             onClick={() => setSelectedFile(file.path)}
             onDoubleClick={() => onSelect(file.path, "file")}
           >

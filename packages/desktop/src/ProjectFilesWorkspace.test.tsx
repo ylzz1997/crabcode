@@ -10,6 +10,7 @@ import {
   closeProjectFileTab,
   ProjectFilesWorkspace,
   projectFileDisplayPath,
+  projectPathKey,
   type ProjectFileTabsState,
 } from "./ProjectFilesWorkspace";
 
@@ -91,6 +92,21 @@ describe("project file tabs", () => {
   it("shows a root-relative location and falls back to the absolute path", () => {
     expect(projectFileDisplayPath("/work/crab/src/App.tsx", ["/work/crab", "/work"])).toBe("crab/src/App.tsx");
     expect(projectFileDisplayPath("/outside/notes.txt", ["/work/crab"])).toBe("/outside/notes.txt");
+  });
+
+  it("treats Windows drive paths as case-insensitive", () => {
+    const original = { ...first, path: "C:\\Work\\Crab\\README.md" };
+    const refreshed = { ...original, path: "c:\\work\\crab\\readme.md", size: 42 };
+    let state = activateProjectFileTab({ files: [], activePath: null }, original);
+    state = activateProjectFileTab(state, refreshed);
+
+    expect(state.files).toHaveLength(1);
+    expect(state.files[0].size).toBe(42);
+    expect(projectPathKey(original.path)).toBe(projectPathKey(refreshed.path));
+    expect(projectFileDisplayPath(
+      "c:\\work\\crab\\src\\App.tsx",
+      ["C:\\Work\\Crab"],
+    )).toBe("Crab/src/App.tsx");
   });
 });
 

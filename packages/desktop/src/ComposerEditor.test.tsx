@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   ComposerEditor,
   composerModifierLabel,
@@ -30,8 +30,8 @@ function placeCaretAtEnd(node: Node) {
 describe("ComposerEditor mentions", () => {
   let container: HTMLDivElement;
   let root: Root;
-  let onChange: ReturnType<typeof vi.fn>;
-  let onImages: ReturnType<typeof vi.fn>;
+  let onChange: Mock<(value: string) => void>;
+  let onImages: Mock<(files: File[]) => void>;
 
   beforeEach(() => {
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -124,7 +124,7 @@ describe("ComposerEditor mentions", () => {
 describe("ComposerEditor send shortcuts", () => {
   let container: HTMLDivElement;
   let root: Root;
-  let onSubmit: ReturnType<typeof vi.fn>;
+  let onSubmit: Mock<() => void>;
 
   beforeEach(() => {
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -218,7 +218,7 @@ describe("ComposerEditor send shortcuts", () => {
 describe("ComposerEditor slash commands", () => {
   let container: HTMLDivElement;
   let root: Root;
-  let onChange: ReturnType<typeof vi.fn>;
+  let onChange: Mock<(value: string) => void>;
   const commands = createComposerCommandOptions(
     [{ name: "sonnet", description: "Fast model" }],
     [{ name: "release", description: "Prepare a release" }],

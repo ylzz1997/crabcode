@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncGenerator
 
+from crabcode_core.subprocess_utils import subprocess_group_options
 from crabcode_search.chunker import ChunkMeta, chunk_file, is_indexable
 from crabcode_search.embedder import Embedder
 from crabcode_search.store import VectorStore
@@ -64,7 +65,7 @@ class CodebaseIndexer:
                 rel = str(file_path.relative_to(self.cwd))
                 await self.store.remove_by_file(rel)
                 try:
-                    content = file_path.read_text(errors="replace")
+                    content = file_path.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     continue
                 chunks = chunk_file(rel, content)
@@ -110,7 +111,7 @@ class CodebaseIndexer:
         for file_path in changed:
             rel = str(file_path.relative_to(self.cwd))
             try:
-                content = file_path.read_text(errors="replace")
+                content = file_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             chunks = chunk_file(rel, content)
@@ -156,7 +157,10 @@ class CodebaseIndexer:
                 cwd=self.cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
+                **subprocess_group_options(),
             )
             if result.returncode != 0:
                 return None
@@ -196,14 +200,14 @@ class CodebaseIndexer:
     def _load_file_index(self) -> None:
         if self._file_index_path.exists():
             try:
-                with open(self._file_index_path) as f:
+                with open(self._file_index_path, encoding="utf-8") as f:
                     self._file_index = json.load(f)
             except (json.JSONDecodeError, OSError):
                 self._file_index = {}
 
     def _save_file_index(self) -> None:
         self._index_dir.mkdir(parents=True, exist_ok=True)
-        with open(self._file_index_path, "w") as f:
+        with open(self._file_index_path, "w", encoding="utf-8") as f:
             json.dump(self._file_index, f)
 
 

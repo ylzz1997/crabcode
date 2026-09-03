@@ -59,7 +59,7 @@ class LinuxProcfsMemoryBackend(MemoryBackend):
 
     def regions(self, pid: int) -> list["MemoryRegion"]:
         maps = Path(f"/proc/{pid}/maps")
-        text = maps.read_text(errors="replace")
+        text = maps.read_text(encoding="utf-8", errors="replace")
         regions: list[MemoryRegion] = []
         for line in text.splitlines():
             parts = line.split(maxsplit=5)

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.subprocess_utils import subprocess_group_options
 
 logger = get_logger(__name__)
 
@@ -60,9 +61,12 @@ def _git(*args: str, cwd: str, check: bool = True) -> subprocess.CompletedProces
         cmd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=cwd,
         check=check,
         timeout=30,
+        **subprocess_group_options(),
     )
 
 
@@ -318,11 +322,19 @@ class SnapshotManager:
                 rel = os.path.relpath(str(snap_file), str(snap_dir))
                 current_file = Path(self.cwd) / rel
                 try:
-                    old_lines = snap_file.read_text(errors="replace").splitlines(keepends=True)
+                    old_lines = snap_file.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines(keepends=True)
                 except Exception:
                     old_lines = []
                 try:
-                    new_lines = current_file.read_text(errors="replace").splitlines(keepends=True) if current_file.exists() else []
+                    new_lines = (
+                        current_file.read_text(
+                            encoding="utf-8", errors="replace"
+                        ).splitlines(keepends=True)
+                        if current_file.exists()
+                        else []
+                    )
                 except Exception:
                     new_lines = []
                 diff = list(difflib.unified_diff(old_lines, new_lines, fromfile=rel, tofile=rel))
@@ -355,7 +367,9 @@ class SnapshotManager:
                 diffs.append(FileDiff(file=rel, patch="", status="added"))
             else:
                 try:
-                    if from_file.read_text(errors="replace") != to_file.read_text(errors="replace"):
+                    if from_file.read_text(
+                        encoding="utf-8", errors="replace"
+                    ) != to_file.read_text(encoding="utf-8", errors="replace"):
                         diffs.append(FileDiff(file=rel, patch="", status="modified"))
                 except Exception:
                     diffs.append(FileDiff(file=rel, patch="", status="modified"))

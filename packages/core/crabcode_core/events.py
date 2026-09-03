@@ -4161,7 +4161,9 @@ class CoreSession:
             return False
 
         target_cwd = storage.cwd
-        cwd_changed = os.path.abspath(target_cwd) != os.path.abspath(original_cwd)
+        cwd_changed = os.path.normcase(os.path.abspath(target_cwd)) != os.path.normcase(
+            os.path.abspath(original_cwd)
+        )
         prepared_project: dict[str, Any] | None = None
         if cwd_changed and self._initialized:
             try:

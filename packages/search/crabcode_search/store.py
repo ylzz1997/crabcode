@@ -159,9 +159,9 @@ class VectorStore:
             "key_to_idx": {str(k): v for k, v in self._key_to_idx.items()},
             "next_key": self._next_key,
         }
-        with open(self._index_dir / "hnsw_state.json", "w") as f:
+        with open(self._index_dir / "hnsw_state.json", "w", encoding="utf-8") as f:
             json.dump(state, f)
-        with open(self._index_dir / "metadata.json", "w") as f:
+        with open(self._index_dir / "metadata.json", "w", encoding="utf-8") as f:
             json.dump(self._metadata, f)
         (self._index_dir / "index.npy").unlink(missing_ok=True)
 
@@ -170,7 +170,7 @@ class VectorStore:
         if not meta_path.exists():
             return False
         try:
-            with open(meta_path) as f:
+            with open(meta_path, encoding="utf-8") as f:
                 self._metadata = json.load(f)
 
             usearch_path = self._index_dir / "index.usearch"
@@ -192,7 +192,7 @@ class VectorStore:
 
                 state_path = self._index_dir / "hnsw_state.json"
                 if state_path.exists():
-                    with open(state_path) as f:
+                    with open(state_path, encoding="utf-8") as f:
                         state = json.load(f)
                     self._key_to_idx = {int(k): v for k, v in state["key_to_idx"].items()}
                     self._next_key = state["next_key"]

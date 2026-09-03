@@ -23,7 +23,7 @@ def discover_claude_md(cwd: str) -> list[dict[str, str]]:
         home_md = home / config_dir / "CLAUDE.md"
         if home_md.exists():
             try:
-                content = home_md.read_text(errors="replace")
+                content = home_md.read_text(encoding="utf-8", errors="replace")
                 results.append({"path": str(home_md), "content": content})
             except Exception:
                 logger.warning("Failed to read %s", home_md, exc_info=True)
@@ -37,7 +37,7 @@ def discover_claude_md(cwd: str) -> list[dict[str, str]]:
             candidate = current / name
             if candidate.exists():
                 try:
-                    content = candidate.read_text(errors="replace")
+                    content = candidate.read_text(encoding="utf-8", errors="replace")
                     project_files.append({"path": str(candidate), "content": content})
                 except Exception:
                     logger.warning("Failed to read %s", candidate, exc_info=True)

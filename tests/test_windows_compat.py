@@ -14,14 +14,19 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "core"))
+sys.path.insert(0, str(ROOT / "packages" / "cli"))
 
 from crabcode_core.config.manager import ConfigManager
+from crabcode_core.file_lock import file_lock
 from crabcode_core.lsp.client import _uri_to_path
+from crabcode_core.path_validation import validate_path_component
 from crabcode_core.peer.runtime import PeerMessage, PeerRuntime
+from crabcode_core.prompts.system import get_system_prompt
 from crabcode_core.session import storage
 from crabcode_core.subprocess_utils import (
     decode_subprocess_output,
     is_process_running,
+    resolve_executable_command,
     shell_command,
     subprocess_group_options,
     terminate_process_tree,
@@ -29,6 +34,8 @@ from crabcode_core.subprocess_utils import (
 from crabcode_core.text_io import read_utf8_text
 from crabcode_core.tools.file_edit import FileEditTool
 from crabcode_core.tools.file_write import FileWriteTool
+from crabcode_core.tools.grep import GrepTool
+from crabcode_core.team.inbox import InboxStorage
 from crabcode_core.types.tool import ToolContext
 
 
@@ -64,6 +71,75 @@ class WindowsCompatibilityTests(unittest.TestCase):
             patch("crabcode_core.subprocess_utils.shutil.which", return_value="/bin/bash"),
         ):
             self.assertEqual(shell_command("echo ok"), ["/bin/bash", "-c", "echo ok"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows compatibility test")
+    def test_windows_command_shim_is_resolved_before_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            shim = Path(directory) / "crabcode-audit-tool.cmd"
+            shim.write_text("@echo off\r\necho shim-ok\r\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {"PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}"},
+            ):
+                command = resolve_executable_command(
+                    ["crabcode-audit-tool", "ignored"]
+                )
+                self.assertEqual(Path(command[0]), shim)
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    check=False,
+                )
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(
+                decode_subprocess_output(completed.stdout).strip(),
+                "shim-ok",
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows compatibility test")
+    def test_background_subprocesses_do_not_open_console_windows(self) -> None:
+        options = subprocess_group_options()
+        self.assertIn("creationflags", options)
+        self.assertTrue(options["creationflags"] & subprocess.CREATE_NO_WINDOW)
+
+    @unittest.skipUnless(os.name == "nt", "Windows compatibility test")
+    def test_system_prompt_reports_the_actual_windows_shell(self) -> None:
+        prompt = "\n".join(get_system_prompt([], "test-model"))
+        self.assertNotIn("Shell: unknown", prompt)
+        self.assertRegex(prompt.lower(), r"shell: (?:pwsh|powershell|cmd)(?:\.exe)?")
+
+    @unittest.skipUnless(os.name == "nt", "Windows compatibility test")
+    def test_session_project_key_is_case_insensitive_on_windows(self) -> None:
+        self.assertEqual(
+            storage.get_project_dir(r"C:\Work\CrabCode"),
+            storage.get_project_dir(r"c:\work\crabcode"),
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows compatibility test")
+    def test_cli_stdio_is_utf8_even_when_windows_defaults_are_not(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "0"
+        env.pop("PYTHONIOENCODING", None)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [
+                str(ROOT / "packages" / "cli"),
+                str(ROOT / "packages" / "core"),
+                env.get("PYTHONPATH", ""),
+            ]
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from crabcode_cli.app import _configure_utf8_stdio; "
+                "_configure_utf8_stdio(); print(chr(0x1f980))",
+            ],
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "🦀\r\n".encode("utf-8"))
 
     @unittest.skipUnless(os.name == "nt", "Windows compatibility test")
     def test_pid_probe_does_not_signal_the_process(self) -> None:
@@ -320,7 +396,79 @@ class WindowsCompatibilityTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-                self.assertEqual(storage.get_transcript_path(cwd, session_id), transcript)
+                try:
+                    self.assertEqual(storage.get_transcript_path(cwd, session_id), transcript)
+                finally:
+                    # ``TemporaryDirectory`` cannot traverse this deliberately
+                    # over-MAX_PATH directory without the extended-path prefix.
+                    for child in previous.iterdir():
+                        child.unlink()
+                    previous.rmdir()
+
+    def test_filesystem_components_reject_windows_special_names(self) -> None:
+        invalid = [
+            "bad:name",
+            "bad*name",
+            "trailing.",
+            "trailing ",
+            "CON",
+            "con.jsonl",
+            "LPT9.txt",
+            "control\x7f",
+        ]
+        for value in invalid:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    validate_path_component(value, "test component")
+                with self.assertRaises(ValueError):
+                    InboxStorage._validate_component(value, "test component")
+
+    def test_grep_has_a_python_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "example.py"
+            source.write_text("# 中文 marker\n", encoding="utf-8")
+            with patch("crabcode_core.tools.grep.shutil.which", return_value=None):
+                result = asyncio.run(
+                    GrepTool().call(
+                        {"pattern": "中文", "glob": "*.py"},
+                        ToolContext(cwd=str(root)),
+                    )
+                )
+            self.assertFalse(result.is_error)
+            self.assertIn("example.py:1:# 中文 marker", result.result_for_model)
+
+    def test_shared_file_lock_coordinates_across_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "shared.lock"
+            child_code = (
+                "import pathlib,sys,time;"
+                "from crabcode_core.file_lock import file_lock;"
+                "cm=file_lock(pathlib.Path(sys.argv[1]));"
+                "cm.__enter__();print('locked',flush=True);time.sleep(0.75);"
+                "cm.__exit__(None,None,None)"
+            )
+            env = os.environ.copy()
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(ROOT / "packages" / "core"), env.get("PYTHONPATH", "")]
+            )
+            child = subprocess.Popen(
+                [sys.executable, "-c", child_code, str(lock_path)],
+                env=env,
+                stdout=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            try:
+                self.assertEqual(child.stdout.readline().strip(), "locked")
+                started = time.perf_counter()
+                with file_lock(lock_path):
+                    elapsed = time.perf_counter() - started
+                self.assertGreaterEqual(elapsed, 0.4)
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                child.wait(timeout=5)
 
     def test_utf8_reader_rejects_invalid_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

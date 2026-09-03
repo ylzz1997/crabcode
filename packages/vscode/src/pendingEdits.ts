@@ -131,7 +131,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         this.refreshDecorations();
       }),
       vscode.workspace.onDidChangeTextDocument((event) => {
-        const filePath = normalizeFilePath(event.document.uri.fsPath);
+        const filePath = filePathKey(event.document.uri.fsPath);
         if (this.changeByPath.has(filePath)) {
           this.refreshDecorations();
           this.codeLensEmitter.fire();
@@ -505,7 +505,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     change.updatedAt = Date.now();
 
     this.changes.set(change.id, change);
-    this.changeByPath.set(normalizeFilePath(change.filePath), change.id);
+    this.changeByPath.set(filePathKey(change.filePath), change.id);
     this.syncVirtualDocuments(change);
     this.updatePresentation();
     await this.revealChange(change);
@@ -817,14 +817,14 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       change.action = "create";
     }
     this.changes.set(change.id, change);
-    this.changeByPath.set(normalizeFilePath(change.filePath), change.id);
+    this.changeByPath.set(filePathKey(change.filePath), change.id);
     this.syncVirtualDocuments(change);
   }
 
   private removeChange(changeId: string, update = true): void {
     const change = this.changes.get(changeId);
     if (change) {
-      this.changeByPath.delete(normalizeFilePath(change.filePath));
+      this.changeByPath.delete(filePathKey(change.filePath));
     }
     this.changes.delete(changeId);
     if (update) {
@@ -833,7 +833,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
   }
 
   private getChangeForPath(filePath: string): PendingChange | undefined {
-    const id = this.changeByPath.get(normalizeFilePath(filePath));
+    const id = this.changeByPath.get(filePathKey(filePath));
     return id ? this.changes.get(id) : undefined;
   }
 
@@ -1012,7 +1012,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         const info = parseReviewUri(editor.document.uri);
         return info?.changeId === change.id && info.side === "after";
       }
-      return normalizeFilePath(editor.document.uri.fsPath) === normalizeFilePath(change.filePath);
+      return filePathKey(editor.document.uri.fsPath) === filePathKey(change.filePath);
     });
 
     if (visibleEditor) {
@@ -1847,8 +1847,8 @@ function rangeForHunk(document: vscode.TextDocument, hunk: PendingHunk): vscode.
 
 function shortFilePath(filePath: string): string {
   const workspace = vscode.workspace.workspaceFolders?.find((folder) => {
-    const root = normalizeFilePath(folder.uri.fsPath);
-    const normalized = normalizeFilePath(filePath);
+    const root = filePathKey(folder.uri.fsPath);
+    const normalized = filePathKey(filePath);
     return normalized === root || normalized.startsWith(root + path.sep);
   });
   if (!workspace) {
@@ -1860,6 +1860,11 @@ function shortFilePath(filePath: string): string {
 
 function normalizeFilePath(filePath: string): string {
   return path.normalize(filePath);
+}
+
+function filePathKey(filePath: string): string {
+  const normalized = normalizeFilePath(filePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function formatStats(stats: DiffStats): string {
