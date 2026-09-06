@@ -20,6 +20,7 @@ from typing import Any
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.subprocess_utils import (
     resolve_executable_command,
+    managed_process_command,
     subprocess_group_options,
     terminate_process_tree,
 )
@@ -76,6 +77,8 @@ class LSPClient:
         self._command = command
         self._root_uri = root_uri
         self._env = {**os.environ, **(env or {})}
+        if os.name == "nt":
+            self._env = {key.upper(): value for key, value in self._env.items()}
         self._initialization_options = initialization_options
         self._trace = trace
 
@@ -122,9 +125,9 @@ class LSPClient:
             raise RuntimeError("LSP client already initialised")
 
         # Launch the server process
-        launch_command = resolve_executable_command(self._command)
+        launch_command = resolve_executable_command(self._command, env=self._env)
         self._process = await asyncio.create_subprocess_exec(
-            *launch_command,
+            *managed_process_command(launch_command),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -250,7 +253,7 @@ class LSPClient:
 
         Returns the list of diagnostic dicts for the file.
         """
-        uri = _path_to_uri(str(file_path))
+        uri = _diagnostic_uri_key(_path_to_uri(str(file_path)))
 
         # If we already have diagnostics, return them immediately (caller can
         # still choose to wait again after touch_file).
@@ -508,7 +511,7 @@ class LSPClient:
         logger.debug("LSP ← notification %s", method)
 
         if method == "textDocument/publishDiagnostics":
-            uri = params.get("uri", "")
+            uri = _diagnostic_uri_key(params.get("uri", ""))
             diags = params.get("diagnostics", [])
             self.diagnostics[uri] = diags
 
@@ -676,6 +679,12 @@ class LSPClient:
 # ---------------------------------------------------------------------------
 
 
+def _diagnostic_uri_key(uri: str) -> str:
+    if uri.lower().startswith("file:"):
+        return Path(os.path.normcase(os.path.abspath(_uri_to_path(uri)))).as_uri()
+    return uri
+
+
 def _path_to_uri(path: str) -> str:
     """Convert a filesystem path to a file:// URI."""
     resolved = Path(path).resolve()
@@ -692,7 +701,14 @@ def _uri_to_path(uri: str) -> str:
     if parsed.scheme != "file":
         return uri
 
-    path = url2pathname(parsed.path)
+    if os.name == "nt":
+        # Python 3.10–3.12 url2pathname detects a drive before unquoting,
+        # so the common LSP form /c%3A/path becomes a rooted, drive-less path.
+        path = unquote(parsed.path).replace("/", "\\")
+        if len(path) >= 3 and path[0] == "\\" and path[1].isalpha() and path[2] == ":":
+            path = path[1:]
+    else:
+        path = url2pathname(parsed.path)
     host = unquote(parsed.netloc)
     if host and host.lower() != "localhost":
         if os.name == "nt":

@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.subprocess_utils import (
+    managed_process_command,
+    resolve_executable_command,
     subprocess_group_options,
     terminate_process_tree,
 )
@@ -208,8 +210,9 @@ class GrepTool(Tool):
 
         proc: asyncio.subprocess.Process | None = None
         try:
+            args = resolve_executable_command(args, cwd=context.cwd)
             proc = await asyncio.create_subprocess_exec(
-                *args,
+                *managed_process_command(args),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=context.cwd,
@@ -234,6 +237,8 @@ class GrepTool(Tool):
                 result_for_model="Error: neither ripgrep (rg) nor grep found on PATH.",
                 is_error=True,
             )
+        except ValueError as exc:
+            return ToolResult(result_for_model=f"Search error: {exc}", is_error=True)
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")

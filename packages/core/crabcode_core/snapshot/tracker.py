@@ -312,7 +312,13 @@ def _save_file_backup(
     # Store with the file's basename; original path is in the log
     backup_file = d / "content"
     try:
-        backup_file.write_text(content, encoding="utf-8")
+        original = Path(file_path)
+        if not original.is_absolute():
+            original = Path(cwd) / original
+        # The UTF-8 tool view has already stripped the BOM. Back up the actual
+        # bytes so rollback preserves encoding and every newline exactly.
+        raw = original.read_bytes() if original.is_file() else content.encode("utf-8")
+        backup_file.write_bytes(raw)
         (d / "path").write_text(file_path, encoding="utf-8")
     except Exception:
         logger.debug("Failed to save file backup: %s/%s", snap_id, file_path, exc_info=True)
@@ -339,12 +345,12 @@ def _restore_file_backups(cwd: str, snapshot_id: str) -> list[str]:
         if content_file.exists() and path_file.exists():
             try:
                 file_path = path_file.read_text(encoding="utf-8").strip()
-                content = content_file.read_text(encoding="utf-8")
+                content = content_file.read_bytes()
                 target = Path(file_path)
                 if not target.is_absolute():
                     target = Path(cwd) / file_path
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
+                target.write_bytes(content)
                 restored.append(str(target))
             except Exception:
                 logger.debug("Failed to restore backup %s", snap_dir, exc_info=True)

@@ -21,6 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.subprocess_utils import (
+    managed_process_command,
     subprocess_group_options,
     terminate_process_tree,
 )
@@ -571,7 +572,7 @@ async def _translate_document_precise(
     worker_env["PYTHONUTF8"] = "1"
     worker_env["PYTHONIOENCODING"] = "utf-8"
     process = await asyncio.create_subprocess_exec(
-        *worker_command,
+        *managed_process_command(worker_command),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

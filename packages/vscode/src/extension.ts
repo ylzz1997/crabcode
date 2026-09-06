@@ -304,13 +304,13 @@ class FileChangeHandler implements vscode.Disposable {
       // Show a virtual diff document
       const actionZh =
         action === "create" ? "创建" : action === "modify" ? "修改" : action === "delete" ? "删除" : action;
-      const name = `CrabCode：${path.split("/").pop()}（${actionZh}）`;
+      const name = `CrabCode：${path.split(/[\\/]/).pop()}（${actionZh}）`;
       const content = diff;
       showDiffDocument(name, content, path);
     } else {
       const actionZh =
         action === "create" ? "已创建" : action === "modify" ? "已修改" : action === "delete" ? "已删除" : action;
-      vscode.window.setStatusBarMessage(`CrabCode：${actionZh} ${path.split("/").pop()}`, 3000);
+      vscode.window.setStatusBarMessage(`CrabCode：${actionZh} ${path.split(/[\\/]/).pop()}`, 3000);
     }
   }
 

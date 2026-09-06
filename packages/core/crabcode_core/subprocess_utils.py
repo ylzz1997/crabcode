@@ -6,9 +6,12 @@ import asyncio
 import codecs
 import locale
 import os
+from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
+import sys
 from typing import Any
 
 
@@ -20,20 +23,59 @@ _POWERSHELL_UTF8_SETUP = (
 )
 
 
-def resolve_executable_command(command: list[str]) -> list[str]:
-    """Resolve the executable token, including Windows ``.cmd`` shims.
-
-    Windows ``CreateProcess`` does not apply ``PATHEXT`` consistently for a
-    bare command passed to ``subprocess``/``asyncio``. ``shutil.which`` does,
-    so replacing the first token makes npm-installed launchers work without a
-    shell and keeps argument handling safe.
-    """
+def resolve_executable_command(
+    command: list[str], *, env: dict[str, str] | None = None, cwd: str | None = None,
+) -> list[str]:
+    """Resolve using the launch environment, without interpreting batch arguments."""
     if not command:
         raise ValueError("command must not be empty")
     if os.name != "nt":
         return list(command)
-    resolved = shutil.which(command[0])
-    return [resolved or command[0], *command[1:]]
+    environment = {key.upper(): value for key, value in (env if env is not None else os.environ).items()}
+    search_path = environment.get("PATH", "")
+    base = Path(cwd or os.getcwd()).resolve()
+    search_path = os.pathsep.join(str(base / part.strip('"')) for part in search_path.split(os.pathsep))
+    token = command[0]
+    if os.path.dirname(token):
+        token = str(base / token)
+    resolved = shutil.which(token, path=search_path)
+    # which() takes PATHEXT from the parent process, not its path argument.
+    if env is not None:
+        roots = [Path()] if os.path.dirname(token) else [Path(p) for p in search_path.split(os.pathsep)]
+        extensions = environment.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
+        names = [token] if Path(token).suffix.upper() in {e.upper() for e in extensions} else [token + ext for ext in extensions]
+        resolved = next((str(root / name) for root in roots for name in names if (root / name).is_file()), None)
+    if not resolved:
+        raise FileNotFoundError(f"Executable not found in the launch environment: {command[0]}")
+    result = [resolved, *command[1:]]
+    if Path(result[0]).suffix.lower() in {".cmd", ".bat"}:
+        # npm's cmd-shim template has a fixed Node invocation. Bypass cmd.exe
+        # for this template so filenames such as a&b.js remain literal argv.
+        shim = Path(result[0])
+        try:
+            body = shim.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            body = ""
+        match = re.fullmatch(
+            r'@ECHO off\s+GOTO start\s+:find_dp0\s+SET dp0=%~dp0\s+EXIT /b\s+'
+            r':start\s+SETLOCAL\s+CALL :find_dp0\s+'
+            r'IF EXIST "%dp0%\\node.exe" \(\s+SET "_prog=%dp0%\\node.exe"\s+'
+            r'\) ELSE \(\s+SET "_prog=node"\s+SET PATHEXT=%PATHEXT:;.JS;=;%\s+\)\s+'
+            r'endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & "%_prog%"\s+'
+            r'"%dp0%[\\/]([^"\r\n]+)" %\*\s*', body,
+        )
+        if match:
+            script = shim.parent / match.group(1).replace("\\", "/")
+            node = shim.parent / "node.exe"
+            executable = str(node) if node.is_file() else shutil.which("node", path=search_path)
+            if executable and script.is_file():
+                return [executable, str(script), *command[1:]]
+        if any(re.search(r'[&|<>^%!"()\r\n]', value) for value in result):
+            raise ValueError(
+                "Cannot safely pass shell metacharacters to a Windows batch launcher. "
+                "Configure the native executable (for Node tools: node.exe and its JS entry point)."
+            )
+    return result
 
 
 def shell_command(command: str) -> list[str]:
@@ -61,6 +103,13 @@ def powershell_command(executable: str, command: str) -> list[str]:
         "-Command",
         _POWERSHELL_UTF8_SETUP + command,
     ]
+
+
+def managed_process_command(command: list[str]) -> list[str]:
+    """Wrap a Windows command in a job whose lifetime includes all descendants."""
+    if os.name != "nt":
+        return command
+    return [sys.executable, "-I", str(Path(__file__).with_name("_windows_process.py")), *command]
 
 
 def subprocess_group_options() -> dict[str, Any]:

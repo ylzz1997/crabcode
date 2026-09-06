@@ -1,0 +1,52 @@
+name: Cross-platform compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python: ['3.10', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -e . fastapi pypdf python-multipart
+      - run: python -m unittest discover -s tests -p "test_windows*.py" -v
+
+  windows-clients:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: packages/desktop
+      - run: npm test
+        working-directory: packages/desktop
+      - run: npx tsc --noEmit
+        working-directory: packages/desktop
+      - run: npm ci
+        working-directory: packages/vscode
+      - run: npm test
+        working-directory: packages/vscode
+      - run: npx tsc --noEmit
+        working-directory: packages/vscode
+      - run: cargo test --locked
+        working-directory: packages/desktop/src-tauri
+      - run: cargo test --locked windows_credentials_survive_a_new_entry -- --ignored
+        working-directory: packages/desktop/src-tauri

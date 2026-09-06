@@ -153,7 +153,7 @@ class CodebaseIndexer:
         """Use git ls-files to get tracked files (respects .gitignore)."""
         try:
             result = subprocess.run(
-                ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                 cwd=self.cwd,
                 capture_output=True,
                 text=True,
@@ -165,8 +165,7 @@ class CodebaseIndexer:
             if result.returncode != 0:
                 return None
             files: list[Path] = []
-            for line in result.stdout.splitlines():
-                line = line.strip()
+            for line in result.stdout.split("\0"):
                 if line:
                     files.append(self.cwd / line)
             return files

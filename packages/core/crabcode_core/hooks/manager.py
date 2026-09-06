@@ -11,6 +11,7 @@ from typing import Any
 
 from crabcode_core.subprocess_utils import (
     decode_subprocess_output,
+    managed_process_command,
     shell_command,
     subprocess_group_options,
     terminate_process_tree,
@@ -245,7 +246,7 @@ class HookManager:
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                *shell_command(command),
+                *managed_process_command(shell_command(command)),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
@@ -260,6 +261,9 @@ class HookManager:
                 stdout_b = b""
                 stderr_b = f"Hook timed out after {timeout}s".encode()
                 timed_out = True
+            except asyncio.CancelledError:
+                await terminate_process_tree(proc)
+                raise
         except Exception as exc:
             return {
                 "blocked": True,

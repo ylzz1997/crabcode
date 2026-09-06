@@ -29,8 +29,10 @@ from pydantic import BaseModel, Field, HttpUrl
 from pypdf import PdfReader
 
 from crabcode_core.path_validation import validate_path_component
+from crabcode_core.filesystem import replace_with_retry
 from crabcode_core.subprocess_utils import (
     decode_subprocess_output,
+    managed_process_command,
     subprocess_group_options,
     terminate_process_tree,
 )
@@ -189,7 +191,20 @@ def _file_extension(filename: str) -> str:
 
 
 def _converter() -> str | None:
-    return shutil.which("soffice") or shutil.which("libreoffice")
+    override = os.environ.get("CRABCODE_LIBREOFFICE_PATH", "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        return str(candidate.resolve()) if candidate.is_file() else None
+    executable = shutil.which("soffice") or shutil.which("libreoffice")
+    if executable or os.name != "nt":
+        return executable
+    for variable in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        root = os.environ.get(variable)
+        if root:
+            candidate = Path(root) / "LibreOffice" / "program" / "soffice.exe"
+            if candidate.is_file():
+                return str(candidate)
+    return None
 
 
 def _sha256(path: Path) -> str:
@@ -208,7 +223,7 @@ def _atomic_write_bytes(path: Path, content: bytes) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     try:
-        os.replace(temporary, path)
+        replace_with_retry(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -315,14 +330,16 @@ async def _convert_to_pdf(source: Path, extension: str, internal: Path) -> Path:
     profile_dir = internal / "libreoffice-profile"
     profile_uri = profile_dir.resolve().as_uri()
     process = await asyncio.create_subprocess_exec(
-        converter,
-        "--headless",
-        f"-env:UserInstallation={profile_uri}",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        str(output_dir),
-        str(conversion_input),
+        *managed_process_command([
+            converter,
+            "--headless",
+            f"-env:UserInstallation={profile_uri}",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(output_dir),
+            str(conversion_input),
+        ]),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         **subprocess_group_options(),
@@ -488,7 +505,7 @@ async def _finish_import(
             "updated_at": now,
         }
         _json_write(stage / MANIFEST_RELATIVE_PATH, manifest)
-        os.replace(stage, workspace)
+        replace_with_retry(stage, workspace)
         return manifest
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
@@ -1474,9 +1491,9 @@ def _finalize_precise_translation_unlocked(
         }
         _json_write(stage / "metadata.json", metadata)
         if target.exists():
-            os.replace(target, backup)
+            replace_with_retry(target, backup)
             replaced = True
-        os.replace(stage, target)
+        replace_with_retry(stage, target)
         translations = manifest.get("translations")
         if not isinstance(translations, dict):
             translations = {}
@@ -1499,12 +1516,12 @@ def _finalize_precise_translation_unlocked(
         except Exception:
             shutil.rmtree(target, ignore_errors=True)
             if replaced and backup.exists():
-                os.replace(backup, target)
+                replace_with_retry(backup, target)
             raise
         shutil.rmtree(backup, ignore_errors=True)
     except Exception:
         if replaced and backup.exists() and not target.exists():
-            os.replace(backup, target)
+            replace_with_retry(backup, target)
         raise
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -1658,7 +1675,7 @@ def _finalize_document_job_unlocked(
         if output.exists():
             blog_backup = output.read_bytes()
             blog_existed = True
-        os.replace(staged_blog, output)
+        replace_with_retry(staged_blog, output)
         revision = _blog_revision(markdown)
         blog_language = locale if language == "source" and source == "translation" else language
         manifest["blog"] = {
@@ -1747,7 +1764,7 @@ async def write_document_blog(req: DocumentBlogWriteRequest, workspace: str, req
         temporary = root / f".blog-{uuid.uuid4().hex}.md"
         try:
             temporary.write_text(req.markdown, encoding="utf-8")
-            os.replace(temporary, path)
+            replace_with_retry(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
         revision = _blog_revision(req.markdown)

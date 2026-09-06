@@ -38,7 +38,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from crabcode_cli.banner import print_banner
-from crabcode_core.subprocess_utils import shell_command
+from crabcode_core.subprocess_utils import managed_process_command, shell_command
 from crabcode_core.events import CoreSession
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.types.config import (
@@ -2088,7 +2088,7 @@ async def run_repl(
                 cmd = user_input[2:]
                 import subprocess
                 async with in_terminal():
-                    subprocess.run(shell_command(cmd), cwd=cwd, capture_output=False)
+                    subprocess.run(managed_process_command(shell_command(cmd)), cwd=cwd, capture_output=False)
                 continue
 
             streamed_text = ""
@@ -2645,7 +2645,7 @@ async def _handle_command(
         return True
 
     if cmd == "/goal":
-        import shlex
+        from crabcode_core.command_line import split_command_arguments
 
         def render_goal() -> None:
             goal = session.get_goal()
@@ -2675,7 +2675,7 @@ async def _handle_command(
             return True
 
         try:
-            tokens = shlex.split(arg)
+            tokens = split_command_arguments(arg)
         except ValueError as exc:
             console.print(f"[bold red]Invalid goal command:[/] {exc}")
             return True
@@ -3314,12 +3314,12 @@ async def _handle_command(
         return True
 
     if cmd == "/team":
-        import shlex
+        from crabcode_core.command_line import split_command_arguments
 
         await session.initialize()
         team_mgr = getattr(session, "_team_manager", None)
         try:
-            tokens = shlex.split(arg)
+            tokens = split_command_arguments(arg)
         except ValueError as exc:
             console.print(f"[bold red]Invalid team command:[/] {exc}")
             return True
@@ -3632,7 +3632,7 @@ async def _handle_command(
         return True
 
     if cmd == "/schedule":
-        import shlex
+        from crabcode_core.command_line import split_command_arguments
 
         from crabcode_core.tools.schedule import (
             _format_job_brief,
@@ -3647,7 +3647,7 @@ async def _handle_command(
             console.print("[bold red]Schedule manager is unavailable.[/]")
             return True
         try:
-            tokens = shlex.split(arg)
+            tokens = split_command_arguments(arg)
         except ValueError as exc:
             console.print(f"[bold red]Invalid schedule command:[/] {exc}")
             return True
