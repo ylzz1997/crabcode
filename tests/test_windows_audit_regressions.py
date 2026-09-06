@@ -200,9 +200,40 @@ class WindowsAuditRegressionTests(unittest.TestCase):
             shim.write_bytes(b"@echo ok")
             environment = {"Path": "bin", "PATHEXT": ".CMD"}
             command = resolve_executable_command(["tool", "argument"], env=environment, cwd=directory)
-            self.assertEqual(Path(command[0]), shim)
+            # resolve() can expand TEMP's 8.3 alias (e.g. RUNNER~1) on Windows.
+            self.assertTrue(Path(command[0]).samefile(shim))
+            self.assertEqual(command[1:], ["argument"])
             command = resolve_executable_command([r"bin\tool.cmd"], env=environment, cwd=directory)
-            self.assertEqual(Path(command[0]), shim)
+            self.assertTrue(Path(command[0]).samefile(shim))
+
+    def test_executable_discovery_accepts_windows_short_cwd(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        kernel.GetShortPathNameW.restype = wintypes.DWORD
+        with tempfile.TemporaryDirectory(prefix="crabcode executable discovery ") as directory:
+            root = Path(directory).resolve()
+            (root / "bin").mkdir()
+            shim = root / "bin/tool.cmd"
+            shim.write_bytes(b"@echo ok")
+            size = kernel.GetShortPathNameW(str(root), None, 0)
+            self.assertGreater(size, 0, ctypes.get_last_error())
+            buffer = ctypes.create_unicode_buffer(size)
+            self.assertGreater(kernel.GetShortPathNameW(str(root), buffer, size), 0)
+            short_root = Path(buffer.value)
+            if short_root == root:
+                self.skipTest("The test directory has no 8.3 short-path alias")
+            self.assertTrue(short_root.samefile(root))
+            environment = {"Path": "bin", "PATHEXT": ".CMD"}
+            for executable in ("tool", r"bin\tool.cmd"):
+                with self.subTest(executable=executable):
+                    command = resolve_executable_command(
+                        [executable, "argument"], env=environment, cwd=str(short_root),
+                    )
+                    self.assertTrue(Path(command[0]).samefile(shim))
+                    self.assertEqual(command[1:], ["argument"])
 
     def test_missing_child_executable_does_not_fall_back_to_parent_path(self):
         with tempfile.TemporaryDirectory() as directory:

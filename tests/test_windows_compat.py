@@ -84,7 +84,7 @@ class WindowsCompatibilityTests(unittest.TestCase):
                 command = resolve_executable_command(
                     ["crabcode-audit-tool", "ignored"]
                 )
-                self.assertEqual(Path(command[0]), shim)
+                self.assertTrue(Path(command[0]).samefile(shim))
                 completed = subprocess.run(
                     command,
                     capture_output=True,

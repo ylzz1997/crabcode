@@ -38,7 +38,7 @@
 
 Windows x64、Python 3.12.14、Node 24.18.0；桌面依赖已按现有锁文件重新安装，Vitest 3.2.7。
 
-- `python -B -m unittest discover -s tests -p "test_windows*.py" -q`：47 项通过，含 25 项新增回归；需要正常进程权限的测试在沙箱外复验。
+- `python -B -m unittest discover -s tests -p "test_windows*.py" -q`：48 项通过，含 26 项新增回归；需要正常进程权限的测试在沙箱外复验。
 - Desktop `vitest run`：15 个文件、169 项通过。
 - VS Code `node --test tests/gatewayManager.test.cjs`：4 项通过。
 - Desktop 与 VS Code `tsc --noEmit`：通过。
@@ -48,6 +48,8 @@ Windows x64、Python 3.12.14、Node 24.18.0；桌面依赖已按现有锁文件�
 - 五个 Python 包的 `compileall`、`git diff --check`：通过。
 
 既有共享文件锁测试有未关闭 stdout 的 ResourceWarning；Vite 提示部分资源包大于 500 kB。这两项不导致上述测试/构建失败，本次未扩展到无关清理。
+
+GitHub Windows runner 的 TEMP 使用 `RUNNER~1` 等 8.3 短路径别名，工具发现会将其展开为完整路径。路径发现测试已改用 `samefile()` 校验文件身份，并增加使用真实短路径 cwd 的回归，避免将同一文件的不同路径写法误判为失败。
 
 ## 尚未宣称完成的验收
 
