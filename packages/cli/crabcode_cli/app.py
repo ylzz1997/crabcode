@@ -535,6 +535,12 @@ def gateway(
     log_level: str = typer.Option("info", "--log-level", help="Log level"),
 ) -> None:
     """Start the CrabCode HTTP/gRPC gateway server."""
+    if os.name == "nt":
+        from crabcode_core._windows_process import attach_process_tree_job
+
+        # The handle stays open until Gateway exits, including a forced kill
+        # by Desktop/VS Code. All subsequently spawned descendants are owned.
+        attach_process_tree_job()
     from crabcode_core.logging_utils import configure_logging
     from crabcode_core.types.config import LoggingSettings
 

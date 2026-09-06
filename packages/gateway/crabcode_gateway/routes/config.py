@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from crabcode_core.config.manager import ConfigManager
+from crabcode_core.filesystem import replace_with_retry
 from crabcode_core.skills.loader import load_skills
 from crabcode_core.text_io import normalize_newlines, read_utf8_text
 from crabcode_gateway.session_registry import get_session_lock
@@ -463,7 +464,7 @@ def _atomic_write_settings(path: Path, value: dict[str, Any]) -> None:
             os.fsync(handle.fileno())
         if path.exists():
             temporary.chmod(stat.S_IMODE(path.stat().st_mode))
-        os.replace(temporary, path)
+        replace_with_retry(temporary, path)
     except OSError as exc:
         if temporary is not None:
             try:

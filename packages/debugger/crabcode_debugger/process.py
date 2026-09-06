@@ -14,6 +14,7 @@ from typing import Any
 
 from crabcode_core.subprocess_utils import (
     decode_subprocess_output,
+    managed_process_command,
     powershell_command,
     resolve_executable_command,
     subprocess_group_options,
@@ -87,10 +88,11 @@ async def _run(
     cwd: str | None = None,
     timeout: float = 10,
 ) -> tuple[int, str, str]:
+    proc: asyncio.subprocess.Process | None = None
     try:
-        launch_command = resolve_executable_command(command)
+        launch_command = resolve_executable_command(command, cwd=cwd)
         proc = await asyncio.create_subprocess_exec(
-            *launch_command,
+            *managed_process_command(launch_command),
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -105,6 +107,9 @@ async def _run(
     except asyncio.TimeoutError:
         await terminate_process_tree(proc)
         return -1, "", f"command timed out after {timeout}s"
+    except asyncio.CancelledError:
+        await terminate_process_tree(proc)
+        raise
     except FileNotFoundError:
         return -1, "", f"command not found: {command[0]}"
     except Exception as exc:

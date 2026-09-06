@@ -21,12 +21,14 @@ import sysconfig
 import tempfile
 import urllib.parse
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 import httpx
 
-from crabcode_core.subprocess_utils import subprocess_group_options
+from crabcode_core.subprocess_utils import managed_process_command, subprocess_group_options
+from crabcode_core.path_validation import validate_path_component
+from crabcode_core.filesystem import replace_with_retry
 from crabcode_gateway import __version__ as CRABCODE_VERSION
 
 
@@ -49,7 +51,7 @@ def _run_text_command(
     environment["PYTHONUTF8"] = "1"
     environment["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
-        command,
+        managed_process_command(command),
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -260,10 +262,16 @@ def _sha256(path: Path) -> str:
 
 
 def _safe_bundle_member(name: str) -> Path:
-    normalized = Path(name.replace("\\", "/"))
-    if normalized.is_absolute() or ".." in normalized.parts or not normalized.parts:
+    normalized = PurePosixPath(name)
+    windows = PureWindowsPath(name)
+    if (
+        "\\" in name or normalized.is_absolute() or windows.drive or windows.root
+        or not name or any(part in {"", ".", ".."} for part in name.split("/"))
+    ):
         raise ValueError(f"unsafe engine bundle member: {name}")
-    return normalized
+    for part in normalized.parts:
+        validate_path_component(part, "engine bundle member")
+    return Path(*normalized.parts)
 
 
 def _download_bundle(source: str, destination: Path, progress: ProgressCallback) -> None:
@@ -337,6 +345,8 @@ def _extract_and_verify_bundle(bundle: Path, destination: Path) -> dict[str, Any
             if extracted_bytes > MAX_ENGINE_BUNDLE_BYTES:
                 raise ValueError("document engine bundle expands beyond 2 GiB")
             target = destination / _safe_bundle_member(name)
+            if not target.resolve().is_relative_to(destination.resolve()):
+                raise ValueError(f"unsafe engine bundle target: {name}")
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source, target.open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
@@ -401,12 +411,12 @@ def _publish_engine_stage(stage: Path, target: Path) -> None:
     if backup.exists():
         shutil.rmtree(backup)
     if target.exists():
-        os.replace(target, backup)
+        replace_with_retry(target, backup)
     try:
-        os.replace(stage, target)
+        replace_with_retry(stage, target)
     except Exception:
         if backup.exists() and not target.exists():
-            os.replace(backup, target)
+            replace_with_retry(backup, target)
         raise
     shutil.rmtree(backup, ignore_errors=True)
 

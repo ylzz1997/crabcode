@@ -11,6 +11,7 @@ from typing import Any
 
 from crabcode_core.subprocess_utils import (
     resolve_executable_command,
+    managed_process_command,
     subprocess_group_options,
     terminate_process_tree,
 )
@@ -44,6 +45,8 @@ class DAPClient:
         self.command = command
         self.cwd = cwd
         self.env = {**os.environ, **(env or {})}
+        if os.name == "nt":
+            self.env = {key.upper(): value for key, value in self.env.items()}
         self.timeout = timeout
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -60,9 +63,9 @@ class DAPClient:
             if self._process.returncode is None:
                 return
             raise DAPError(f"debug adapter exited with code {self._process.returncode}")
-        launch_command = resolve_executable_command(self.command)
+        launch_command = resolve_executable_command(self.command, env=self.env, cwd=self.cwd)
         self._process = await asyncio.create_subprocess_exec(
-            *launch_command,
+            *managed_process_command(launch_command),
             cwd=self.cwd,
             env=self.env,
             stdin=asyncio.subprocess.PIPE,

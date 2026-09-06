@@ -18,6 +18,7 @@ from xml.sax.saxutils import escape
 from crabcode_core.session.storage import get_task_output_path
 from crabcode_core.subprocess_utils import (
     decode_subprocess_output,
+    managed_process_command,
     shell_command,
     subprocess_group_options,
     terminate_process_tree,
@@ -259,7 +260,7 @@ class MonitorManager:
         cwd: str,
     ) -> int:
         run.process = await asyncio.create_subprocess_exec(
-            *shell_command(command),
+            *managed_process_command(shell_command(command)),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,

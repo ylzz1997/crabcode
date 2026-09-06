@@ -308,6 +308,19 @@ pub fn read_credential(credential_ref: &str) -> Result<String, String> {
 mod tests {
     use super::{default_settings, safe_export_filename};
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "writes a temporary Windows Credential Manager entry; run explicitly"]
+    fn windows_credentials_survive_a_new_entry() {
+        let key = format!("audit-{}-{:?}", std::process::id(), std::time::SystemTime::now());
+        let first = keyring::Entry::new("crabcode-windows-regression", &key).unwrap();
+        first.set_password("test-only-not-a-real-secret").unwrap();
+        let read = keyring::Entry::new("crabcode-windows-regression", &key)
+            .unwrap().get_password();
+        first.delete_credential().unwrap();
+        assert_eq!(read.unwrap(), "test-only-not-a-real-secret");
+    }
+
     #[test]
     fn project_file_tabs_default_to_five() {
         assert_eq!(default_settings()["project_files_max_tabs"], 5);

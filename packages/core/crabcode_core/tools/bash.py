@@ -8,6 +8,7 @@ from typing import Any
 
 from crabcode_core.subprocess_utils import (
     decode_subprocess_output,
+    managed_process_command,
     shell_command,
     subprocess_group_options,
     terminate_process_tree,
@@ -40,6 +41,8 @@ class BashTool(Tool):
             "- On Windows, commands run in PowerShell. Do not assume `&&` is "
             "available because Windows PowerShell 5.1 does not support it; "
             "use `; if ($?) { ... }` for conditional sequencing.\n"
+            "- If PowerShell blocks npm.ps1/npx.ps1 with PSSecurityException, "
+            "use npm.cmd/npx.cmd; do not change the system execution policy.\n"
             if os.name == "nt"
             else ""
         )
@@ -107,7 +110,7 @@ class BashTool(Tool):
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                *shell_command(command),
+                *managed_process_command(shell_command(command)),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=context.cwd,

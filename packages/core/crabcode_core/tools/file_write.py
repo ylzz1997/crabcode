@@ -89,8 +89,11 @@ class FileWriteTool(Tool):
                 old_content = source.text
                 newline = source.newline
                 has_bom = source.has_bom
-            except Exception:
-                logger.debug("Failed to read existing file before overwrite: %s", path, exc_info=True)
+            except (OSError, UnicodeError) as exc:
+                return ToolResult(
+                    result_for_model=f"Error reading existing file; refusing to overwrite without a valid backup: {exc}",
+                    is_error=True,
+                )
 
         if newline is not None:
             content = normalize_newlines(content, newline)

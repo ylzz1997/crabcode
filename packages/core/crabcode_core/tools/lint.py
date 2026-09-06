@@ -9,6 +9,8 @@ from typing import Any
 
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.subprocess_utils import (
+    decode_subprocess_output,
+    managed_process_command,
     resolve_executable_command,
     subprocess_group_options,
     terminate_process_tree,
@@ -191,7 +193,7 @@ async def _run_linter(
     target_flag = cfg.get("target_flag")
     suffix_args = cfg.get("suffix_args", [])
 
-    full_cmd = resolve_executable_command(list(cmd))
+    full_cmd = list(cmd)
     if not is_project_level:
         if target_flag:
             full_cmd.extend([target_flag, ",".join(targets)])
@@ -201,8 +203,9 @@ async def _run_linter(
 
     proc: asyncio.subprocess.Process | None = None
     try:
+        full_cmd = resolve_executable_command(full_cmd, cwd=cwd)
         proc = await asyncio.create_subprocess_exec(
-            *full_cmd,
+            *managed_process_command(full_cmd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
@@ -211,8 +214,8 @@ async def _run_linter(
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             proc.communicate(), timeout=timeout
         )
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        stdout = decode_subprocess_output(stdout_bytes)
+        stderr = decode_subprocess_output(stderr_bytes)
 
         if cfg.get("use_stderr"):
             return stderr, stdout, proc.returncode or 0
@@ -227,6 +230,8 @@ async def _run_linter(
         raise
     except FileNotFoundError:
         return "", f"Linter command not found: {cmd[0]}", -1
+    except ValueError as exc:
+        return "", str(exc), -1
 
 
 class LintTool(Tool):

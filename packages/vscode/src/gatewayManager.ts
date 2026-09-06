@@ -295,6 +295,11 @@ export async function detectPython(
     if (v) return candidate;
   }
 
+  if (process.platform === "win32") {
+    const { stdout, code } = await execAsync("py", ["-3", "-c", "import sys; print(sys.executable)"]);
+    if (code === 0 && stdout && await checkPython(stdout)) return stdout;
+  }
+
   return null;
 }
 
@@ -358,7 +363,7 @@ async function detectCondaPython(): Promise<string | null> {
 
 /** Locate the conda executable. */
 async function findCondaBin(): Promise<string | null> {
-  for (const candidate of ["conda", "conda.exe"]) {
+  for (const candidate of [process.env.CONDA_EXE, "conda", "conda.exe"].filter((value): value is string => Boolean(value))) {
     const { code } = await execAsync(candidate, ["--version"]);
     if (code === 0) return candidate;
   }

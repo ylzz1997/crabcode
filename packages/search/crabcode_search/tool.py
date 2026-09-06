@@ -229,7 +229,11 @@ class CodebaseSearchTool(Tool):
         results = await self._indexer.store.search(query_vec[0], top_k=num_results * 2)
 
         if target_dir:
-            results = [r for r in results if r.chunk.file_path.startswith(target_dir)]
+            prefix = os.path.normcase(target_dir.replace("\\", "/")).replace("\\", "/").rstrip("/") + "/"
+            results = [
+                r for r in results
+                if os.path.normcase(r.chunk.file_path.replace("\\", "/")).replace("\\", "/").startswith(prefix)
+            ]
 
         results = results[:num_results]
 

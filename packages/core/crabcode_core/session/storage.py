@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from crabcode_core.file_lock import file_lock
+from crabcode_core.filesystem import replace_with_retry
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.path_validation import validate_path_component
 from crabcode_core.subprocess_utils import subprocess_group_options
@@ -465,7 +466,7 @@ class SessionStorage:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(temp_path, path)
+            replace_with_retry(temp_path, path)
         finally:
             try:
                 temp_path.unlink()
