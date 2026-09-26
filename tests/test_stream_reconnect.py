@@ -179,6 +179,57 @@ def test_connection_failure_uses_unbounded_budget_even_when_stream_budget_is_zer
     assert messages[-1].text_content == "online"
 
 
+def test_idle_timeout_after_thinking_retries_without_item_checkpoints():
+    class StallAfterThinking(ScriptedAdapter):
+        emits_response_item_events = False
+
+        def __init__(self):
+            super().__init__([], max_retries=2)
+            self.config.timeout = 1
+
+        async def stream_message(self, messages, system, tools, config):
+            self.requests.append([message.model_copy(deep=True) for message in messages])
+            if len(self.requests) == 1:
+                yield StreamChunk(type="thinking", text="still working")
+                await asyncio.Event().wait()
+            yield StreamChunk(type="text", text="resumed")
+            yield StreamChunk(type="message_stop")
+
+    adapter = StallAfterThinking()
+    events, messages = run(adapter)
+
+    assert len(adapter.requests) == 2
+    retry = next(event for event in events if isinstance(event, StreamRetryEvent))
+    assert "timed out after 1s" in retry.error
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+    assert [message.text_content for message in messages if isinstance(message, AssistantMessage)] == ["resumed"]
+
+
+def test_closed_tool_call_without_item_events_runs_once_across_reconnect():
+    tool = CountingTool()
+    adapter = ScriptedAdapter([
+        [
+            StreamChunk(type="tool_use_start", tool_use_id="call-1", tool_name="Count"),
+            StreamChunk(
+                type="tool_use_end",
+                tool_use_id="call-1",
+                tool_name="Count",
+                tool_input_json="{}",
+            ),
+            httpx.ReadError("incomplete chunked read"),
+        ],
+        [*completed_text("done", "msg-2"), StreamChunk(type="message_stop")],
+    ])
+    adapter.emits_response_item_events = False
+
+    events, messages = run(adapter, tools=[tool])
+
+    assert tool.calls == 1
+    assert len(adapter.requests) == 2
+    assert len([event for event in events if isinstance(event, StreamRetryEvent)]) == 1
+    assert messages[-1].text_content == "done"
+
+
 def test_completed_tool_call_runs_before_reconnect_and_is_not_replayed():
     tool = CountingTool()
     adapter = ScriptedAdapter([

@@ -15,7 +15,7 @@ from crabcode_core.query.loop import _is_recoverable_api_exception
 from crabcode_core.query.loop import QueryParams, query_loop
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.types.event import ErrorEvent, StreamRetryEvent
-from crabcode_core.types.message import create_user_message
+from crabcode_core.types.message import AssistantMessage, create_user_message
 from crabcode_core.types.tool import ToolContext
 from test_stream_reconnect import ScriptedAdapter, run
 
@@ -106,13 +106,18 @@ def test_connection_retries_exhaust_and_reset_before_each_retry():
     assert adapter.reset_network_client.await_count == 3
 
 
-def test_partial_response_without_checkpoints_is_not_replayed():
-    adapter = ScriptedAdapter([[StreamChunk(type="text", text="partial"), httpx.ReadError("offline")]])
+def test_partial_response_without_checkpoints_is_replayed():
+    adapter = ScriptedAdapter([
+        [StreamChunk(type="text", text="partial"), httpx.ReadError("offline")],
+        [StreamChunk(type="text", text="recovered"), StreamChunk(type="message_stop")],
+    ])
     adapter.emits_response_item_events = False
-    events, _ = run(adapter)
-    assert len(adapter.requests) == 1
-    assert not any(isinstance(e, StreamRetryEvent) for e in events)
-    assert any(isinstance(e, ErrorEvent) for e in events)
+    events, messages = run(adapter)
+    assert len(adapter.requests) == 2
+    assert any(isinstance(e, StreamRetryEvent) for e in events)
+    assert not any(isinstance(e, ErrorEvent) for e in events)
+    durable = [message.text_content for message in messages if isinstance(message, AssistantMessage)]
+    assert durable == ["recovered"]
 
 
 def test_waiting_for_network_can_be_cancelled_without_another_request():

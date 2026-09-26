@@ -1150,10 +1150,9 @@ async def query_loop(
         connection_failed: bool = False,
         retry_after: float | None = None,
     ) -> StreamRetry | None:
-        # Without durable item checkpoints, replaying partial output could
-        # duplicate text or tool calls. Let the user decide how to continue.
-        if _has_response_evidence() and not getattr(params.api_adapter, "emits_response_item_events", False):
-            return None
+        # Unfinished thinking and text are discarded before the replay.
+        # Tool calls that already closed stay in the checkpoint and are not
+        # executed a second time, including adapters without response items.
         if "CERTIFICATE_VERIFY_FAILED" in error_message:
             return None
         fallback = getattr(params.api_adapter, "try_switch_fallback_transport", None)
