@@ -93,7 +93,7 @@ export function VirtualMachineSettings({ settings, taskBusy = false, onChange, o
       </div>
     </div>
     {!native && <p className="vm-feedback">请在 Apple Silicon Mac 上使用 Crab Desktop 配置本地虚拟机。</p>}
-    {native && windows && <p className="vm-feedback">本地虚拟机仅支持 Apple Silicon Mac。</p>}
+    {native && windows && <p className="vm-feedback">本地虚拟机目前不支持Windows平台</p>}
     {taskBusy && <p className="vm-feedback"><ShieldCheck />任务运行中，环境配置已锁定；可在“更多操作”中暂停。</p>}
     {selected && !windows && <div className="vm-workspace">
       <div className="vm-engine-install">
