@@ -47,7 +47,7 @@ Windows PowerShell 请使用 `$env:ANTHROPIC_API_KEY = "YourKey"` 设置环境�
 
 ```bash
 # 以可编辑模式安装所有包
-pip install -e packages/core packages/cli packages/search packages/debugger
+pip install -e packages/core packages/cli packages/search packages/debugger crabcode-gateway
 # 最小安装
 pip install -e packages/core packages/cli
 # 含浏览器自动化依赖
