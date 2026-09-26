@@ -117,7 +117,9 @@ import {
   type ComputerUseState,
 } from "./computerUse";
 import { gatewayEnvironmentLog, gatewayLogAddress, updateGatewayStartup, type GatewayStartupState } from "./gatewayStartup";
+import { sessionExecutionTask } from "./sessionExecution";
 import { StatusBar } from "./StatusBar";
+import { setSessionTaskbarProgress } from "./taskbarProgress";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
 import {
   activateProjectFileTab,
@@ -3029,6 +3031,14 @@ function App() {
     const timer = window.setInterval(() => setRunClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [activeSession?.busy, activeSessionKey]);
+  const executionTask = sessionExecutionTask(sessions, activeSession);
+  const sessionRunning = executionTask !== null;
+  useEffect(() => {
+    void setSessionTaskbarProgress(sessionRunning);
+  }, [sessionRunning]);
+  useEffect(() => () => {
+    void setSessionTaskbarProgress(false);
+  }, []);
 
   useEffect(() => {
     if (
@@ -4247,6 +4257,7 @@ function App() {
           : lumeInstaller.busy
             ? lumeInstaller.progress?.detail ?? "正在安装 Lume…"
             : null}
+        task={executionTask}
         onConnections={() => setConnectionModal(activeConnection?.id ?? "new")}
         onRetry={activeConnection ? () => void connectGateway(activeConnection, settings.python_path) : undefined}
       />

@@ -13,6 +13,7 @@ interface StatusBarProps {
   loading?: boolean;
   error?: string | null;
   activity?: string | null;
+  task?: { label: string; startedAt: number } | null;
   onRetry?: () => void;
   onConnections?: () => void;
   computerUse?: ComputerUseState;
@@ -40,12 +41,13 @@ function previewCursorPosition(preview: ComputerUsePreview | null): { left: numb
   };
 }
 
-export function StatusBar({ connection, gateway, startup, project, loading, error, activity, onRetry, onConnections, computerUse, computerUseConfig, onComputerUseEnabledChange, onComputerUseOpenInputSettings, onComputerUseRefresh }: StatusBarProps) {
+export function StatusBar({ connection, gateway, startup, project, loading, error, activity, task, onRetry, onConnections, computerUse, computerUseConfig, onComputerUseEnabledChange, onComputerUseOpenInputSettings, onComputerUseRefresh }: StatusBarProps) {
   const [expanded, setExpanded] = useState(false);
   const [computerExpanded, setComputerExpanded] = useState(false);
   const [computerDetail, setComputerDetail] = useState<ComputerUsePreview | null>(null);
   const [now, setNow] = useState(Date.now);
   const [mountedAt] = useState(Date.now);
+  const taskStartRef = useRef<number | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const computerToggleRef = useRef<HTMLButtonElement>(null);
@@ -53,12 +55,23 @@ export function StatusBar({ connection, gateway, startup, project, loading, erro
   const computerDetailTriggerRef = useRef<HTMLElement | null>(null);
   const computerWasActiveRef = useRef(computerUse?.active === true);
   const failed = Boolean(error || gateway?.status === "error");
-  const busy = !failed && Boolean(loading || activity || (connection && (!gateway || gateway.status === "connecting")));
+  const gatewayBusy = !failed && Boolean(loading || activity || (connection && (!gateway || gateway.status === "connecting")));
+  const taskBusy = !failed && !gatewayBusy && Boolean(task);
+  const busy = gatewayBusy || taskBusy;
   const status = failed ? "error" : busy ? "busy" : gateway?.status === "online" ? "online" : "offline";
   const detail = error || gateway?.error || activity || (loading ? "正在读取桌面配置…"
-    : busy ? startup?.detail || "正在连接 Gateway…"
+    : gatewayBusy ? startup?.detail || "正在连接 Gateway…"
+    : taskBusy ? task!.label
     : gateway?.status === "online" ? "就绪" : "尚未连接 Gateway");
-  const elapsed = Math.max(0, Math.floor(((startup?.finishedAt ?? now) - (startup?.startedAt ?? mountedAt)) / 1000));
+  const taskStartedAt = task?.startedAt && task.startedAt > 0 ? task.startedAt : null;
+  if (taskBusy) {
+    taskStartRef.current = taskStartedAt ?? taskStartRef.current ?? now;
+  } else {
+    taskStartRef.current = null;
+  }
+  const elapsedStart = taskBusy ? taskStartRef.current ?? now : (startup?.startedAt ?? mountedAt);
+  const elapsedEnd = taskBusy ? now : (startup?.finishedAt ?? now);
+  const elapsed = Math.max(0, Math.floor((elapsedEnd - elapsedStart) / 1000));
   const duration = elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`;
 
   useEffect(() => {
