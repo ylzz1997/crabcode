@@ -260,7 +260,7 @@ export interface SwitchModeRequest {
 }
 
 export interface SetReasoningEffortRequest {
-  effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  effort: "auto" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   session_id?: string | null;
 }
 

@@ -3916,23 +3916,45 @@ class CoreSession:
         ).reasoning_effort
 
     def set_reasoning_effort(self, effort: str) -> bool:
-        """Override reasoning effort for subsequent requests in this session."""
+        """Override reasoning effort for subsequent requests in this session.
+
+        ``auto`` clears the session override and restores the model profile's
+        configured value.  When that value is unset, later requests omit an
+        effort and the provider uses its own default.
+        """
         normalized = effort.strip().lower()
+        if normalized == "auto":
+            self._reasoning_effort_override = None
+            self._apply_reasoning_effort(self._configured_reasoning_effort())
+            return True
         if normalized not in REASONING_EFFORT_LEVELS:
             return False
 
         selected = cast(ReasoningEffort, normalized)
         self._reasoning_effort_override = selected
+        self._apply_reasoning_effort(selected)
+        return True
+
+    def _configured_reasoning_effort(self) -> ReasoningEffort | None:
+        """Return the effort saved for the active model, ignoring this session."""
+        from crabcode_core.config.manager import ConfigManager
+
+        try:
+            catalog = self._merge_project_settings(ConfigManager(cwd=self.cwd).load())
+        except Exception:
+            logger.warning("Failed to restore configured reasoning effort", exc_info=True)
+            return None
+        return catalog.get_api_config(self._current_model_name).reasoning_effort
+
+    def _apply_reasoning_effort(self, selected: ReasoningEffort | None) -> None:
         active_config = self.settings.get_api_config(self._current_model_name)
         active_config.reasoning_effort = selected
-
         # Initialized adapters retain their ApiConfig object.  Most adapters
         # share ``active_config`` directly; update a defensive copy as well so
         # wrappers that copied it still observe the runtime override.
         adapter_config = getattr(self._api_adapter, "config", None)
         if adapter_config is not None and hasattr(adapter_config, "reasoning_effort"):
             adapter_config.reasoning_effort = selected
-        return True
 
     @property
     def ultra_mode(self) -> bool:

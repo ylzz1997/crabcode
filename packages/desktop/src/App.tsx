@@ -2532,12 +2532,13 @@ function App() {
     if (deleted) setScheduleDeleteTarget(null);
   };
 
-  const selectReasoningEffort = (effort: ReasoningEffort) => {
+  const selectReasoningEffort = (effort: ReasoningEffort | "auto") => {
     if (!activeChannel || !activeSessionKey || !activeConnection || !activeProject || !activeSession) return;
+    const reasoningEffort = effort === "auto" ? null : effort;
     try {
       activeChannel.setReasoningEffort(effort);
       updateSessionPreferences(activeConnection.id, activeProject.id, activeSession.id, {
-        reasoning_effort: effort,
+        reasoning_effort: reasoningEffort,
       }, true);
       setSessions((current) => {
         const session = current[activeSessionKey];
@@ -2546,7 +2547,7 @@ function App() {
           ...current,
           [activeSessionKey]: {
             ...session,
-            status: { ...session.status, reasoning_effort: effort },
+            status: { ...session.status, reasoning_effort: reasoningEffort },
           },
         };
       });
@@ -2731,10 +2732,10 @@ function App() {
           appendCommandCard(command, "推理强度", `当前推理强度：${activeSession?.status?.reasoning_effort || "自动"}`);
           return true;
         }
-        const allowed: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-        if (!allowed.includes(args as ReasoningEffort)) throw new Error("用法：/effort <none|minimal|low|medium|high|xhigh|max>");
-        selectReasoningEffort(args as ReasoningEffort);
-        appendCommandMessage(`推理强度已切换为 ${args}`);
+        const allowed = ["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
+        if (!allowed.includes(args)) throw new Error("用法：/effort <auto|none|minimal|low|medium|high|xhigh|max>");
+        selectReasoningEffort(args as ReasoningEffort | "auto");
+        appendCommandMessage(`推理强度已切换为 ${args === "auto" ? "自动" : args}`);
         return true;
       }
       if (command === "/ultra") {
@@ -5156,9 +5157,10 @@ const PERMISSION_OPTIONS: Array<{
 ];
 
 const REASONING_EFFORT_OPTIONS: Array<{
-  value: ReasoningEffort;
+  value: ReasoningEffort | "auto";
   label: string;
 }> = [
+  { value: "auto", label: "自动" },
   { value: "none", label: "关闭" },
   { value: "minimal", label: "最低" },
   { value: "low", label: "低" },
@@ -5801,13 +5803,14 @@ function ReasoningEffortPicker({
 }: {
   value: string | null | undefined;
   disabled: boolean;
-  onChange: (value: ReasoningEffort) => void;
+  onChange: (value: ReasoningEffort | "auto") => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const close = useCallback(() => setOpen(false), []);
   useDismissMenu(open, close, ref);
-  const selected = REASONING_EFFORT_OPTIONS.find((option) => option.value === value);
+  const current = value || "auto";
+  const selected = REASONING_EFFORT_OPTIONS.find((option) => option.value === current);
   return (
     <div className="picker effort-picker" ref={ref}>
       <button
@@ -5831,13 +5834,13 @@ function ReasoningEffortPicker({
               <button
                 type="button"
                 role="menuitemradio"
-                aria-checked={option.value === value}
-                className={`effort-option ${option.value === value ? "selected" : ""}`}
+                aria-checked={option.value === current}
+                className={`effort-option ${option.value === current ? "selected" : ""}`}
                 key={option.value}
                 onClick={() => { onChange(option.value); setOpen(false); }}
               >
                 <span>{option.label}</span>
-                {option.value === value && <Check className="picker-check" />}
+                {option.value === current && <Check className="picker-check" />}
               </button>
             ))}
           </div>

@@ -8,7 +8,8 @@ import {
   Server,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { isWindowsPlatform } from "./platform";
 import type {
   ConnectionPreset,
   GatewayViewState,
@@ -64,9 +65,15 @@ export function RuntimeSettingsPanel({
   const writableSources = useMemo(() => sourceOptions.filter((item) => item.writable), [sourceOptions]);
   const online = gateway?.status === "online";
   const canEdit = online && Boolean(onMutate) && writableSources.length > 0;
-  const computerUseTarget = data?.computer_use_target_scope
+  const storedTarget = data?.computer_use_target_scope
     ?? (data?.computer_use_mode === "foreground_desktop" ? "desktop" : "app_window");
-  const computerUsePolicy = data?.computer_use_delivery_policy ?? "allow_foreground";
+  const storedPolicy = data?.computer_use_delivery_policy ?? "allow_foreground";
+  const windowsHost = isWindowsPlatform();
+  // The shared default is app_window for macOS. On Windows that choice cannot
+  // run, so the control shows and keeps the desktop scope instead.
+  const computerUseTarget = windowsHost && storedTarget === "app_window" ? "desktop" : storedTarget;
+  const computerUsePolicy = windowsHost && storedPolicy === "strict_background" ? "allow_foreground" : storedPolicy;
+  const windowsCorrection = useRef(false);
 
   useEffect(() => {
     setSnapshotSizeDraft(data ? String(data.snapshot_max_size_mb) : "");
@@ -117,6 +124,16 @@ export function RuntimeSettingsPanel({
       // The mutation banner contains the remote error.
     }
   };
+
+  useEffect(() => {
+    if (!windowsHost || !canEdit || !data || windowsCorrection.current) return;
+    const changes: Pick<RuntimeSettingsMutation, "computer_use_target_scope" | "computer_use_delivery_policy"> = {};
+    if (storedTarget === "app_window") changes.computer_use_target_scope = "desktop";
+    if (storedPolicy === "strict_background") changes.computer_use_delivery_policy = "allow_foreground";
+    if (!changes.computer_use_target_scope && !changes.computer_use_delivery_policy) return;
+    windowsCorrection.current = true;
+    void saveComputerUseOptions(changes);
+  }, [windowsHost, canEdit, data, storedTarget, storedPolicy, source]);
 
   const addTool = async (event: FormEvent) => {
     event.preventDefault();
@@ -274,8 +291,12 @@ export function RuntimeSettingsPanel({
                     type="button"
                     className={computerUseTarget === scope ? "active" : ""}
                     aria-pressed={computerUseTarget === scope}
-                    disabled={!canEdit || mutationBusy || (scope === "desktop" && computerUsePolicy !== "allow_foreground")}
-                    onClick={() => void saveComputerUseOptions({ computer_use_target_scope: scope })}
+                    title={windowsHost && scope === "app_window" ? "Windows 暂不支持指定窗口" : undefined}
+                    disabled={!canEdit || mutationBusy || (windowsHost && scope === "app_window") || (scope === "desktop" && computerUsePolicy !== "allow_foreground")}
+                    onClick={() => {
+                      if (windowsHost && scope === "app_window") return;
+                      void saveComputerUseOptions({ computer_use_target_scope: scope });
+                    }}
                   >
                     {scope === "app_window" ? "指定窗口" : "整个桌面"}
                   </button>
@@ -294,11 +315,15 @@ export function RuntimeSettingsPanel({
                     type="button"
                     className={computerUsePolicy === policy ? "active" : ""}
                     aria-pressed={computerUsePolicy === policy}
-                    disabled={!canEdit || mutationBusy}
-                    onClick={() => void saveComputerUseOptions({
-                      computer_use_delivery_policy: policy,
-                      ...(policy === "strict_background" ? { computer_use_target_scope: "app_window" as const } : {}),
-                    })}
+                    title={windowsHost && policy === "strict_background" ? "Windows 暂不支持严格后台" : undefined}
+                    disabled={!canEdit || mutationBusy || (windowsHost && policy === "strict_background")}
+                    onClick={() => {
+                      if (windowsHost && policy === "strict_background") return;
+                      void saveComputerUseOptions({
+                        computer_use_delivery_policy: policy,
+                        ...(policy === "strict_background" ? { computer_use_target_scope: "app_window" as const } : {}),
+                      });
+                    }}
                   >
                     {policy === "strict_background" ? "严格后台" : "允许前台操作"}
                   </button>

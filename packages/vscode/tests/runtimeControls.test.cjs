@@ -15,9 +15,10 @@ function harness() {
     requests.push({ url, body, session });
     if (pause) { const wait = pause; pause = null; await wait; }
     if (failure && body) return { ok: false, json: async () => ({ detail: 'provider rejected' }) };
-    if (body?.effort) state.reasoning_effort = body.effort;
+    if (body?.effort === 'auto') delete state.reasoning_effort;
+    else if (body?.effort) state.reasoning_effort = body.effort;
     if (typeof body?.enabled === 'boolean') state.ultra_mode = body.enabled;
-    const result = body?.effort ? { reasoning_effort: state.reasoning_effort }
+    const result = body?.effort ? (state.reasoning_effort ? { reasoning_effort: state.reasoning_effort } : {})
       : typeof body?.enabled === 'boolean' ? { ultra_mode: state.ultra_mode } : { ...state };
     return { ok: true, json: async () => result };
   });
@@ -42,6 +43,19 @@ test('effort and Ultra cross the host bridge, use session IDs, and persist ackno
   h.states.a = { reasoning_effort: 'low', ultra_mode: true };
   await h.panel.runtimeControls.refresh('a', true);
   assert.deepEqual(h.states.a, { reasoning_effort: 'max', ultra_mode: false });
+});
+
+test('auto is selectable and clears a previously persisted effort', async () => {
+  const h = harness();
+  await h.panel.showOrSetReasoningEffort('max');
+  await h.panel.showOrSetReasoningEffort('auto');
+  assert.equal(h.states.a.reasoning_effort, undefined);
+  assert.equal(h.panel.runtimeControls.get('a').reasoning_effort, undefined);
+  assert.ok(h.requests.some(r => r.url.endsWith('/config/reasoning-effort') && r.body.effort === 'auto' && r.body.session_id === 'a'));
+  assert.equal([...h.saved.values()].at(-1)?.reasoning_effort, undefined);
+  h.states.a = { ultra_mode: false };
+  await h.panel.runtimeControls.refresh('a', true);
+  assert.equal(h.states.a.reasoning_effort, undefined);
 });
 
 test('automatic effort stays automatic until explicitly selected; invalid effort never reaches Gateway', async () => {

@@ -3,7 +3,7 @@ import type { SessionRuntimeStatus } from "./client/types";
 
 export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
-type Preferences = { reasoning_effort?: ReasoningEffort; ultra_mode?: boolean };
+type Preferences = { reasoning_effort?: ReasoningEffort | "auto"; ultra_mode?: boolean };
 export type RuntimeControlsState = Preferences & { ready: boolean; pending: boolean };
 
 export function normalizeRuntimePreferences(value: unknown): Preferences {
@@ -83,6 +83,9 @@ export class RuntimeControls {
   }
 
   setEffort(sessionId: string, effort: string): Promise<void> {
+    if (effort === "auto") {
+      return this.run(sessionId, (key) => this.clearEffort(sessionId, key));
+    }
     if (!REASONING_EFFORTS.includes(effort as ReasoningEffort)) {
       this.reportError(sessionId, "无效的思考强度。");
       return Promise.resolve();
@@ -97,6 +100,34 @@ export class RuntimeControls {
       const status = enabled === null ? await this.request("/session/status", sessionId) : null;
       await this.apply(sessionId, key, { ultra_mode: enabled ?? !status?.ultra_mode });
     });
+  }
+
+  private async clearEffort(sessionId: string, key: string): Promise<void> {
+    if (key !== this.key(sessionId)) return;
+    if (!this.states.get(key)?.ready) {
+      const status = await this.request("/session/status", sessionId);
+      this.states.set(key, { ...normalizeRuntimePreferences(status), ready: true, pending: true });
+    }
+    if (key !== this.key(sessionId)) return;
+    const normalized = normalizeRuntimePreferences(
+      await this.request("/config/reasoning-effort", sessionId, { reasoning_effort: "auto" }),
+    );
+    const next: RuntimeControlsState = {
+      ...this.states.get(key),
+      ...normalized,
+      ready: true,
+      pending: true,
+    };
+    if (normalized.reasoning_effort) next.reasoning_effort = normalized.reasoning_effort;
+    else delete next.reasoning_effort;
+    this.states.set(key, next);
+    const stored: Preferences = {
+      ...normalizeRuntimePreferences(this.storage?.get(key)),
+      ...normalized,
+    };
+    if (normalized.reasoning_effort) stored.reasoning_effort = normalized.reasoning_effort;
+    else delete stored.reasoning_effort;
+    await this.storage?.update(key, Object.keys(stored).length > 0 ? stored : undefined);
   }
 
   private async apply(sessionId: string, key: string, preference: Preferences): Promise<void> {

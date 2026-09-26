@@ -6,6 +6,7 @@ import {
   Power, RefreshCw, Save, Server, Settings2, ShieldCheck,
 } from "lucide-react";
 import { isDesktopShell } from "./native";
+import { isWindowsPlatform } from "./platform";
 import type { DesktopSettings } from "./types";
 import type { ComputerUseCapabilities } from "./computerUse";
 import type { LumeInstallerState } from "./lumeInstaller";
@@ -31,6 +32,7 @@ export function VirtualMachineSettings({ settings, taskBusy = false, onChange, o
   const [resources, setResources] = useState({ cpus: 4, memory_gb: 8, disk_gb: 80, ipsw: "latest" });
   const moreActionsRef = useRef<HTMLDetailsElement>(null);
   const native = isDesktopShell();
+  const windows = isWindowsPlatform();
   const selected = settings.computer_use_environment === "local_vm";
   const locked = !native || busy !== null || taskBusy || Boolean(lumeInstaller?.busy);
   const engineReady = lumeInstaller?.status?.available;
@@ -87,12 +89,13 @@ export function VirtualMachineSettings({ settings, taskBusy = false, onChange, o
       </div>
       <div className="settings-segmented" aria-label="Computer Use 执行环境选择">
         <button type="button" disabled={locked || !onChange} aria-pressed={!selected} className={!selected ? "active" : ""} onClick={() => onChange?.({ computer_use_environment: "host", computer_use_vm: normalizeVmConfig(settings.computer_use_vm) })}>本机</button>
-        <button type="button" disabled={locked || !onChange} aria-pressed={selected} className={selected ? "active" : ""} onClick={() => onChange?.({ computer_use_environment: "local_vm", computer_use_vm: config })}>本地虚拟机</button>
+        <button type="button" disabled={locked || !onChange || windows} title={windows ? "Windows 暂不支持本地虚拟机" : undefined} aria-pressed={selected} className={selected ? "active" : ""} onClick={() => { if (!windows) onChange?.({ computer_use_environment: "local_vm", computer_use_vm: config }); }}>本地虚拟机</button>
       </div>
     </div>
     {!native && <p className="vm-feedback">请在 Apple Silicon Mac 上使用 Crab Desktop 配置本地虚拟机。</p>}
+    {native && windows && <p className="vm-feedback">本地虚拟机仅支持 Apple Silicon Mac。</p>}
     {taskBusy && <p className="vm-feedback"><ShieldCheck />任务运行中，环境配置已锁定；可在“更多操作”中暂停。</p>}
-    {selected && <div className="vm-workspace">
+    {selected && !windows && <div className="vm-workspace">
       <div className="vm-engine-install">
         <div className="vm-engine-row">
           <span className="vm-engine-icon" aria-hidden="true"><Server /></span>

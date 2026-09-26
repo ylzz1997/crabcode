@@ -24,10 +24,12 @@ function button(text: string) { return [...container.querySelectorAll("button")]
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.resetAllMocks();
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
   vi.mocked(getLumeInstallStatus).mockResolvedValue(missing);
   container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
 });
-afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Lume install settings", () => {
   it("shows progress across page changes and prevents concurrent attempts", async () => {

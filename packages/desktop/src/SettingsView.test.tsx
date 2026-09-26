@@ -148,6 +148,7 @@ describe("SettingsView", () => {
     act(() => root.unmount());
     container.remove();
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    vi.restoreAllMocks();
   });
 
   const callbacks = () => ({
@@ -590,6 +591,8 @@ describe("SettingsView", () => {
   });
 
   it("requires explicit foreground permission and revokes desktop scope atomically", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
     const onMutate = vi.fn().mockResolvedValue(undefined);
     const data: RuntimeSettingsResponse = {
       cwd: "/work/crabcode", snapshot_enabled: true, snapshot_max_size_mb: 1024,
@@ -623,6 +626,41 @@ describe("SettingsView", () => {
       computer_use_delivery_policy: "strict_background", computer_use_target_scope: "app_window",
     }));
     expect(onMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables window scope and strict background only on Windows", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    const onMutate = vi.fn().mockResolvedValue(undefined);
+    const data: RuntimeSettingsResponse = {
+      cwd: "/work/crabcode", snapshot_enabled: true, snapshot_max_size_mb: 1024,
+      computer_use_target_scope: "app_window", computer_use_delivery_policy: "allow_foreground",
+      extra_tools: [], extra_tools_by_source: {}, sources: [], warnings: [],
+      editable_sources: [{ id: "projectSettings", label: "项目配置", path: "/work/crabcode/.crabcode/settings.json", exists: true, writable: true }],
+    };
+    await act(async () => {
+      root.render(
+        <RuntimeSettingsPanel
+          activeConnection={settings.connections[0]} activeProject={settings.connections[0].projects[0]}
+          gateway={onlineGateway} data={data} loading={false} error={null}
+          onRefresh={vi.fn()} onMutate={onMutate}
+        />,
+      );
+      await Promise.resolve();
+    });
+    const button = (label: string) => Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((item) => item.textContent === label)!;
+    expect(button("指定窗口").disabled).toBe(true);
+    expect(button("指定窗口").getAttribute("aria-pressed")).toBe("false");
+    expect(button("严格后台").disabled).toBe(true);
+    expect(button("整个桌面").disabled).toBe(false);
+    expect(button("整个桌面").getAttribute("aria-pressed")).toBe("true");
+    expect(button("允许前台操作").disabled).toBe(false);
+    expect(onMutate).toHaveBeenCalledWith(expect.objectContaining({ computer_use_target_scope: "desktop" }));
+    const saved = onMutate.mock.calls.length;
+    await act(async () => button("指定窗口").click());
+    await act(async () => button("严格后台").click());
+    expect(onMutate).toHaveBeenCalledTimes(saved);
   });
 
   it("shows a host-side command instead of remote execution for remote gateways", () => {

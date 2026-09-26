@@ -209,7 +209,7 @@ class SwitchModeRequest(BaseModel):
 
 
 class SetReasoningEffortRequest(BaseModel):
-    effort: ReasoningEffort
+    effort: ReasoningEffort | Literal["auto"]
     session_id: str | None = None
 
 

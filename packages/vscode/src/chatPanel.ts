@@ -7204,7 +7204,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let composerIsComposing = false;
     let compositionResetTimer = null;
     let runtimeState = { ready: false, pending: false, connected: false };
-    const effortLabels = { none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' };
+    const effortLabels = { auto: '自动', none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' };
 
     function isMacPlatform() {
       return /Macintosh|MacIntel|MacPPC|Mac68K/i.test(navigator.platform || navigator.userAgent || '');
@@ -9215,7 +9215,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { name: '/image',         desc: '附加图片到下一条消息',             badge: '' },
     ];
 
-    const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+    const EFFORT_LEVELS = ['auto', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
     let slashSkills = [];
     let slashActiveIndex = -1;
@@ -9851,7 +9851,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       '/effort': function(args) {
         const effort = (args || '').toLowerCase();
         if (effort && EFFORT_LEVELS.indexOf(effort) < 0) {
-          addLocalSystemMessage('用法：/effort <none|minimal|low|medium|high|xhigh|max>');
+          addLocalSystemMessage('用法：/effort <auto|none|minimal|low|medium|high|xhigh|max>');
           return true;
         }
         vscode.postMessage({ type: 'setEffort', effort: effort || null });
@@ -10547,13 +10547,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       ultraChip.disabled = disabled;
       ultraMenuItem.disabled = disabled;
       effortBtn.setAttribute('aria-busy', state.pending ? 'true' : 'false');
-      effortLabel.textContent = '思考 ' + (effortLabels[state.reasoning_effort] || '自动');
+      const selectedEffort = state.reasoning_effort || 'auto';
+      effortLabel.textContent = '思考 ' + (effortLabels[selectedEffort] || '自动');
       const ultra = state.ultra_mode === true;
       ultraChip.hidden = !ultra;
       ultraMenuItem.setAttribute('aria-checked', String(ultra));
       composerCard.classList.toggle('ultra-mode', ultra);
       effortOptions.querySelectorAll('[data-effort]').forEach(function(button) {
-        button.setAttribute('aria-checked', String(button.dataset.effort === state.reasoning_effort));
+        button.setAttribute('aria-checked', String(button.dataset.effort === selectedEffort));
       });
       if (disabled) closeEffortMenu();
     }

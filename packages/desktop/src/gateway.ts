@@ -793,7 +793,7 @@ export class SessionChannel {
     this.sendRaw({ type: "switch_mode", mode, session_id: this.sessionId });
   }
 
-  setReasoningEffort(effort: ReasoningEffort): void {
+  setReasoningEffort(effort: ReasoningEffort | "auto"): void {
     this.sendRaw({ type: "set_reasoning_effort", effort, session_id: this.sessionId });
   }
 

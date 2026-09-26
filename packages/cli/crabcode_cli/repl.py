@@ -198,7 +198,7 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
         "cancel",
     ],
     "/status": [],
-    "/effort": list(REASONING_EFFORT_LEVELS),
+    "/effort": ["auto", *REASONING_EFFORT_LEVELS],
     "/ultra": ["true", "false"],
     "/logs": ["-f", "--follow", "--clear", "--tail"],
     "/model": [],  # Dynamic: model names
@@ -2755,7 +2755,7 @@ async def _handle_command(
             "[bold]/schedule create [options] <name> <type> <schedule> <prompt>[/] — create a task\n"
             "[bold]/schedule pause|resume|run|cancel <id>[/] — manage a task\n"
             "[bold]/status[/] — show session status (model, effort, ultra, context, compactions)\n"
-            "[bold]/effort [none|minimal|low|medium|high|xhigh|max][/] — show/set reasoning effort\n"
+            "[bold]/effort [auto|none|minimal|low|medium|high|xhigh|max][/] — show/set reasoning effort\n"
             "[bold]/ultra [true|false][/] — toggle or explicitly set ultra mode\n"
             "[bold]/logs[/] — show background tool logs summary\n"
             "[bold]/logs <name>[/] — show a background log tail\n"
@@ -3086,7 +3086,7 @@ async def _handle_command(
     if cmd == "/effort":
         if not arg:
             current = session.reasoning_effort or "auto"
-            available = " | ".join(REASONING_EFFORT_LEVELS)
+            available = " | ".join(("auto", *REASONING_EFFORT_LEVELS))
             console.print(
                 f"Reasoning effort: [bold cyan]{current}[/]  "
                 f"[dim](set with /effort <{available}>)[/]"
@@ -3095,7 +3095,7 @@ async def _handle_command(
 
         effort = arg.lower()
         if not session.set_reasoning_effort(effort):
-            available = " | ".join(REASONING_EFFORT_LEVELS)
+            available = " | ".join(("auto", *REASONING_EFFORT_LEVELS))
             console.print(
                 f"[bold red]Invalid effort: {arg}[/]  "
                 f"[dim]Usage: /effort <{available}>[/]"
