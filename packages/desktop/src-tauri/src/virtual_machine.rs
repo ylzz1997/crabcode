@@ -14,6 +14,7 @@ mod guest;
 pub mod installer;
 
 const RESPONSE_LIMIT: u64 = 32 * 1024 * 1024;
+#[cfg(target_os = "macos")]
 const APP: &str = "Crab Computer Use.app";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -247,6 +248,7 @@ fn guest_address(info: &Value) -> Result<String, String> {
     Ok(ip.to_string())
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

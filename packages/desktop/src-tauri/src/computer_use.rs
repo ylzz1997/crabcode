@@ -185,6 +185,8 @@ pub struct ComputerAction {
     duration_ms: Option<u64>,
     include_screenshot: Option<bool>,
     // Internal Core/host negotiation; not a model-facing action argument.
+    // Read on macOS. Kept on every platform so deny_unknown_fields still accepts it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     include_window_observations: Option<bool>,
     observation: Option<String>,
     snapshot_id: Option<String>,
