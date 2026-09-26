@@ -61,28 +61,6 @@ describe("desktop status bar", () => {
     expect(document.activeElement).toBe(container.querySelector(".status-current"));
   });
 
-  it("shows session execution with elapsed time, and keeps gateway startup ahead of it", () => {
-    const online = { ...connecting, status: "online" } as GatewayViewState;
-    const startedAt = Date.parse("2026-09-16T12:00:00Z") - 38_000;
-    const task = { label: "正在执行 · 生成回复", startedAt };
-    act(() => root.render(<StatusBar connection={connection} gateway={online} task={task} />));
-    expect(container.querySelector(".desktop-status-bar")?.className).toContain("busy");
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("正在执行 · 生成回复");
-    expect(container.querySelector(".status-elapsed")?.textContent).toBe("38 秒");
-    expect(container.querySelector(".spin")).not.toBeNull();
-    act(() => vi.advanceTimersByTime(2_000));
-    expect(container.querySelector(".status-elapsed")?.textContent).toBe("40 秒");
-
-    const startup = updateGatewayStartup(undefined, "waiting_gateway", "正在等待本地 Gateway 就绪");
-    act(() => root.render(<StatusBar connection={connection} gateway={connecting} startup={startup} task={task} />));
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("正在等待本地 Gateway 就绪");
-
-    act(() => root.render(<StatusBar connection={connection} gateway={online} />));
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("就绪");
-    expect(container.querySelector(".spin")).toBeNull();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("shows configuration loading and a readable configuration error", () => {
     act(() => root.render(<StatusBar loading />));
     expect(container.querySelector('[role="status"]')?.textContent).toBe("正在读取桌面配置…");

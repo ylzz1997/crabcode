@@ -28,6 +28,22 @@ import type {
   WorkspaceInfo,
 } from "./types";
 
+// FastAPI returns ``detail`` as a string for HTTPException, but as a list of
+// error objects for request-validation failures. Join those objects so callers
+// never render "[object Object]".
+function errorDetail(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object") return fallback;
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return fallback;
+  const messages = detail
+    .filter((item): item is { msg: string; loc?: (string | number)[] } => (
+      item !== null && typeof item === "object" && typeof (item as { msg?: unknown }).msg === "string"
+    ))
+    .map((item) => `${Array.isArray(item.loc) ? `${item.loc.join(".")}: ` : ""}${item.msg}`);
+  return messages.length ? messages.join("; ") : fallback;
+}
+
 export class GatewayApi {
   private token: string | null = null;
   private expiresAt = 0;
@@ -90,10 +106,10 @@ export class GatewayApi {
       return this.request<T>(path, init, false);
     }
     if (!response.ok) {
-      let detail = `${response.status} ${response.statusText}`;
+      const fallback = `${response.status} ${response.statusText}`;
+      let detail = fallback;
       try {
-        const payload = await response.json() as { detail?: string };
-        detail = payload.detail || detail;
+        detail = errorDetail(await response.json(), fallback);
       } catch {
         // Keep the status text when the response is not JSON.
       }
@@ -134,10 +150,10 @@ export class GatewayApi {
       return this.workspaceFile(path, false);
     }
     if (!response.ok) {
-      let detail = `${response.status} ${response.statusText}`;
+      const fallback = `${response.status} ${response.statusText}`;
+      let detail = fallback;
       try {
-        const payload = await response.json() as { detail?: string };
-        detail = payload.detail || detail;
+        detail = errorDetail(await response.json(), fallback);
       } catch {
         // Keep the status text when the response is not JSON.
       }
