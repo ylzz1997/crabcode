@@ -48,7 +48,7 @@ the provider-specific keys below).
 
 ```bash
 # Install packages in editable mode
-pip install -e packages/core packages/cli packages/search
+pip install -e packages/core packages/cli packages/search packages/debugger
 # Minimal install (core + cli only, no semantic search)
 pip install -e packages/core packages/cli
 # Browser automation dependency
