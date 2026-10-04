@@ -1,8 +1,11 @@
-"""WebSearchTool — search the web using Tavily or DuckDuckGo."""
+"""WebSearchTool — search the web using Tavily, DuckDuckGo, or Bing."""
 
 from __future__ import annotations
 
 import os
+import re
+import time
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
@@ -19,7 +22,55 @@ _DEFAULT_MAX_RESULTS = 5
 _MAX_RESULTS = 10
 _DDG_BASE_URL = "https://html.duckduckgo.com/html/"
 _DDG_RESULT_BASE_URL = "https://duckduckgo.com"
+_BING_HOME_URL = "https://www.bing.com/"
+_BING_SEARCH_URL = "https://www.bing.com/search"
 _TAVILY_URL = "https://api.tavily.com/search"
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+_DDG_BACKOFF_SECONDS = 10 * 60
+_TAG_RE = re.compile(r"<[^>]+>")
+_ddg_unavailable_until = 0.0
+
+
+class DuckDuckGoUnavailable(RuntimeError):
+    """DuckDuckGo did not return a results page."""
+
+
+def _reset_ddg_backoff() -> None:
+    """Clear the in-process DuckDuckGo backoff. Used by tests."""
+    global _ddg_unavailable_until
+    _ddg_unavailable_until = 0.0
+
+
+def _ddg_in_backoff() -> bool:
+    return time.monotonic() < _ddg_unavailable_until
+
+
+def _note_ddg_unavailable() -> None:
+    global _ddg_unavailable_until
+    _ddg_unavailable_until = time.monotonic() + _DDG_BACKOFF_SECONDS
+
+
+def _is_ddg_challenge(status_code: int, html: str) -> bool:
+    """True when DuckDuckGo served a bot check instead of results.
+
+    HTTP 202 plus an anomaly page still passes ``raise_for_status`` and has no
+    result links, which used to be reported as an empty search.
+    """
+    if status_code == 202:
+        return True
+    lowered = html.lower()
+    return "anomaly-modal" in lowered or "bots use duckduckgo" in lowered
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _plain(value: str) -> str:
+    return _clean_text(_TAG_RE.sub(" ", value))
 
 
 def _is_http_url(url: str) -> bool:
@@ -105,9 +156,41 @@ class _DuckDuckGoHTMLParser(HTMLParser):
         self._capture_snippet = False
 
 
+def _parse_ddg_html(html: str) -> list[dict[str, str]]:
+    parser = _DuckDuckGoHTMLParser()
+    parser.feed(html)
+    parser.close()
+    return parser.results
+
+
+def _parse_bing_rss(xml_text: str) -> list[dict[str, str]]:
+    stripped = xml_text.lstrip("\ufeff \t\r\n")
+    lowered = stripped[:200].lower()
+    if lowered.startswith("<!doctype html") or lowered.startswith("<html"):
+        raise RuntimeError("Bing returned an HTML page instead of search results")
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        raise RuntimeError("Bing returned a response that was not RSS") from exc
+
+    results: list[dict[str, str]] = []
+    for item in root.iter():
+        if _local_name(item.tag) != "item":
+            continue
+        fields = {_local_name(child.tag): child.text or "" for child in list(item)}
+        results.append(
+            {
+                "title": _plain(fields.get("title", "")),
+                "url": fields.get("link", "").strip(),
+                "snippet": _plain(fields.get("description", "")),
+            }
+        )
+    return results
+
+
 class WebSearchTool(Tool):
     name = "WebSearch"
-    description = "Search the web for current external information using Tavily or DuckDuckGo."
+    description = "Search the web for current external information using Tavily, DuckDuckGo, or Bing."
     is_read_only = True
     is_concurrency_safe = True
     input_schema = {
@@ -204,6 +287,15 @@ class WebSearchTool(Tool):
 
         try:
             provider, results = await self._run_search(query, num_results)
+        except DuckDuckGoUnavailable as exc:
+            logger.warning("WebSearch DuckDuckGo unavailable for query %r: %s", query, exc)
+            return ToolResult(
+                result_for_model=(
+                    "WebSearch error: DuckDuckGo blocked this request with a bot check "
+                    "instead of returning results."
+                ),
+                is_error=True,
+            )
         except Exception as exc:
             logger.exception("WebSearch failed for query %r", query)
             return ToolResult(
@@ -239,8 +331,8 @@ class WebSearchTool(Tool):
         if self._provider == "ddg":
             return [_DDG_BASE_URL]
         if self._api_key:
-            return [_TAVILY_URL, _DDG_BASE_URL]
-        return [_DDG_BASE_URL]
+            return [_TAVILY_URL, _DDG_BASE_URL, _BING_HOME_URL]
+        return [_DDG_BASE_URL, _BING_HOME_URL]
 
     async def _probe_endpoint(self, url: str) -> bool:
         try:
@@ -254,6 +346,8 @@ class WebSearchTool(Tool):
         if self._provider == "tavily":
             return "tavily", await self._search_tavily(query, num_results)
         if self._provider == "ddg":
+            if _ddg_in_backoff():
+                raise DuckDuckGoUnavailable("DuckDuckGo is still blocking this client")
             return "ddg", await self._search_ddg(query, num_results)
 
         if self._api_key:
@@ -262,7 +356,16 @@ class WebSearchTool(Tool):
             except Exception:
                 logger.warning("Tavily search failed; retrying with DuckDuckGo", exc_info=True)
 
-        return "ddg", await self._search_ddg(query, num_results)
+        return await self._search_ddg_then_bing(query, num_results)
+
+    async def _search_ddg_then_bing(self, query: str, num_results: int) -> tuple[str, list[dict[str, str]]]:
+        """Use DuckDuckGo, and switch to Bing when DuckDuckGo serves a bot check."""
+        if not _ddg_in_backoff():
+            try:
+                return "ddg", await self._search_ddg(query, num_results)
+            except DuckDuckGoUnavailable:
+                logger.warning("DuckDuckGo blocked WebSearch; retrying with Bing")
+        return "bing", await self._search_bing(query, num_results)
 
     async def _search_tavily(self, query: str, num_results: int) -> list[dict[str, str]]:
         if not self._api_key:
@@ -294,17 +397,38 @@ class WebSearchTool(Tool):
     async def _search_ddg(self, query: str, num_results: int) -> list[dict[str, str]]:
         url = f"{_DDG_BASE_URL}?q={quote(query)}"
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; CrabCode/0.1; +https://example.invalid/crabcode)"
+            "User-Agent": _BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True, headers=headers) as client:
+                response = await client.get(url)
+        except httpx.HTTPError as exc:
+            _note_ddg_unavailable()
+            raise DuckDuckGoUnavailable(f"DuckDuckGo request failed: {exc}") from exc
+
+        if _is_ddg_challenge(response.status_code, response.text):
+            _note_ddg_unavailable()
+            raise DuckDuckGoUnavailable("DuckDuckGo returned a bot check instead of results")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _note_ddg_unavailable()
+            raise DuckDuckGoUnavailable(f"DuckDuckGo returned HTTP {response.status_code}") from exc
+        return self._normalize_results(_parse_ddg_html(response.text))[:num_results]
+
+    async def _search_bing(self, query: str, num_results: int) -> list[dict[str, str]]:
+        headers = {
+            "User-Agent": _BROWSER_UA,
+            "Accept": "application/rss+xml, application/xml, text/xml",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
         async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True, headers=headers) as client:
-            response = await client.get(url)
+            response = await client.get(_BING_SEARCH_URL, params={"q": query, "format": "rss"})
             response.raise_for_status()
-            html = response.text
-
-        parser = _DuckDuckGoHTMLParser()
-        parser.feed(html)
-        parser.close()
-        return self._normalize_results(parser.results)[:num_results]
+            xml_text = response.text
+        return self._normalize_results(_parse_bing_rss(xml_text))[:num_results]
 
     def _normalize_results(self, items: Any) -> list[dict[str, str]]:
         results: list[dict[str, str]] = []

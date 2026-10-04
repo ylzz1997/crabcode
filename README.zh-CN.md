@@ -864,7 +864,7 @@ CrabCode 集成了 **Language Server Protocol (LSP)** 服务器，为 AI agent �
 
 `WebSearch` 工具用于搜索公共互联网，并返回包含标题、URL 和摘要的精简结果。
 
-- **默认后端顺序**：如果配置了 `TAVILY_API_KEY`，优先使用 Tavily；否则使用 DuckDuckGo HTML 搜索
+- **默认后端顺序**：如果配置了 `TAVILY_API_KEY`，优先使用 Tavily；否则使用 DuckDuckGo HTML 搜索。DuckDuckGo 返回机器人验证页时，改用 Bing RSS，不再把验证页当成「没有结果」
 - **离线行为**：如果 CrabCode 在会话启动时检测不到外网连通性，则该会话内会禁用 `WebSearch`，并且不会把它暴露给模型
 - **权限行为**：`WebSearch` 虽然是只读工具，但每次发起网络请求前仍会请求确认
 
@@ -885,7 +885,7 @@ CrabCode 集成了 **Language Server Protocol (LSP)** 服务器，为 AI agent �
 
 `provider` 支持以下取值：
 
-- `"auto"`：配置了 Tavily 就先用 Tavily，否则用 DuckDuckGo；如果 Tavily 运行时失败，会回退到 DuckDuckGo 一次
+- `"auto"`：配置了 Tavily 就先用 Tavily，否则用 DuckDuckGo；如果 Tavily 运行时失败，会回退到 DuckDuckGo 一次。DuckDuckGo 被拦截时，大约十分钟内改用 Bing
 - `"tavily"`：要求必须配置 API key，只使用 Tavily
 - `"ddg"`：只使用 DuckDuckGo
 

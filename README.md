@@ -888,7 +888,7 @@ In **pipe mode** (non-interactive), the first option is auto-selected.
 
 The `WebSearch` tool searches the public web and returns compact search results with titles, URLs, and snippets.
 
-- **Default provider order** — Tavily first when `TAVILY_API_KEY` is configured, otherwise DuckDuckGo HTML search
+- **Default provider order** — Tavily first when `TAVILY_API_KEY` is configured, otherwise DuckDuckGo HTML search. If DuckDuckGo answers with a bot check, search continues with Bing RSS instead of reporting an empty result.
 - **Offline behavior** — if CrabCode cannot detect outbound network access during session startup, `WebSearch` is disabled for that session and is not exposed to the model
 - **Permission behavior** — `WebSearch` is read-only, but still asks for confirmation before each network request
 
@@ -909,7 +909,7 @@ Configure via `tool_settings.WebSearch` in `settings.json`:
 
 Supported `provider` values:
 
-- `"auto"` — use Tavily when configured, otherwise DuckDuckGo; if Tavily fails at runtime, retry with DuckDuckGo once
+- `"auto"` — use Tavily when configured, otherwise DuckDuckGo; if Tavily fails at runtime, retry with DuckDuckGo once. If DuckDuckGo is blocked, fall back to Bing for about ten minutes
 - `"tavily"` — require a configured API key and use Tavily only
 - `"ddg"` — use DuckDuckGo only
 
