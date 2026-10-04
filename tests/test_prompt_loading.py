@@ -61,6 +61,14 @@ def test_plan_language_and_ultra_are_preserved():
     assert "# Doing tasks" not in text
 
 
+def test_user_questions_require_web_search_when_available():
+    text = "\n".join(get_system_prompt(["WebSearch"], "test"))
+    assert "gather enough relevant sources before answering" in text
+    assert "Do not answer from memory or speculation" in text
+    assert "instead of giving an unfounded answer" in text
+    assert "Skip web search only when the user explicitly says not to search" in text
+
+
 def test_default_prompt_requires_real_tool_search_before_deferred_tools():
     text = "\n".join(get_system_prompt(["ToolSearch"], "test"))
     assert "directory lists only tools whose schemas are not supplied yet" in text
