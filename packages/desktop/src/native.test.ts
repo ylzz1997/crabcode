@@ -71,7 +71,7 @@ describe("desktop settings migration", () => {
       font_smoothing: true,
       show_turn_duration: true,
       turn_duration_format: "hms",
-      session_notify_on_start: true,
+      session_notify_on_start: false,
       session_notify_on_complete: true,
       composer_send_key: "enter",
       file_upload_mode: "content",
@@ -177,10 +177,16 @@ describe("desktop settings migration", () => {
     }]);
   });
 
-  it("defaults session notifications to on and keeps an explicit off switch", () => {
+  it("defaults the start notification off and keeps an explicit choice", () => {
     expect(normalizeSettings({ connections: [] } as unknown as DesktopSettings)).toMatchObject({
-      session_notify_on_start: true,
+      session_notify_on_start: false,
       session_notify_on_complete: true,
+    });
+    expect(normalizeSettings({
+      connections: [],
+      session_notify_on_start: true,
+    } as unknown as DesktopSettings)).toMatchObject({
+      session_notify_on_start: true,
     });
     expect(normalizeSettings({
       connections: [],

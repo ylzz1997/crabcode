@@ -17,11 +17,22 @@ export type NotificationPermissionState = "granted" | "prompt" | "denied" | "unk
 
 let suppressPermissionPrompt = false;
 
+export function sessionNotificationName(liveTitle: string, listedTitle = "", preview = ""): string {
+  const listed = listedTitle.trim();
+  if (listed) return listed;
+  const live = liveTitle.trim();
+  if (live && live !== "新会话") return live;
+  const text = preview.trim();
+  if (text) return text.length > 200 ? text.slice(0, 200) : text;
+  return "未命名会话";
+}
+
 export function sessionNotificationCopy(phase: SessionNotifyPhase, title: string): { title: string; body: string } {
   const name = title.trim() || "未命名会话";
   const body = name.length > 120 ? `${name.slice(0, 119)}…` : name;
+  const label = phase === "start" ? "会话开始执行" : "会话执行完毕";
   return {
-    title: phase === "start" ? "会话开始执行" : "会话执行完毕",
+    title: `${label} · ${body}`,
     body,
   };
 }

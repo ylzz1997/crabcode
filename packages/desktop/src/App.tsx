@@ -119,7 +119,7 @@ import {
 import { gatewayEnvironmentLog, gatewayLogAddress, updateGatewayStartup, type GatewayStartupState } from "./gatewayStartup";
 import { StatusBar } from "./StatusBar";
 import { setSessionTaskbarProgress } from "./taskbarProgress";
-import { diffSessionNotifications, showSessionNotification } from "./sessionNotifications";
+import { diffSessionNotifications, sessionNotificationName, showSessionNotification } from "./sessionNotifications";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
 import {
   activateProjectFileTab,
@@ -3150,9 +3150,21 @@ function App() {
   }, []);
   const sessionNotifyBusyRef = useRef<Map<string, boolean> | null>(null);
   useEffect(() => {
+    const listedTitles = new Map<string, string>();
+    for (const [connectionId, gateway] of Object.entries(gateways)) {
+      for (const list of Object.values(gateway.sessionsByProject)) {
+        for (const info of list) {
+          const title = info.title?.trim();
+          if (title) listedTitles.set(sessionKey(connectionId, info.session_id), title);
+        }
+      }
+    }
     const current = new Map(Object.entries(sessions).map(([sessionId, session]) => [
       sessionId,
-      { title: session.title, busy: session.busy },
+      {
+        title: sessionNotificationName(session.title, listedTitles.get(sessionId) ?? "", firstUserText(session.items)),
+        busy: session.busy,
+      },
     ]));
     const { next, intents } = diffSessionNotifications(sessionNotifyBusyRef.current, current);
     sessionNotifyBusyRef.current = next;
@@ -3165,7 +3177,7 @@ function App() {
       if (!enabled) continue;
       void showSessionNotification(intent.phase, intent.title);
     }
-  }, [sessions]);
+  }, [gateways, sessions]);
 
   useEffect(() => {
     if (

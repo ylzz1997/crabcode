@@ -110,7 +110,7 @@ fn default_settings() -> Value {
         "font_smoothing": true,
         "show_turn_duration": true,
         "turn_duration_format": "hms",
-        "session_notify_on_start": true,
+        "session_notify_on_start": false,
         "session_notify_on_complete": true,
         "composer_send_key": "enter",
         "approval_shortcuts": {
@@ -426,9 +426,9 @@ mod tests {
     }
 
     #[test]
-    fn session_notifications_default_to_on() {
+    fn session_start_notification_defaults_off() {
         let settings = default_settings();
-        assert_eq!(settings["session_notify_on_start"], true);
+        assert_eq!(settings["session_notify_on_start"], false);
         assert_eq!(settings["session_notify_on_complete"], true);
     }
 
