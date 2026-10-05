@@ -86,6 +86,7 @@ const settings: DesktopSettings = {
   turn_duration_format: "hms",
   session_notify_on_start: true,
   session_notify_on_complete: true,
+  session_notify_on_interaction: true,
   composer_send_key: "enter",
   approval_shortcuts: { enabled: true, approve: "Ctrl+Alt+Shift+F9", deny: "Ctrl+Alt+Shift+F10", always_allow: "Ctrl+Alt+Shift+F11" },
   file_upload_mode: "content",
@@ -390,11 +391,14 @@ describe("SettingsView", () => {
 
     expect(container.textContent).toContain("会话开始执行时弹出系统通知。");
     expect(container.textContent).toContain("会话这一轮执行结束时弹出系统通知。");
+    expect(container.textContent).toContain("会话请求权限、询问选择或等待确认计划时弹出系统通知。");
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="执行时通知"]')!.click());
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="执行完毕通知"]')!.click());
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="需要操作时通知"]')!.click());
 
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(1, { session_notify_on_start: false });
     expect(handlers.onConversationChange).toHaveBeenNthCalledWith(2, { session_notify_on_complete: false });
+    expect(handlers.onConversationChange).toHaveBeenNthCalledWith(3, { session_notify_on_interaction: false });
   });
 
   it("changes the composer send shortcut", () => {

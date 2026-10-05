@@ -1115,6 +1115,13 @@ fn playwright_module_installed(python: &str) -> bool {
     run_probe_command(&mut command, Duration::from_secs(15)).is_ok()
 }
 
+fn playwright_browsers_ready(python: &str) -> bool {
+    let mut command = Command::new(python);
+    configure_python_utf8(&mut command);
+    command.args(["-c", PLAYWRIGHT_BROWSER_READY_SCRIPT]);
+    run_probe_command(&mut command, Duration::from_secs(20)).is_ok()
+}
+
 fn install_gateway(python: &str, on_output: &(impl Fn(&str) + Sync)) -> Result<(), String> {
     let package = default_gateway_package()?;
     install_gateway_package(python, &package, on_output)?;
@@ -1126,13 +1133,18 @@ fn ensure_default_browser(
     python: &str,
     progress: &(impl Fn(&str, &str) + Sync),
 ) -> Result<(), String> {
-    if playwright_module_installed(python) {
+    let module_installed = playwright_module_installed(python);
+    if module_installed && playwright_browsers_ready(python) {
         return Ok(());
     }
     progress(
         "installing",
         "正在安装 Browser 与 Chromium，首次补齐可能需要几分钟",
     );
+    if module_installed {
+        install_playwright_chromium(python, &|line| progress("installing", line))?;
+        return check_playwright_chromium(python);
+    }
     install_gateway(python, &|line| progress("installing", line))
 }
 
@@ -1330,8 +1342,30 @@ fn python_for_feature_probe(configured: Option<&str>) -> Result<String, String> 
 fn probe_installed_gateway_features(python: &str) -> Result<Vec<String>, String> {
     let script = r#"
 import importlib.util, json
-modules = {"search": "crabcode_search", "debugger": "crabcode_debugger", "browser": "playwright"}
-print(json.dumps([name for name, module in modules.items() if importlib.util.find_spec(module)]))
+features = []
+if importlib.util.find_spec("crabcode_search"):
+    features.append("search")
+if importlib.util.find_spec("crabcode_debugger"):
+    features.append("debugger")
+if importlib.util.find_spec("playwright"):
+    import os, sys
+    from pathlib import Path
+    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if override and override != "0":
+        browsers = Path(override)
+    elif sys.platform == "win32":
+        browsers = Path(os.environ["LOCALAPPDATA"]) / "ms-playwright"
+    elif sys.platform == "darwin":
+        browsers = Path.home() / "Library" / "Caches" / "ms-playwright"
+    else:
+        browsers = Path.home() / ".cache" / "ms-playwright"
+    import playwright
+    catalog = Path(playwright.__file__).parent / "driver" / "package" / "browsers.json"
+    revision = next(item["revision"] for item in json.loads(catalog.read_text(encoding="utf-8"))["browsers"] if item["name"] == "chromium-headless-shell")
+    directory = browsers / f"chromium_headless_shell-{revision}"
+    if any(path.is_file() for path in directory.rglob("chrome-headless-shell*")):
+        features.append("browser")
+print(json.dumps(features))
 "#;
     let mut command = Command::new(python);
     configure_python_utf8(&mut command);
@@ -1461,6 +1495,29 @@ print(f"installed {binary_name} to {output}")
     Ok(version)
 }
 
+const PLAYWRIGHT_BROWSER_READY_SCRIPT: &str = r#"
+import json, os, sys
+from pathlib import Path
+# crabcode-playwright-browser-ready
+import playwright
+override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+if override and override != "0":
+    browsers = Path(override)
+elif sys.platform == "win32":
+    browsers = Path(os.environ["LOCALAPPDATA"]) / "ms-playwright"
+elif sys.platform == "darwin":
+    browsers = Path.home() / "Library" / "Caches" / "ms-playwright"
+else:
+    browsers = Path.home() / ".cache" / "ms-playwright"
+catalog = Path(playwright.__file__).parent / "driver" / "package" / "browsers.json"
+revision = next(item["revision"] for item in json.loads(catalog.read_text(encoding="utf-8"))["browsers"] if item["name"] == "chromium-headless-shell")
+directory = browsers / f"chromium_headless_shell-{revision}"
+shells = [path for path in directory.rglob("chrome-headless-shell*") if path.is_file()]
+if not shells:
+    raise SystemExit(f"Chromium headless shell is not installed at {directory}")
+print(shells[0])
+"#;
+
 fn install_playwright_chromium(
     python: &str,
     on_output: &(impl Fn(&str) + Sync),
@@ -1479,23 +1536,16 @@ fn install_playwright_chromium(
 }
 
 fn check_playwright_chromium(python: &str) -> Result<(), String> {
-    let script = r#"
-from playwright.sync_api import sync_playwright
-playwright = sync_playwright().start()
-try:
-    path = playwright.chromium.executable_path
-finally:
-    playwright.stop()
-print(path)
-"#;
     let mut command = Command::new(python);
     configure_python_utf8(&mut command);
     if let Some(home) = dirs::home_dir() {
         command.current_dir(home);
     }
-    command.args(["-c", script]);
-    run_probe_command(&mut command, Duration::from_secs(60)).map_err(|error| {
-        format!("Playwright is installed, but Chromium is not ready. {error}")
+    command.args(["-c", PLAYWRIGHT_BROWSER_READY_SCRIPT]);
+    run_probe_command(&mut command, Duration::from_secs(20)).map_err(|error| {
+        format!(
+            "Playwright is installed, but the Chromium headless shell is not ready. Run `{python} -m playwright install chromium`. {error}"
+        )
     })?;
     Ok(())
 }

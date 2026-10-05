@@ -73,6 +73,7 @@ describe("desktop settings migration", () => {
       turn_duration_format: "hms",
       session_notify_on_start: false,
       session_notify_on_complete: true,
+      session_notify_on_interaction: true,
       composer_send_key: "enter",
       file_upload_mode: "content",
       file_upload_max_size_mb: 5,
@@ -181,6 +182,7 @@ describe("desktop settings migration", () => {
     expect(normalizeSettings({ connections: [] } as unknown as DesktopSettings)).toMatchObject({
       session_notify_on_start: false,
       session_notify_on_complete: true,
+      session_notify_on_interaction: true,
     });
     expect(normalizeSettings({
       connections: [],
@@ -192,9 +194,11 @@ describe("desktop settings migration", () => {
       connections: [],
       session_notify_on_start: false,
       session_notify_on_complete: false,
+      session_notify_on_interaction: false,
     } as unknown as DesktopSettings)).toMatchObject({
       session_notify_on_start: false,
       session_notify_on_complete: false,
+      session_notify_on_interaction: false,
     });
   });
 

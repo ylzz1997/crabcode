@@ -356,6 +356,7 @@ export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
   | "turn_duration_format"
   | "session_notify_on_start"
   | "session_notify_on_complete"
+  | "session_notify_on_interaction"
   | "composer_send_key"
   | "approval_shortcuts"
   | "file_upload_mode"
@@ -1225,6 +1226,28 @@ export function SettingsView({
                       onClick={() => {
                         const enabled = !settings.session_notify_on_complete;
                         onConversationChange({ session_notify_on_complete: enabled });
+                        if (enabled) {
+                          void requestSessionNotificationPermission().then((state) => {
+                            if (state !== "unknown") setNotificationPermission(state);
+                          });
+                        }
+                      }}
+                    ><span /></button>
+                  </div>
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>需要操作时通知</strong>
+                      <span>会话请求权限、询问选择或等待确认计划时弹出系统通知。</span>
+                    </div>
+                    <button
+                      className={`settings-switch ${settings.session_notify_on_interaction ? "on" : ""}`}
+                      type="button"
+                      role="switch"
+                      aria-checked={settings.session_notify_on_interaction}
+                      aria-label="需要操作时通知"
+                      onClick={() => {
+                        const enabled = !settings.session_notify_on_interaction;
+                        onConversationChange({ session_notify_on_interaction: enabled });
                         if (enabled) {
                           void requestSessionNotificationPermission().then((state) => {
                             if (state !== "unknown") setNotificationPermission(state);

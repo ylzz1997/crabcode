@@ -119,7 +119,7 @@ import {
 import { gatewayEnvironmentLog, gatewayLogAddress, updateGatewayStartup, type GatewayStartupState } from "./gatewayStartup";
 import { StatusBar } from "./StatusBar";
 import { setSessionTaskbarProgress } from "./taskbarProgress";
-import { diffSessionNotifications, sessionNotificationName, showSessionNotification } from "./sessionNotifications";
+import { diffSessionNotifications, sessionInteractions, sessionNotificationName, showSessionNotification, type SessionNotifySnapshot } from "./sessionNotifications";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
 import {
   activateProjectFileTab,
@@ -3148,7 +3148,7 @@ function App() {
   useEffect(() => () => {
     void setSessionTaskbarProgress(false);
   }, []);
-  const sessionNotifyBusyRef = useRef<Map<string, boolean> | null>(null);
+  const sessionNotifyBusyRef = useRef<Map<string, SessionNotifySnapshot> | null>(null);
   useEffect(() => {
     const listedTitles = new Map<string, string>();
     for (const [connectionId, gateway] of Object.entries(gateways)) {
@@ -3164,6 +3164,7 @@ function App() {
       {
         title: sessionNotificationName(session.title, listedTitles.get(sessionId) ?? "", firstUserText(session.items)),
         busy: session.busy,
+        interactions: sessionInteractions(session.items),
       },
     ]));
     const { next, intents } = diffSessionNotifications(sessionNotifyBusyRef.current, current);
@@ -3173,9 +3174,11 @@ function App() {
     for (const intent of intents) {
       const enabled = intent.phase === "start"
         ? preferences.session_notify_on_start
-        : preferences.session_notify_on_complete;
+        : intent.phase === "complete"
+          ? preferences.session_notify_on_complete
+          : preferences.session_notify_on_interaction;
       if (!enabled) continue;
-      void showSessionNotification(intent.phase, intent.title);
+      void showSessionNotification(intent.phase, intent.title, intent.detail ?? "", intent.interaction);
     }
   }, [gateways, sessions]);
 

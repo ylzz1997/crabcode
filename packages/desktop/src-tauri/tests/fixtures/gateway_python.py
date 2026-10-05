@@ -95,7 +95,7 @@ elif args[:3] == ["-u", "-m", "pip"]:
     setup(root, "healthy", args[-1].split("==")[1])
 elif args[:4] == ["-u", "-m", "playwright", "install"]:
     (root / "ran-playwright").write_text(" ".join(args))
-elif args[0] == "-c" and "playwright.chromium.executable_path" in args[1]:
+elif args[0] == "-c" and "crabcode-playwright-browser-ready" in args[1]:
     print("chromium")
 else:
     sys.path.insert(0, str(root / "modules"))

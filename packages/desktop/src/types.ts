@@ -123,6 +123,7 @@ export interface DesktopSettings {
   turn_duration_format: TurnDurationFormat;
   session_notify_on_start: boolean;
   session_notify_on_complete: boolean;
+  session_notify_on_interaction: boolean;
   composer_send_key: ComposerSendKey;
   approval_shortcuts: ApprovalShortcutPreferences;
   file_upload_mode: FileUploadMode;
