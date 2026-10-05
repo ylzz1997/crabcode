@@ -910,6 +910,7 @@ fn start_release_gateway_at(
             &format!("正在检查已有 CrabCode 的版本和 Gateway 依赖 · {python}"),
         );
         let result = check_gateway_installation(&python).and_then(|()| {
+            ensure_default_browser(&python, progress)?;
             start_gateway(
                 &python,
                 base,
@@ -946,7 +947,10 @@ fn start_release_gateway_at(
         progress("creating_environment", line)
     })?;
     if check_gateway_installation(&python).is_err() {
-        progress("installing", "正在独立环境中安装 CrabCode 和 Gateway 依赖");
+        progress(
+            "installing",
+            "正在独立环境中安装 CrabCode、Gateway、Browser 和 Chromium",
+        );
         install_gateway(&python, &|line| progress("installing", line))?;
         check_gateway_installation(&python)?;
     }
@@ -1099,9 +1103,37 @@ fn run_streaming_command(
     })
 }
 
+fn default_gateway_package() -> Result<String, String> {
+    gateway_features_package(&["browser".to_string()])
+}
+
+fn playwright_module_installed(python: &str) -> bool {
+    let script = "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('playwright') else 1)";
+    let mut command = Command::new(python);
+    configure_python_utf8(&mut command);
+    command.args(["-c", script]);
+    run_probe_command(&mut command, Duration::from_secs(15)).is_ok()
+}
+
 fn install_gateway(python: &str, on_output: &(impl Fn(&str) + Sync)) -> Result<(), String> {
-    let package = gateway_suite_package("gateway")?;
-    install_gateway_package(python, &package, on_output)
+    let package = default_gateway_package()?;
+    install_gateway_package(python, &package, on_output)?;
+    install_playwright_chromium(python, on_output)?;
+    check_playwright_chromium(python)
+}
+
+fn ensure_default_browser(
+    python: &str,
+    progress: &(impl Fn(&str, &str) + Sync),
+) -> Result<(), String> {
+    if playwright_module_installed(python) {
+        return Ok(());
+    }
+    progress(
+        "installing",
+        "正在安装 Browser 与 Chromium，首次补齐可能需要几分钟",
+    );
+    install_gateway(python, &|line| progress("installing", line))
 }
 
 fn install_gateway_package(
@@ -1131,7 +1163,7 @@ fn install_gateway_package(
     ))
 }
 
-const GATEWAY_INSTALL_FEATURES: &[&str] = &["search", "debugger"];
+const GATEWAY_INSTALL_FEATURES: &[&str] = &["search", "debugger", "browser"];
 const RIPGREP_VERSION: &str = "15.2.0";
 
 #[derive(Clone, Copy)]
@@ -1231,6 +1263,7 @@ fn gateway_features_package(features: &[String]) -> Result<String, String> {
     ))
 }
 
+#[cfg(test)]
 fn gateway_suite_package(suite: &str) -> Result<String, String> {
     gateway_features_package(&legacy_gateway_suite_features(suite)?)
 }
@@ -1250,7 +1283,64 @@ fn gateway_feature_modules(features: &[String]) -> Result<Vec<&'static str>, Str
     if features.iter().any(|feature| feature == "debugger") {
         modules.push("crabcode_debugger");
     }
+    if features.iter().any(|feature| feature == "browser") {
+        modules.push("playwright");
+    }
     Ok(modules)
+}
+
+fn features_from_probe_output(output: &str) -> Result<Vec<String>, String> {
+    let parsed: Vec<String> = serde_json::from_str(output.trim().lines().last().unwrap_or("[]"))
+        .map_err(|error| error.to_string())?;
+    let known = parsed
+        .into_iter()
+        .filter(|feature| GATEWAY_INSTALL_FEATURES.contains(&feature.as_str()))
+        .collect();
+    normalize_gateway_install_features(known)
+}
+
+fn python_for_feature_probe(configured: Option<&str>) -> Result<String, String> {
+    let mut candidates = python_candidates(configured, false);
+    if let Ok(environment) = managed_gateway_environment_dir() {
+        push_unique(
+            &mut candidates,
+            managed_gateway_python_path(&environment)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    let mut fallback = None;
+    for candidate in candidates {
+        if !supported_gateway_python(&candidate) {
+            continue;
+        }
+        if fallback.is_none() {
+            fallback = Some(candidate.clone());
+        }
+        if check_gateway_installation(&candidate).is_ok() {
+            return Ok(candidate);
+        }
+    }
+    fallback.ok_or_else(|| {
+        "Python 3.10 or newer was not found. Install Python or set a Python path in Desktop settings."
+            .to_string()
+    })
+}
+
+fn probe_installed_gateway_features(python: &str) -> Result<Vec<String>, String> {
+    let script = r#"
+import importlib.util, json
+modules = {"search": "crabcode_search", "debugger": "crabcode_debugger", "browser": "playwright"}
+print(json.dumps([name for name, module in modules.items() if importlib.util.find_spec(module)]))
+"#;
+    let mut command = Command::new(python);
+    configure_python_utf8(&mut command);
+    if let Some(home) = dirs::home_dir() {
+        command.current_dir(home);
+    }
+    command.args(["-c", script]);
+    let output = run_probe_command(&mut command, Duration::from_secs(15))?;
+    features_from_probe_output(&output)
 }
 
 fn gateway_suite_name(features: &[String]) -> String {
@@ -1371,6 +1461,45 @@ print(f"installed {binary_name} to {output}")
     Ok(version)
 }
 
+fn install_playwright_chromium(
+    python: &str,
+    on_output: &(impl Fn(&str) + Sync),
+) -> Result<(), String> {
+    on_output("正在下载 Playwright Chromium，首次安装可能需要几分钟");
+    let mut command = Command::new(python);
+    configure_python_utf8(&mut command);
+    command.args(["-u", "-m", "playwright", "install", "chromium"]);
+    let (status, detail) = run_streaming_command(&mut command, on_output)?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "Failed to install Playwright Chromium. Run `{python} -m playwright install chromium` manually. {detail}"
+    ))
+}
+
+fn check_playwright_chromium(python: &str) -> Result<(), String> {
+    let script = r#"
+from playwright.sync_api import sync_playwright
+playwright = sync_playwright().start()
+try:
+    path = playwright.chromium.executable_path
+finally:
+    playwright.stop()
+print(path)
+"#;
+    let mut command = Command::new(python);
+    configure_python_utf8(&mut command);
+    if let Some(home) = dirs::home_dir() {
+        command.current_dir(home);
+    }
+    command.args(["-c", script]);
+    run_probe_command(&mut command, Duration::from_secs(60)).map_err(|error| {
+        format!("Playwright is installed, but Chromium is not ready. {error}")
+    })?;
+    Ok(())
+}
+
 fn check_gateway_feature_installation(python: &str, features: &[String]) -> Result<(), String> {
     check_gateway_installation(python)?;
     let modules = gateway_feature_modules(features)?;
@@ -1390,6 +1519,9 @@ if missing:
         }
         command.args(["-c", script, &encoded]);
         run_probe_command(&mut command, Duration::from_secs(15))?;
+    }
+    if features.iter().any(|feature| feature == "browser") {
+        check_playwright_chromium(python)?;
     }
     Ok(())
 }
@@ -1478,6 +1610,20 @@ fn emit_system_tool_progress(app: &AppHandle, operation_id: &str, stage: &str, d
 }
 
 #[tauri::command]
+pub async fn installed_gateway_features(
+    python_path: Option<String>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Ok(python) = python_for_feature_probe(python_path.as_deref()) else {
+            return Ok(Vec::new());
+        };
+        probe_installed_gateway_features(&python).or_else(|_| Ok(Vec::new()))
+    })
+    .await
+    .map_err(|error| format!("Gateway feature probe failed: {error}"))?
+}
+
+#[tauri::command]
 pub async fn install_gateway_suite(
     app: AppHandle,
     python_path: Option<String>,
@@ -1509,6 +1655,17 @@ pub async fn install_gateway_suite(
         install_gateway_package(&python, &package_spec, &|line| {
             emit_gateway_suite_progress(&app, &operation_id, "installing", line)
         })?;
+        if features.iter().any(|feature| feature == "browser") {
+            emit_gateway_suite_progress(
+                &app,
+                &operation_id,
+                "installing_browser",
+                "正在安装 Browser 使用的 Chromium",
+            );
+            install_playwright_chromium(&python, &|line| {
+                emit_gateway_suite_progress(&app, &operation_id, "installing_browser", line)
+            })?;
+        }
         emit_gateway_suite_progress(
             &app,
             &operation_id,
@@ -1675,9 +1832,11 @@ fn ensure_local_gateway_blocking(
         if installed_version.as_deref() != Some(env!("CARGO_PKG_VERSION")) {
             progress(
                 "installing",
-                "正在安装 CrabCode 和依赖，首次启动可能需要几分钟",
+                "正在安装 CrabCode、Browser 和 Chromium，首次启动可能需要几分钟",
             );
             install_gateway(&python, &|line| progress("installing", line))?;
+        } else {
+            ensure_default_browser(&python, progress)?;
         }
         start_gateway(
             &python,
@@ -1767,6 +1926,10 @@ mod tests {
             format!("crabcode[gateway]=={}", env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(
+            default_gateway_package().unwrap(),
+            format!("crabcode[gateway,browser]=={}", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
             gateway_suite_package("search").unwrap(),
             format!("crabcode[gateway,search]=={}", env!("CARGO_PKG_VERSION"))
         );
@@ -1802,6 +1965,30 @@ mod tests {
                 "crabcode[gateway,search,debugger]=={}",
                 env!("CARGO_PKG_VERSION")
             )
+        );
+        let with_browser = gateway_install_features(
+            Some(vec!["browser".to_string(), "search".to_string()]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            with_browser,
+            vec!["search".to_string(), "browser".to_string()]
+        );
+        assert_eq!(
+            gateway_features_package(&with_browser).unwrap(),
+            format!(
+                "crabcode[gateway,search,browser]=={}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+        assert_eq!(
+            gateway_feature_modules(&vec!["browser".to_string()]).unwrap(),
+            vec!["playwright"]
+        );
+        assert_eq!(
+            features_from_probe_output("[\"browser\", \"search\", \"nope\"]").unwrap(),
+            vec!["search".to_string(), "browser".to_string()]
         );
         assert_eq!(
             gateway_install_features(None, Some("search-debugger")).unwrap(),

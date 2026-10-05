@@ -65,8 +65,9 @@ def test_user_questions_require_web_search_when_available():
     text = "\n".join(get_system_prompt(["WebSearch"], "test"))
     assert "gather enough relevant sources before answering" in text
     assert "Do not answer from memory or speculation" in text
-    assert "instead of giving an unfounded answer" in text
-    assert "Skip web search only when the user explicitly says not to search" in text
+    assert "fall back to Browser" in text
+    assert "If neither WebSearch nor Browser can support an answer" in text
+    assert "Skip web search and Browser only when the user explicitly says not to search" in text
 
 
 def test_default_prompt_requires_real_tool_search_before_deferred_tools():

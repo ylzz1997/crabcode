@@ -10721,7 +10721,7 @@ html[data-theme="light"] .model-detail-field > small.default {
   border-top: 1px solid var(--border-soft);
 }
 
-.gateway-feature-option:hover:not(.is-required) {
+.gateway-feature-option:hover:not(.is-required):not(.is-installed) {
   background: var(--surface-hover);
 }
 
@@ -10753,12 +10753,20 @@ html[data-theme="light"] .model-detail-field > small.default {
   line-height: 1.35;
 }
 
-.gateway-feature-option.is-required {
+.gateway-feature-option.is-required,
+.gateway-feature-option.is-installed {
   cursor: default;
 }
 
-.gateway-feature-option.is-required input {
+.gateway-feature-option.is-required input,
+.gateway-feature-option.is-installed input {
   opacity: .65;
+}
+
+.gateway-feature-option.is-installed,
+.gateway-feature-option.is-installed strong,
+.gateway-feature-option.is-installed small {
+  color: var(--muted);
 }
 
 .gateway-suite-actions .settings-command {

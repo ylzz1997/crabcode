@@ -36,6 +36,7 @@ pub fn run() {
             settings::load_custom_dock_icon,
             gateway::authenticate_connection,
             gateway::ensure_local_gateway,
+            gateway::installed_gateway_features,
             gateway::install_gateway_suite,
             gateway::install_system_tool,
             gateway::shutdown_gateway,

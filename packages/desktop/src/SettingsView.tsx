@@ -55,6 +55,8 @@ import {
   loadCustomDockIcon,
   saveThemeExport,
   type DocumentEngineInstallProgress,
+  GATEWAY_INSTALL_FEATURES,
+  installedGatewayFeatures,
   type GatewayInstallFeature,
   type GatewaySuiteInstallProgress,
   type SystemTool,
@@ -99,7 +101,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     id: "general",
     title: "常规",
     description: "运行环境、文件上传、文件查看与会话设置",
-    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 CrabCode 套件 安装 Gateway Search Debugger Ripgrep rg 语义搜索 文本搜索 调试 浏览器模式 文件 上传 内容 路径 引用 查看 浏览 标签 标签页 最大标签数 最大数量 上限 会话 显示 处理用时 耗时 仅秒数 时分秒 发送快捷键 Enter 回车 Ctrl Cmd Command Option 权限快捷键 全局 审批 允许 始终允许 拒绝 Windows macOS F9 F10 F11 系统通知 通知 执行时 执行完毕 开始执行 右下角 气泡 通知权限",
+    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 CrabCode 套件 安装 Gateway Search Debugger Browser Playwright Chromium 浏览器工具 网页浏览 Ripgrep rg 语义搜索 文本搜索 调试 浏览器模式 文件 上传 内容 路径 引用 查看 浏览 标签 标签页 最大标签数 最大数量 上限 会话 显示 处理用时 耗时 仅秒数 时分秒 发送快捷键 Enter 回车 Ctrl Cmd Command Option 权限快捷键 全局 审批 允许 始终允许 拒绝 Windows macOS F9 F10 F11 系统通知 通知 执行时 执行完毕 开始执行 右下角 气泡 通知权限",
   },
   {
     id: "appearance",
@@ -156,6 +158,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     searchText: "关于 版本 Crab Desktop Gateway 协议 作者 Yuri Head",
   },
 ];
+
+const GATEWAY_FEATURE_DETAILS: Record<GatewayInstallFeature, { title: string; detail: string }> = {
+  search: { title: "Search", detail: "语义代码搜索 · 依赖体积较大" },
+  debugger: { title: "Debugger", detail: "DAP 与进程级调试" },
+  browser: { title: "Browser", detail: "网页浏览 · 安装 Playwright 与 Chromium" },
+};
 
 export function filterSettingsSections(query: string): SettingsSectionDefinition[] {
   const normalized = query.trim().toLocaleLowerCase("zh-CN");
@@ -625,6 +633,7 @@ export function SettingsView({
   const [query, setQuery] = useState("");
   const [pythonPath, setPythonPath] = useState(settings.python_path ?? "");
   const [gatewayFeatures, setGatewayFeatures] = useState<GatewayInstallFeature[]>(["search"]);
+  const [installedFeatures, setInstalledFeatures] = useState<GatewayInstallFeature[]>([]);
   const [customIconPreview, setCustomIconPreview] = useState<string | null>(null);
   const [dockIconBusy, setDockIconBusy] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
@@ -646,6 +655,28 @@ export function SettingsView({
   useEffect(() => {
     setPythonPath(settings.python_path ?? "");
   }, [settings.python_path]);
+
+  useEffect(() => {
+    if (activeSection !== "general" || !isDesktopShell()) return;
+    let cancelled = false;
+    void installedGatewayFeatures(settings.python_path)
+      .then((features) => {
+        if (!cancelled) setInstalledFeatures(features);
+      })
+      .catch(() => {
+        if (!cancelled) setInstalledFeatures([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, settings.python_path, gatewaySuiteSuccess]);
+
+  useEffect(() => {
+    if (installedFeatures.length === 0) return;
+    setGatewayFeatures((current) => GATEWAY_INSTALL_FEATURES.filter((feature) => (
+      installedFeatures.includes(feature) || current.includes(feature)
+    )));
+  }, [installedFeatures]);
 
   useEffect(() => {
     if (activeSection !== "general" || !isDesktopShell()) return;
@@ -713,7 +744,8 @@ export function SettingsView({
   };
 
   const setGatewayFeatureSelected = (feature: GatewayInstallFeature, selected: boolean) => {
-    setGatewayFeatures((current) => (["search", "debugger"] as const).filter((candidate) => (
+    if (installedFeatures.includes(feature)) return;
+    setGatewayFeatures((current) => GATEWAY_INSTALL_FEATURES.filter((candidate) => (
       candidate === feature ? selected : current.includes(candidate)
     )));
   };
@@ -940,7 +972,7 @@ export function SettingsView({
                       <div className="settings-row gateway-suite-row">
                         <div className="settings-row-copy">
                           <strong>CrabCode 套件</strong>
-                          <span>基础 Gateway 始终安装；按需勾选 Search 和 Debugger。安装后仍需在“运行与工具”中启用。</span>
+                          <span>首次启动会安装 Gateway、Browser 和 Chromium。这里可按需再安装 Search、Debugger 和 Browser；装完后需重启本地 Gateway。</span>
                         </div>
                         <div className="gateway-suite-install">
                           <div className="gateway-feature-list" role="group" aria-label="CrabCode 安装组件">
@@ -948,26 +980,25 @@ export function SettingsView({
                               <input type="checkbox" checked disabled readOnly />
                               <span><strong>Gateway</strong><small>必装 · 本地服务与客户端协议</small></span>
                             </label>
-                            <label className="gateway-feature-option">
-                              <input
-                                type="checkbox"
-                                aria-label="Search"
-                                checked={gatewayFeatures.includes("search")}
-                                disabled={gatewaySuiteBusy || systemToolBusy !== null}
-                                onChange={(event) => setGatewayFeatureSelected("search", event.target.checked)}
-                              />
-                              <span><strong>Search</strong><small>语义代码搜索 · 依赖体积较大</small></span>
-                            </label>
-                            <label className="gateway-feature-option">
-                              <input
-                                type="checkbox"
-                                aria-label="Debugger"
-                                checked={gatewayFeatures.includes("debugger")}
-                                disabled={gatewaySuiteBusy || systemToolBusy !== null}
-                                onChange={(event) => setGatewayFeatureSelected("debugger", event.target.checked)}
-                              />
-                              <span><strong>Debugger</strong><small>DAP 与进程级调试</small></span>
-                            </label>
+                            {GATEWAY_INSTALL_FEATURES.map((feature) => {
+                              const installed = installedFeatures.includes(feature);
+                              const meta = GATEWAY_FEATURE_DETAILS[feature];
+                              return (
+                                <label key={feature} className={`gateway-feature-option${installed ? " is-installed" : ""}`}>
+                                  <input
+                                    type="checkbox"
+                                    aria-label={meta.title}
+                                    checked={gatewayFeatures.includes(feature)}
+                                    disabled={installed || gatewaySuiteBusy || systemToolBusy !== null}
+                                    onChange={(event) => setGatewayFeatureSelected(feature, event.target.checked)}
+                                  />
+                                  <span>
+                                    <strong>{meta.title}</strong>
+                                    <small>{installed ? `已安装 · ${meta.detail}` : meta.detail}</small>
+                                  </span>
+                                </label>
+                              );
+                            })}
                           </div>
                           <div className="gateway-suite-actions">
                             <button

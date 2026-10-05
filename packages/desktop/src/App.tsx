@@ -3373,7 +3373,10 @@ function App() {
             });
             try {
               const result = await installGatewaySuite(pythonPath, features, setGatewaySuiteProgress);
-              setGatewaySuiteSuccess(`${result.packageSpec} 已安装到 ${result.python}`);
+              const restartNote = result.features.includes("browser")
+                ? "。请重启本地 Gateway，Browser 才会出现"
+                : "";
+              setGatewaySuiteSuccess(`${result.packageSpec} 已安装到 ${result.python}${restartNote}`);
             } catch (reason) {
               setGatewaySuiteError(reason instanceof Error ? reason.message : String(reason));
               throw reason;

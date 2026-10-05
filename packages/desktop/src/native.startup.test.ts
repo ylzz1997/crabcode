@@ -129,6 +129,26 @@ describe("Gateway startup progress bridge", () => {
     });
   });
 
+  it("accepts Browser alongside the other optional features", async () => {
+    vi.mocked(invoke).mockImplementation(async (_command, args) => {
+      expect(args).toMatchObject({
+        features: ["search", "browser"],
+        suite: null,
+      });
+      return {
+        suite: "search-browser",
+        features: ["search", "browser"],
+        packageSpec: "crabcode[gateway,search,browser]==0.1.5",
+        python: "/opt/python3",
+      };
+    });
+
+    await expect(installGatewaySuite("/opt/python3", ["browser", "search"])).resolves.toMatchObject({
+      features: ["search", "browser"],
+      packageSpec: "crabcode[gateway,search,browser]==0.1.5",
+    });
+  });
+
   it("does not use desktop events or install anything in browser mode", async () => {
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
     const result = await ensureLocalGateway("local", "http://127.0.0.1:4096", null, null, vi.fn());

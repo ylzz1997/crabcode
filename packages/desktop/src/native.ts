@@ -48,7 +48,8 @@ interface EnsureGatewayResult {
   message: string;
 }
 
-export type GatewayInstallFeature = "search" | "debugger";
+export const GATEWAY_INSTALL_FEATURES = ["search", "debugger", "browser"] as const;
+export type GatewayInstallFeature = (typeof GATEWAY_INSTALL_FEATURES)[number];
 export type GatewayInstallSuite = "gateway" | "search" | "debugger" | "search-debugger";
 export type GatewayInstallSelection = GatewayInstallSuite | readonly GatewayInstallFeature[];
 export type SystemTool = "ripgrep";
@@ -87,7 +88,7 @@ function normalizeGatewayInstallFeatures(selection: GatewayInstallSelection): Ga
     "search-debugger": ["search", "debugger"],
   };
   const requested = typeof selection === "string" ? legacyFeatures[selection] : selection;
-  const supported: readonly GatewayInstallFeature[] = ["search", "debugger"];
+  const supported: readonly GatewayInstallFeature[] = GATEWAY_INSTALL_FEATURES;
   if (!requested) throw new Error("未知的 CrabCode 套件");
   for (const feature of requested) {
     if (!supported.includes(feature)) throw new Error(`未知的 CrabCode 可选能力：${feature}`);
@@ -535,6 +536,14 @@ export async function ensureLocalGateway(
 export async function shutdownGateway(connectionId: string): Promise<boolean> {
   if (!isDesktopShell()) return false;
   return invoke<boolean>("shutdown_gateway", { connectionId });
+}
+
+export async function installedGatewayFeatures(
+  pythonPath: string | null,
+): Promise<GatewayInstallFeature[]> {
+  if (!isDesktopShell()) return [];
+  const features = await invoke<string[]>("installed_gateway_features", { pythonPath });
+  return GATEWAY_INSTALL_FEATURES.filter((feature) => features.includes(feature));
 }
 
 export async function installGatewaySuite(

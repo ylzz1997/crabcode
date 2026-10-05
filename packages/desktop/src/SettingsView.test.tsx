@@ -12,6 +12,7 @@ import { composerModifierLabel } from "./ComposerEditor";
 import { RuntimeSettingsPanel } from "./RuntimeSettingsPanel";
 import { BUILTIN_THEMES } from "./theme";
 import type { DocumentEngineInstallProgress } from "./native";
+import { installedGatewayFeatures } from "./native";
 import type {
   DesktopSettings,
   DocumentCapabilities,
@@ -19,6 +20,14 @@ import type {
   ModelSettingsResponse,
   RuntimeSettingsResponse,
 } from "./types";
+
+vi.mock("./native", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./native")>();
+  return {
+    ...original,
+    installedGatewayFeatures: vi.fn(() => Promise.resolve([])),
+  };
+});
 
 const settings: DesktopSettings = {
   schema_version: 4,
@@ -116,6 +125,7 @@ describe("settings search", () => {
   it("matches section names, item labels, and descriptions", () => {
     expect(filterSettingsSections("Python").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("Debugger").map((section) => section.id)).toEqual(["general"]);
+    expect(filterSettingsSections("Playwright").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("Ripgrep").map((section) => section.id)).toEqual(["general"]);
     expect(filterSettingsSections("凭据").map((section) => section.id)).toEqual(["connections"]);
     expect(filterSettingsSections("工作目录").map((section) => section.id)).toEqual(["projects"]);
@@ -146,6 +156,8 @@ describe("SettingsView", () => {
 
   beforeEach(() => {
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.mocked(installedGatewayFeatures).mockReset();
+    vi.mocked(installedGatewayFeatures).mockResolvedValue([]);
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -211,10 +223,10 @@ describe("SettingsView", () => {
     expect(container.querySelector(".settings-page-header h1")?.textContent).toBe("项目");
   });
 
-  it("saves a normalized Python path when the field loses focus", () => {
+  it("saves a normalized Python path when the field loses focus", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const handlers = callbacks();
-    act(() => root.render(
+    await act(async () => root.render(
       <SettingsView
         {...handlers}
         settings={settings}
@@ -250,11 +262,15 @@ describe("SettingsView", () => {
 
     const search = container.querySelector<HTMLInputElement>('input[aria-label="Search"]')!;
     const debuggerOption = container.querySelector<HTMLInputElement>('input[aria-label="Debugger"]')!;
+    const browser = container.querySelector<HTMLInputElement>('input[aria-label="Browser"]')!;
     expect(search.checked).toBe(true);
     expect(debuggerOption.checked).toBe(false);
+    expect(browser.checked).toBe(false);
+    expect(container.querySelector('[aria-label="CrabCode 安装组件"]')?.textContent).toContain("Chromium");
     expect(container.querySelector('[aria-label="CrabCode 安装组件"]')?.textContent).not.toContain("Ripgrep");
     act(() => {
       debuggerOption.click();
+      browser.click();
     });
     await act(async () => {
       Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
@@ -263,7 +279,50 @@ describe("SettingsView", () => {
       await Promise.resolve();
     });
 
-    expect(handlers.onInstallGatewaySuite).toHaveBeenCalledWith(["search", "debugger"], null);
+    expect(handlers.onInstallGatewaySuite).toHaveBeenCalledWith(["search", "debugger", "browser"], null);
+  });
+
+  it("locks installed suite features as checked and grayed out", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    vi.mocked(installedGatewayFeatures).mockResolvedValue(["browser", "search"]);
+    const handlers = callbacks();
+    await act(async () => root.render(
+      <SettingsView
+        {...handlers}
+        settings={settings}
+        gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]}
+        activeProject={settings.connections[0].projects[0]}
+        activeSection="general"
+        onSectionChange={vi.fn()}
+      />,
+    ));
+
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="Search"]')!;
+    const debuggerOption = container.querySelector<HTMLInputElement>('input[aria-label="Debugger"]')!;
+    const browser = container.querySelector<HTMLInputElement>('input[aria-label="Browser"]')!;
+    expect(search.checked).toBe(true);
+    expect(search.disabled).toBe(true);
+    expect(browser.checked).toBe(true);
+    expect(browser.disabled).toBe(true);
+    expect(debuggerOption.checked).toBe(false);
+    expect(debuggerOption.disabled).toBe(false);
+    expect(search.closest("label")?.className).toContain("is-installed");
+    expect(container.textContent).toContain("已安装 · 语义代码搜索");
+    expect(container.textContent).toContain("已安装 · 网页浏览");
+    act(() => {
+      search.click();
+      debuggerOption.click();
+    });
+    expect(search.checked).toBe(true);
+    await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("安装套件"))!
+        .click();
+      await Promise.resolve();
+    });
+
+    expect(handlers.onInstallGatewaySuite).toHaveBeenCalledWith(["search", "debugger", "browser"], null);
   });
 
   it("installs Ripgrep from the separate system tools section", async () => {

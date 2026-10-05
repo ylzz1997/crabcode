@@ -167,8 +167,10 @@ class BrowserTool(Tool):
         return (
             "Use a persistent Chromium browser session to navigate pages, interact with DOM elements, "
             "extract content, evaluate page-side JavaScript, and take screenshots. "
-            "Prefer WebSearch for discovering URLs or searching the public web; use Browser when you need "
-            "to open a specific page, click, fill forms, inspect DOM state, or capture a screenshot. "
+            "Prefer WebSearch for discovering URLs or searching the public web. "
+            "If WebSearch is unavailable, fails, or its snippets are not enough to answer, use Browser as the fallback "
+            "to open the relevant pages and extract their content. "
+            "Also use Browser when you need to open a specific page, click, fill forms, inspect DOM state, or capture a screenshot. "
             "Browser sessions run headless by default, but create_session can override that with headless=false when needed. "
             "Create a session once, reuse the returned session_id across actions, and close sessions when done."
         )

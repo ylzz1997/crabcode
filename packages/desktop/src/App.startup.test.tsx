@@ -52,13 +52,13 @@ describe("application startup feedback", () => {
       connections: [{ id: "local", name: "Local", base_url: "http://127.0.0.1:4096", projects: [] }],
     } as unknown as DesktopSettings)));
     const onProgress = vi.mocked(ensureLocalGateway).mock.calls[0][4]!;
-    act(() => onProgress({ connectionId: "local", operationId: "test", stage: "installing", detail: "正在安装 CrabCode 和依赖" }));
-    expect(container.querySelector(".desktop-status-bar")?.textContent).toContain("正在安装 CrabCode 和依赖");
+    act(() => onProgress({ connectionId: "local", operationId: "test", stage: "installing", detail: "正在安装 CrabCode、Browser 和 Chromium，首次启动可能需要几分钟" }));
+    expect(container.querySelector(".desktop-status-bar")?.textContent).toContain("正在安装 CrabCode、Browser 和 Chromium");
     expect(container.querySelector<HTMLButtonElement>('button[title="重新连接"]')?.disabled).toBe(true);
 
     await act(async () => container.querySelector<HTMLButtonElement>(".workspace-settings-button")!.click());
     expect(container.querySelector(".settings-shell")).not.toBeNull();
-    expect(container.querySelector(".desktop-status-bar")?.textContent).toContain("正在安装 CrabCode 和依赖");
+    expect(container.querySelector(".desktop-status-bar")?.textContent).toContain("正在安装 CrabCode、Browser 和 Chromium");
 
     await act(async () => rejectInstall(new Error("安装失败：无法下载依赖")));
     expect(container.querySelector(".desktop-status-bar.error")?.textContent).toContain("无法下载依赖");

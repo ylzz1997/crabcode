@@ -58,6 +58,9 @@ def setup(root, mode, version):
         "import missing_gateway_dependency\n" if mode == "dependency" else "def run_server(): pass\n"
     )
     (cli / "__init__.py").write_text("")
+    playwright = modules / "playwright"
+    playwright.mkdir(parents=True, exist_ok=True)
+    (playwright / "__init__.py").write_text("")
     (cli / "__main__.py").write_text(
         "raise ImportError('missing CLI entry point')\n" if mode == "cli" else CLI
     )
@@ -90,6 +93,10 @@ elif args[:2] == ["-m", "venv"]:
 elif args[:3] == ["-u", "-m", "pip"]:
     (root / "ran-pip").write_text(" ".join(args))
     setup(root, "healthy", args[-1].split("==")[1])
+elif args[:4] == ["-u", "-m", "playwright", "install"]:
+    (root / "ran-playwright").write_text(" ".join(args))
+elif args[0] == "-c" and "playwright.chromium.executable_path" in args[1]:
+    print("chromium")
 else:
     sys.path.insert(0, str(root / "modules"))
     if args[0] == "-c":
