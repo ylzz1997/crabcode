@@ -29,8 +29,8 @@ from crabcode_core.types.tool import ToolContext
 class RecoverySession(CoreSession):
     """Keep real turn ownership/model switching; isolate tools and storage."""
 
-    def __init__(self, failure):
-        super().__init__(settings=CrabCodeSettings(
+    def __init__(self, failure, *, settings: CrabCodeSettings | None = None):
+        super().__init__(settings=settings or CrabCodeSettings(
             default_model="healthy",
             models={name: ApiConfig(provider="openai", model=name)
                     for name in ("healthy", "broken", "invalid")},
@@ -356,12 +356,18 @@ class CliApiRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         server = await asyncio.start_server(handle_http, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
-        session = HttpSession(None)
-        for name, config in session.settings.models.items():
-            config.base_url = f"http://127.0.0.1:{port}/{name}"
-            config.api_key_env = "CRABCODE_RECOVERY_TEST_KEY"
-            config.max_retries = 0
-            config.timeout = 2
+        # Model switches merge the constructor's settings snapshot, so the
+        # local HTTP configuration must be complete before creating a session.
+        settings = CrabCodeSettings(
+            default_model="healthy",
+            models={name: ApiConfig(
+                provider="openai", model=name,
+                base_url=f"http://127.0.0.1:{port}/{name}",
+                api_key_env="CRABCODE_RECOVERY_TEST_KEY",
+                network_mode="direct", max_retries=0, timeout=2,
+            ) for name in ("healthy", "broken", "invalid")},
+        )
+        session = HttpSession(None, settings=settings)
         try:
             with patch.dict("os.environ", {"CRABCODE_RECOVERY_TEST_KEY": "local-test-only"}):
                 async with self.running_repl(session, make_adapter) as (pipe, composer, output, wait_for):
