@@ -565,7 +565,7 @@ If your model is not in the built-in table and you don't set an override, the 20
 
 **Automatic compaction**
 
-CrabCode estimates the complete request (system prompts, messages, tool calls/results, tool schemas, and image payloads). It normally compacts before input exceeds `context_window - max(max_tokens, 20000)`:
+CrabCode measures the complete request (system prompts, messages, tool calls/results, tool schemas, and image payloads). It automatically compacts when input exceeds `context_window - max(max_tokens, compact_buffer_tokens)`, with `compact_buffer_tokens` defaulting to `20000`:
 
 1. Incrementally summarizes the full older history into a structured, resumable checkpoint
 2. Keeps up to two complete recent user turns, so tool calls are never separated from their results
@@ -573,6 +573,18 @@ CrabCode estimates the complete request (system prompts, messages, tool calls/re
 4. Continues the current task in the same session without interruption
 
 Use `/compact [optional instructions]` to trigger it manually. `auto_compact_enabled` controls automatic compaction. `max_context_length` can set an earlier input threshold, but it cannot raise the threshold past the provider-safe limit.
+
+Configure these top-level fields in `settings.json`:
+
+```json
+{
+  "auto_compact_enabled": true,
+  "compact_buffer_tokens": 30000,
+  "max_context_length": null
+}
+```
+
+The buffer must be a nonnegative integer. Setting it to `0` still reserves the model's `max_tokens` output allowance. A `null` `max_context_length` uses the automatic threshold. All three controls are available in the VS Code chat settings menu → **上下文压缩** (or the **CrabCode：打开上下文压缩设置** command) and Desktop **Settings → 运行与工具 → 上下文压缩**. Both let you choose the configuration layer to save. Changes apply from the next conversation turn; a running turn keeps its original settings.
 
 > **Note**: Compaction uses the configured API model. If checkpoint generation fails, CrabCode keeps the original conversation unchanged; it never replaces history with a lossy fallback. Provider overflow recovery is attempted only before response output has started, avoiding duplicate tool calls after a partial response.
 

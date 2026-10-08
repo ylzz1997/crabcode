@@ -3210,6 +3210,10 @@ class CoreSession:
         model = active_api_cfg.model or "claude-sonnet-4-20250514"
 
         try:
+            self.reload_compaction_settings()
+        except Exception:
+            logger.warning("Failed to reload compaction settings", exc_info=True)
+        try:
             self.reload_prompt_settings()
         except Exception:
             logger.warning("Failed to reload prompt settings", exc_info=True)
@@ -3291,6 +3295,7 @@ class CoreSession:
             ai_reviewer=self._ai_reviewer,
             tool_call_timeout=self.settings.tool_call_timeout,
             auto_compact_enabled=self.settings.auto_compact_enabled,
+            compact_buffer_tokens=self.settings.compact_buffer_tokens,
             compact_threshold=self.settings.max_context_length,
             reply_to_uuid=message_uuid if synthetic else None,
             user_append_prompts=enabled_user_append_texts(self.settings),
@@ -4227,6 +4232,15 @@ class CoreSession:
     def effective_computer_use_delivery_policy(self) -> str:
         """Return the Computer Use policy independently of tool approval mode."""
         return self.computer_use_delivery_policy
+
+    def reload_compaction_settings(self) -> None:
+        """Apply compaction edits to subsequent turns without rebuilding the session."""
+        from crabcode_core.config.manager import ConfigManager
+
+        merged = self._merge_project_settings(ConfigManager(cwd=self.cwd).load())
+        self.settings.auto_compact_enabled = merged.auto_compact_enabled
+        self.settings.compact_buffer_tokens = merged.compact_buffer_tokens
+        self.settings.max_context_length = merged.max_context_length
 
     def reload_prompt_settings(self) -> None:
         """Apply prompt template and user-append edits without rebuilding the session."""

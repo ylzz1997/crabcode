@@ -58,6 +58,8 @@ export function RuntimeSettingsPanel({
     activeProject ? "projectSettings" : "userSettings",
   );
   const [snapshotSizeDraft, setSnapshotSizeDraft] = useState("");
+  const [compactBufferDraft, setCompactBufferDraft] = useState("");
+  const [compactLimitDraft, setCompactLimitDraft] = useState("");
   const [toolPath, setToolPath] = useState("");
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [mutationBusy, setMutationBusy] = useState(false);
@@ -80,6 +82,11 @@ export function RuntimeSettingsPanel({
   }, [data?.snapshot_max_size_mb]);
 
   useEffect(() => {
+    setCompactBufferDraft(String(data?.compact_buffer_tokens ?? 20_000));
+    setCompactLimitDraft(data?.max_context_length == null ? "" : String(data.max_context_length));
+  }, [data?.cwd, data?.compact_buffer_tokens, data?.max_context_length]);
+
+  useEffect(() => {
     if (writableSources.length > 0 && !writableSources.some((item) => item.id === source)) {
       setSource(writableSources.find((item) => item.id === "projectSettings")?.id ?? writableSources[0].id);
     }
@@ -97,6 +104,28 @@ export function RuntimeSettingsPanel({
     } finally {
       setMutationBusy(false);
     }
+  };
+
+  const saveCompaction = async (
+    changes: Pick<RuntimeSettingsMutation, "auto_compact_enabled" | "compact_buffer_tokens" | "max_context_length">,
+  ) => {
+    try {
+      await mutate({ action: "set_compaction", source, cwd: activeProject?.path, ...changes });
+    } catch {
+      // Keep the draft available for retry; the banner shows the error.
+    }
+  };
+
+  const saveCompactionTokens = (field: "compact_buffer_tokens" | "max_context_length", draft: string) => {
+    const value = draft.trim();
+    const next = field === "max_context_length" && value === "" ? null : Number(value);
+    if (next !== null && (value === "" || !Number.isSafeInteger(next) || next < (field === "compact_buffer_tokens" ? 0 : 1))) {
+      setMutationError(field === "compact_buffer_tokens" ? "压缩预留 token 必须是非负整数" : "提前触发阈值必须是正整数，或留空使用自动阈值");
+      return;
+    }
+    const current = field === "compact_buffer_tokens" ? data?.compact_buffer_tokens ?? 20_000 : data?.max_context_length ?? null;
+    setMutationError(null);
+    if (next !== current) void saveCompaction({ [field]: next });
   };
 
   const saveSnapshot = async (
@@ -169,7 +198,7 @@ export function RuntimeSettingsPanel({
       <div className="settings-section-heading">
         <div>
           <h2 id="runtime-settings-title">运行与工具</h2>
-          <p>管理 Gateway 的 Computer Use、文件快照和额外工具配置。</p>
+          <p>管理 Gateway 的上下文压缩、Computer Use、文件快照和额外工具配置。</p>
         </div>
         <button
           className="settings-command"
@@ -207,6 +236,46 @@ export function RuntimeSettingsPanel({
       )}
 
       {online && loading && !data && <div className="model-settings-loading"><LoaderCircle className="spin" />正在读取运行设置</div>}
+
+      {online && !loading && !error && data && (
+        <section className="runtime-settings-group settings-group" aria-labelledby="compaction-settings-title">
+          <div className="settings-subsection-heading">
+            <div>
+              <h3 id="compaction-settings-title">上下文压缩</h3>
+              <p>保存后从下一轮对话生效；正在运行的一轮沿用原设置。</p>
+            </div>
+          </div>
+          <div className="settings-row compact">
+            <div className="settings-row-copy"><strong>自动压缩</strong><span>接近上下文上限时，整理历史内容并继续当前任务。</span></div>
+            <button className={`settings-switch ${data.auto_compact_enabled !== false ? "on" : ""}`} type="button" role="switch"
+              aria-label="自动压缩" aria-checked={data.auto_compact_enabled !== false} disabled={!canEdit || mutationBusy}
+              onClick={() => void saveCompaction({ auto_compact_enabled: data.auto_compact_enabled === false })}><span /></button>
+          </div>
+          <div className="settings-row compact">
+            <div className="settings-row-copy"><strong>压缩预留 token</strong><span>默认 20,000。实际至少预留模型的最大输出额度；设为 0 仍保留输出空间。</span></div>
+            <input className="settings-number-input" aria-label="压缩预留 token" type="number" min={0} step={1}
+              value={compactBufferDraft} disabled={!canEdit || mutationBusy}
+              onChange={(event) => setCompactBufferDraft(event.target.value)}
+              onBlur={() => saveCompactionTokens("compact_buffer_tokens", compactBufferDraft)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") setCompactBufferDraft(String(data.compact_buffer_tokens ?? 20_000));
+              }} />
+          </div>
+          <div className="settings-row compact">
+            <div className="settings-row-copy"><strong>提前触发阈值</strong><span>已用 token 超过此值时提前压缩。留空自动计算，设置值不能推迟安全阈值。</span></div>
+            <input className="settings-number-input" aria-label="提前触发阈值（tokens）" type="number" min={1} step={1} placeholder="自动"
+              value={compactLimitDraft} disabled={!canEdit || mutationBusy}
+              onChange={(event) => setCompactLimitDraft(event.target.value)}
+              onBlur={() => saveCompactionTokens("max_context_length", compactLimitDraft)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") setCompactLimitDraft(data.max_context_length == null ? "" : String(data.max_context_length));
+              }} />
+          </div>
+          <div className="runtime-settings-note">自动阈值 = 上下文容量 − max（压缩预留 token，模型最大输出 token）。</div>
+        </section>
+      )}
 
       {online && !loading && !error && data && (
         <section className="runtime-settings-group settings-group" aria-labelledby="snapshot-settings-title">

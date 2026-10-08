@@ -210,6 +210,28 @@ def test_true_server_overflow_compacts_and_recounts_changed_input():
     assert not any(isinstance(event, ErrorEvent) for event in events)
 
 
+@pytest.mark.parametrize("buffer,output,count,override,expected", [
+    (20_000, 1000, 12_000, None, False),
+    (20_000, 1000, 12_001, None, True),
+    (10_000, 1000, 12_001, None, False),
+    (25_000, 1000, 8_000, None, True),
+    (0, 8000, 24_001, None, True),
+    (0, 8000, 24_000, None, False),
+    (0, 1000, 8_001, 8_000, True),
+    (25_000, 1000, 8_000, 30_000, True),
+])
+def test_configurable_compaction_buffer_governs_actual_requests(buffer, output, count, override, expected):
+    adapter = Adapter([response(1000)], counts=[count, 1000])
+    adapter.config.max_tokens = output
+    messages = [create_user_message("old " * 4000), create_assistant_message("reply " * 1000),
+                create_user_message("continue")]
+    with patch("crabcode_core.query.loop.compact_conversation", new_callable=AsyncMock,
+               return_value=[create_user_message("summary")]) as compact:
+        events, _ = run(adapter, messages, compact_buffer_tokens=buffer, compact_threshold=override)
+    assert compact.await_count == int(expected)
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+
+
 @pytest.mark.parametrize("usage", [{}, {"output_tokens": 4000}, {"input_tokens": 0},
     {"input_tokens": -2}, {"input_tokens": True}, {"input_tokens": float("inf")},
     {"input_tokens": "unknown"}, {"input_tokens": 1.2}])

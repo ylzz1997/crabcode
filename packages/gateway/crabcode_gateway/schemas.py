@@ -18,7 +18,7 @@ from crabcode_gateway.protocol import (
     GATEWAY_MIN_PROTOCOL_VERSION,
     GATEWAY_PROTOCOL_VERSION,
 )
-from crabcode_core.types.config import ReasoningEffort
+from crabcode_core.types.config import DEFAULT_COMPACT_BUFFER_TOKENS, ReasoningEffort
 
 
 class UsageDayResponse(BaseModel):
@@ -312,6 +312,7 @@ class RuntimeSettingsMutationRequest(BaseModel):
 
     action: Literal[
         "set_snapshot",
+        "set_compaction",
         "set_computer_use_mode",
         "set_computer_use_options",
         "add_extra_tool",
@@ -321,6 +322,9 @@ class RuntimeSettingsMutationRequest(BaseModel):
     cwd: str | None = None
     snapshot_enabled: bool | None = None
     snapshot_max_size_mb: int | None = Field(default=None, ge=1, le=1_048_576)
+    auto_compact_enabled: bool | None = None
+    compact_buffer_tokens: int | None = Field(default=None, ge=0, strict=True)
+    max_context_length: int | None = Field(default=None, ge=1, strict=True)
     computer_use_mode: Literal["background_app", "foreground_desktop"] | None = None
     computer_use_target_scope: Literal["app_window", "desktop"] | None = None
     computer_use_delivery_policy: Literal["strict_background", "allow_foreground"] | None = None
@@ -331,6 +335,13 @@ class RuntimeSettingsMutationRequest(BaseModel):
         if self.action == "set_snapshot":
             if self.snapshot_enabled is None and self.snapshot_max_size_mb is None:
                 raise ValueError("snapshot_enabled or snapshot_max_size_mb is required")
+        elif self.action == "set_compaction":
+            if (
+                self.auto_compact_enabled is None
+                and self.compact_buffer_tokens is None
+                and "max_context_length" not in self.model_fields_set
+            ):
+                raise ValueError("At least one compaction setting is required")
         elif self.action in {"set_computer_use_mode", "set_computer_use_options"}:
             if self.action == "set_computer_use_mode" and self.computer_use_mode is None:
                 raise ValueError("computer_use_mode is required")
@@ -819,6 +830,9 @@ class SessionRuntimeStatus(BaseModel):
     context_token_source: Literal["server", "calibrated", "estimated"] = "estimated"
     compact_count: int = 0
     auto_compact_enabled: bool = True
+    compact_buffer_tokens: int = DEFAULT_COMPACT_BUFFER_TOKENS
+    max_context_length: int | None = None
+    compact_input_limit: int | None = None
     thinking_enabled: bool = False
     max_tokens: int = 0
     tool_count: int | None = None
@@ -1116,6 +1130,9 @@ class RuntimeSettingsResponse(BaseModel):
     cwd: str
     snapshot_enabled: bool = True
     snapshot_max_size_mb: int = 1024
+    auto_compact_enabled: bool = True
+    compact_buffer_tokens: int = DEFAULT_COMPACT_BUFFER_TOKENS
+    max_context_length: int | None = None
     computer_use_mode: Literal["background_app", "foreground_desktop"] = "background_app"
     computer_use_target_scope: Literal["app_window", "desktop"] = "app_window"
     computer_use_delivery_policy: Literal["strict_background", "allow_foreground"] = "allow_foreground"

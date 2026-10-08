@@ -118,8 +118,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   {
     id: "runtime",
     title: "运行与工具",
-    description: "Computer Use、文件快照与额外工具配置",
-    searchText: "运行 Computer Use 虚拟机 Lume VM 共享目录 电脑 后台应用 前台桌面 background foreground 快照 文件快照 checkpoint 检查点 snapshot 最大大小 启用 额外工具 extra tools import path 工具",
+    description: "上下文压缩、Computer Use、文件快照与额外工具配置",
+    searchText: "运行 上下文 压缩 自动 预留 token compact buffer 阈值 Computer Use 虚拟机 Lume VM 共享目录 电脑 后台应用 前台桌面 background foreground 快照 文件快照 checkpoint 检查点 snapshot 最大大小 启用 额外工具 extra tools import path 工具",
   },
   {
     id: "prompts",

@@ -73,6 +73,10 @@
         "title": "CrabCode：打开提示词设置"
       },
       {
+        "command": "crabcode.openContextSettings",
+        "title": "CrabCode：打开上下文压缩设置"
+      },
+      {
         "command": "crabcode.connect",
         "title": "CrabCode：连接网关"
       },

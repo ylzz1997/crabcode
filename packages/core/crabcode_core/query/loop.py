@@ -413,6 +413,7 @@ class QueryParams:
     ai_reviewer: AiPermissionReviewer | None = None
     tool_call_timeout: float | None = None  # seconds; None means no timeout
     auto_compact_enabled: bool = True
+    compact_buffer_tokens: int = DEFAULT_COMPACT_BUFFER_TOKENS
     compact_threshold: int | None = None
     reply_to_uuid: str | None = None
     drain_peer_messages: Callable[[], list[str]] | None = None
@@ -1415,7 +1416,7 @@ async def query_loop(
 
         compact_limit = compaction_input_limit(
             context_window, max_tokens,
-            buffer_tokens=DEFAULT_COMPACT_BUFFER_TOKENS,
+            buffer_tokens=params.compact_buffer_tokens,
             override=params.compact_threshold if params.auto_compact_enabled else None,
         )
 

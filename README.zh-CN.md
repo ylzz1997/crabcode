@@ -552,7 +552,7 @@ CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报
 
 **自动压缩（Auto Compact）**
 
-CrabCode 会估算完整请求（system prompt、消息、工具调用/结果、工具 schema 和图片载荷）。默认会在输入超过 `context_window - max(max_tokens, 20000)` 前触发压缩：
+CrabCode 会统计完整请求（system prompt、消息、工具调用/结果、工具 schema 和图片载荷）。输入超过 `context_window - max(max_tokens, compact_buffer_tokens)` 时触发自动压缩，`compact_buffer_tokens` 默认是 `20000`：
 
 1. 分块处理全部较旧历史，生成结构化、可恢复的 checkpoint
 2. 最多保留最近两个完整用户轮次，保证工具调用与对应结果不会被拆开
@@ -560,6 +560,18 @@ CrabCode 会估算完整请求（system prompt、消息、工具调用/结果、
 4. **在同一个 session 内继续执行当前任务**，无需用户干预
 
 可使用 `/compact [可选指令]` 手动触发。`auto_compact_enabled` 控制自动压缩；`max_context_length` 可设置更早的输入触发阈值，但不能突破服务商安全上限。
+
+可在 `settings.json` 顶层配置：
+
+```json
+{
+  "auto_compact_enabled": true,
+  "compact_buffer_tokens": 30000,
+  "max_context_length": null
+}
+```
+
+预留值须为非负整数；设为 `0` 时仍会预留 `max_tokens` 的输出空间。`max_context_length` 为 `null` 表示使用自动阈值。VS Code 聊天面板的设置菜单 → **上下文压缩**（或命令 **CrabCode：打开上下文压缩设置**），以及 Desktop 的 **设置 → 运行与工具 → 上下文压缩**，均可调整这三项并选择保存的配置层。修改从下一轮对话生效，正在运行的一轮沿用原设置。
 
 > **注意**：压缩使用当前配置的 API 模型。若 checkpoint 生成失败，CrabCode 会原样保留旧对话，不会用有损兜底摘要替换历史。只有在响应尚未产生任何输出时才会针对服务商超限做恢复重试，避免部分响应后重复执行工具。
 

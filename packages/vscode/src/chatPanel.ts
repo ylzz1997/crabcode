@@ -1151,6 +1151,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       `**消息数：** ${status.message_count ?? 0} · **压缩次数：** ${status.compact_count ?? 0} · **自动压缩：** ${status.auto_compact_enabled === false ? "关闭" : "开启"}`,
       `**配置：** think=${status.thinking_enabled ? "on" : "off"} · max_tokens=${status.max_tokens ?? 0} · tools=${tools}`,
     );
+    if (status.compact_buffer_tokens != null) {
+      lines.push(`**压缩预留：** ${status.compact_buffer_tokens.toLocaleString()} tokens`);
+    }
+    if (status.auto_compact_enabled !== false && status.compact_input_limit != null) {
+      lines.push(`**压缩触发阈值：** 已用超过 ${status.compact_input_limit.toLocaleString()} tokens`);
+    }
     if ((status.agent_total ?? 0) > 0) {
       lines.push(
         `**Agents：** total=${status.agent_total} · active=${status.agent_active ?? 0} · failed=${status.agent_failed ?? 0} · callbacks=${status.agent_pending_callbacks ?? 0} · max_concurrency=${status.agent_max_concurrency ?? 0}`,
@@ -4437,12 +4443,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async chooseSettingsDestination(): Promise<void> {
     const choice = await vscode.window.showQuickPick(
       [
+        { label: "上下文压缩", description: "自动压缩、预留 token 和提前触发阈值", id: "context" },
         { label: "提示词", description: "自定义提示词模版，以及追加到用户输入的提示", id: "prompts" },
         { label: "扩展设置", description: "连接、权限和其他 CrabCode 设置", id: "extension" },
       ],
       { title: "CrabCode 设置", placeHolder: "选择要打开的设置" },
     );
     if (!choice) return;
+    if (choice.id === "context") {
+      await vscode.commands.executeCommand("crabcode.openContextSettings");
+      return;
+    }
     if (choice.id === "prompts") {
       await vscode.commands.executeCommand("crabcode.openPromptSettings");
       return;

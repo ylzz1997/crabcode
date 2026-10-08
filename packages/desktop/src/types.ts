@@ -478,6 +478,9 @@ export interface SessionStatus {
   context_used_percent: number;
   compact_count?: number;
   auto_compact_enabled?: boolean;
+  compact_buffer_tokens?: number;
+  max_context_length?: number | null;
+  compact_input_limit?: number | null;
   thinking_enabled?: boolean;
   max_tokens?: number;
   tool_count?: number | null;
@@ -556,6 +559,9 @@ export interface RuntimeSettingsResponse {
   cwd: string;
   snapshot_enabled: boolean;
   snapshot_max_size_mb: number;
+  auto_compact_enabled?: boolean;
+  compact_buffer_tokens?: number;
+  max_context_length?: number | null;
   computer_use_mode?: ComputerUseMode;
   computer_use_target_scope?: ComputerUseTargetScope;
   computer_use_delivery_policy?: ComputerUseDeliveryPolicy;
@@ -568,6 +574,7 @@ export interface RuntimeSettingsResponse {
 
 export type RuntimeSettingsMutationAction =
   | "set_snapshot"
+  | "set_compaction"
   | "set_computer_use_mode"
   | "set_computer_use_options"
   | "add_extra_tool"
@@ -583,6 +590,9 @@ export interface RuntimeSettingsMutation {
   cwd?: string;
   snapshot_enabled?: boolean;
   snapshot_max_size_mb?: number;
+  auto_compact_enabled?: boolean;
+  compact_buffer_tokens?: number;
+  max_context_length?: number | null;
   computer_use_mode?: ComputerUseMode;
   computer_use_target_scope?: ComputerUseTargetScope;
   computer_use_delivery_policy?: ComputerUseDeliveryPolicy;

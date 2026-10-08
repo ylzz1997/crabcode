@@ -78,6 +78,9 @@ export interface SessionRuntimeStatus {
   context_token_source?: "server" | "calibrated" | "estimated";
   compact_count?: number;
   auto_compact_enabled?: boolean;
+  compact_buffer_tokens?: number;
+  max_context_length?: number | null;
+  compact_input_limit?: number | null;
   thinking_enabled?: boolean;
   max_tokens?: number;
   tool_count?: number | null;
@@ -130,6 +133,20 @@ export interface ModelSettingsSource {
   writable?: boolean;
 }
 
+export interface PromptTemplateView {
+  id: string;
+  name: string;
+  source: string;
+  sections?: Record<string, string>;
+}
+
+export interface UserAppendPromptView {
+  id: string;
+  text: string;
+  source: string;
+  enabled?: boolean;
+}
+
 /** Complete persisted message shape used when replaying a session. */
 export interface SessionMessagePayload {
   uuid: string;
@@ -169,6 +186,10 @@ export interface NewSessionRequest {
   base_url?: string | null;
   api_format?: string | null;
   model_profile?: string | null;
+  reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
+  ultra_mode?: boolean | null;
+  mode?: "agent" | "plan" | null;
+  permission_mode?: "default" | "ask" | "run_everything" | "bypassPermissions" | "ai_review" | "aiReview" | null;
   computer_use_host_id?: string | null;
   computer_use_enabled?: boolean | null;
   computer_use_mode?: "background_app" | "foreground_desktop" | null;
@@ -193,7 +214,7 @@ export interface ResumeSessionRequest {
 
 export interface ForkSessionRequest {
   session_id: string;
-  message_uuid: string;
+  message_uuid?: string | null;
   title?: string | null;
 }
 
@@ -260,7 +281,7 @@ export interface SwitchModeRequest {
 }
 
 export interface SetReasoningEffortRequest {
-  effort: "auto" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "auto";
   session_id?: string | null;
 }
 
@@ -288,15 +309,31 @@ export interface ModelSettingsMutationRequest {
 
 /** A focused mutation for runtime, Computer Use, and extra-tool settings. */
 export interface RuntimeSettingsMutationRequest {
-  action: "set_snapshot" | "set_computer_use_mode" | "set_computer_use_options" | "add_extra_tool" | "remove_extra_tool";
+  action: "set_snapshot" | "set_compaction" | "set_computer_use_mode" | "set_computer_use_options" | "add_extra_tool" | "remove_extra_tool";
   source?: "userSettings" | "projectSettings" | "localSettings";
   cwd?: string | null;
   snapshot_enabled?: boolean | null;
   snapshot_max_size_mb?: number | null;
+  auto_compact_enabled?: boolean | null;
+  compact_buffer_tokens?: number | null;
+  max_context_length?: number | null;
   computer_use_mode?: "background_app" | "foreground_desktop" | null;
   computer_use_target_scope?: "app_window" | "desktop" | null;
   computer_use_delivery_policy?: "strict_background" | "allow_foreground" | null;
   tool_path?: string | null;
+}
+
+/** Create templates and choose which saved prompts are appended to user input. */
+export interface PromptSettingsMutationRequest {
+  action: "save_template" | "delete_template" | "set_active_template" | "add_user_prompt" | "set_user_prompt_enabled" | "delete_user_prompt";
+  source?: "userSettings" | "projectSettings" | "localSettings";
+  cwd?: string | null;
+  template_id?: string | null;
+  template_name?: string | null;
+  sections?: Record<string, string> | null;
+  prompt_id?: string | null;
+  prompt_text?: string | null;
+  enabled?: boolean | null;
 }
 
 export interface GoalRequest {
@@ -493,6 +530,57 @@ export interface WorkspaceDirectoryCreateRequest {
 
 
 // ── Response / info types ────────────────────────────────────────────
+export interface UsageDayResponse {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  request_count: number;
+  unknown_requests: number;
+  missing_requests: number;
+  partial_requests: number;
+  coverage: "complete" | "partial" | "unavailable";
+  total_tokens?: number | null;
+}
+
+export interface UsagePointResponse {
+  date: string;
+  total_tokens?: number | null;
+}
+
+export interface UsageModelResponse {
+  key: string;
+  provider: string;
+  model_id: string;
+  model: string;
+  total_tokens: number;
+  recorded_request_count: number;
+  points: UsagePointResponse[];
+}
+
+export interface UsageSummaryResponse {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  request_count: number;
+  unknown_requests: number;
+  missing_requests: number;
+  partial_requests: number;
+}
+
+export interface UsageDailyResponse {
+  start: string;
+  end: string;
+  timezone: string;
+  scope: "global" | "project";
+  generated_at: string;
+  days: UsageDayResponse[];
+  models: UsageModelResponse[];
+  summary: UsageSummaryResponse;
+  tracking_started_at?: string | null;
+  first_recorded_at?: string | null;
+  last_recorded_at?: string | null;
+}
+
 export interface SessionInfo {
   session_id: string;
   message_count?: number;
@@ -756,6 +844,7 @@ export interface ModelSettingsResponse {
   default_model?: string | null;
   sources?: string[];
   groups?: Record<string, Record<string, unknown>>;
+  group_sources?: Record<string, string[]>;
   models?: ModelSettingsEntry[];
   warnings?: string[];
   editable_sources?: ModelSettingsSource[];
@@ -766,12 +855,31 @@ export interface RuntimeSettingsResponse {
   cwd: string;
   snapshot_enabled?: boolean;
   snapshot_max_size_mb?: number;
+  auto_compact_enabled?: boolean;
+  compact_buffer_tokens?: number;
+  max_context_length?: number | null;
   computer_use_mode?: "background_app" | "foreground_desktop";
   computer_use_target_scope?: "app_window" | "desktop";
   computer_use_delivery_policy?: "strict_background" | "allow_foreground";
   extra_tools?: string[];
   extra_tools_by_source?: Record<string, string[]>;
   sources?: string[];
+  warnings?: string[];
+  editable_sources?: ModelSettingsSource[];
+}
+
+export interface PromptSectionInfo {
+  key: string;
+  label: string;
+}
+
+/** Prompt templates and user-input prompts visible from one workspace. */
+export interface PromptSettingsResponse {
+  cwd: string;
+  active_template_id?: string | null;
+  templates?: PromptTemplateView[];
+  user_prompts?: UserAppendPromptView[];
+  sections?: PromptSectionInfo[];
   warnings?: string[];
   editable_sources?: ModelSettingsSource[];
 }

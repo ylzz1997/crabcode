@@ -631,12 +631,15 @@ describe("SettingsView", () => {
     expect(container.textContent).toContain("正在安装…");
   });
 
-  it("edits remote snapshot settings and extra tools by configuration layer", async () => {
+  it("edits remote compaction, snapshot settings and extra tools by configuration layer", async () => {
     const handlers = callbacks();
     const runtimeSettings: RuntimeSettingsResponse = {
       cwd: "/work/crabcode",
       snapshot_enabled: true,
       snapshot_max_size_mb: 1024,
+      auto_compact_enabled: true,
+      compact_buffer_tokens: 20_000,
+      max_context_length: 50_000,
       computer_use_mode: "background_app",
       computer_use_target_scope: "app_window",
       computer_use_delivery_policy: "allow_foreground",
@@ -664,6 +667,19 @@ describe("SettingsView", () => {
       />,
     ));
 
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="自动压缩"]')!.click());
+    const buffer = container.querySelector<HTMLInputElement>('[aria-label="压缩预留 token"]')!;
+    act(() => changeInput(buffer, "30000"));
+    await act(async () => buffer.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    const limit = container.querySelector<HTMLInputElement>('[aria-label="提前触发阈值（tokens）"]')!;
+    act(() => changeInput(limit, ""));
+    await act(async () => limit.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    const calls = handlers.onMutateRuntimeSettings.mock.calls.length;
+    act(() => changeInput(buffer, "-1"));
+    await act(async () => buffer.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    expect(handlers.onMutateRuntimeSettings.mock.calls.length).toBe(calls);
+    expect(container.textContent).toContain("压缩预留 token 必须是非负整数");
+
     await act(async () => Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="Computer Use 操作目标"] button'))
       .find((button) => button.textContent === "整个桌面")!.click());
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="启用文件快照"]')!.click());
@@ -676,6 +692,9 @@ describe("SettingsView", () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="移除额外工具 pkg.UserTool"]')!.click());
 
     expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_snapshot", snapshot_enabled: false, source: "projectSettings" }));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_compaction", auto_compact_enabled: false, source: "projectSettings" }));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_compaction", compact_buffer_tokens: 30000, source: "projectSettings" }));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_compaction", max_context_length: null, source: "projectSettings" }));
     expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_computer_use_options", computer_use_target_scope: "desktop", source: "projectSettings" }));
     expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "set_snapshot", snapshot_max_size_mb: 2048, source: "projectSettings" }));
     expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ action: "add_extra_tool", tool_path: "pkg.ProjectTool", source: "projectSettings" }));

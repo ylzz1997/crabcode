@@ -1041,8 +1041,7 @@ async def session_status(
             window = max(
                 0,
                 int(
-                    getattr(settings, "max_context_length", None)
-                    or getattr(active_config, "context_window", None)
+                    getattr(active_config, "context_window", None)
                     or 0
                 ),
             )
@@ -1088,6 +1087,12 @@ async def session_status(
                 search_index = SearchIndexStatus(state="waiting")
 
         agent_settings = getattr(settings, "agent", None)
+        from crabcode_core.compact.compact import compaction_input_limit
+        from crabcode_core.types.config import DEFAULT_COMPACT_BUFFER_TOKENS
+
+        compact_buffer = getattr(settings, "compact_buffer_tokens", DEFAULT_COMPACT_BUFFER_TOKENS)
+        compact_override = getattr(settings, "max_context_length", None)
+        max_output = max(0, int(getattr(active_config, "max_tokens", 0) or 0))
         result = SessionRuntimeStatus(
             session_id=sid,
             cwd=str(getattr(session, "cwd", "") or ""),
@@ -1109,8 +1114,13 @@ async def session_status(
             auto_compact_enabled=bool(
                 getattr(settings, "auto_compact_enabled", True)
             ),
+            compact_buffer_tokens=compact_buffer,
+            max_context_length=compact_override,
+            compact_input_limit=compaction_input_limit(
+                window, max_output, buffer_tokens=compact_buffer, override=compact_override,
+            ) if window else None,
             thinking_enabled=bool(getattr(active_config, "thinking_enabled", False)),
-            max_tokens=max(0, int(getattr(active_config, "max_tokens", 0) or 0)),
+            max_tokens=max_output,
             tool_count=enabled_tools,
             prompt_budget=getattr(session, "last_prompt_budget", None) or None,
             agent_total=len(agents),

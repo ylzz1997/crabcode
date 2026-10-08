@@ -9,6 +9,7 @@ import * as vscode from "vscode";
 import { CrabCodeConnection } from "./connection";
 import { ChatPanelProvider } from "./chatPanel";
 import { PromptSettingsPanel } from "./promptSettingsPanel";
+import { ContextSettingsPanel } from "./contextSettingsPanel";
 import { chooseAndInstallGatewaySuite, ensureGateway, GatewayProcess } from "./gatewayManager";
 import { PendingEditManager } from "./pendingEdits";
 import type { IdeContextSnapshot } from "./ideContext";
@@ -466,6 +467,12 @@ function registerCommands(
   );
 
   // Open Settings
+  push(
+    vscode.commands.registerCommand("crabcode.openContextSettings", () => {
+      ContextSettingsPanel.show();
+    }),
+  );
+
   push(
     vscode.commands.registerCommand("crabcode.openSettings", () => {
       vscode.commands.executeCommand(

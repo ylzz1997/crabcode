@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 DEFAULT_FILESYSTEM_TIMEOUT = 3600.0
+DEFAULT_COMPACT_BUFFER_TOKENS = 20_000
 
 
 ReasoningEffort = Literal[
@@ -345,6 +346,7 @@ class CrabCodeSettings(BaseModel):
     default_model: str | None = None
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     auto_compact_enabled: bool = True
+    compact_buffer_tokens: int = Field(default=DEFAULT_COMPACT_BUFFER_TOKENS, ge=0, strict=True)
     max_context_length: int | None = None
     language: str | None = None
     output_style: str | None = None

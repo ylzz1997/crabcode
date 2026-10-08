@@ -6122,6 +6122,8 @@ export function ContextMeter({
           <div className="context-stat-row"><span>推理</span><strong>{status.reasoning_effort || "自动"}{status.ultra_mode ? " · Ultra" : ""}</strong></div>
           <div className="context-stat-row"><span>会话</span><strong>{status.message_count ?? 0} 条消息 · 压缩 {status.compact_count ?? 0} 次</strong></div>
           <div className="context-stat-row"><span>自动压缩</span><strong>{status.auto_compact_enabled === false ? "关闭" : "开启"}</strong></div>
+          {status.compact_buffer_tokens != null && <div className="context-stat-row"><span>压缩预留</span><strong>{formatTokenCount(status.compact_buffer_tokens)} tokens</strong></div>}
+          {status.auto_compact_enabled !== false && status.compact_input_limit != null && <div className="context-stat-row"><span>压缩触发阈值</span><strong>已用超过 {formatTokenCount(status.compact_input_limit)} tokens</strong></div>}
           <div className="context-stat-row"><span>输出配置</span><strong>思考 {status.thinking_enabled ? "开启" : "关闭"} · {formatTokenCount(status.max_tokens ?? 0)} tokens</strong></div>
           {status.tool_count != null && <div className="context-stat-row"><span>可用工具</span><strong>{status.tool_count}</strong></div>}
           {status.prompt_budget && <>

@@ -419,7 +419,7 @@ def _model_settings_from_files(cwd: str) -> ModelSettingsResponse:
 def _runtime_settings_from_files(
     cwd: str, pending: tuple[str, dict[str, Any]] | None = None,
 ) -> RuntimeSettingsResponse:
-    """Read effective snapshot and extra-tool settings by configuration layer."""
+    """Read effective runtime settings by configuration layer."""
     from crabcode_core.config.manager import SETTING_SOURCES, _merge_settings
     from crabcode_core.types.config import CrabCodeSettings
     from pydantic import ValidationError
@@ -438,7 +438,10 @@ def _runtime_settings_from_files(
             continue
         relevant = {
             key: raw[key]
-            for key in ("snapshot", "computer_use", "extra_tools")
+            for key in (
+                "snapshot", "computer_use", "extra_tools",
+                "auto_compact_enabled", "compact_buffer_tokens", "max_context_length",
+            )
             if key in raw
         }
         if not relevant:
@@ -490,6 +493,9 @@ def _runtime_settings_from_files(
         cwd=cwd,
         snapshot_enabled=settings.snapshot.enabled,
         snapshot_max_size_mb=settings.snapshot.max_size_mb,
+        auto_compact_enabled=settings.auto_compact_enabled,
+        compact_buffer_tokens=settings.compact_buffer_tokens,
+        max_context_length=settings.max_context_length,
         computer_use_mode=settings.computer_use.mode,
         computer_use_target_scope=settings.computer_use.target_scope,
         computer_use_delivery_policy=settings.computer_use.delivery_policy,
@@ -701,7 +707,16 @@ def _mutate_runtime_settings(
     path = _settings_mutation_path(cwd, req.source)
     current = _read_settings_object(path)
 
-    if req.action == "set_snapshot":
+    if req.action == "set_compaction":
+        if req.auto_compact_enabled is not None:
+            current["auto_compact_enabled"] = req.auto_compact_enabled
+        if req.compact_buffer_tokens is not None:
+            current["compact_buffer_tokens"] = req.compact_buffer_tokens
+        if "max_context_length" in req.model_fields_set:
+            # Explicit null clears the earlier threshold, including an inherited one.
+            current["max_context_length"] = req.max_context_length
+        _runtime_settings_from_files(cwd, pending=(req.source, current))
+    elif req.action == "set_snapshot":
         snapshot = current.get("snapshot")
         if snapshot is None:
             snapshot = {}
@@ -1119,7 +1134,7 @@ async def get_runtime_settings(
     request: Request,
     cwd: str | None = None,
 ) -> RuntimeSettingsResponse:
-    """Inspect snapshot and extra-tool settings and available mutation layers."""
+    """Inspect runtime settings and available mutation layers."""
     return _runtime_settings_from_files(_resolve_model_settings_cwd(request, cwd))
 
 
@@ -1128,13 +1143,13 @@ async def mutate_runtime_settings(
     req: RuntimeSettingsMutationRequest,
     request: Request,
 ) -> RuntimeSettingsResponse:
-    """Update snapshot or extra-tool settings in a selected layer."""
+    """Update runtime settings in a selected layer."""
     lock = getattr(request.app.state, "model_settings_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         request.app.state.model_settings_lock = lock
     async with lock:
-        if req.action not in {"set_computer_use_mode", "set_computer_use_options"}:
+        if req.action not in {"set_compaction", "set_computer_use_mode", "set_computer_use_options"}:
             return _mutate_runtime_settings(request, req)
 
         # Session registration uses this lock too. Keep the file write and
@@ -1146,7 +1161,10 @@ async def mutate_runtime_settings(
             for session in request.app.state.sessions.values():
                 session_path = ConfigManager(cwd=session.cwd).settings_file_paths.get(req.source)
                 if session_path and Path(session_path).resolve() == changed_path:
-                    session.reload_computer_use_settings()
+                    if req.action == "set_compaction":
+                        session.reload_compaction_settings()
+                    else:
+                        session.reload_computer_use_settings()
             return result
 
 
