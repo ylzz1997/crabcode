@@ -14,6 +14,7 @@ from crabcode_core.prompts.templates import CLAUDE_MODEL_IDS
         ("claude-fable-5-1", 1_000_000),
         ("claude-mythos-5-1", 1_000_000),
         ("claude-opus-5-5", 1_000_000),
+        ("claude-haiku-5-5", 1_000_000),
         ("gpt-6-astra", 1_050_000),
         ("gpt-6.1-sol", 1_050_000),
         ("gpt-6-sol", 1_050_000),

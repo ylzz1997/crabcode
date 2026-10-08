@@ -12,6 +12,7 @@ KNOWN_CONTEXT_WINDOWS: dict[str, int] = {
     "claude-mythos-5": 1_000_000,
     "claude-fable-5": 1_000_000,
     "claude-opus-5-5": 1_000_000,
+    "claude-haiku-5-5": 1_000_000,
     "claude-opus-5": 1_000_000,
     "claude-sonnet-5": 1_000_000,
     "claude-opus-4-8": 1_000_000,
