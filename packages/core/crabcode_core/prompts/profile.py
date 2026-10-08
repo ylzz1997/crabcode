@@ -4,13 +4,16 @@ Each section field controls one part of the system prompt:
   - None   → use the built-in default for that section
   - ""     → disable (skip) the section entirely
   - "..."  → override with custom text
+
+The compaction prompt is separate from the system prompt; blank text uses its
+built-in default rather than disabling checkpoint instructions.
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from crabcode_core.prompts.templates import DEFAULT_AGENT_PROMPT, DEFAULT_PREFIX
+from crabcode_core.prompts.templates import DEFAULT_AGENT_PROMPT, DEFAULT_COMPACT_PROMPT, DEFAULT_PREFIX
 
 
 class PromptProfile(BaseModel):
@@ -33,6 +36,9 @@ class PromptProfile(BaseModel):
 
     # Sub-agent system prompt.
     agent_prompt: str | None = None
+
+    # Checkpoint instructions for manual and automatic context compaction.
+    compact_prompt: str | None = None
 
     # Extra sections appended after all built-in sections
     # (before the dynamic env / language / mcp blocks).
@@ -64,3 +70,10 @@ def resolve_agent_prompt(profile: PromptProfile | None) -> str:
     if profile and profile.agent_prompt is not None:
         return profile.agent_prompt
     return DEFAULT_AGENT_PROMPT
+
+
+def resolve_compact_prompt(profile: PromptProfile | None) -> str:
+    """Return checkpoint instructions, falling back for missing or blank text."""
+    if profile and profile.compact_prompt and profile.compact_prompt.strip():
+        return profile.compact_prompt.strip()
+    return DEFAULT_COMPACT_PROMPT

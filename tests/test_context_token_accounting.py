@@ -203,8 +203,9 @@ def test_true_server_overflow_compacts_and_recounts_changed_input():
                 create_user_message("continue")]
     with patch("crabcode_core.query.loop.compact_conversation", new_callable=AsyncMock,
                return_value=[create_user_message("summary")]) as compact:
-        events, _ = run(adapter, messages)
+        events, _ = run(adapter, messages, compact_prompt="Preserve the active task and unfinished changes.")
     compact.assert_awaited_once()
+    assert compact.call_args.kwargs["compact_prompt"] == "Preserve the active task and unfinished changes."
     assert len(adapter.count_requests) == 2
     assert any(isinstance(event, CompactEvent) for event in events)
     assert not any(isinstance(event, ErrorEvent) for event in events)

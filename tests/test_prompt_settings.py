@@ -6,11 +6,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from crabcode_core.events import CoreSession
 from crabcode_core.prompts.library import (
     enabled_user_append_texts,
     resolve_prompt_profile,
 )
 from crabcode_core.prompts.system import get_system_prompt
+from crabcode_core.prompts.profile import resolve_compact_prompt
+from crabcode_core.prompts.templates import DEFAULT_COMPACT_PROMPT
 from crabcode_core.query.loop import _append_user_prompts
 from crabcode_core.types.config import (
     CrabCodeSettings,
@@ -28,7 +31,7 @@ def test_blank_sections_keep_builtin_defaults_and_templates_override_legacy_prof
             PromptTemplateConfig(
                 id="care",
                 name="客服",
-                sections={"intro": "custom identity", "doing_tasks": "  "},
+                sections={"intro": "custom identity", "doing_tasks": "  ", "compact_prompt": "custom checkpoint rules"},
             )
         ],
         active_prompt_template="care",
@@ -43,6 +46,8 @@ def test_blank_sections_keep_builtin_defaults_and_templates_override_legacy_prof
     assert "custom identity" in text
     assert "legacy identity" not in text
     assert "# Doing tasks" in text
+    assert resolve_compact_prompt(profile) == "custom checkpoint rules"
+    assert "custom checkpoint rules" not in text
 
     fallback = CrabCodeSettings(prompt_profile={"intro": "legacy identity"})
     assert resolve_prompt_profile(fallback).intro == "legacy identity"
@@ -74,6 +79,8 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "_resolve_model_settings_cwd", lambda request, cwd: cwd or str(project))
 
     app = FastAPI()
+    session = CoreSession(cwd=str(project))
+    app.state.sessions = {session.session_id: session}
     app.include_router(routes.router)
     with TestClient(app) as client:
         initial = client.get("/config/prompt-settings", params={"cwd": str(project)})
@@ -83,23 +90,37 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
         assert body["templates"] == []
         assert body["sections"][0]["key"] == "prefix"
         assert any(section["key"] == "extra" for section in body["sections"])
+        compact = next(section for section in body["sections"] if section["key"] == "compact_prompt")
+        assert compact["label"] == "上下文压缩提示词"
+        assert compact["default_text"] == DEFAULT_COMPACT_PROMPT
 
         saved = client.post("/config/prompt-settings", json={
             "action": "save_template",
             "source": "userSettings",
             "cwd": str(project),
             "template_name": "客服",
-            "sections": {"intro": "custom identity", "doing_tasks": "  ", "unknown": "skip"},
+            "sections": {"intro": "custom identity", "doing_tasks": "  ", "compact_prompt": "保留目标和下一步", "unknown": "skip"},
         })
         assert saved.status_code == 200
         saved_body = saved.json()
         assert saved_body["active_template_id"]
         assert saved_body["templates"][0]["name"] == "客服"
-        assert saved_body["templates"][0]["sections"] == {"intro": "custom identity"}
+        expected_sections = {"intro": "custom identity", "compact_prompt": "保留目标和下一步"}
+        assert saved_body["templates"][0]["sections"] == expected_sections
+        assert resolve_compact_prompt(session._prompt_profile) == "保留目标和下一步"
 
         stored = json.loads((home / ".crabcode" / "settings.json").read_text(encoding="utf-8"))
         assert stored["active_prompt_template"] == saved_body["active_template_id"]
-        assert stored["prompt_templates"][0]["sections"] == {"intro": "custom identity"}
+        assert stored["prompt_templates"][0]["sections"] == expected_sections
+
+        cleared = client.post("/config/prompt-settings", json={
+            "action": "save_template", "source": "userSettings", "cwd": str(project),
+            "template_id": saved_body["active_template_id"], "template_name": "客服",
+            "sections": {"intro": "custom identity", "compact_prompt": "  \n"},
+        })
+        assert cleared.status_code == 200
+        assert cleared.json()["templates"][0]["sections"] == {"intro": "custom identity"}
+        assert resolve_compact_prompt(session._prompt_profile) == DEFAULT_COMPACT_PROMPT
 
         default = client.post("/config/prompt-settings", json={
             "action": "set_active_template",
@@ -109,6 +130,7 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
         })
         assert default.status_code == 200
         assert default.json()["active_template_id"] is None
+        assert resolve_compact_prompt(session._prompt_profile) == DEFAULT_COMPACT_PROMPT
 
         added = client.post("/config/prompt-settings", json={
             "action": "add_user_prompt",

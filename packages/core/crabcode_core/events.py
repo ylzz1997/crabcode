@@ -3078,6 +3078,7 @@ class CoreSession:
 
         from crabcode_core.prompts.context import get_system_context, get_user_context
         from crabcode_core.prompts.library import enabled_user_append_texts, resolve_prompt_profile
+        from crabcode_core.prompts.profile import resolve_compact_prompt
         from crabcode_core.prompts.system import get_system_prompt
         from crabcode_core.query.loop import QueryParams, query_loop
         from crabcode_core.types.event import CompactEvent, ErrorEvent, TurnCompleteEvent
@@ -3297,6 +3298,7 @@ class CoreSession:
             auto_compact_enabled=self.settings.auto_compact_enabled,
             compact_buffer_tokens=self.settings.compact_buffer_tokens,
             compact_threshold=self.settings.max_context_length,
+            compact_prompt=resolve_compact_prompt(profile),
             reply_to_uuid=message_uuid if synthetic else None,
             user_append_prompts=enabled_user_append_texts(self.settings),
             drain_peer_messages=self._drain_peer_messages_for_query,
@@ -3747,10 +3749,17 @@ class CoreSession:
         custom_instructions: str | None = None,
     ) -> bool:
         from crabcode_core.compact.compact import compact_conversation, compact_summary_text
+        from crabcode_core.prompts.library import resolve_prompt_profile
+        from crabcode_core.prompts.profile import resolve_compact_prompt
 
         old_count = len(self.messages)
         if old_count < 4:
             return False
+
+        try:
+            self.reload_prompt_settings()
+        except Exception:
+            logger.warning("Failed to reload prompt settings", exc_info=True)
 
         from crabcode_core.compact.compact import estimate_token_count
         estimated_tokens_before = estimate_token_count(self.messages)
@@ -3776,6 +3785,7 @@ class CoreSession:
             self.messages,
             api_adapter=self._api_adapter,
             custom_instructions=custom_instructions,
+            compact_prompt=resolve_compact_prompt(resolve_prompt_profile(self.settings)),
             context_window=context_window,
             cwd=self.cwd,
             session_id=self.session_id,

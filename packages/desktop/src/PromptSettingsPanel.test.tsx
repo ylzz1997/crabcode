@@ -43,6 +43,7 @@ const data: PromptSettingsResponse = {
   }],
   sections: [
     { key: "intro", label: "介绍" },
+    { key: "compact_prompt", label: "上下文压缩提示词", default_text: "Create a durable checkpoint.", description: "用于手动和自动压缩，随模版生效。" },
     { key: "extra", label: "额外段落" },
   ],
   warnings: [],
@@ -149,6 +150,51 @@ describe("PromptSettingsPanel", () => {
       source: "userSettings",
       prompt_id: "p1",
       enabled: true,
+    }));
+  });
+
+  it("loads, edits, exports and restores the compaction prompt in the selected template", async () => {
+    const onMutate = vi.fn(async (_mutation: PromptSettingsMutation) => undefined);
+    await act(async () => {
+      root.render(
+        <PromptSettingsPanel
+          activeConnection={null}
+          activeProject={null}
+          gateway={gateway}
+          data={{ ...data, active_template_id: "care", templates: [{
+            ...data.templates[0], sections: { intro: "custom identity", compact_prompt: "Previous checkpoint rules" },
+          }] }}
+          loading={false}
+          error={null}
+          onRefresh={() => undefined}
+          onMutate={onMutate}
+        />,
+      );
+    });
+    const area = container.querySelector<HTMLTextAreaElement>('[aria-label="上下文压缩提示词"]')!;
+    expect(area.value).toBe("Previous checkpoint rules");
+    expect(container.textContent).toContain("用于手动和自动压缩，随模版生效。");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="填入内置默认：上下文压缩提示词"]')!.click());
+    expect(area.value).toBe("Create a durable checkpoint.");
+    await act(async () => setValue(area, "保留目标、决策和未完成工作。"));
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-settings-actions .primary")!.click());
+    expect(onMutate).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: "save_template", template_id: "care",
+      sections: expect.objectContaining({ compact_prompt: "保留目标、决策和未完成工作。" }),
+    }));
+
+    const exportButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "导出 JSON")!;
+    await act(async () => exportButton.click());
+    expect(JSON.parse(new TextDecoder().decode(savePromptExport.mock.calls[0][1])).sections.compact_prompt)
+      .toBe("保留目标、决策和未完成工作。");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="恢复默认：上下文压缩提示词"]')!.click());
+    expect(area.value).toBe("");
+    expect(area.placeholder).toBe("Create a durable checkpoint.");
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-settings-actions .primary")!.click());
+    expect(onMutate).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: "save_template", template_id: "care", sections: expect.objectContaining({ compact_prompt: "" }),
     }));
   });
 

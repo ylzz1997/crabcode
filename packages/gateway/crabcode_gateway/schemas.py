@@ -1146,6 +1146,8 @@ class RuntimeSettingsResponse(BaseModel):
 class PromptSectionInfo(BaseModel):
     key: str
     label: str
+    description: str | None = None
+    default_text: str | None = None
 
 
 class PromptTemplateView(BaseModel):

@@ -835,6 +835,7 @@ def _editable_prompt_sources(cwd: str) -> list[ModelSettingsSource]:
 
 def _prompt_settings_from_files(cwd: str) -> PromptSettingsResponse:
     from crabcode_core.prompts.library import PROMPT_SECTIONS, last_by_id
+    from crabcode_core.prompts.templates import DEFAULT_COMPACT_PROMPT
 
     manager = ConfigManager(cwd=cwd)
     settings = manager.load()
@@ -869,7 +870,18 @@ def _prompt_settings_from_files(cwd: str) -> PromptSettingsResponse:
             )
             for item in user_prompts
         ],
-        sections=[PromptSectionInfo(key=key, label=label) for key, label in PROMPT_SECTIONS],
+        sections=[
+            PromptSectionInfo(
+                key=key,
+                label=label,
+                description=(
+                    "用于手动和自动压缩，随模版生效。留空使用内置默认；/compact 的临时要求会继续追加。"
+                    if key == "compact_prompt" else None
+                ),
+                default_text=DEFAULT_COMPACT_PROMPT if key == "compact_prompt" else None,
+            )
+            for key, label in PROMPT_SECTIONS
+        ],
         warnings=warnings,
         editable_sources=_editable_prompt_sources(cwd),
     )

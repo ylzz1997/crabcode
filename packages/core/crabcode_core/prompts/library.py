@@ -28,6 +28,7 @@ PROMPT_SECTIONS: tuple[tuple[str, str], ...] = (
     ("output_efficiency", "输出效率"),
     ("session_guidance", "会话指引"),
     ("agent_prompt", "子代理提示词"),
+    ("compact_prompt", "上下文压缩提示词"),
     ("extra", "额外段落"),
 )
 

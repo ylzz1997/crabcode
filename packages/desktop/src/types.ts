@@ -602,6 +602,8 @@ export interface RuntimeSettingsMutation {
 export interface PromptSectionInfo {
   key: string;
   label: string;
+  description?: string | null;
+  default_text?: string | null;
 }
 
 export interface PromptTemplateView {

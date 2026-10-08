@@ -415,6 +415,7 @@ class QueryParams:
     auto_compact_enabled: bool = True
     compact_buffer_tokens: int = DEFAULT_COMPACT_BUFFER_TOKENS
     compact_threshold: int | None = None
+    compact_prompt: str | None = None
     reply_to_uuid: str | None = None
     drain_peer_messages: Callable[[], list[str]] | None = None
     # User guidance submitted while the foreground turn is running.  These
@@ -1267,6 +1268,7 @@ async def query_loop(
         result = await compact_conversation(
             messages,
             api_adapter=params.api_adapter,
+            compact_prompt=params.compact_prompt,
             context_window=context_window,
             cwd=params.tool_context.cwd,
             session_id=params.tool_context.session_id,

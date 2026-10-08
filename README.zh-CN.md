@@ -2001,7 +2001,10 @@ agent 会话启动后，索引立即在后台异步建立，CLI 会显示实时�
 | `output_efficiency` | 输出简洁度规则 | 内置 |
 | `session_guidance` | 会话级提示 | 内置 |
 | `agent_prompt` | 子 agent 的 system prompt | 内置 |
+| `compact_prompt` | 手动与自动上下文压缩的检查点提示词 | 内置 |
 | `extra_sections` | 追加在所有内置段之后的自定义段落 | `[]` |
+
+桌面端的「设置 → 提示词」和 VS Code 的「CrabCode：打开提示词设置」提供「上下文压缩提示词」编辑项。点击「填入内置默认」可在默认内容上修改，保存模版后用于后续的手动、自动及子代理压缩；点击「恢复默认」并保存可恢复内置内容。该项随当前模版生效，也随模版 JSON 导入、导出。`/compact` 后的临时要求仍会追加到压缩提示词中。
 
 也可以在代码中直接使用 `crabcode_core.prompts.profile` 中的 `PromptProfile` 构建配置：
 

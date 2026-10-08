@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from crabcode_core.logging_utils import get_logger
-from crabcode_core.prompts.profile import PromptProfile, resolve_agent_prompt
+from crabcode_core.prompts.profile import PromptProfile, resolve_agent_prompt, resolve_compact_prompt
 from crabcode_core.query.loop import QueryParams, query_loop
 from crabcode_core.types.config import AgentSettings, AgentTypeConfig, CrabCodeSettings
 from crabcode_core.types.event import (
@@ -1521,6 +1521,11 @@ class AgentManager:
                     auto_compact_enabled=settings.auto_compact_enabled,
                     compact_buffer_tokens=settings.compact_buffer_tokens,
                     compact_threshold=settings.max_context_length,
+                    compact_prompt=resolve_compact_prompt(
+                        run.run_prompt_profile
+                        if run.run_prompt_profile is not None
+                        else self._prompt_profile
+                    ),
                     reply_to_uuid=(
                         run.messages[-1].uuid
                         if run.messages and run.messages[-1].origin == "task-notification"

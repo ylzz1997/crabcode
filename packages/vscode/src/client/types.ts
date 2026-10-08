@@ -871,6 +871,8 @@ export interface RuntimeSettingsResponse {
 export interface PromptSectionInfo {
   key: string;
   label: string;
+  description?: string | null;
+  default_text?: string | null;
 }
 
 /** Prompt templates and user-input prompts visible from one workspace. */

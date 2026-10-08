@@ -124,8 +124,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   {
     id: "prompts",
     title: "提示词",
-    description: "自定义提示词模版，以及追加到用户输入的提示",
-    searchText: "提示词 模版 模板 prompt 自定义 默认 系统提示词 用户输入 追加 用户提示 规则 留空 导入 导出 JSON",
+    description: "自定义系统与上下文压缩提示词模版，以及追加到用户输入的提示",
+    searchText: "提示词 模版 模板 prompt 自定义 默认 系统提示词 上下文 压缩 compact 用户输入 追加 用户提示 规则 留空 导入 导出 JSON",
   },
   {
     id: "connections",

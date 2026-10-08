@@ -2056,7 +2056,10 @@ Each section field follows the same rule:
 | `output_efficiency` | Verbosity rules | built-in |
 | `session_guidance` | Session-level hints | built-in |
 | `agent_prompt` | System prompt for spawned sub-agents | built-in |
+| `compact_prompt` | Checkpoint prompt for manual and automatic context compaction | built-in |
 | `extra_sections` | Additional sections appended after all built-in ones | `[]` |
+
+The desktop **Settings → Prompts** panel and VS Code's **CrabCode: Open Prompt Settings** command include a context-compaction prompt field. Load the built-in text to edit it, then save the template for subsequent manual, automatic, and sub-agent compaction. Clear the field or use **Restore default**, then save, to restore the built-in prompt. This field follows the active template and is included in template JSON imports and exports. Temporary instructions after `/compact` are still appended to the compaction prompt.
 
 You can also build profiles in code using `PromptProfile` from `crabcode_core.prompts.profile`:
 

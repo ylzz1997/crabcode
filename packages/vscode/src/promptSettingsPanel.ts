@@ -10,6 +10,8 @@ import {
 interface PromptSection {
   key: string;
   label: string;
+  description?: string | null;
+  default_text?: string | null;
 }
 
 interface PromptTemplate {
@@ -275,7 +277,7 @@ function html(): string {
   <header>
     <div>
       <h1>提示词</h1>
-      <p>自定义系统提示词模版，并选择要追加到用户输入的提示。</p>
+      <p>自定义系统与上下文压缩提示词模版，并选择要追加到用户输入的提示。</p>
     </div>
     <button type="button" id="refresh">刷新</button>
   </header>
@@ -371,12 +373,36 @@ function html(): string {
         const label = document.createElement("label");
         label.className = "field";
         label.append(section.label);
+        if (section.description) {
+          const description = document.createElement("small");
+          description.textContent = section.description;
+          label.append(description);
+        }
         const area = document.createElement("textarea");
+        area.setAttribute("aria-label", section.label);
         area.value = draft[section.key] || "";
-        area.placeholder = section.key === "extra" ? "留空则不追加额外段落" : "留空则使用默认";
+        area.disabled = writableSources().length === 0;
+        area.placeholder = section.default_text || (section.key === "extra" ? "留空则不追加额外段落" : "留空则使用默认");
         area.addEventListener("input", () => { draft[section.key] = area.value; });
         label.append(area);
         fields.append(label);
+        if (section.default_text) {
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          [["填入内置默认", section.default_text], ["恢复默认", ""]].forEach(([text, value]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = text;
+            button.setAttribute("aria-label", text + "：" + section.label);
+            button.disabled = writableSources().length === 0;
+            button.addEventListener("click", () => {
+              draft[section.key] = value;
+              area.value = value;
+            });
+            actions.append(button);
+          });
+          fields.append(actions);
+        }
       });
     }
 
