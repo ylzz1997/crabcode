@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 
 logger = get_logger(__name__)
 
@@ -19,8 +20,8 @@ def discover_claude_md(cwd: str) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     home = Path.home()
 
-    for config_dir in [".claude", ".crabcode"]:
-        home_md = home / config_dir / "CLAUDE.md"
+    global_files = [home / ".claude" / "CLAUDE.md", get_config_home() / "CLAUDE.md"]
+    for home_md in global_files:
         if home_md.exists():
             try:
                 content = home_md.read_text(encoding="utf-8", errors="replace")
@@ -35,6 +36,9 @@ def discover_claude_md(cwd: str) -> list[dict[str, str]]:
     while current != current.parent:
         for name in ["CLAUDE.md", ".claude/CLAUDE.md", ".crabcode/CLAUDE.md"]:
             candidate = current / name
+            # User-global files are handled above, including a relocated home.
+            if candidate in global_files or (current == home and name != "CLAUDE.md"):
+                continue
             if candidate.exists():
                 try:
                     content = candidate.read_text(encoding="utf-8", errors="replace")

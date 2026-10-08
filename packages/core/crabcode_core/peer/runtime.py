@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.subprocess_utils import is_process_running
 
 logger = get_logger(__name__)
@@ -116,7 +117,7 @@ class PeerRuntime:
         self._on_message = on_message
         self._on_hold = on_hold
         self._permission_class_provider = permission_class_provider
-        self._registry_root = registry_root or Path.home() / ".crabcode" / "peers"
+        self._registry_root = registry_root or get_config_home() / "peers"
         self._max_message_size_bytes = max_message_size_bytes
         self._connect_timeout = connect_timeout_seconds
         self._server: asyncio.AbstractServer | None = None

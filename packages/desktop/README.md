@@ -72,6 +72,13 @@ effort, Agent/Plan mode, Ultra setting, and permission mode. Unsent composer
 text and attachments remain in the composer while the new conversation opens.
 
 Tauri writes non-secret UI state to `~/.crabcode/settings_desktop.json`.
+
+Set `CRABCODE_HOME` to an absolute directory (or `~/...`) before launching Desktop
+to relocate its settings, managed Gateway environment and other global data.
+The default is `~/.crabcode`. The app must inherit this variable; launching it
+from the system launcher may not inherit terminal exports. Existing files are
+not moved automatically. See [global configuration](../../README.md#custom-global-directory).
+
 Gateway model and tool settings continue to use the normal `settings.json`.
 The Models settings section queries the active Gateway for raw named-model
 fields, group inheritance, and effective configuration, and can create, edit,
@@ -83,16 +90,6 @@ The Runtime & Tools settings section edits Computer Use's independent
 Defaults are `app_window + allow_foreground`. Desktop scope requires
 `allow_foreground`. These are user/session settings, not model action arguments.
 
-The delivery policy is independent of tool approval modes, including Full
-Access (`run_everything` / `bypassPermissions`). On macOS, strict input goes
-through one backend that owns target preparation, window routing, event
-delivery, cleanup and isolation monitoring. It requires an exact validated
-macOS build, application version, executable architecture and action profile.
-The initial profiles cover left click/double-click in TextEdit and Chrome;
-Feishu, keyboard input and scrolling have not passed the complete validation.
-Unsupported combinations return a reason before sending input. Strict mode
-never raises/activates a global foreground window or automatically switches
-to `allow_foreground`.
 
 Legacy `computer_use.mode` values migrate only the target scope, never the
 foreground permission. Old Desktop hosts must be upgraded before input can be

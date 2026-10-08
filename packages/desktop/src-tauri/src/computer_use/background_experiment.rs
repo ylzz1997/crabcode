@@ -4,7 +4,6 @@
 //! SPI layouts are hypotheses from Cua commit
 //! 9bbfa7dd3e27ca7f1861ede70aaca390174493f9, input/skylight.rs and mouse.rs.
 //! Unlike that recipe, this never defocuses the user's app or posts a primer
-//! click. Symbol availability and passing AppKit tests do not prove Feishu
 //! compatibility or preventive focus isolation.
 use super::tests::MacInputTestHost;
 use super::*;

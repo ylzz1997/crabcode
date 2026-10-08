@@ -40,7 +40,7 @@ async def daily_usage(request: Request, start_date: date, end_date: date,
     store = UsageStore()
     if usage_module.recording_error or store.error_marker.is_file():
         raise HTTPException(status_code=503, detail=(
-            "使用记录曾写入失败，统计可能不完整；请检查 Gateway/CLI 日志及 ~/.crabcode/usage-recording-error.txt"
+            f"使用记录曾写入失败，统计可能不完整；请检查 Gateway/CLI 日志及 {store.error_marker}"
         ))
     project = str(_resolve_directory(cwd, _workspace_roots(request))) if cwd else None
     try:

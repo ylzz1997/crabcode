@@ -1269,6 +1269,29 @@ VS Code 扩展默认使用“跟随配置”（`crabcode.permissionMode: "defaul
 4. 命令行参数
 5. `~/.crabcode/managed-settings.json`（策略级）
 
+### 自定义全局目录
+
+启动 CrabCode 前设置 `CRABCODE_HOME`，即可指定全局目录：
+
+```bash
+export CRABCODE_HOME="$HOME/.config/crabcode"
+crabcode
+```
+
+PowerShell 写法：`$env:CRABCODE_HOME = "$HOME\.config\crabcode"`。
+支持绝对目录路径和 `~/...`。未设置或值为空白时，默认使用 `~/.crabcode`；
+相对路径会报错，以确保从不同项目启动的进程使用同一个全局目录。
+
+目录内包括 `settings.json`、`managed-settings.json`、全局 MCP 配置、技能、
+`CLAUDE.md`、记忆、会话、用量和定时任务数据。桌面端配置及其托管的 Gateway
+环境也使用此目录。项目级 `.crabcode` 目录和显式指定的单项路径
+（例如 `CRABCODE_DOCUMENT_ENGINE_HOME`）保留原有行为。
+本文其他位置的 `~/.crabcode` 均指默认位置。
+
+已有文件不会自动迁移；如需继续使用，请将它们复制到新目录。
+修改变量后需重启 CLI、Gateway 和桌面端，并确保各进程继承该变量。
+从系统启动器打开的桌面应用可能不会继承终端中导出的环境变量。
+
 ### Ultra 模式
 
 将顶层 `ultra_mode` 字段设为 `true` 后，主模型会主动把非简单任务拆分给大量子 agent，并行执行彼此独立的工作：

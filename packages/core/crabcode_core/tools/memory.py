@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.types.tool import Tool, ToolContext, ToolResult
 
 logger = get_logger(__name__)
 
-GLOBAL_MEMORY_DIR = Path.home() / ".crabcode"
 PROJECT_MEMORY_DIR_NAME = ".crabcode"
 MEMORY_FILENAME = "memories.json"
 MEMORY_DIRECTORY_LIMIT = 100
@@ -25,7 +25,7 @@ MEMORY_SEARCH_EXCERPT_LENGTH = 180
 
 def _memory_path(scope: str, cwd: str) -> Path:
     if scope == "global":
-        return GLOBAL_MEMORY_DIR / MEMORY_FILENAME
+        return get_config_home() / MEMORY_FILENAME
     return Path(cwd) / PROJECT_MEMORY_DIR_NAME / MEMORY_FILENAME
 
 
@@ -231,7 +231,7 @@ class MemoryTool(Tool):
             "- read: Retrieve one memory's full content (requires memory_id)\n\n"
             "Scope:\n"
             "- 'project' (default): Stored in .crabcode/memories.json in the project root\n"
-            "- 'global': Stored in ~/.crabcode/memories.json, available across all projects\n"
+            f"- 'global': Stored in {get_config_home() / MEMORY_FILENAME}, available across all projects\n"
             "- list/search/read check both scopes when scope is omitted\n\n"
             "Guidelines:\n"
             "- Only create memories when the user explicitly asks to remember something.\n"

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from crabcode_core.config.manager import ConfigManager
 from crabcode_core.filesystem import replace_with_retry
+from crabcode_core.paths import get_config_home
 from crabcode_core.skills.loader import load_skills
 from crabcode_core.text_io import normalize_newlines, read_utf8_text
 from crabcode_gateway.session_registry import get_session_lock
@@ -1538,7 +1539,7 @@ def _discover_logs(cwd: Path) -> dict[str, Path]:
     if safe_legacy is not None:
         result.setdefault("search", safe_legacy)
     # Gateway startup logs are useful even before a CoreSession exists.
-    candidates = [Path.home() / ".crabcode" / "gateway.log"]
+    candidates = [get_config_home() / "gateway.log"]
     if os.name != "nt":
         candidates.append(Path("/tmp/crabcode-gateway.log"))
     for candidate in candidates:

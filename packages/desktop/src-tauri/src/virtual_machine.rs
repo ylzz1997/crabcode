@@ -84,9 +84,7 @@ fn supported() -> Result<(), String> {
 }
 
 fn state_dir() -> Result<PathBuf, String> {
-    let path = dirs::home_dir()
-        .ok_or("Home directory is unavailable")?
-        .join(".crabcode/vm");
+    let path = crate::paths::config_home()?.join("vm");
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {

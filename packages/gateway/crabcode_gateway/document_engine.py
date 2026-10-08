@@ -29,6 +29,7 @@ import httpx
 from crabcode_core.subprocess_utils import managed_process_command, subprocess_group_options
 from crabcode_core.path_validation import validate_path_component
 from crabcode_core.filesystem import replace_with_retry
+from crabcode_core.paths import get_config_home
 from crabcode_gateway import __version__ as CRABCODE_VERSION
 
 
@@ -65,7 +66,7 @@ def document_engine_root() -> Path:
     override = os.environ.get("CRABCODE_DOCUMENT_ENGINE_HOME", "").strip()
     if override:
         return Path(override).expanduser().resolve(strict=False)
-    return Path.home() / ".crabcode" / "engines" / "babeldoc" / BABELDOC_VERSION
+    return get_config_home() / "engines" / "babeldoc" / BABELDOC_VERSION
 
 
 def _venv_python(root: Path) -> Path:

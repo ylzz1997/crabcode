@@ -39,6 +39,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
@@ -46,6 +47,7 @@ from crabcode_cli.banner import print_banner
 from crabcode_core.subprocess_utils import managed_process_command, shell_command
 from crabcode_core.events import CoreSession
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.types.config import (
     REASONING_EFFORT_LEVELS,
     CrabCodeSettings,
@@ -2023,7 +2025,8 @@ def _print_active_model(
     if not active.model:
         console.print(
             f"{indent}[bold yellow]Warning:[/] no model configured. "
-            "Set [bold]api.model[/] or [bold]models[/] in ~/.crabcode/settings.json or use [bold]-m[/] flag.",
+            f"Set [bold]api.model[/] or [bold]models[/] in {escape(str(get_config_home() / 'settings.json'))} "
+            "or use [bold]-m[/] flag.",
             style="dim",
         )
 
@@ -2055,7 +2058,8 @@ async def run_repl(
         console.print("  provider: [yellow]not set[/]  model: [yellow]not set[/]", style="dim")
         console.print(
             "  [bold yellow]Warning:[/] no model configured. "
-            "Set [bold]api.model[/] or [bold]models[/] in ~/.crabcode/settings.json or use [bold]-m[/] flag.",
+            f"Set [bold]api.model[/] or [bold]models[/] in {escape(str(get_config_home() / 'settings.json'))} "
+            "or use [bold]-m[/] flag.",
             style="dim",
         )
     console.print(

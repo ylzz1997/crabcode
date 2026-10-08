@@ -18,6 +18,7 @@ from crabcode_core.file_lock import file_lock
 from crabcode_core.filesystem import replace_with_retry
 from crabcode_core.logging_utils import get_logger
 from crabcode_core.path_validation import validate_path_component
+from crabcode_core.paths import get_config_home
 from crabcode_core.subprocess_utils import subprocess_group_options
 from crabcode_core.types.message import Message
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree
@@ -35,11 +36,6 @@ def _transcript_file_lock(path: Path, *, exclusive: bool):
     lock_path = path.with_name(f".{path.name}.lock")
     with file_lock(lock_path, exclusive=exclusive):
         yield
-
-
-def get_config_home() -> Path:
-    """Get the CrabCode config directory (~/.crabcode/)."""
-    return Path.home() / ".crabcode"
 
 
 def get_projects_dir() -> Path:

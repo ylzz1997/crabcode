@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.text_io import read_utf8_text, write_utf8_text
 from crabcode_core.types.config import (
     ComputerUseSettings,
@@ -77,7 +78,7 @@ class ConfigManager:
 
     @property
     def settings_file_paths(self) -> dict[str, str | None]:
-        home = Path.home() / ".crabcode"
+        home = get_config_home()
         project = Path(self._cwd).resolve()
         return {
             "userSettings": str(home / "settings.json"),

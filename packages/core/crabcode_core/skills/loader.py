@@ -2,7 +2,7 @@
 
 Search order (later entries override earlier ones with the same name):
   1. ~/.claude/skills/<name>/SKILL.md     (user global, Claude Code compat)
-  2. ~/.crabcode/skills/<name>/SKILL.md   (user global, crabcode native)
+  2. $CRABCODE_HOME/skills/<name>/SKILL.md (user global, default ~/.crabcode)
   3. .claude/skills/<name>/SKILL.md       (project, walking up to home)
   4. .crabcode/skills/<name>/SKILL.md     (project, walking up to home, highest priority)
 """
@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from crabcode_core.paths import get_config_home
 
 
 @dataclass
@@ -195,8 +197,8 @@ def load_skills(cwd: str) -> list[SkillDefinition]:
     for name, skill in _scan_skills_dir(home / ".claude" / "skills").items():
         merged[name] = skill
 
-    # 2. ~/.crabcode/skills/ — overrides claude global
-    for name, skill in _scan_skills_dir(home / ".crabcode" / "skills").items():
+    # 2. CrabCode global skills — overrides claude global
+    for name, skill in _scan_skills_dir(get_config_home() / "skills").items():
         merged[name] = skill
 
     # 3. Project-level .claude/skills/ dirs (home-adjacent → cwd)

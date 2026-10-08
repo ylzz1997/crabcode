@@ -1,5 +1,6 @@
 mod computer_use;
 mod gateway;
+mod paths;
 mod settings;
 mod virtual_machine;
 

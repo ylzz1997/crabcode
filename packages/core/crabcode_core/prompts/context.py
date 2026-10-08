@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.subprocess_utils import decode_subprocess_output, subprocess_group_options
 
 logger = get_logger(__name__)
@@ -171,7 +172,7 @@ def _load_claude_md(cwd: str) -> str | None:
         except Exception:
             logger.warning("Failed to read %s", home_claude_md, exc_info=True)
 
-    crabcode_md = home / ".crabcode" / "CLAUDE.md"
+    crabcode_md = get_config_home() / "CLAUDE.md"
     if crabcode_md.exists():
         try:
             contents.append(crabcode_md.read_text(encoding="utf-8", errors="replace"))

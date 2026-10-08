@@ -966,9 +966,9 @@ fn start_release_gateway_at(
 }
 
 fn managed_gateway_environment_dir() -> Result<PathBuf, String> {
-    let home =
-        dirs::home_dir().ok_or_else(|| "Unable to locate the user home directory".to_string())?;
-    Ok(home.join(".crabcode").join("desktop").join("gateway-venv"))
+    Ok(crate::paths::config_home()?
+        .join("desktop")
+        .join("gateway-venv"))
 }
 
 fn managed_gateway_python_path(environment: &Path) -> PathBuf {

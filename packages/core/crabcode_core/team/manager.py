@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.team.message_bus import TeamMessageBus
 from crabcode_core.team.models import (
     BridgePolicy,
@@ -1166,11 +1167,11 @@ class TeamManager:
             # session-bound managers get stable project/session children so an
             # old session cannot read or delete a same-named team's files.
             return self._scope_inbox_root(Path(team_settings.inbox_dir), custom=True)
-        # Default: ~/.crabcode/team_inbox/<project_hash>/<session_hash>/.
+        # Default: <config home>/team_inbox/<project_hash>/<session_hash>/.
         # Keep the project-only path for low-level callers that have not bound a
         # session yet.
         return self._scope_inbox_root(
-            Path.home() / ".crabcode" / "team_inbox",
+            get_config_home() / "team_inbox",
             custom=False,
         )
 

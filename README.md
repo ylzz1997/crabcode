@@ -1298,6 +1298,32 @@ Settings are loaded from multiple layers (later overrides earlier):
 4. Flag settings
 5. `~/.crabcode/managed-settings.json` (policy)
 
+### Custom Global Directory
+
+Set `CRABCODE_HOME` before starting CrabCode to use a different global directory:
+
+```bash
+export CRABCODE_HOME="$HOME/.config/crabcode"
+crabcode
+```
+
+On PowerShell: `$env:CRABCODE_HOME = "$HOME\.config\crabcode"`.
+Use an absolute directory path or `~/...`. An unset or blank value defaults to
+`~/.crabcode`; relative paths are rejected so different projects share the same
+global directory.
+
+The directory contains `settings.json`, `managed-settings.json`, global MCP
+configuration, skills, `CLAUDE.md`, memories, sessions, usage and schedules.
+Desktop settings and its managed Gateway environment also use this directory.
+Project-level `.crabcode` directories and explicit feature-specific paths
+(such as `CRABCODE_DOCUMENT_ENGINE_HOME`) keep their existing behavior.
+References to `~/.crabcode` elsewhere in this guide describe the default location.
+
+Existing files are not moved automatically; copy them into the new directory if
+you want to reuse them. Restart CLI, Gateway and Desktop after changing the
+variable, and ensure each process inherits it. A desktop app launched from the
+system launcher may not inherit variables exported in a terminal.
+
 ### Ultra Mode
 
 Set the top-level `ultra_mode` field to make the main model proactively split non-trivial work across many sub-agents and run independent tasks in parallel:

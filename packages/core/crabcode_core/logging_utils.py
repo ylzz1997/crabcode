@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from crabcode_core.paths import get_config_home
+
 if TYPE_CHECKING:
     from crabcode_core.types.config import LoggingSettings
 
@@ -91,8 +93,8 @@ def get_logs_dir(cwd: str) -> Path:
     try:
         logs_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
-        # cwd may be read-only (e.g. "/" on macOS) — fall back to home dir
-        logs_dir = Path.home() / LOGS_DIR_NAME
+        # cwd may be read-only (e.g. "/" on macOS) — fall back to config home
+        logs_dir = get_config_home() / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
     return logs_dir
 
@@ -106,7 +108,7 @@ def get_log_path(cwd: str, settings: LoggingSettings | None = None) -> Path:
         try:
             configured.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
-            configured = Path.home() / LOGS_DIR_NAME / configured.name
+            configured = get_config_home() / "logs" / configured.name
             configured.parent.mkdir(parents=True, exist_ok=True)
         return configured
     return get_logs_dir(cwd) / LOG_FILE_NAME

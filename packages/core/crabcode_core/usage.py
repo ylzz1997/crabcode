@@ -19,6 +19,7 @@ from typing import Any, AsyncIterator
 from zoneinfo import ZoneInfo
 
 from crabcode_core.api.base import APIAdapter, ModelConfig, StreamChunk, usage_int_field
+from crabcode_core.paths import get_config_home
 
 logger = logging.getLogger(__name__)
 recording_error: str | None = None
@@ -26,7 +27,7 @@ recording_error: str | None = None
 
 class UsageStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or Path.home() / ".crabcode" / "usage.sqlite3"
+        self.path = path or get_config_home() / "usage.sqlite3"
 
     @property
     def error_marker(self) -> Path:

@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from crabcode_core.paths import get_config_home
 from crabcode_core.schedule.models import JobRun, ScheduleJob
 
 
 def _db_path() -> Path:
-    """Default database path: ~/.crabcode/schedules.db"""
-    return Path.home() / ".crabcode" / "schedules.db"
+    """Database path below the configured CrabCode home."""
+    return get_config_home() / "schedules.db"
 
 
 _SCHEMA = """\

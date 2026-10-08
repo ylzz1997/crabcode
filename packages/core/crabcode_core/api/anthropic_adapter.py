@@ -16,6 +16,7 @@ from crabcode_core.api.base import (
     usage_int_field,
 )
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.types.config import ApiConfig
 from crabcode_core.utf8_sanitize import safe_utf8_json_tree, safe_utf8_str
 from crabcode_core.types.message import (
@@ -376,7 +377,7 @@ class AnthropicAdapter(APIAdapter):
         model = config.model or self.config.model
         if not model:
             raise ValueError(
-                "No model configured. Set api.model in ~/.crabcode/settings.json or use the -m flag."
+                f"No model configured. Set api.model in {get_config_home() / 'settings.json'} or use the -m flag."
             )
 
         system_blocks = safe_utf8_json_tree(

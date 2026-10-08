@@ -10,15 +10,11 @@ use tauri::Manager;
 const KEYRING_SERVICE: &str = "io.crabcode.desktop";
 
 fn settings_path() -> Result<PathBuf, String> {
-    let home =
-        dirs::home_dir().ok_or_else(|| "Unable to locate the user home directory".to_string())?;
-    Ok(home.join(".crabcode").join("settings_desktop.json"))
+    Ok(crate::paths::config_home()?.join("settings_desktop.json"))
 }
 
 fn custom_theme_presets_path() -> Result<PathBuf, String> {
-    let home =
-        dirs::home_dir().ok_or_else(|| "Unable to locate the user home directory".to_string())?;
-    Ok(home.join(".crabcode").join("custom_theme_presets.json"))
+    Ok(crate::paths::config_home()?.join("custom_theme_presets.json"))
 }
 
 fn merge_theme_presets_from_sidecar(mut settings: Value) -> Value {
@@ -57,9 +53,7 @@ fn save_theme_presets_sidecar(parent: &Path, presets: &Value) -> Result<(), Stri
 }
 
 fn custom_dock_icon_path() -> Result<PathBuf, String> {
-    let home =
-        dirs::home_dir().ok_or_else(|| "Unable to locate the user home directory".to_string())?;
-    Ok(home.join(".crabcode").join("dock_icon_custom.png"))
+    Ok(crate::paths::config_home()?.join("dock_icon_custom.png"))
 }
 
 fn dock_icon_bytes(choice: &str) -> Result<Vec<u8>, String> {

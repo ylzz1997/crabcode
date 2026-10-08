@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from crabcode_core.logging_utils import get_logger
+from crabcode_core.paths import get_config_home
 from crabcode_core.types.config import McpServerConfig
 
 logger = get_logger(__name__)
@@ -16,7 +17,7 @@ def load_mcp_configs(cwd: str) -> dict[str, McpServerConfig]:
     """Load and merge MCP server configurations from multiple scopes.
 
     Scopes (later overrides earlier):
-      1. User (~/.crabcode/mcp_servers.json)
+      1. User ($CRABCODE_HOME/mcp_servers.json; default ~/.crabcode)
       2. Project (<project>/.crabcode/mcp_servers.json)
       3. Local (<project>/.crabcode/mcp_servers.local.json)
     """
@@ -24,7 +25,7 @@ def load_mcp_configs(cwd: str) -> dict[str, McpServerConfig]:
     home = Path.home()
 
     paths = [
-        home / ".crabcode" / "mcp_servers.json",
+        get_config_home() / "mcp_servers.json",
         home / ".claude" / "mcp_servers.json",
         Path(cwd).resolve() / ".crabcode" / "mcp_servers.json",
         Path(cwd).resolve() / ".claude" / "mcp_servers.json",
