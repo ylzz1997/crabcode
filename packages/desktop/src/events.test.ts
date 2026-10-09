@@ -649,4 +649,92 @@ describe("Gateway event reducer", () => {
     });
     expect(current.items[0].text).not.toContain("secret body");
   });
+
+  it("summarizes file edits when the agent stops, including an interrupt", () => {
+    const running: SessionViewState = {
+      ...state(),
+      busy: true,
+      runStartedAt: 1_000,
+      items: [
+        { id: "user", kind: "user", text: "改一下" },
+        {
+          id: "edit",
+          kind: "tool",
+          title: "Edit",
+          status: "complete",
+          result: "Updated /work/project/src/App.tsx (line 4) [+3, -1]",
+        },
+      ],
+    };
+    const finished = applyGatewayEvent(running, { type: "turn_complete", operation_id: "operation-1" });
+    expect(finished.items.map((item) => item.kind)).toEqual([
+      "user",
+      "tool",
+      "file_edit_summary",
+      "turn_duration",
+    ]);
+    expect(finished.items[2].detail).toMatchObject({
+      added: 3,
+      removed: 1,
+      files: [{ path: "src/App.tsx", added: 3, removed: 1 }],
+    });
+    const again = applyGatewayEvent(finished, { type: "turn_complete", operation_id: "operation-1" });
+    expect(again.items.filter((item) => item.kind === "file_edit_summary")).toHaveLength(1);
+
+    const interrupted = applyGatewayEvent(running, { type: "turn_complete", reason: "interrupted" });
+    expect(interrupted.items.some((item) => item.kind === "file_edit_summary")).toBe(true);
+  });
+
+  it("does not summarize while the agent is waiting for permission", () => {
+    const current = applyGatewayEvent({
+      ...state(),
+      busy: true,
+      runStartedAt: 1_000,
+      items: [{ id: "edit", kind: "tool", title: "Write", status: "complete", result: "Created /work/project/a.ts (2 lines)." }],
+    }, {
+      type: "permission_request",
+      tool_name: "Bash",
+      tool_use_id: "bash-1",
+      tool_input: { command: "ls" },
+    });
+    expect(current.items.some((item) => item.kind === "file_edit_summary")).toBe(false);
+  });
+
+  it("restores a file edit summary from session history", () => {
+    const current = applyGatewayEvent(state(), {
+      type: "session_history",
+      messages: [
+        { uuid: "user-1", role: "user", timestamp: "2026-08-20T00:00:00.000Z", content: "改文件" },
+        {
+          uuid: "assistant-1",
+          role: "assistant",
+          timestamp: "2026-08-20T00:00:02.000Z",
+          content: [
+            { type: "tool_use", id: "tool-1", name: "Edit", input: { file_path: "/work/project/src/App.tsx" } },
+          ],
+        },
+        {
+          uuid: "result-1",
+          role: "user",
+          timestamp: "2026-08-20T00:00:03.000Z",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "tool-1",
+            content: "Updated /work/project/src/App.tsx [+8, -2]",
+          }],
+        },
+        { uuid: "assistant-2", role: "assistant", timestamp: "2026-08-20T00:00:04.000Z", content: "改好了" },
+      ],
+    });
+    expect(current.items.map((item) => item.kind)).toEqual([
+      "user",
+      "tool",
+      "assistant",
+      "file_edit_summary",
+      "turn_duration",
+    ]);
+    expect(current.items[3].detail).toMatchObject({
+      files: [{ path: "src/App.tsx", added: 8, removed: 2 }],
+    });
+  });
 });

@@ -9,6 +9,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  GitCompareArrows,
   LoaderCircle,
   PanelRightClose,
   Plus,
@@ -33,6 +34,10 @@ import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import remarkGfm from "remark-gfm";
 import type { GatewayApi } from "./gateway";
+import { ChangeReview, ChangeReviewFiles, type WorkspaceChangeReview } from "./ChangeReview";
+import { ChangeReviewControls } from "./ChangeReviewControls";
+import { ALL_EDITS, allEditsSummary } from "./reviewHistory";
+import { useGitReview } from "./useGitReview";
 import { projectPathKey, sameProjectPath } from "./pathUtils";
 import type { WorkspaceDirectoryEntry, WorkspaceDirectoryListing, WorkspaceFileEntry } from "./types";
 
@@ -271,6 +276,7 @@ function SourcePreview({ text, language }: { text: string; language: string | nu
 export function ProjectFilesWorkspace({
   api,
   projectName,
+  projectPath,
   directories,
   drawer = false,
   treeOpen,
@@ -278,6 +284,7 @@ export function ProjectFilesWorkspace({
   openFiles,
   selectedFile,
   referencedPaths,
+  changes,
   onToggleTree,
   onClose,
   onCloseFile,
@@ -288,6 +295,7 @@ export function ProjectFilesWorkspace({
 }: {
   api: GatewayApi;
   projectName: string;
+  projectPath?: string;
   directories: string[];
   drawer?: boolean;
   treeOpen: boolean;
@@ -295,6 +303,7 @@ export function ProjectFilesWorkspace({
   openFiles: WorkspaceFileEntry[];
   selectedFile: WorkspaceFileEntry | null;
   referencedPaths: ReadonlySet<string>;
+  changes?: WorkspaceChangeReview;
   onToggleTree: () => void;
   onClose: () => void;
   onCloseFile: (path: string) => void;
@@ -308,6 +317,36 @@ export function ProjectFilesWorkspace({
   const [showHidden, setShowHidden] = useState(false);
   const [filter, setFilter] = useState("");
   const [markdownSource, setMarkdownSource] = useState(false);
+  const reviewActive = Boolean(changes?.active && changes.selection);
+  const [explorerView, setExplorerView] = useState<"files" | "changes">(reviewActive ? "changes" : "files");
+  const reviewTurn = changes?.turns.find((turn) => turn.id === changes.selection?.summaryId)
+    ?? changes?.turns[changes.turns.length - 1];
+  const gitReview = useGitReview(api, projectPath ?? directories[0] ?? "", changes?.selection ?? null, reviewActive);
+  const gitSelected = changes?.selection?.source === "git";
+  const allHistory = !gitSelected && changes?.selection?.summaryId === ALL_EDITS;
+  const historySummary = useMemo(() => allHistory ? allEditsSummary(changes?.turns ?? []) : reviewTurn?.summary ?? null,
+    [allHistory, changes?.turns, reviewTurn]);
+  const reviewSummary = gitSelected ? gitReview.data : historySummary;
+  const hasChanges = Boolean(changes);
+  const selectedChangePath = changes?.selection?.path
+    ?? (changes?.selection?.showAll ? null : reviewSummary?.files[0]?.path ?? null);
+  const openChanges = (path: string | null = null, showAll = true) => {
+    changes?.onOpen(changes.selection ? { ...changes.selection, path, showAll }
+      : reviewTurn ? { summaryId: reviewTurn.id, path, showAll }
+      : { source: "git", scope: "uncommitted", path, showAll });
+    setExplorerView("changes");
+  };
+  const descriptions = {
+    uncommitted: "工作区相对 HEAD 的全部未提交改动，包含未跟踪文件",
+    unstaged: "工作区相对暂存区的改动，包含未跟踪文件",
+    staged: "暂存区相对 HEAD 的改动",
+    commit: "所选提交相对第一父提交的改动；首次提交显示新增内容",
+    branch: `当前分支相对 ${changes?.selection?.ref ?? gitReview.info?.default_base ?? "所选分支"} 的共同祖先的已提交改动`,
+  };
+  const reviewDescription = gitSelected
+    ? `${descriptions[changes.selection!.scope!]}${gitReview.data?.truncated ? ` · 仅显示前 ${gitReview.data.files.length} / ${gitReview.data.total_files} 个文件，行数为已显示文件的小计` : ""}`
+    : allHistory ? "全部会话编辑记录，按编辑顺序分组；行数为各次编辑的累计值" : "当前会话中保存的单次编辑记录";
+
   const [preview, setPreview] = useState<PreviewState>({
     status: "empty", kind: null, text: "", imageUrl: null, error: null,
   });
@@ -317,6 +356,11 @@ export function ProjectFilesWorkspace({
   const workspaceRef = useRef<HTMLElement | null>(null);
   const rootsKey = directories.join("\u0000");
   expandedRef.current = expanded;
+
+  useEffect(() => {
+    setExplorerView(reviewActive ? "changes" : "files");
+    setTabTooltip(null);
+  }, [reviewActive, changes?.selection?.summaryId, changes?.selection?.scope, changes?.selection?.ref]);
 
   const requestDirectory = useCallback(async (path: string, generation: number) => {
     setListings((current) => ({
@@ -528,21 +572,31 @@ export function ProjectFilesWorkspace({
     <>
     <aside
       ref={workspaceRef}
-      className={`project-files-workspace ${selectedFile ? "has-file" : "empty-preview"} ${treeOpen ? "tree-open" : "tree-collapsed"} ${drawer ? "drawer" : ""}`}
+      className={`project-files-workspace ${reviewActive ? "review-active" : selectedFile ? "has-file" : "empty-preview"} ${treeOpen ? "tree-open" : "tree-collapsed"} ${drawer ? "drawer" : ""}`}
       style={{ "--project-files-width": `${width}px` } as CSSProperties}
       aria-label={`${projectName} 文件工作区`}
     >
       {!drawer && <div className="project-files-resizer" role="separator" aria-orientation="vertical" onPointerDown={startResize} />}
       <div className="project-file-tabs-bar">
         <div className="project-file-tabs" role="tablist" aria-label="打开的文件">
-          {openFiles.length === 0 && (
+          {changes?.selection && (
+            <div className={`project-file-tab project-change-tab ${reviewActive ? "active" : ""}`}>
+              <button type="button" role="tab" aria-selected={reviewActive} onClick={changes.onActivate}>
+                <GitCompareArrows />
+                <span>变更</span>
+                <small className="project-change-count">{reviewSummary?.files.length ?? 0}</small>
+              </button>
+              <button className="project-file-tab-close" type="button" title="关闭变更" aria-label="关闭变更" onClick={changes.onClose}><X /></button>
+            </div>
+          )}
+          {openFiles.length === 0 && !changes?.selection && (
             <div className="project-file-tab empty active">
               <FolderOpen />
               <span>浏览文件</span>
             </div>
           )}
           {openFiles.map((file) => {
-            const active = sameProjectPath(selectedFile?.path ?? null, file.path);
+            const active = !reviewActive && sameProjectPath(selectedFile?.path ?? null, file.path);
             return (
               <div
                 className={`project-file-tab ${active ? "active" : ""}`}
@@ -577,6 +631,7 @@ export function ProjectFilesWorkspace({
             title="打开其他文件"
             aria-label="打开其他文件"
             onClick={() => {
+              setExplorerView("files");
               if (!treeOpen) onToggleTree();
             }}
           >
@@ -584,6 +639,11 @@ export function ProjectFilesWorkspace({
           </button>
         </div>
         <div className="project-file-tabs-actions">
+          {hasChanges && (
+            <button className={`icon-button tiny ${reviewActive ? "active" : ""}`} type="button" title="查看变更" aria-label="查看变更" aria-pressed={reviewActive} onClick={() => openChanges()}>
+              <GitCompareArrows />
+            </button>
+          )}
           <button
             className={`icon-button tiny ${treeOpen ? "active" : ""}`}
             type="button"
@@ -599,7 +659,20 @@ export function ProjectFilesWorkspace({
           </button>
         </div>
       </div>
-      <section className="project-file-preview">
+      {reviewActive && changes?.selection ? (
+        <ChangeReview
+          summary={reviewSummary}
+          path={changes.selection.path}
+          showAll={changes.selection.showAll}
+          history={allHistory ? changes.turns : undefined}
+          loading={gitSelected && gitReview.loading}
+          error={gitSelected ? gitReview.error ?? (!gitReview.info?.available && !gitReview.infoLoading ? gitReview.unavailable : null) : null}
+          description={reviewDescription}
+          toolbar={<ChangeReviewControls turns={changes.turns} selection={changes.selection} gitInfo={gitReview.info}
+            gitLoading={gitReview.infoLoading} unavailable={gitReview.unavailable} onSelect={changes.onOpen} onRefresh={gitReview.refresh} />}
+          onShowAll={() => openChanges()}
+        />
+      ) : <section className="project-file-preview">
         <header>
           <div className="project-file-preview-title">
             {selectedFile ? fileIcon(selectedFile) : <FolderOpen />}
@@ -647,7 +720,7 @@ export function ProjectFilesWorkspace({
             <SourcePreview text={preview.text} language={selectedClassification?.language ?? null} />
           )}
         </div>
-      </section>
+      </section>}
 
       <section
         className="project-file-explorer"
@@ -655,22 +728,38 @@ export function ProjectFilesWorkspace({
         {...(!treeOpen ? { inert: "" } : {})}
       >
         <header>
-          <strong>文件</strong>
-          <div>
+          {hasChanges ? (
+            <div className="project-explorer-switch" role="group" aria-label="文件导航">
+              <button type="button" className={explorerView === "files" ? "active" : ""} aria-pressed={explorerView === "files"} onClick={() => setExplorerView("files")}>文件</button>
+              <button type="button" className={explorerView === "changes" ? "active" : ""} aria-pressed={explorerView === "changes"} onClick={() => {
+                if (!reviewActive) openChanges();
+                else setExplorerView("changes");
+              }}>变更 <span>{reviewSummary?.files.length ?? 0}</span></button>
+            </div>
+          ) : <strong>文件</strong>}
+          {explorerView === "files" && <div>
             <button className="icon-button tiny" type="button" title={showHidden ? "隐藏点文件" : "显示点文件"} onClick={() => setShowHidden((value) => !value)}>
               {showHidden ? <EyeOff /> : <Eye />}
             </button>
             <button className="icon-button tiny" type="button" title="刷新文件树" onClick={refresh}><RefreshCw /></button>
-          </div>
+          </div>}
         </header>
-        <label className="project-file-filter">
+        {explorerView === "changes" ? (
+          <ChangeReviewFiles
+            key={JSON.stringify(changes?.selection?.source === "git" ? [changes.selection.scope, changes.selection.ref] : changes?.selection?.summaryId)}
+            files={reviewSummary?.files ?? []}
+            selectedPath={selectedChangePath}
+            onSelectFile={(path) => openChanges(path, false)}
+            onShowAll={() => openChanges()}
+          />
+        ) : <><label className="project-file-filter">
           <Search />
           <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="筛选已加载文件…" />
         </label>
         <div className="project-file-tree">
           {rootNodes.map((root) => renderDirectory(root, 0, new Set()))}
           {rootNodes.length === 0 && <div className="project-tree-empty">项目没有可浏览的目录</div>}
-        </div>
+        </div></>}
       </section>
     </aside>
     {tabTooltip && createPortal(

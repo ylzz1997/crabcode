@@ -635,7 +635,9 @@ export function SettingsView({
   const [query, setQuery] = useState("");
   const [pythonPath, setPythonPath] = useState(settings.python_path ?? "");
   const [gatewayFeatures, setGatewayFeatures] = useState<GatewayInstallFeature[]>(["search"]);
-  const [installedFeatures, setInstalledFeatures] = useState<GatewayInstallFeature[]>([]);
+  const [installedFeatures, setInstalledFeatures] = useState<GatewayInstallFeature[] | null>(null);
+  const [gatewayFeatureError, setGatewayFeatureError] = useState<string | null>(null);
+  const [gatewayFeatureRetry, setGatewayFeatureRetry] = useState(0);
   const [customIconPreview, setCustomIconPreview] = useState<string | null>(null);
   const [dockIconBusy, setDockIconBusy] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
@@ -653,6 +655,11 @@ export function SettingsView({
   const activeThemeIsBuiltin = themeRegistry.isBuiltin(activeTheme.id);
   const activeGateway = activeConnection ? gateways[activeConnection.id] : null;
   const canManageProjects = activeGateway?.status === "online" && Boolean(activeGateway.workspace);
+  const gatewayFeaturesLoading = installedFeatures === null && gatewayFeatureError === null;
+  const gatewayFeaturesLocked = installedFeatures === null || gatewaySuiteBusy || systemToolBusy !== null;
+  const selectedGatewayFeatures = GATEWAY_INSTALL_FEATURES.filter((feature) => (
+    installedFeatures?.includes(feature) || gatewayFeatures.includes(feature)
+  ));
 
   useEffect(() => {
     setPythonPath(settings.python_path ?? "");
@@ -661,24 +668,19 @@ export function SettingsView({
   useEffect(() => {
     if (activeSection !== "general" || !isDesktopShell()) return;
     let cancelled = false;
+    setInstalledFeatures(null);
+    setGatewayFeatureError(null);
     void installedGatewayFeatures(settings.python_path)
       .then((features) => {
         if (!cancelled) setInstalledFeatures(features);
       })
-      .catch(() => {
-        if (!cancelled) setInstalledFeatures([]);
+      .catch((error: unknown) => {
+        if (!cancelled) setGatewayFeatureError(error instanceof Error ? error.message : String(error));
       });
     return () => {
       cancelled = true;
     };
-  }, [activeSection, settings.python_path, gatewaySuiteSuccess]);
-
-  useEffect(() => {
-    if (installedFeatures.length === 0) return;
-    setGatewayFeatures((current) => GATEWAY_INSTALL_FEATURES.filter((feature) => (
-      installedFeatures.includes(feature) || current.includes(feature)
-    )));
-  }, [installedFeatures]);
+  }, [activeSection, settings.python_path, gatewaySuiteSuccess, gatewayFeatureRetry]);
 
   useEffect(() => {
     if (activeSection !== "general" || !isDesktopShell()) return;
@@ -718,14 +720,14 @@ export function SettingsView({
   };
 
   const installSelectedGatewaySuite = async () => {
-    if (!onInstallGatewaySuite) return;
+    if (!onInstallGatewaySuite || gatewayFeaturesLocked) return;
     const normalizedPythonPath = pythonPath.trim();
     setPythonPath(normalizedPythonPath);
     if (normalizedPythonPath !== (settings.python_path ?? "")) {
       onSavePythonPath(normalizedPythonPath);
     }
     try {
-      await onInstallGatewaySuite(gatewayFeatures, normalizedPythonPath || null);
+      await onInstallGatewaySuite(selectedGatewayFeatures, normalizedPythonPath || null);
     } catch {
       // The application-level task owner preserves and displays the error.
     }
@@ -746,7 +748,7 @@ export function SettingsView({
   };
 
   const setGatewayFeatureSelected = (feature: GatewayInstallFeature, selected: boolean) => {
-    if (installedFeatures.includes(feature)) return;
+    if (gatewayFeaturesLocked || installedFeatures?.includes(feature)) return;
     setGatewayFeatures((current) => GATEWAY_INSTALL_FEATURES.filter((candidate) => (
       candidate === feature ? selected : current.includes(candidate)
     )));
@@ -754,6 +756,7 @@ export function SettingsView({
 
   const activeDefinition = SETTINGS_SECTIONS.find((section) => section.id === activeSection)!;
   const preciseEngine = documentCapabilities?.translation_engines?.precise;
+  const documentEngineLoading = documentCapabilities === undefined && activeGateway?.status === "online";
   const documentEngineInstallCommand = preciseEngine?.install_command ?? "crabcode document-engine install";
 
   const beginThemeRename = (theme: ThemePreset) => {
@@ -977,21 +980,27 @@ export function SettingsView({
                           <span>首次启动会安装 Gateway、Browser 和 Chromium。这里可按需再安装 Search、Debugger 和 Browser；装完后需重启本地 Gateway。</span>
                         </div>
                         <div className="gateway-suite-install">
-                          <div className="gateway-feature-list" role="group" aria-label="CrabCode 安装组件">
+                          {gatewayFeaturesLoading && (
+                            <div className="settings-loading-status" role="status">
+                              <LoaderCircle className="spin" aria-hidden="true" />
+                              <span>正在检测已安装的组件，请稍候…</span>
+                            </div>
+                          )}
+                          <div className="gateway-feature-list" role="group" aria-label="CrabCode 安装组件" aria-busy={gatewayFeaturesLoading}>
                             <label className="gateway-feature-option is-required">
                               <input type="checkbox" checked disabled readOnly />
                               <span><strong>Gateway</strong><small>必装 · 本地服务与客户端协议</small></span>
                             </label>
                             {GATEWAY_INSTALL_FEATURES.map((feature) => {
-                              const installed = installedFeatures.includes(feature);
+                              const installed = installedFeatures?.includes(feature) ?? false;
                               const meta = GATEWAY_FEATURE_DETAILS[feature];
                               return (
-                                <label key={feature} className={`gateway-feature-option${installed ? " is-installed" : ""}`}>
+                                <label key={feature} className={`gateway-feature-option${installed ? " is-installed" : ""}${gatewayFeaturesLocked ? " is-disabled" : ""}`}>
                                   <input
                                     type="checkbox"
                                     aria-label={meta.title}
-                                    checked={gatewayFeatures.includes(feature)}
-                                    disabled={installed || gatewaySuiteBusy || systemToolBusy !== null}
+                                    checked={selectedGatewayFeatures.includes(feature)}
+                                    disabled={installed || gatewayFeaturesLocked}
                                     onChange={(event) => setGatewayFeatureSelected(feature, event.target.checked)}
                                   />
                                   <span>
@@ -1002,15 +1011,28 @@ export function SettingsView({
                               );
                             })}
                           </div>
+                          {gatewayFeatureError !== null && (
+                            <small className="gateway-suite-error" role="alert" title={gatewayFeatureError}>
+                              组件检测失败：{gatewayFeatureError}
+                            </small>
+                          )}
                           <div className="gateway-suite-actions">
+                            {gatewayFeatureError !== null && (
+                              <button
+                                className="settings-command"
+                                type="button"
+                                disabled={gatewaySuiteBusy || systemToolBusy !== null}
+                                onClick={() => setGatewayFeatureRetry((current) => current + 1)}
+                              ><RotateCcw /><span>重新检测</span></button>
+                            )}
                             <button
                               className="settings-command primary"
                               type="button"
-                              disabled={gatewaySuiteBusy || systemToolBusy !== null || !onInstallGatewaySuite}
+                              disabled={gatewayFeaturesLocked || !onInstallGatewaySuite}
                               onClick={() => void installSelectedGatewaySuite()}
                             >
-                              {gatewaySuiteBusy ? <LoaderCircle className="spin" /> : <Download />}
-                              <span>{gatewaySuiteBusy ? "正在安装" : "安装套件"}</span>
+                              {gatewaySuiteBusy || gatewayFeaturesLoading ? <LoaderCircle className="spin" /> : <Download />}
+                              <span>{gatewaySuiteBusy ? "正在安装" : gatewayFeaturesLoading ? "正在检测" : "安装套件"}</span>
                             </button>
                           </div>
                           {gatewaySuiteBusy && gatewaySuiteProgress && (
@@ -1646,7 +1668,7 @@ export function SettingsView({
                       <span>
                         {preciseEngine?.status === "ready"
                           ? `BabelDOC ${preciseEngine.version} 已就绪；新的全文翻译会默认生成原生译后 PDF。`
-                          : preciseEngine?.detail ?? (documentCapabilities === undefined ? "正在读取当前 Gateway 的能力…" : "当前 Gateway 不支持高精度 PDF 引擎。")}
+                          : preciseEngine?.detail ?? (documentEngineLoading ? "正在读取当前 Gateway 的能力…" : documentCapabilities === undefined ? "连接 Gateway 后检测引擎状态。" : "当前 Gateway 不支持高精度 PDF 引擎。")}
                       </span>
                       <small>
                         本地解析与排版，不接收模型密钥
@@ -1660,7 +1682,12 @@ export function SettingsView({
                       </small>
                       {documentEngineError && <small className="document-engine-error">{documentEngineError}</small>}
                     </div>
-                    {canManageDocumentEngine ? (
+                    {documentEngineLoading ? (
+                      <div className="settings-loading-status" role="status">
+                        <LoaderCircle className="spin" aria-hidden="true" />
+                        <span>正在检测文档引擎…</span>
+                      </div>
+                    ) : canManageDocumentEngine ? (
                       preciseEngine?.status === "ready" ? (
                         <button
                           className="settings-command"

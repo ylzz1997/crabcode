@@ -13,6 +13,9 @@ import type {
   GatewayEvent,
   GatewayModel,
   GoalState,
+  GitReviewInfo,
+  GitReviewDiff,
+  GitReviewScope,
   ModelSettingsResponse,
   ModelSettingsMutation,
   PromptSettingsMutation,
@@ -124,6 +127,16 @@ export class GatewayApi {
 
   workspaceInfo(): Promise<WorkspaceInfo> {
     return this.request("/workspace/info");
+  }
+
+  gitReviewInfo(path: string, signal?: AbortSignal): Promise<GitReviewInfo> {
+    return this.request(`/workspace/git/info?${new URLSearchParams({ path })}`, { signal });
+  }
+
+  gitReviewDiff(path: string, scope: GitReviewScope, ref?: string, signal?: AbortSignal): Promise<GitReviewDiff> {
+    const query = new URLSearchParams({ path, scope });
+    if (ref) query.set("ref", ref);
+    return this.request(`/workspace/git/diff?${query}`, { signal });
   }
 
   directories(path: string, includeHidden = false, includeFiles = false): Promise<WorkspaceDirectoryListing> {

@@ -431,6 +431,29 @@ export interface WorkspaceFileEntry {
   is_symlink: boolean;
 }
 
+export type GitReviewScope = "uncommitted" | "unstaged" | "staged" | "commit" | "branch";
+
+export interface GitReviewInfo {
+  available: boolean;
+  reason: string | null;
+  root: string | null;
+  head: string | null;
+  branch: string | null;
+  default_base: string | null;
+  branches: string[];
+  commits: { id: string; subject: string }[];
+}
+
+export interface GitReviewDiff {
+  files: { path: string; action: "create" | "modify" | "delete"; added: number; removed: number; diff: string | null; note?: string | null }[];
+  added: number;
+  removed: number;
+  total_files: number;
+  truncated: boolean;
+  base: string | null;
+  target: string | null;
+}
+
 export interface SessionInfo {
   session_id: string;
   message_count: number;
@@ -737,6 +760,7 @@ export type ChatItemKind =
   | "plan"
   | "document_job"
   | "file_change"
+  | "file_edit_summary"
   | "turn_duration"
   | "command"
   | "system"

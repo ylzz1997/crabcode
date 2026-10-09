@@ -1,3 +1,4 @@
+import { fileEditSummaryItem, summarizeFileEdits } from "./fileEditSummary";
 import type { ChatItem, GatewayEvent, ImageAttachment, SessionViewState } from "./types";
 import { presentUserMessage } from "./userPromptDisplay";
 import { randomUuid } from "./uuid";
@@ -38,15 +39,19 @@ function displayedUserText(kind: ChatItem["kind"], source: string): Pick<ChatIte
   };
 }
 
-function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
+function historyItems(messages: Array<Record<string, unknown>>, cwd: string): ChatItem[] {
   const items: ChatItem[] = [];
   const tools = new Map<string, number>();
   let turnStartedAt: number | null = null;
   let turnCompletedAt: number | null = null;
   let turnDurationId = "";
+  let summarizedUntil = 0;
 
   const finishTurn = () => {
     if (turnStartedAt === null || turnCompletedAt === null) return;
+    const summary = summarizeFileEdits(items.slice(summarizedUntil), cwd);
+    const summaryId = `${turnDurationId || randomUuid()}:file-edits`;
+    if (summary) items.push(fileEditSummaryItem(summaryId, summary));
     items.push({
       id: `${turnDurationId || randomUuid()}:turn-duration`,
       kind: "turn_duration",
@@ -55,6 +60,7 @@ function historyItems(messages: Array<Record<string, unknown>>): ChatItem[] {
       completedAt: turnCompletedAt,
       durationMs: Math.max(0, turnCompletedAt - turnStartedAt),
     });
+    summarizedUntil = items.length;
   };
 
   for (const message of messages) {
@@ -311,6 +317,29 @@ function completeItem(item: ChatItem, now: number): ChatItem {
   };
 }
 
+function currentTurnItems(items: ChatItem[]): ChatItem[] {
+  let start = 0;
+  items.forEach((item, index) => {
+    if (item.kind === "turn_duration" || item.kind === "file_edit_summary") start = index + 1;
+    else if (item.kind === "user") start = index;
+  });
+  return items.slice(start);
+}
+
+function closeTurn(
+  items: ChatItem[],
+  startedAt: number | null | undefined,
+  completedAt: number,
+  operationId: string | null | undefined,
+  cwd: string,
+): ChatItem[] {
+  const summary = summarizeFileEdits(currentTurnItems(items), cwd);
+  const withSummary = summary
+    ? [...items, fileEditSummaryItem(`${operationId || "turn"}:${items.length}:file-edits`, summary)]
+    : items;
+  return appendTurnDuration(withSummary, startedAt, completedAt, operationId ?? undefined);
+}
+
 function appendTurnDuration(
   items: ChatItem[],
   startedAt: number | null | undefined,
@@ -368,14 +397,14 @@ export function applyGatewayEvent(
         runStartedAt: now,
         currentStep: { kind: "response", label: "执行排队消息", startedAt: now },
         pendingFollowUps: pending.filter((_, itemIndex) => itemIndex !== index),
-        items: [...appendTurnDuration(completeRunning(state.items, now), state.runStartedAt, now), userItem],
+        items: [...closeTurn(completeRunning(state.items, now), state.runStartedAt, now, state.operationId, state.cwd), userItem],
       };
     }
     case "server.connected":
     case "server.heartbeat":
       return { ...state, connected: true, error: null };
     case "session_history": {
-      const messages = historyItems(event.messages ?? []);
+      const messages = historyItems(event.messages ?? [], state.cwd);
       return {
         ...state,
         loading: false,
@@ -560,7 +589,7 @@ export function applyGatewayEvent(
         busy: false,
         runStartedAt: null,
         currentStep: null,
-        items: appendTurnDuration([
+        items: closeTurn([
           ...completeRunning(state.items, now),
           {
             id: randomUuid(),
@@ -569,7 +598,7 @@ export function applyGatewayEvent(
             detail: event.plan ?? {},
             status: "pending",
           },
-        ], state.runStartedAt, now, event.operation_id),
+        ], state.runStartedAt, now, event.operation_id, state.cwd),
       };
     case "file_change":
       return {
@@ -744,11 +773,12 @@ export function applyGatewayEvent(
         runStartedAt: null,
         currentStep: null,
         lastTurnUsage: event.usage ?? state.lastTurnUsage ?? null,
-        items: appendTurnDuration(
+        items: closeTurn(
           completedItems,
           state.runStartedAt,
           now,
-          event.operation_id ?? state.operationId ?? undefined,
+          event.operation_id ?? state.operationId,
+          state.cwd,
         ),
         status: state.status && event.context_used_tokens !== undefined
           ? {

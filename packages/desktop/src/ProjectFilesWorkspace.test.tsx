@@ -4,6 +4,7 @@ import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayApi } from "./gateway";
+import { type ChangeReviewSelection, type ChangeReviewTurn } from "./ChangeReview";
 import {
   activateProjectFileTab,
   classifyProjectFile,
@@ -111,6 +112,81 @@ describe("project file tabs", () => {
 });
 
 describe("ProjectFilesWorkspace", () => {
+  it("keeps changes and file previews in one workspace across navigation, turn selection, and closing tabs", async () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const file = { name: "README.md", path: "/work/README.md", size: 10, hidden: false, is_symlink: false };
+    const turns: ChangeReviewTurn[] = [
+      { id: "older", summary: { added: 2, removed: 1, files: [
+        { path: "src/app.ts", action: "modify", added: 1, removed: 1, diff: "@@ -1 +1 @@\n-before\n+after" },
+        { path: "removed.ts", action: "delete", added: 1, removed: 0, diff: null },
+      ] } },
+      { id: "latest", summary: { added: 1, removed: 0, files: [
+        { path: "new.ts", action: "create", added: 1, removed: 0, diff: "@@ -0,0 +1 @@\n+latest change" },
+      ] } },
+    ];
+    const api = {
+      directories: vi.fn(async () => ({ path: "/work", parent: "/", directories: [], files: [file] })),
+      workspaceFile: vi.fn(async () => ({ text: async () => "# File preview" } as Blob)),
+    } as unknown as GatewayApi;
+    function Harness() {
+      const [selection, setSelection] = useState<ChangeReviewSelection | null>({ summaryId: "older", path: "src/app.ts", showAll: false });
+      const [active, setActive] = useState(true);
+      const [treeOpen, setTreeOpen] = useState(true);
+      return <ProjectFilesWorkspace
+        api={api} projectName="test" directories={["/work"]} width={640}
+        openFiles={[file]} selectedFile={file} referencedPaths={new Set()}
+        treeOpen={treeOpen} onToggleTree={() => setTreeOpen((value) => !value)}
+        onClose={vi.fn()} onCloseFile={vi.fn()} onReference={vi.fn()}
+        onWidthChange={vi.fn()} onWidthCommit={vi.fn()}
+        onSelectFile={() => setActive(false)}
+        changes={{ turns, selection, active,
+          onOpen: (next) => { setSelection(next); setActive(true); },
+          onActivate: () => setActive(true),
+          onClose: () => { setSelection(null); setActive(false); },
+        }}
+      />;
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<Harness />));
+    await flush();
+    const click = (selector: string) => act(() => container.querySelector<HTMLButtonElement>(selector)!.click());
+
+    expect(container.querySelectorAll(".project-files-workspace")).toHaveLength(1);
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(2);
+    expect(container.querySelector(".change-review-scroll")?.textContent).toContain("after");
+    expect(container.querySelector(".project-change-tab [role=tab]")?.getAttribute("aria-selected")).toBe("true");
+
+    click('.project-file-tab:not(.project-change-tab) [role="tab"]');
+    expect(container.querySelector(".project-file-preview")?.textContent).toContain("File preview");
+    expect(container.querySelector(".project-change-tab [role=tab]")?.getAttribute("aria-selected")).toBe("false");
+    click('.project-change-tab [role="tab"]');
+    expect(container.querySelector(".change-review-scroll")?.textContent).toContain("after");
+
+    click('.change-review-tree-file[title="removed.ts"]');
+    expect(container.querySelector(".change-review-scroll")?.textContent).toContain("没有保存完整 diff");
+    expect(container.querySelector(".change-review-scroll")?.textContent).not.toContain("after");
+    click(".change-review-all");
+    expect(container.querySelectorAll(".change-review-scroll article")).toHaveLength(2);
+    click('[aria-label="编辑记录"]');
+    act(() => Array.from(document.querySelectorAll<HTMLButtonElement>('.change-review-turn-menu button')).find((button) => button.textContent === '最近一次')!.click());
+    expect(container.querySelector(".change-review-scroll")?.textContent).toContain("latest change");
+    expect(container.querySelectorAll(".change-review-tree-file")).toHaveLength(1);
+
+    click('[aria-label="收起文件树"]');
+    expect(container.querySelector(".project-files-workspace.tree-collapsed")).not.toBeNull();
+    expect(container.querySelector(".change-review-scroll")?.textContent).toContain("latest change");
+    click('[aria-label="关闭变更"]');
+    expect(container.querySelector(".project-change-tab")).toBeNull();
+    expect(container.querySelector(".project-file-preview")?.textContent).toContain("File preview");
+    click('[aria-label="查看变更"]');
+    expect(container.querySelector(".change-review-scroll")?.textContent).toContain("latest change");
+    expect(api.workspaceFile).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it("loads multiple roots lazily, filters loaded files, previews Markdown, and references paths", async () => {
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const directories = vi.fn(async (path: string, showHidden: boolean) => {

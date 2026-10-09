@@ -36,6 +36,7 @@ from crabcode_gateway.routes import (
     document,
     event,
     health,
+    git_review,
     peer,
     permission,
     schedule,
@@ -205,6 +206,7 @@ class GatewayServer:
         app.include_router(peer.router)
         app.include_router(team.router)
         app.include_router(workspace.router)
+        app.include_router(git_review.router)
         app.include_router(document.router)
 
         self._app = app

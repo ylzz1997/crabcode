@@ -11,7 +11,7 @@ import {
 import { composerModifierLabel } from "./ComposerEditor";
 import { RuntimeSettingsPanel } from "./RuntimeSettingsPanel";
 import { BUILTIN_THEMES } from "./theme";
-import type { DocumentEngineInstallProgress } from "./native";
+import type { DocumentEngineInstallProgress, GatewayInstallFeature } from "./native";
 import { installedGatewayFeatures } from "./native";
 import type {
   DesktopSettings,
@@ -249,7 +249,7 @@ describe("SettingsView", () => {
   it("checks independent CrabCode features and installs them together", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const handlers = callbacks();
-    act(() => root.render(
+    await act(async () => root.render(
       <SettingsView
         {...handlers}
         settings={settings}
@@ -281,6 +281,103 @@ describe("SettingsView", () => {
     });
 
     expect(handlers.onInstallGatewaySuite).toHaveBeenCalledWith(["search", "debugger", "browser"], null);
+  });
+
+  it("blocks suite changes until detection completes and checks again after installation", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    let finishProbe!: (features: GatewayInstallFeature[]) => void;
+    vi.mocked(installedGatewayFeatures).mockImplementation(() => new Promise((resolve) => { finishProbe = resolve; }));
+    const handlers = callbacks();
+    const renderSettings = (success: string | null = null) => root.render(
+      <SettingsView {...handlers} settings={settings} gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]} activeProject={settings.connections[0].projects[0]}
+        activeSection="general" onSectionChange={vi.fn()} gatewaySuiteSuccess={success} />,
+    );
+    act(() => renderSettings());
+
+    const suite = container.querySelector('.gateway-suite-install')!;
+    const browser = suite.querySelector<HTMLInputElement>('input[aria-label="Browser"]')!;
+    const install = suite.querySelector<HTMLButtonElement>('.gateway-suite-actions button')!;
+    expect(suite.querySelector('[role="status"]')?.textContent).toContain("正在检测已安装的组件");
+    expect(suite.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(Array.from(suite.querySelectorAll<HTMLInputElement>('input')).every((input) => input.disabled)).toBe(true);
+    expect(install.disabled).toBe(true);
+    act(() => { browser.click(); install.click(); });
+    expect(browser.checked).toBe(false);
+    expect(handlers.onInstallGatewaySuite).not.toHaveBeenCalled();
+    // Unrelated settings remain usable while this probe is pending.
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="显示处理用时"]')!.click());
+    expect(handlers.onConversationChange).toHaveBeenCalledWith({ show_turn_duration: false });
+
+    await act(async () => finishProbe(["browser"]));
+    expect(suite.querySelector('.settings-loading-status')).toBeNull();
+    expect(browser.checked).toBe(true);
+    expect(browser.disabled).toBe(true);
+    expect(install.disabled).toBe(false);
+    await act(async () => install.click());
+    expect(handlers.onInstallGatewaySuite).toHaveBeenCalledWith(["search", "browser"], null);
+
+    act(() => renderSettings("安装完成"));
+    expect(install.disabled).toBe(true);
+    expect(suite.querySelector('[aria-busy="true"]')).not.toBeNull();
+    await act(async () => finishProbe(["search", "browser"]));
+    expect(install.disabled).toBe(false);
+    expect(suite.querySelector<HTMLInputElement>('input[aria-label="Search"]')!.disabled).toBe(true);
+  });
+
+  it("keeps failed detection locked and lets the user retry", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    vi.mocked(installedGatewayFeatures).mockRejectedValueOnce(new Error("检测超时"));
+    const handlers = callbacks();
+    await act(async () => root.render(
+      <SettingsView {...handlers} settings={settings} gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]} activeProject={settings.connections[0].projects[0]}
+        activeSection="general" onSectionChange={vi.fn()} />,
+    ));
+
+    const suite = container.querySelector('.gateway-suite-install')!;
+    expect(suite.querySelector('[role="alert"]')?.textContent).toContain("组件检测失败：检测超时");
+    expect(suite.querySelector('.settings-loading-status')).toBeNull();
+    expect(suite.querySelector<HTMLButtonElement>('.primary')!.disabled).toBe(true);
+    expect(suite.querySelector<HTMLInputElement>('input[aria-label="Browser"]')!.disabled).toBe(true);
+    await act(async () => {
+      Array.from(suite.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === "重新检测")!.click();
+    });
+    expect(suite.querySelector('[role="alert"]')).toBeNull();
+    expect(suite.querySelector<HTMLButtonElement>('.primary')!.disabled).toBe(false);
+    expect(suite.querySelector<HTMLInputElement>('input[aria-label="Browser"]')!.disabled).toBe(false);
+    expect(handlers.onInstallGatewaySuite).not.toHaveBeenCalled();
+  });
+
+  it("ignores stale detection after changing Python environments", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const probes: ((features: GatewayInstallFeature[]) => void)[] = [];
+    vi.mocked(installedGatewayFeatures).mockImplementation(() => new Promise((resolve) => { probes.push(resolve); }));
+    const handlers = callbacks();
+    const renderSettings = (pythonPath: string | null) => root.render(
+      <SettingsView {...handlers} settings={{ ...settings, python_path: pythonPath }} gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]} activeProject={settings.connections[0].projects[0]}
+        activeSection="general" onSectionChange={vi.fn()} />,
+    );
+    act(() => renderSettings(null));
+    act(() => renderSettings("/opt/new/python3"));
+    expect(installedGatewayFeatures).toHaveBeenLastCalledWith("/opt/new/python3");
+    await act(async () => probes[1](["debugger"]));
+    await act(async () => probes[0](["browser"]));
+
+    const browser = container.querySelector<HTMLInputElement>('input[aria-label="Browser"]')!;
+    const debuggerOption = container.querySelector<HTMLInputElement>('input[aria-label="Debugger"]')!;
+    expect(browser.checked).toBe(false);
+    expect(browser.disabled).toBe(false);
+    expect(debuggerOption.checked).toBe(true);
+    expect(debuggerOption.disabled).toBe(true);
+
+    act(() => renderSettings(null));
+    expect(browser.disabled).toBe(true);
+    await act(async () => probes[2]([]));
+    expect(debuggerOption.checked).toBe(false);
+    expect(debuggerOption.disabled).toBe(false);
   });
 
   it("locks installed suite features as checked and grayed out", async () => {
@@ -585,6 +682,7 @@ describe("SettingsView", () => {
       key: string,
       documentEngineBusy: "install" | "remove" | null = null,
       documentEngineProgress: DocumentEngineInstallProgress | null = null,
+      loading = false,
     ) => root.render(
       <SettingsView
         key={key}
@@ -595,13 +693,17 @@ describe("SettingsView", () => {
         activeProject={settings.connections[0].projects[0]}
         activeSection="document"
         onSectionChange={vi.fn()}
-        documentCapabilities={capabilities}
+        documentCapabilities={loading ? undefined : capabilities}
         canManageDocumentEngine
         documentEngineBusy={documentEngineBusy}
         documentEngineProgress={documentEngineProgress}
         onInstallDocumentEngine={install}
       />,
     );
+    act(() => renderSettings("loading", null, null, true));
+    expect(container.querySelector('.document-engine-row [role="status"]')?.textContent).toContain("正在检测文档引擎");
+    expect(container.querySelector('.document-engine-row button')).toBeNull();
+    expect(container.querySelector<HTMLInputElement>('[aria-label="翻译并行请求数"]')!.disabled).toBe(false);
     act(() => renderSettings("idle"));
 
     const group = container.querySelector(".document-translation-group")!;

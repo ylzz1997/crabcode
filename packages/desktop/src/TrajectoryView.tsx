@@ -89,6 +89,17 @@ function recordIdentity(item: ChatItem): Pick<TrajectoryRecord, "lane" | "label"
       preview: compactText(item.diff),
     };
   }
+  if (item.kind === "file_edit_summary") {
+    const files = item.detail && typeof item.detail === "object" && !Array.isArray(item.detail)
+      ? (item.detail as { files?: Array<{ path?: string }> }).files ?? []
+      : [];
+    return {
+      lane: "tools",
+      label: "FILE",
+      title: item.title ?? "文件改动",
+      preview: compactText(files.map((file) => file.path).filter(Boolean).join(" ")),
+    };
+  }
   if (item.kind === "permission") {
     return {
       lane: "input",

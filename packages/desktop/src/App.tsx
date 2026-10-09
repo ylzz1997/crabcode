@@ -118,6 +118,10 @@ import {
   openComputerUseInputSettings,
   type ComputerUseState,
 } from "./computerUse";
+import { latestFileEditSummaryId } from "./fileEditSummary";
+import { FileEditSummaryCard, type FileEditReviewRequest } from "./FileEditSummaryCard";
+import { changeReviewTurns, type ChangeReviewSelection } from "./ChangeReview";
+import { ALL_EDITS } from "./reviewHistory";
 import { gatewayEnvironmentLog, gatewayLogAddress, updateGatewayStartup, type GatewayStartupState } from "./gatewayStartup";
 import { StatusBar } from "./StatusBar";
 import { setSessionTaskbarProgress } from "./taskbarProgress";
@@ -895,6 +899,8 @@ function App() {
   const promptSettingsRevisionRef = useRef(new Map<string, number>());
   const [connectionModal, setConnectionModal] = useState<"new" | string | null>(null);
   const [checkpointModal, setCheckpointModal] = useState(false);
+  const [changeReview, setChangeReview] = useState<ChangeReviewSelection | null>(null);
+  const [changeReviewActive, setChangeReviewActive] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [approvalShortcutError, setApprovalShortcutError] = useState<string | null>(null);
   const [computerUseBaseId] = useState(computerUseHostId);
@@ -957,7 +963,7 @@ function App() {
     setProjectFilesOpen(false);
     setProjectFileTreeOpen(false);
     setProjectFileTabs({ files: [], activePath: null });
-  }, [wideProjectFilesLayout, workspaceView, activeConnection?.id, activeProject?.id]);
+  }, [workspaceView, activeConnection?.id, activeProject?.id]);
   const defaultProjectId = activeConnection
     ? resolveDefaultProjectId(activeConnection.projects, activeGateway?.workspace?.startup_cwd)
     : null;
@@ -2626,6 +2632,28 @@ function App() {
     }
   };
 
+  const undoLatestFileEdits = async () => {
+    if (!activeConnection || !activeSession || !activeSessionKey || activeSession.busy) return;
+    const api = apiRef.current.get(activeConnection.id);
+    if (!api) throw new Error("Gateway 尚未连接");
+    const checkpoints = await api.checkpoints(activeSession.id);
+    const latest = checkpoints[0];
+    if (!latest) throw new Error("还没有检查点，无法撤销这些文件改动。");
+    if (!latest.snapshot_id) throw new Error("最近的检查点没有文件快照，无法撤销这些文件改动。");
+    if (!window.confirm("撤销最近一次检查点？文件和会话都会回退。")) return;
+    await api.undo(activeSession.id);
+    channelRef.current.get(activeSessionKey)?.dispose();
+    channelRef.current.delete(activeSessionKey);
+    const sessionKeyToReload = activeSessionKey;
+    const sessionId = activeSession.id;
+    setSessions((current) => ({
+      ...current,
+      [sessionKeyToReload]: { ...current[sessionKeyToReload], items: [], connected: false },
+    }));
+    const info = activeList.find((item) => item.session_id === sessionId);
+    if (activeProject) openSession(activeConnection, activeProject, info);
+  };
+
   const toggleChoice = (item: ChatItem, option: string) => {
     if (!activeSessionKey) return;
     setSessions((current) => {
@@ -3148,16 +3176,26 @@ function App() {
     documentMode,
     settings?.document_agent_collapsed === true,
   );
+  const reviewTurns = useMemo(() => changeReviewTurns(activeSession?.items ?? []), [activeSession?.items]);
+  const openChangeReview = changeReview && (changeReview.source === "git" || changeReview.summaryId === ALL_EDITS
+    || reviewTurns.some((turn) => turn.id === changeReview.summaryId))
+    ? changeReview
+    : null;
+  const openFileChanges = (selection: ChangeReviewSelection) => {
+    setChangeReview(selection);
+    setChangeReviewActive(true);
+    setProjectFilesOpen(true);
+  };
   const projectFilesEligible = workspaceView === "chat"
-    && activeProject?.kind === "project"
+    && Boolean(activeProject)
     && Boolean(activeConnection && apiRef.current.get(activeConnection.id))
-    && activeGateway?.status === "online";
-  const projectFilesWideLayout = projectFilesEligible && wideProjectFilesLayout;
+    && ((activeProject?.kind === "project" && activeGateway?.status === "online") || Boolean(openChangeReview));
+  const projectFilesWideLayout = projectFilesEligible && wideProjectFilesLayout && !documentMode;
   const projectFilesWideOpen = projectFilesEligible
-    && wideProjectFilesLayout
+    && projectFilesWideLayout
     && projectFilesOpen;
   const projectFilesDrawerVisible = projectFilesEligible
-    && !wideProjectFilesLayout
+    && !projectFilesWideLayout
     && projectFilesOpen;
   const projectFilesVisible = projectFilesWideOpen || projectFilesDrawerVisible;
   const referencedProjectFilePaths = useMemo(() => new Set(
@@ -3194,6 +3232,11 @@ function App() {
     activePluginData.skills,
     DESKTOP_COMMAND_NAMES,
   ), [activeGateway?.models, activePluginData.skills]);
+
+  useEffect(() => {
+    setChangeReview(null);
+    setChangeReviewActive(false);
+  }, [activeSessionKey]);
 
   useEffect(() => {
     if (!activeSession?.busy) return;
@@ -4222,6 +4265,14 @@ function App() {
                     )}
                     onFork={forkSessionFromMessage}
                     forkDisabled={activeSession.busy}
+                    onUndoFileEdits={!activeSession.busy && item.id === latestFileEditSummaryId(activeSession.items)
+                      ? undoLatestFileEdits
+                      : undefined}
+                    onOpenFileEdits={(request) => openFileChanges({
+                      summaryId: item.id,
+                      path: request.path,
+                      showAll: request.all,
+                    })}
                     onCompatibilityRetry={item.kind === "document_job" && item.engine === "precise" && item.status === "failed"
                       ? () => startDocumentAction("translate", {
                           locale: item.locale,
@@ -4423,6 +4474,7 @@ function App() {
               key={`${activeConnection.id}:${activeProject.id}`}
               api={apiRef.current.get(activeConnection.id)!}
               projectName={activeProject.name}
+              projectPath={activeProject.path}
               directories={activeProject.directories}
               drawer={projectFilesDrawerVisible}
               treeOpen={projectFileTreeOpen}
@@ -4430,12 +4482,27 @@ function App() {
               openFiles={projectFileTabs.files}
               selectedFile={selectedProjectFile}
               referencedPaths={referencedProjectFilePaths}
+              changes={{
+                turns: reviewTurns,
+                selection: openChangeReview,
+                active: changeReviewActive,
+                onOpen: openFileChanges,
+                onActivate: () => setChangeReviewActive(true),
+                onClose: () => {
+                  setChangeReview(null);
+                  setChangeReviewActive(false);
+                },
+              }}
               onClose={() => setProjectFilesOpen(false)}
               onToggleTree={() => setProjectFileTreeOpen((value) => !value)}
-              onSelectFile={(file) => setProjectFileTabs((current) => (
-                activateProjectFileTab(current, file, settings.project_files_max_tabs)
-              ))}
-              onCloseFile={(path) => setProjectFileTabs((current) => closeProjectFileTab(current, path))}
+              onSelectFile={(file) => {
+                setChangeReviewActive(false);
+                setProjectFileTabs((current) => activateProjectFileTab(current, file, settings.project_files_max_tabs));
+              }}
+              onCloseFile={(path) => {
+                setProjectFileTabs((current) => closeProjectFileTab(current, path));
+                if (projectFileTabs.files.length === 1 && openChangeReview) setChangeReviewActive(true);
+              }}
               onReference={(file) => setPendingFiles((current) => (
                 current.some((item) => item.mode === "path" && item.path
                   && projectPathKey(item.path) === projectPathKey(file.path))
@@ -6509,7 +6576,7 @@ export function MessageMarkdown({ children }: { children: string }) {
   );
 }
 
-export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, approvalShortcuts = DEFAULT_APPROVAL_SHORTCUTS, onToggleChoice, onSubmitChoice, onPlan, onCompatibilityRetry, onFork, forkDisabled }: {
+export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, approvalShortcuts = DEFAULT_APPROVAL_SHORTCUTS, onToggleChoice, onSubmitChoice, onPlan, onCompatibilityRetry, onFork, forkDisabled, onUndoFileEdits, onOpenFileEdits }: {
   item: ChatItem;
   now: number;
   showTurnDuration: boolean;
@@ -6522,6 +6589,8 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
   onCompatibilityRetry?: () => void;
   onFork?: (item: ChatItem) => void;
   forkDisabled?: boolean;
+  onUndoFileEdits?: () => Promise<void> | void;
+  onOpenFileEdits?: (request: FileEditReviewRequest) => void;
 }) {
   const [collapsed, setCollapsed] = useState(item.collapsed ?? false);
   const durationMs = item.durationMs ?? (item.startedAt ? Math.max(0, now - item.startedAt) : null);
@@ -6530,6 +6599,9 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     if (!showTurnDuration || durationMs === null) return null;
     const label = `已处理：${formatTurnDuration(durationMs, turnDurationFormat)}`;
     return <div className="turn-duration-divider" role="separator" aria-label={label}><span>{label}</span></div>;
+  }
+  if (item.kind === "file_edit_summary") {
+    return <FileEditSummaryCard item={item} onUndo={onUndoFileEdits} onOpenReview={onOpenFileEdits} />;
   }
   if (item.kind === "user") {
     const presented = presentUserMessage(item.text ?? "");

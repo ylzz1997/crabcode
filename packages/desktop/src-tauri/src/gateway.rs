@@ -1667,7 +1667,7 @@ pub async fn installed_gateway_features(
         let Ok(python) = python_for_feature_probe(python_path.as_deref()) else {
             return Ok(Vec::new());
         };
-        probe_installed_gateway_features(&python).or_else(|_| Ok(Vec::new()))
+        probe_installed_gateway_features(&python)
     })
     .await
     .map_err(|error| format!("Gateway feature probe failed: {error}"))?
