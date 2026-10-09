@@ -1280,6 +1280,25 @@ class ErrorPayload(BaseModel):
     request_id: str | None = None
 
 
+class TurnDetails(BaseModel):
+    """Statistics for one input, stored on its final assistant message."""
+
+    session_id: str
+    started_at: str | None = None
+    ended_at: str | None = None
+    duration_ms: int | None = None
+    tool_call_count: int = 0
+    thinking_count: int = 0
+    request_count: int = 0
+    retry_count: int | None = None
+    compact_count: int | None = None
+    model: str = ""
+    provider: str = ""
+    reason: str | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    source: Literal["recorded", "history"] = "recorded"
+
+
 class TurnCompletePayload(BaseModel):
     type: Literal["turn_complete"] = "turn_complete"
     reason: str = "end_turn"
@@ -1291,6 +1310,7 @@ class TurnCompletePayload(BaseModel):
     context_used_percent: float = 0.0
     context_token_source: Literal["server", "calibrated", "estimated"] = "estimated"
     assistant_message_uuid: str | None = None
+    turn_details: TurnDetails | None = None
     prompt_budget: PromptBudget | None = None
 
 
@@ -1321,7 +1341,7 @@ class SteeringAppliedPayload(BaseModel):
 class QueuedMessageStartedPayload(BaseModel):
     type: Literal["queued_message_started"] = "queued_message_started"
     text: str
-    images: list[dict[str, Any]] = Field(default_factory=list)
+    images: list[ImageAttachment] = Field(default_factory=list)
     request_id: str | None = None
 
 
@@ -1497,6 +1517,7 @@ class SessionMessagePayload(BaseModel):
     reply_to_uuid: str | None = None
     api_error: str | None = None
     request_id: str | None = None
+    turn_details: TurnDetails | None = None
 
 
 class SessionHistoryPayload(BaseModel):
@@ -1659,6 +1680,7 @@ def core_event_to_payload(event: Any) -> EventPayload:
             context_remaining_tokens=event.context_remaining_tokens,
             context_used_percent=event.context_used_percent,
             assistant_message_uuid=event.assistant_message_uuid,
+            turn_details=event.turn_details,
             prompt_budget=event.prompt_budget or None,
         )
     if isinstance(event, StreamModeEvent):

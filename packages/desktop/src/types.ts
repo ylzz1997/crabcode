@@ -1,5 +1,6 @@
 import type { UserAttachmentChip } from "./userPromptDisplay";
 import type { LocalVmConfig } from "./virtualMachine";
+import type { TurnDetails } from "./turnDetails";
 
 export interface UsageDay {
   date: string;
@@ -775,6 +776,7 @@ export interface ImageAttachment {
 
 export interface ChatItem {
   id: string;
+  turnDetails?: TurnDetails;
   kind: ChatItemKind;
   text?: string;
   images?: ImageAttachment[];
@@ -906,6 +908,7 @@ export interface GatewayEvent {
   context_token_source?: "server" | "calibrated" | "estimated";
   context_used_percent?: number;
   assistant_message_uuid?: string | null;
+  turn_details?: TurnDetails | null;
   prompt_budget?: PromptBudget | null;
   usage?: Record<string, unknown>;
   error_type?: string;

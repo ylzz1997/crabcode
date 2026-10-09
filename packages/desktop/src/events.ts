@@ -3,6 +3,7 @@ import type { ChatItem, GatewayEvent, ImageAttachment, SessionViewState } from "
 import { presentUserMessage } from "./userPromptDisplay";
 import { randomUuid } from "./uuid";
 import { computerUseDisplayResult } from "./toolPresentation";
+import { withClientTurnDetails, type TurnDetails } from "./turnDetails";
 
 function stringify(value: unknown): string {
   if (typeof value === "string") return value;
@@ -95,9 +96,11 @@ function historyItems(messages: Array<Record<string, unknown>>, cwd: string): Ch
     const messageTiming = messageTimestamp === null
       ? {}
       : { startedAt: messageTimestamp, completedAt: messageTimestamp, durationMs: 0 };
+    const turnDetails = kind === "assistant" && message.turn_details
+      ? { turnDetails: message.turn_details as TurnDetails } : {};
     const content = message.content;
     if (typeof content === "string") {
-      if (content) items.push({ id: baseId, kind, status: "complete", ...messageTiming, ...displayedUserText(kind, content) });
+      if (content) items.push({ id: baseId, kind, status: "complete", ...messageTiming, ...turnDetails, ...displayedUserText(kind, content) });
       continue;
     }
     if (!Array.isArray(content)) continue;
@@ -118,6 +121,7 @@ function historyItems(messages: Array<Record<string, unknown>>, cwd: string): Ch
         images: images.length > 0 ? images : undefined,
         status: "complete",
         ...messageTiming,
+        ...turnDetails,
       });
       text = "";
       images = [];
@@ -404,7 +408,7 @@ export function applyGatewayEvent(
     case "server.heartbeat":
       return { ...state, connected: true, error: null };
     case "session_history": {
-      const messages = historyItems(event.messages ?? [], state.cwd);
+      const messages = withClientTurnDetails(historyItems(event.messages ?? [], state.cwd), state.id);
       return {
         ...state,
         loading: false,
@@ -477,6 +481,7 @@ export function applyGatewayEvent(
             detail: event.tool_input ?? {},
             input: event.tool_input ?? {},
             tool_use_id: event.tool_use_id,
+            agent_id: event.agent_id,
             status: "running",
             collapsed: true,
             startedAt: now,
@@ -754,6 +759,10 @@ export function applyGatewayEvent(
         ? runningAssistantIndex
         : latestAssistantIndex;
       const completedItems = completeRunning(state.items, now).map((item, itemIndex) => {
+        if (event.turn_details && event.reason !== "history_restore"
+          && (durableAssistantId || runningAssistantIndex >= 0) && itemIndex === assistantIndex) {
+          item = { ...item, turnDetails: event.turn_details };
+        }
         if (
           durableAssistantId
           && item.kind === "assistant"
@@ -773,13 +782,13 @@ export function applyGatewayEvent(
         runStartedAt: null,
         currentStep: null,
         lastTurnUsage: event.usage ?? state.lastTurnUsage ?? null,
-        items: closeTurn(
+        items: withClientTurnDetails(closeTurn(
           completedItems,
           state.runStartedAt,
           now,
           event.operation_id ?? state.operationId,
           state.cwd,
-        ),
+        ), state.id),
         status: state.status && event.context_used_tokens !== undefined
           ? {
               ...state.status,

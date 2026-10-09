@@ -120,6 +120,7 @@ class AssistantMessage(Message):
     api_error: str | None = None
     usage: dict[str, Any] | None = None
     request_id: str | None = None
+    turn_details: dict[str, Any] | None = None
 
 
 class SystemMessage(Message):

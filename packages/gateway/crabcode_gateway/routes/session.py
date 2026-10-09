@@ -28,6 +28,7 @@ from crabcode_gateway.schemas import (
     SearchIndexStatus,
 )
 from crabcode_gateway.event_bus import EventBus
+from crabcode_gateway.turn_details import with_turn_details
 from crabcode_gateway.session_registry import get_session_load_lock, get_session_lock
 from crabcode_gateway.task_registry import (
     cancel_operation_task,
@@ -623,7 +624,7 @@ async def session_messages(
         if hasattr(role, "value"):
             payload["role"] = role.value
         result.append(payload)
-    return result
+    return with_turn_details(result, session.session_id)
 
 
 @router.post("/fork", response_model=SessionInfo)

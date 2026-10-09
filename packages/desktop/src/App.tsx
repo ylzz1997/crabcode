@@ -82,6 +82,8 @@ import remarkMath from "remark-math";
 import DocumentWorkspace from "./DocumentWorkspace";
 import { ComposerEditor, composerModifierLabel, createComposerCommandOptions, type ComposerReferenceOption } from "./ComposerEditor";
 import { CopyButton } from "./CopyButton";
+import { TurnDetailsButton } from "./TurnDetailsButton";
+import { withClientTurnDetails } from "./turnDetails";
 import { applyGatewayEvent } from "./events";
 import { FollowUpQueue } from "./FollowUpQueue";
 import type { QueuedMessageAction } from "./types";
@@ -4248,7 +4250,7 @@ function App() {
                     <h2>在 {activeProject?.name ?? "项目"} 中构建什么？</h2>
                   </div>
                 )}
-                {activeSession.items.map((item) => (
+                {withClientTurnDetails(activeSession.items, activeSession.id, activeSession.busy).map((item) => (
                   <ChatItemView
                     key={item.id}
                     item={item}
@@ -6642,8 +6644,9 @@ export function ChatItemView({ item, now, showTurnDuration, showFileEditSummary 
       <article className="message assistant-message">
         <MessageMarkdown>{item.text ?? ""}</MessageMarkdown>
         <InlineImages images={item.images} />
-        {item.text && <div className="message-actions">
-          <CopyButton text={item.text} label="复制回复" />
+        {(item.text || item.turnDetails) && <div className="message-actions">
+          {item.turnDetails && <TurnDetailsButton details={item.turnDetails} />}
+          {item.text && <CopyButton text={item.text} label="复制回复" />}
           {item.status === "complete" && onFork && (
             <button
               className="copy-button fork-button"

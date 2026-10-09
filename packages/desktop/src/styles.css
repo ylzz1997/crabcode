@@ -692,9 +692,15 @@ svg {
 
 .message-actions {
   display: flex;
+  gap: 2px;
   justify-content: flex-end;
   margin-top: 8px;
 }
+
+.turn-details-dialog .modal-body { max-height: min(680px, calc(100vh - 140px)); overflow-y: auto; }
+.turn-details-dialog { outline: none; }
+.turn-details-dialog .session-detail-copy-value code { overflow: visible; overflow-wrap: anywhere; white-space: normal; }
+.turn-details-note { margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 
 .message-actions .copy-button {
   position: static;

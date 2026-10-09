@@ -3140,6 +3140,9 @@ class CoreSession:
             images: Optional list of image attachments. Each dict should have
                     ``media_type`` (e.g. "image/png") and ``data`` (base64-encoded).
         """
+        from crabcode_core.turn_details import TurnDetailsTracker
+
+        turn_details = TurnDetailsTracker()
         await self.initialize()
         if self._closed or self._closing:
             raise RuntimeError("CoreSession is closed")
@@ -3386,6 +3389,7 @@ class CoreSession:
         )
         query_storage = self._session_storage
         query_session_id = self.session_id
+        initial_message_ids = {message.uuid for message in params.messages}
         projection_committed = False
 
         if self._closed or self._closing:
@@ -3396,6 +3400,7 @@ class CoreSession:
         async def _produce_main_events() -> None:
             try:
                 async for event in query_loop(params):
+                    turn_details.observe(event)
                     await merged_events.put(event)
             except asyncio.CancelledError:
                 await merged_events.put(TurnCompleteEvent(reason="interrupted"))
@@ -3468,6 +3473,20 @@ class CoreSession:
                     event.source_messages = None
                     event.checkpoint_messages = None
                 if isinstance(event, TurnCompleteEvent):
+                    event.turn_details = turn_details.finish(
+                        event, session_id=query_session_id,
+                        model=active_api_cfg.model, provider=active_api_cfg.provider or "",
+                    )
+                    assistant = next((
+                        message for message in reversed(params.messages)
+                        if message.uuid not in initial_message_ids
+                        and getattr(message.role, "value", message.role) == "assistant"
+                    ), None)
+                    if assistant is not None:
+                        assistant.turn_details = event.turn_details
+                        event.assistant_message_uuid = assistant.uuid
+                    else:
+                        event.assistant_message_uuid = None
                     if event.prompt_budget:
                         self.last_prompt_budget = dict(event.prompt_budget)
                     projection_committed = self._commit_query_projection(

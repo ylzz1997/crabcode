@@ -140,6 +140,7 @@ def _message_to_entry(message: Message) -> dict[str, Any]:
         "api_error",
         "usage",
         "request_id",
+        "turn_details",
     ):
         value = getattr(message, field, None)
         if value is not None:

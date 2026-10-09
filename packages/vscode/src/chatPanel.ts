@@ -53,6 +53,7 @@ import type {
   SessionMessagePayload,
   SessionHistoryPayload,
   SessionInfo,
+  TurnDetails,
   SessionRuntimeStatus,
   SnapshotPayload,
   StreamRetryPayload,
@@ -239,6 +240,7 @@ export interface ChatMessage {
   role: ChatMessageRole;
   text: string;
   timestamp: number;
+  timestampRecorded?: boolean;
   images?: ImageAttachment[];
   attachments?: UserAttachmentChip[];
   parentId?: string | null;
@@ -246,11 +248,13 @@ export interface ChatMessage {
   usage?: Record<string, unknown> | null;
   /** Durable assistant UUID used by message-level session forks. */
   messageUuid?: string | null;
+  turnDetails?: TurnDetails | null;
   copyLabel?: string | null;
 }
 
 export interface ToolCard {
   id: string;          // tool_use_id
+  agentId?: string | null;
   toolName: string;
   input: Record<string, unknown>;
   result: string | null;
@@ -3824,15 +3828,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (!this.terminalBelongsToState(payload, state)) break;
         this.finalizeThinkingOnState(state, updateWebview);
         const assistantMessageUuid = (payload as TurnCompletePayload).assistant_message_uuid;
-        if (assistantMessageUuid) {
+        this.restoreClientTurnDetails(state, payload.session_id ?? this.displayedSessionId ?? "");
+        const turnDetails = (payload as TurnCompletePayload).turn_details
+          ?? [...state.messages].reverse().find((message) => message.role === "assistant")?.turnDetails;
+        if (assistantMessageUuid || turnDetails) {
           const latestAssistant = [...state.messages].reverse().find((message) => message.role === "assistant");
-          if (latestAssistant) {
-            latestAssistant.messageUuid = assistantMessageUuid;
+          const lastUserIndex = state.messages.reduce((index, message, i) => message.role === "user" ? i : index, -1);
+          if (latestAssistant && (assistantMessageUuid || state.messages.indexOf(latestAssistant) > lastUserIndex)) {
+            if (assistantMessageUuid) latestAssistant.messageUuid = assistantMessageUuid;
+            if (turnDetails) latestAssistant.turnDetails = turnDetails;
             if (updateWebview) {
               this.postMessage({
                 type: "messageForkable",
                 id: latestAssistant.id,
                 messageUuid: assistantMessageUuid,
+                turnDetails,
               });
             }
           }
@@ -3929,12 +3939,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           role,
           text: presented.text,
           timestamp,
+          timestampRecorded: typeof msg.timestamp === "string" && Number.isFinite(Date.parse(msg.timestamp)),
           images: pendingImages.length > 0 ? pendingImages : undefined,
           ...(presented.attachments.length ? { attachments: presented.attachments } : {}),
           parentId,
           origin,
           usage,
           messageUuid: role === "assistant" ? baseId : null,
+          turnDetails: role === "assistant" ? msg.turn_details : null,
         };
         state.messages.push(chatMsg);
         state.history.push({ kind: "message", message: chatMsg });
@@ -4036,6 +4048,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       flushText();
     }
 
+    this.restoreClientTurnDetails(state, sessionId, this.busySessions.has(sessionId));
     state.isBusy = this.busySessions.has(sessionId);
     if (updateWebview) {
       this.postMessage({ type: "history", items: state.history });
@@ -4049,6 +4062,38 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private handleThinking(chunk: string): void {
     this.handleThinkingOnState(this.currentState, chunk, true);
+  }
+
+  private restoreClientTurnDetails(state: SessionState, sessionId: string, busy = false): void {
+    let round: HistoryItem[] = [];
+    const finish = () => {
+      const messages = round.flatMap((item) => item.kind === "message" ? [item.message] : []);
+      const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+      if (!assistant || assistant.turnDetails) return;
+      const lastUser = messages.reduce((index, message, i) => message.role === "user" ? i : index, -1);
+      if (lastUser > messages.indexOf(assistant)) return;
+      const user = messages.find((message) => message.role === "user");
+      const startedAt = user?.timestampRecorded !== false ? user?.timestamp : undefined;
+      const endedAt = assistant.timestampRecorded !== false ? assistant.timestamp : undefined;
+      const tools = round.flatMap((item) => item.kind === "tool" && !item.card.agentId ? [item.card.id] : []);
+      assistant.turnDetails = {
+        session_id: sessionId, source: "history",
+        started_at: startedAt == null ? null : new Date(startedAt).toISOString(),
+        ended_at: endedAt == null ? null : new Date(endedAt).toISOString(),
+        duration_ms: startedAt == null || endedAt == null ? null : Math.max(0, endedAt - startedAt),
+        tool_call_count: new Set(tools).size,
+        thinking_count: round.filter((item) => item.kind === "thinking").length,
+      };
+    };
+    for (const item of state.history) {
+      if (item.kind === "message" && item.message.role === "user"
+        && item.message.origin !== "user-steering" && item.message.followUpMode !== "steer") {
+        finish();
+        round = [];
+      }
+      round.push(item);
+    }
+    if (!busy) finish();
   }
 
   private handleThinkingOnState(state: SessionState, chunk: string, updateWebview: boolean): void {
@@ -4213,6 +4258,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private handleToolUseOnState(state: SessionState, payload: ToolUsePayload, updateWebview: boolean): void {
     const card: ToolCard = {
       id: payload.tool_use_id,
+      agentId: payload.agent_id,
       toolName: payload.tool_name,
       input: payload.tool_input,
       result: null,
@@ -4963,6 +5009,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       position: static;
     }
     .fork-button { margin-left: 2px; }
+    .turn-details-button { margin-right: 2px; }
+    .turn-details-overlay {
+      position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center;
+      padding: 16px; background: rgba(0, 0, 0, .55);
+    }
+    .turn-details-dialog {
+      width: min(460px, 100%); max-height: calc(100vh - 32px); overflow: auto;
+      padding: 18px; border: 1px solid var(--vscode-widget-border, #454545); border-radius: 10px;
+      background: var(--vscode-editor-background, #1e1e1e); color: var(--vscode-editor-foreground, #d4d4d4); outline: none;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, .4);
+    }
+    .turn-details-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .turn-details-dialog h2 { margin: 0; font-size: 15px; }
+    .turn-details-close { background: transparent; color: inherit; border: 0; cursor: pointer; font-size: 20px; }
+    .turn-details-dialog dl { margin: 14px 0; }
+    .turn-details-dialog dl > div { display: grid; grid-template-columns: 106px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--vscode-widget-border, #454545); font-size: 12px; }
+    .turn-details-dialog dt, .turn-details-dialog p { color: var(--text-muted); }
+    .turn-details-dialog dd { margin: 0; overflow-wrap: anywhere; }
+    .turn-details-dialog .copy-button { position: static; opacity: .82; pointer-events: auto; margin-left: 6px; vertical-align: middle; }
+    .turn-details-dialog p { font-size: 11px; line-height: 1.6; }
     .tool-copy-button { position: absolute; right: 8px; bottom: 8px; }
     .tool-card-section.copyable-content { padding-bottom: 30px; }
     .tool-result-shell { min-height: 28px; }
@@ -7962,9 +8028,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     imagePreviewClose.addEventListener('click', closeImagePreview);
 
     let copyRequestCounter = 0;
-    msgContainer.addEventListener('click', (event) => {
+    document.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      const detailsButton = target.closest('[data-turn-details]');
+      if (detailsButton instanceof HTMLElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        try { openTurnDetails(JSON.parse(detailsButton.getAttribute('data-turn-details')), detailsButton); } catch (_) { /* Invalid legacy metadata. */ }
+        return;
+      }
       const forkButton = target.closest('[data-fork-message-uuid]');
       if (forkButton instanceof HTMLElement) {
         event.preventDefault();
@@ -8024,6 +8097,72 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function forkButtonHtml(messageUuid) {
       if (!messageUuid) return '';
       return '<button type="button" class="copy-button fork-button" data-fork-message-uuid="' + escapeAttr(messageUuid) + '" title="从此处分叉" aria-label="从此处分叉"' + (isBusy ? ' disabled' : '') + '>' + forkIconSvg() + '</button>';
+    }
+
+    function turnDetailsButtonHtml(details) {
+      if (!details) return '';
+      return '<button type="button" class="copy-button turn-details-button" data-turn-details="' + escapeAttr(JSON.stringify(details)) + '" title="本轮详情" aria-label="本轮详情" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6M12 17h.01"></path></svg></button>';
+    }
+
+    let turnDetailsOverlay = null;
+    let turnDetailsReturnFocus = null;
+    let turnDetailsPreviousOverflow = '';
+
+    function closeTurnDetails() {
+      if (!turnDetailsOverlay) return;
+      turnDetailsOverlay.remove();
+      turnDetailsOverlay = null;
+      document.body.style.overflow = turnDetailsPreviousOverflow;
+      document.removeEventListener('keydown', turnDetailsKeydown, true);
+      if (turnDetailsReturnFocus && turnDetailsReturnFocus.isConnected) turnDetailsReturnFocus.focus();
+      turnDetailsReturnFocus = null;
+    }
+
+    function turnDetailsKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation(); closeTurnDetails();
+      } else if (event.key === 'Tab' && turnDetailsOverlay) {
+        const dialog = turnDetailsOverlay.querySelector('[role="dialog"]');
+        const buttons = dialog.querySelectorAll('button:not(:disabled)');
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog)) {
+          event.preventDefault(); first.focus();
+        }
+      }
+    }
+
+    function openTurnDetails(details, trigger) {
+      closeTurnDetails();
+      const count = value => value == null ? '未记录' : Number(value).toLocaleString('zh-CN') + ' 次';
+      const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '未记录';
+      const tokens = value => typeof value === 'number' ? value.toLocaleString('zh-CN') : '未记录';
+      const reasons = { end_turn: '正常结束', stop: '正常结束', interrupted: '已中断', max_turns_reached: '达到轮数上限', empty_response: '空回复', mode_switch_requested: '切换模式' };
+      const usage = details.usage || {};
+      const rows = [
+        ['启动时间', time(details.started_at)], ['结束时间', time(details.ended_at)],
+        ['耗时', details.duration_ms == null ? '未记录' : (details.duration_ms / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + ' 秒'],
+        ['工具调用次数', count(details.tool_call_count)], ['思考次数', count(details.thinking_count)],
+        ['模型请求次数', count(details.request_count)], ['重试次数', count(details.retry_count)], ['压缩次数', count(details.compact_count)],
+        ['模型', [details.provider, details.model].filter(Boolean).join(' / ') || '未记录'],
+        ['结束原因', details.reason ? reasons[details.reason] || details.reason : '未记录'],
+        ['输入 tokens', tokens(usage.total_input_tokens ?? usage.input_tokens)], ['输出 tokens', tokens(usage.output_tokens)],
+        ['缓存读取 tokens', tokens(usage.cache_read_tokens)], ['缓存写入 tokens', tokens(usage.cache_write_tokens)],
+      ];
+      const overlay = document.createElement('div');
+      overlay.className = 'turn-details-overlay';
+      overlay.innerHTML = '<section class="turn-details-dialog" role="dialog" aria-modal="true" aria-label="本轮详情" tabindex="-1"><header><h2>本轮详情</h2><button class="turn-details-close" type="button" aria-label="关闭本轮详情">×</button></header><dl><div><dt>Session ID</dt><dd><code>' + escapeHtml(details.session_id || '') + '</code>' + copyButtonHtml(details.session_id, '复制 Session ID') + '</dd></div>' + rows.map(row => '<div><dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd></div>').join('') + '</dl><p>次数统计本轮主会话；连续思考内容计为一次。' + (details.source === 'history' ? '此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。' : '') + '</p></section>';
+      turnDetailsOverlay = overlay;
+      turnDetailsReturnFocus = trigger;
+      turnDetailsPreviousOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      document.body.appendChild(overlay);
+      overlay.querySelector('.turn-details-close').addEventListener('click', closeTurnDetails);
+      overlay.addEventListener('mousedown', event => { if (event.target === overlay) closeTurnDetails(); });
+      document.addEventListener('keydown', turnDetailsKeydown, true);
+      overlay.querySelector('[role="dialog"]').focus();
     }
 
     function updateForkButtonsDisabled() {
@@ -8150,7 +8289,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function addMessageEl(msg) {
       const shouldStick = captureScrollAnchor();
       const div = document.createElement('div');
-      const copyable = msg.copyLabel || (msg.role === 'assistant' && msg.text);
+      const copyable = msg.copyLabel || (msg.role === 'assistant' && (msg.text || msg.turnDetails));
       div.className = 'msg ' + msg.role + (copyable ? ' copyable-inline' : '');
       div.id = 'msg-' + msg.id;
       let html;
@@ -8174,7 +8313,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
       }
       if (copyable) {
-        html += '<div class="message-actions">' + copyButtonHtml(msg.text || '', msg.copyLabel || '复制回复') + (msg.role === 'assistant' ? forkButtonHtml(msg.messageUuid) : '') + '</div>';
+        html += '<div class="message-actions">' + (msg.role === 'assistant' ? turnDetailsButtonHtml(msg.turnDetails) : '') + copyButtonHtml(msg.text || '', msg.copyLabel || '复制回复') + (msg.role === 'assistant' ? forkButtonHtml(msg.messageUuid) : '') + '</div>';
       }
       div.innerHTML = html;
       if (msg.role === 'user') {
@@ -11457,14 +11596,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'messageForkable': {
           const messageEl = document.getElementById('msg-' + msg.id);
-          if (messageEl && msg.messageUuid) {
+          if (messageEl && (msg.messageUuid || msg.turnDetails)) {
             let actions = messageEl.querySelector('.message-actions');
             if (!actions) {
               actions = document.createElement('div');
               actions.className = 'message-actions';
               messageEl.appendChild(actions);
             }
-            if (!actions.querySelector('[data-fork-message-uuid]')) {
+            if (msg.turnDetails && !actions.querySelector('[data-turn-details]')) {
+              actions.insertAdjacentHTML('afterbegin', turnDetailsButtonHtml(msg.turnDetails));
+            }
+            if (msg.messageUuid && !actions.querySelector('[data-fork-message-uuid]')) {
               actions.insertAdjacentHTML('beforeend', forkButtonHtml(msg.messageUuid));
             }
           }
@@ -11488,6 +11630,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'history':
+          closeTurnDetails();
           msgContainer.innerHTML = '';
           toolCards.clear();
           toolCardTurns.clear();

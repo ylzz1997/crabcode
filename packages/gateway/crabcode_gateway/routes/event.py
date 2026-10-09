@@ -26,6 +26,7 @@ from crabcode_core.subprocess_utils import (
     terminate_process_tree,
 )
 from crabcode_gateway.event_bus import EventBus
+from crabcode_gateway.turn_details import with_turn_details
 from crabcode_gateway.schemas import (
     ChoiceResponsePayload,
     ImageAttachment,
@@ -3708,6 +3709,7 @@ async def _send_session_history(ws: WebSocket, session: Any) -> None:
                         "reply_to_uuid",
                         "api_error",
                         "request_id",
+                        "turn_details",
                     )
                     if hasattr(msg, key)
                 }
@@ -3771,6 +3773,10 @@ async def _send_session_history(ws: WebSocket, session: Any) -> None:
         except (TypeError, ValueError):
             logger.warning("Skipping malformed session history message")
 
+    history_items = [SessionMessagePayload.model_validate(item) for item in with_turn_details(
+        [item.model_dump(mode="json") for item in history_items],
+        getattr(session, "session_id", ""),
+    )]
     await ws.send_text(
         SessionHistoryPayload(
             session_id=getattr(session, "session_id", ""),

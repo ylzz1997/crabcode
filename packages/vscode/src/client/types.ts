@@ -147,6 +147,24 @@ export interface UserAppendPromptView {
   enabled?: boolean;
 }
 
+/** Statistics for one input, stored on its final assistant message. */
+export interface TurnDetails {
+  session_id: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  tool_call_count?: number;
+  thinking_count?: number;
+  request_count?: number;
+  retry_count?: number | null;
+  compact_count?: number | null;
+  model?: string;
+  provider?: string;
+  reason?: string | null;
+  usage?: Record<string, unknown>;
+  source?: "recorded" | "history";
+}
+
 /** Complete persisted message shape used when replaying a session. */
 export interface SessionMessagePayload {
   uuid: string;
@@ -162,6 +180,7 @@ export interface SessionMessagePayload {
   reply_to_uuid?: string | null;
   api_error?: string | null;
   request_id?: string | null;
+  turn_details?: TurnDetails | null;
 }
 
 
@@ -1009,7 +1028,6 @@ export interface CompactPayload {
 }
 
 export interface ErrorPayload {
-  request_id?: string | null;
   session_id?: string;
   operation_id?: string;
   operation_scope?: "foreground" | "plan" | "background";
@@ -1020,6 +1038,7 @@ export interface ErrorPayload {
   agent_id?: string | null;
   command?: string | null;
   command_error?: boolean;
+  request_id?: string | null;
 }
 
 export interface TurnCompletePayload {
@@ -1036,6 +1055,7 @@ export interface TurnCompletePayload {
   context_used_percent?: number;
   context_token_source?: "server" | "calibrated" | "estimated";
   assistant_message_uuid?: string | null;
+  turn_details?: TurnDetails | null;
   prompt_budget?: PromptBudget | null;
 }
 
@@ -1073,22 +1093,22 @@ export interface SteeringAppliedPayload {
 }
 
 export interface QueuedMessageStartedPayload {
-  type: "queued_message_started";
   session_id?: string;
   operation_id?: string;
   operation_scope?: "foreground" | "plan" | "background";
-  request_id?: string | null;
   text: string;
+  type: "queued_message_started";
   images?: ImageAttachment[];
+  request_id?: string | null;
 }
 
 export interface QueuedMessageUpdatedPayload {
-  type: "queued_message_updated";
   session_id?: string;
   operation_id?: string;
   operation_scope?: "foreground" | "plan" | "background";
   request_id: string;
-  action: "steer" | "remove" | "edit";
+  action: "remove" | "edit" | "steer";
+  type: "queued_message_updated";
 }
 
 export interface DocumentJobPayload {
