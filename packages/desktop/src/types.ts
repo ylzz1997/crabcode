@@ -121,6 +121,7 @@ export interface DesktopSettings {
   diff_marker_style: DiffMarkerStyle;
   font_smoothing: boolean;
   show_turn_duration: boolean;
+  show_file_edit_summary: boolean;
   turn_duration_format: TurnDurationFormat;
   session_notify_on_start: boolean;
   session_notify_on_complete: boolean;

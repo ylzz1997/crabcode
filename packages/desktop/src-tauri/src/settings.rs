@@ -103,6 +103,7 @@ fn default_settings() -> Value {
         "diff_marker_style": "color",
         "font_smoothing": true,
         "show_turn_duration": true,
+        "show_file_edit_summary": true,
         "turn_duration_format": "hms",
         "session_notify_on_start": false,
         "session_notify_on_complete": true,

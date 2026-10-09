@@ -4254,6 +4254,7 @@ function App() {
                     item={item}
                     now={runClock}
                     showTurnDuration={settings.show_turn_duration}
+                    showFileEditSummary={settings.show_file_edit_summary}
                     turnDurationFormat={settings.turn_duration_format}
                     onPermission={resolvePermission}
                     approvalShortcuts={settings.approval_shortcuts}
@@ -6576,10 +6577,11 @@ export function MessageMarkdown({ children }: { children: string }) {
   );
 }
 
-export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, onPermission, approvalShortcuts = DEFAULT_APPROVAL_SHORTCUTS, onToggleChoice, onSubmitChoice, onPlan, onCompatibilityRetry, onFork, forkDisabled, onUndoFileEdits, onOpenFileEdits }: {
+export function ChatItemView({ item, now, showTurnDuration, showFileEditSummary = true, turnDurationFormat, onPermission, approvalShortcuts = DEFAULT_APPROVAL_SHORTCUTS, onToggleChoice, onSubmitChoice, onPlan, onCompatibilityRetry, onFork, forkDisabled, onUndoFileEdits, onOpenFileEdits }: {
   item: ChatItem;
   now: number;
   showTurnDuration: boolean;
+  showFileEditSummary?: boolean;
   turnDurationFormat: TurnDurationFormat;
   onPermission: (item: ChatItem, allowed: boolean, always?: boolean) => void;
   approvalShortcuts?: ApprovalShortcutPreferences;
@@ -6601,6 +6603,7 @@ export function ChatItemView({ item, now, showTurnDuration, turnDurationFormat, 
     return <div className="turn-duration-divider" role="separator" aria-label={label}><span>{label}</span></div>;
   }
   if (item.kind === "file_edit_summary") {
+    if (!showFileEditSummary) return null;
     return <FileEditSummaryCard item={item} onUndo={onUndoFileEdits} onOpenReview={onOpenFileEdits} />;
   }
   if (item.kind === "user") {
