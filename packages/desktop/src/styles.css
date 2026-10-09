@@ -6294,6 +6294,7 @@ body {
 .document-toolbar {
   min-height: 58px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 8px 12px 8px 16px;
@@ -6333,7 +6334,29 @@ body {
 }
 
 .document-view-tabs {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+}
+
+.document-change-count {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-active);
+  font-size: 10px;
+}
+
+.document-file-workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.document-pdf-scroll[hidden],
+.document-blog-shell[hidden],
+.document-file-workspace[hidden] {
+  display: none;
 }
 
 .document-view-tabs svg {
@@ -15190,6 +15213,15 @@ html[data-theme-visuals="true"] :is(.composer-box, .welcome-composer)::after {
 
 .project-files-workspace.tree-collapsed {
   grid-template-columns: minmax(0, 1fr) 0;
+}
+
+.document-file-workspace>.project-files-workspace.embedded {
+  flex: 1;
+  grid-column: auto;
+  grid-row: auto;
+  border: 0;
+  box-shadow: none;
+  animation: none;
 }
 
 .project-file-tabs-bar {

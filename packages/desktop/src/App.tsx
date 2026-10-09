@@ -3191,15 +3191,34 @@ function App() {
   const projectFilesEligible = workspaceView === "chat"
     && Boolean(activeProject)
     && Boolean(activeConnection && apiRef.current.get(activeConnection.id))
-    && ((activeProject?.kind === "project" && activeGateway?.status === "online") || Boolean(openChangeReview));
+    && (((activeProject?.kind === "project" || documentMode) && activeGateway?.status === "online") || Boolean(openChangeReview));
   const projectFilesWideLayout = projectFilesEligible && wideProjectFilesLayout && !documentMode;
   const projectFilesWideOpen = projectFilesEligible
     && projectFilesWideLayout
     && projectFilesOpen;
   const projectFilesDrawerVisible = projectFilesEligible
+    && !documentMode
     && !projectFilesWideLayout
     && projectFilesOpen;
   const projectFilesVisible = projectFilesWideOpen || projectFilesDrawerVisible;
+  const documentFilesView = documentMode && projectFilesOpen
+    ? changeReviewActive ? "changes" : "files"
+    : null;
+  const changeDocumentFilesView = (view: "files" | "changes" | null) => {
+    if (view === "changes") {
+      openFileChanges(openChangeReview ?? {
+        summaryId: reviewTurns[reviewTurns.length - 1]?.id ?? ALL_EDITS,
+        path: null,
+        showAll: true,
+      });
+      return;
+    }
+    setProjectFilesOpen(view === "files");
+    if (view === "files") {
+      setChangeReviewActive(false);
+      setProjectFileTreeOpen(true);
+    }
+  };
   const referencedProjectFilePaths = useMemo(() => new Set(
     pendingFiles.flatMap((file) => file.mode === "path" && file.path ? [file.path] : []),
   ), [pendingFiles]);
@@ -3450,6 +3469,62 @@ function App() {
   const activePromptSettingsState = promptSettingsState?.key === activePromptSettingsKey
     ? promptSettingsState
     : null;
+
+  const filesWorkspace = projectFilesEligible && (projectFilesVisible || documentFilesView)
+    && activeConnection && activeProject && apiRef.current.get(activeConnection.id) ? (
+    <ProjectFilesWorkspace
+      key={`${activeConnection.id}:${activeProject.id}`}
+      api={apiRef.current.get(activeConnection.id)!}
+      projectName={activeProject.name}
+      projectPath={activeProject.path}
+      directories={activeProject.directories}
+      drawer={projectFilesDrawerVisible}
+      embedded={documentMode}
+      treeOpen={projectFileTreeOpen}
+      width={projectFilesWidth}
+      openFiles={projectFileTabs.files}
+      selectedFile={selectedProjectFile}
+      referencedPaths={referencedProjectFilePaths}
+      changes={{
+        turns: reviewTurns,
+        selection: openChangeReview,
+        active: changeReviewActive,
+        onOpen: openFileChanges,
+        onActivate: () => setChangeReviewActive(true),
+        onClose: () => {
+          setChangeReview(null);
+          setChangeReviewActive(false);
+          if (documentMode) setProjectFileTreeOpen(true);
+        },
+      }}
+      onClose={() => setProjectFilesOpen(false)}
+      onToggleTree={() => setProjectFileTreeOpen((value) => !value)}
+      onSelectFile={(file) => {
+        setChangeReviewActive(false);
+        setProjectFileTabs((current) => activateProjectFileTab(current, file, settings.project_files_max_tabs));
+      }}
+      onCloseFile={(path) => {
+        setProjectFileTabs((current) => closeProjectFileTab(current, path));
+        if (projectFileTabs.files.length === 1 && openChangeReview) setChangeReviewActive(true);
+      }}
+      onReference={(file) => setPendingFiles((current) => (
+        current.some((item) => item.mode === "path" && item.path
+          && projectPathKey(item.path) === projectPathKey(file.path))
+          ? current
+          : [...current, {
+            id: randomUuid(),
+            name: file.name,
+            mediaType: "",
+            mode: "path",
+            path: file.path,
+            size: file.size,
+            text: "",
+          }]
+      ))}
+      onWidthChange={setProjectFilesWidth}
+      onWidthCommit={(width) => commitSettings((current) => ({ ...current, project_files_width: width }))}
+    />
+  ) : null;
 
   return (
     <div className="app-shell">
@@ -4061,6 +4136,12 @@ function App() {
                   return null;
                 }
               }}
+              filesWorkspace={projectFilesEligible ? {
+                activeView: documentFilesView,
+                changeCount: new Set(reviewTurns.flatMap((turn) => turn.summary.files.map((file) => file.path))).size,
+                content: filesWorkspace,
+                onViewChange: changeDocumentFilesView,
+              } : undefined}
             />
           )}
           {workspaceView === "scheduled" ? (
@@ -4219,7 +4300,7 @@ function App() {
                       <PanelRightClose />
                     </button>
                   )}
-                  {projectFilesEligible && (
+                  {projectFilesEligible && !documentMode && (
                     <button
                       className={`icon-button ${projectFilesVisible ? "active" : ""}`}
                       type="button"
@@ -4456,7 +4537,7 @@ function App() {
               </div>
             </>
           )}
-          {projectFilesEligible && !activeSession && !projectFilesVisible && (
+          {projectFilesEligible && !documentMode && !activeSession && !projectFilesVisible && (
             <button
               className="project-files-floating-toggle"
               type="button"
@@ -4472,58 +4553,7 @@ function App() {
               onClick={() => setProjectFilesOpen(false)}
             />
           )}
-          {projectFilesVisible && activeConnection && activeProject && apiRef.current.get(activeConnection.id) && (
-            <ProjectFilesWorkspace
-              key={`${activeConnection.id}:${activeProject.id}`}
-              api={apiRef.current.get(activeConnection.id)!}
-              projectName={activeProject.name}
-              projectPath={activeProject.path}
-              directories={activeProject.directories}
-              drawer={projectFilesDrawerVisible}
-              treeOpen={projectFileTreeOpen}
-              width={projectFilesWidth}
-              openFiles={projectFileTabs.files}
-              selectedFile={selectedProjectFile}
-              referencedPaths={referencedProjectFilePaths}
-              changes={{
-                turns: reviewTurns,
-                selection: openChangeReview,
-                active: changeReviewActive,
-                onOpen: openFileChanges,
-                onActivate: () => setChangeReviewActive(true),
-                onClose: () => {
-                  setChangeReview(null);
-                  setChangeReviewActive(false);
-                },
-              }}
-              onClose={() => setProjectFilesOpen(false)}
-              onToggleTree={() => setProjectFileTreeOpen((value) => !value)}
-              onSelectFile={(file) => {
-                setChangeReviewActive(false);
-                setProjectFileTabs((current) => activateProjectFileTab(current, file, settings.project_files_max_tabs));
-              }}
-              onCloseFile={(path) => {
-                setProjectFileTabs((current) => closeProjectFileTab(current, path));
-                if (projectFileTabs.files.length === 1 && openChangeReview) setChangeReviewActive(true);
-              }}
-              onReference={(file) => setPendingFiles((current) => (
-                current.some((item) => item.mode === "path" && item.path
-                  && projectPathKey(item.path) === projectPathKey(file.path))
-                  ? current
-                  : [...current, {
-                    id: randomUuid(),
-                    name: file.name,
-                    mediaType: "",
-                    mode: "path",
-                    path: file.path,
-                    size: file.size,
-                    text: "",
-                  }]
-              ))}
-              onWidthChange={setProjectFilesWidth}
-              onWidthCommit={(width) => commitSettings((current) => ({ ...current, project_files_width: width }))}
-            />
-          )}
+          {!documentMode && filesWorkspace}
         </main>
       </div>
       </>

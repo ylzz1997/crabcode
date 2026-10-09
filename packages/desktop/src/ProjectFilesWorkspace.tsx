@@ -279,6 +279,7 @@ export function ProjectFilesWorkspace({
   projectPath,
   directories,
   drawer = false,
+  embedded = false,
   treeOpen,
   width,
   openFiles,
@@ -298,6 +299,7 @@ export function ProjectFilesWorkspace({
   projectPath?: string;
   directories: string[];
   drawer?: boolean;
+  embedded?: boolean;
   treeOpen: boolean;
   width: number;
   openFiles: WorkspaceFileEntry[];
@@ -572,11 +574,11 @@ export function ProjectFilesWorkspace({
     <>
     <aside
       ref={workspaceRef}
-      className={`project-files-workspace ${reviewActive ? "review-active" : selectedFile ? "has-file" : "empty-preview"} ${treeOpen ? "tree-open" : "tree-collapsed"} ${drawer ? "drawer" : ""}`}
+      className={`project-files-workspace ${reviewActive ? "review-active" : selectedFile ? "has-file" : "empty-preview"} ${treeOpen ? "tree-open" : "tree-collapsed"} ${drawer ? "drawer" : ""} ${embedded ? "embedded" : ""}`}
       style={{ "--project-files-width": `${width}px` } as CSSProperties}
       aria-label={`${projectName} 文件工作区`}
     >
-      {!drawer && <div className="project-files-resizer" role="separator" aria-orientation="vertical" onPointerDown={startResize} />}
+      {!drawer && !embedded && <div className="project-files-resizer" role="separator" aria-orientation="vertical" onPointerDown={startResize} />}
       <div className="project-file-tabs-bar">
         <div className="project-file-tabs" role="tablist" aria-label="打开的文件">
           {changes?.selection && (

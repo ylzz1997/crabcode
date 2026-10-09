@@ -6,6 +6,8 @@ import {
   Copy,
   Eye,
   FileText,
+  Folder,
+  GitCompareArrows,
   Highlighter,
   Languages,
   LoaderCircle,
@@ -31,6 +33,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -299,6 +302,12 @@ interface DocumentWorkspaceProps {
   ) => boolean;
   onDocumentReference: (reference: DocumentReference) => void;
   onTranslateSelection: (text: string, locale: string) => string | null;
+  filesWorkspace?: {
+    activeView: "files" | "changes" | null;
+    changeCount: number;
+    content: ReactNode;
+    onViewChange: (view: "files" | "changes" | null) => void;
+  };
 }
 
 const TARGET_LANGUAGES = [
@@ -1439,7 +1448,9 @@ export default function DocumentWorkspace({
   onDocumentAction,
   onDocumentReference,
   onTranslateSelection,
+  filesWorkspace,
 }: DocumentWorkspaceProps) {
+  const filesView = filesWorkspace?.activeView ?? null;
   const [manifest, setManifest] = useState<DocumentManifest | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [precisePdf, setPrecisePdf] = useState<PDFDocumentProxy | null>(null);
@@ -1512,8 +1523,8 @@ export default function DocumentWorkspace({
     const commit = () => {
       persistTimerRef.current = null;
       const element = scrollRef.current;
-      const top = Math.max(0, element?.scrollTop ?? latestScrollRef.current.top);
-      const left = Math.max(0, element?.scrollLeft ?? latestScrollRef.current.left);
+      const top = Math.max(0, element && !element.hidden ? element.scrollTop : latestScrollRef.current.top);
+      const left = Math.max(0, element && !element.hidden ? element.scrollLeft : latestScrollRef.current.left);
       latestScrollRef.current = { top, left };
       const identity = viewIdentityRef.current;
       onDocumentViewStateRef.current(identity.connectionId, identity.projectId, {
@@ -1653,7 +1664,11 @@ export default function DocumentWorkspace({
   }, [connectionId, documentView, persistViewState, project.id, projectKey]);
 
   useLayoutEffect(() => {
-    if (loading || !pdf || view !== "document" || restoredProjectKeyRef.current === projectKey) return undefined;
+    if (loading || !pdf || view !== "document" || filesView) {
+      restoredProjectKeyRef.current = null;
+      return undefined;
+    }
+    if (restoredProjectKeyRef.current === projectKey) return undefined;
     const element = scrollRef.current;
     if (!element) return undefined;
     restoredProjectKeyRef.current = projectKey;
@@ -1671,7 +1686,13 @@ export default function DocumentWorkspace({
     return () => {
       window.cancelAnimationFrame(restoreFrameRef.current);
     };
-  }, [layout, loading, pdf, persistViewState, projectKey, view]);
+  }, [filesView, layout, loading, pdf, persistViewState, projectKey, view]);
+
+  useEffect(() => {
+    if (!filesView) return;
+    setSelection(null);
+    setSelectionLanguageOpen(false);
+  }, [filesView]);
 
   useEffect(() => () => {
     if (persistTimerRef.current !== null) window.clearTimeout(persistTimerRef.current);
@@ -1682,7 +1703,7 @@ export default function DocumentWorkspace({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (view !== "document") return;
+      if (view !== "document" || filesView) return;
       const delta = documentZoomDeltaForKeyboardEvent(event);
       if (delta === 0) return;
       const target = event.target;
@@ -1697,7 +1718,7 @@ export default function DocumentWorkspace({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [changeZoom, view]);
+  }, [changeZoom, filesView, view]);
 
   const refreshArtifacts = useCallback(async () => {
     try {
@@ -1940,6 +1961,7 @@ export default function DocumentWorkspace({
     setAnnotationsOpen(true);
     setActiveAnnotationId(annotation.id);
     setView("document");
+    filesWorkspace?.onViewChange(null);
     if (showingPreciseTranslation) setShowTranslation(false);
     const pageNumber = annotation.rects[0]?.page;
     if (!pageNumber) return;
@@ -1954,13 +1976,14 @@ export default function DocumentWorkspace({
       latestScrollRef.current = { top: scroll.scrollTop, left: scroll.scrollLeft };
       persistViewState(true);
     }, 0);
-  }, [persistViewState, showingPreciseTranslation]);
+  }, [filesWorkspace, persistViewState, showingPreciseTranslation]);
   const setZoomFromInput = useCallback((value: string) => {
     applyZoom(parseDocumentZoomInput(value, zoomRef.current));
   }, [applyZoom]);
   const handlePdfScroll = useCallback(() => {
     const element = scrollRef.current;
-    if (element) latestScrollRef.current = { top: element.scrollTop, left: element.scrollLeft };
+    if (!element || element.hidden) return;
+    latestScrollRef.current = { top: element.scrollTop, left: element.scrollLeft };
     persistViewState();
   }, [persistViewState]);
   const handlePdfWheel = useCallback((event: WheelEvent) => {
@@ -1984,7 +2007,7 @@ export default function DocumentWorkspace({
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element || loading || view !== "document") return undefined;
+    if (!element || loading || view !== "document" || filesView) return undefined;
     let gestureStartZoom = zoomRef.current;
     let gestureAnchor: { clientX: number; clientY: number } | undefined;
     const eventAnchor = (event: WebKitGestureEvent) => (
@@ -2019,7 +2042,7 @@ export default function DocumentWorkspace({
       element.removeEventListener("gesturechange", onGestureChange);
       element.removeEventListener("gestureend", onGestureEnd);
     };
-  }, [handlePdfWheel, loading, schedulePinchZoom, view]);
+  }, [filesView, handlePdfWheel, loading, schedulePinchZoom, view]);
 
   const positionSelection = useCallback((rects: DocumentSelectionRect[]): SelectionBox | null => {
     const clientRects = rects.flatMap((rect) => {
@@ -2107,7 +2130,7 @@ export default function DocumentWorkspace({
     setSelection((current) => current ? { ...current, bounds: positionSelection(current.rects) } : current);
   }, [positionSelection, rotation, selection?.rects, zoom]);
 
-  useDocumentSelectionListeners(scrollRef, captureSelection, !loading && view === "document");
+  useDocumentSelectionListeners(scrollRef, captureSelection, !loading && view === "document" && !filesView);
 
   const startSelectionTranslation = useCallback((targetLocale: string) => {
     if (!selection || sessionBusy) return;
@@ -2272,10 +2295,14 @@ export default function DocumentWorkspace({
           <span><strong>{project.name}</strong><small>{manifest?.source.name ?? "正在读取文档"}</small></span>
         </div>
         <div className="document-view-tabs" role="tablist" aria-label="文档视图">
-          <button className={view === "document" ? "active" : ""} onClick={() => setView("document")}><FileText />文档</button>
-          <button className={view === "blog" ? "active" : ""} onClick={() => setView("blog")}><BookOpen />Blog</button>
+          <button type="button" role="tab" aria-selected={!filesView && view === "document"} className={!filesView && view === "document" ? "active" : ""} onClick={() => { setView("document"); filesWorkspace?.onViewChange(null); }}><FileText />文档</button>
+          <button type="button" role="tab" aria-selected={!filesView && view === "blog"} className={!filesView && view === "blog" ? "active" : ""} onClick={() => { setView("blog"); filesWorkspace?.onViewChange(null); }}><BookOpen />Blog</button>
+          {filesWorkspace && <>
+            <button type="button" role="tab" aria-selected={filesView === "files"} className={filesView === "files" ? "active" : ""} onClick={() => filesWorkspace.onViewChange("files")}><Folder />文件</button>
+            <button type="button" role="tab" aria-selected={filesView === "changes"} className={filesView === "changes" ? "active" : ""} onClick={() => filesWorkspace.onViewChange("changes")}><GitCompareArrows />变更{filesWorkspace.changeCount > 0 && <small className="document-change-count">{filesWorkspace.changeCount}</small>}</button>
+          </>}
         </div>
-        {view === "document" && (
+        {!filesView && view === "document" && (
           <div className="document-tools">
             <DocumentToolbarNumberEditor
               ariaLabel="当前页"
@@ -2335,6 +2362,7 @@ export default function DocumentWorkspace({
               onClear={() => setClearTranslationConfirm(true)}
               onGenerateBlog={() => {
                 setView("blog");
+                filesWorkspace?.onViewChange(null);
                 setBlogView("preview");
                 setPendingAction("generate_blog");
                 if (!onDocumentAction("generate_blog", {
@@ -2360,7 +2388,7 @@ export default function DocumentWorkspace({
             </label>
           </div>
         )}
-        {view === "blog" && blog && (
+        {!filesView && view === "blog" && blog && (
           <div className="document-blog-view-tabs" role="tablist" aria-label="Blog 显示模式">
             <button
               className={blogView === "preview" ? "active" : ""}
@@ -2452,7 +2480,7 @@ export default function DocumentWorkspace({
         </div>
       ), document.body)}
 
-      {error && (
+      {!filesView && error && (
         <div className="document-error" role="alert">
           <AlertTriangle aria-hidden="true" />
           <span className="document-error-message">{error}</span>
@@ -2468,11 +2496,12 @@ export default function DocumentWorkspace({
           </div>
         </div>
       )}
-      {loading && <div className="document-loading"><LoaderCircle className="spin" />正在准备文档</div>}
-      {!loading && view === "document" && (
+      {!filesView && loading && <div className="document-loading"><LoaderCircle className="spin" />正在准备文档</div>}
+      {!loading && (
         <div
           ref={scrollRef}
           className="document-pdf-scroll"
+          hidden={Boolean(filesView) || view !== "document"}
           onScroll={handlePdfScroll}
         >
           <div className="document-pdf-pages">
@@ -2503,8 +2532,8 @@ export default function DocumentWorkspace({
           </div>
         </div>
       )}
-      {!loading && view === "blog" && (
-        <div className="document-blog-shell">
+      {!loading && (
+        <div className="document-blog-shell" hidden={Boolean(filesView) || view !== "blog"}>
           {blogConflict && (
             <div className="document-blog-conflict">
               <AlertTriangle />
@@ -2544,6 +2573,12 @@ export default function DocumentWorkspace({
           ) : (
             <div className="document-blog-empty"><BookOpen /><h2>还没有 Blog</h2><p>返回文档视图，选择原文或译文后生成。</p></div>
           )}
+        </div>
+      )}
+
+      {filesWorkspace && (
+        <div className="document-file-workspace" hidden={!filesView}>
+          {filesWorkspace.content}
         </div>
       )}
 
