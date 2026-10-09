@@ -781,6 +781,26 @@ export class SessionChannel {
     });
   }
 
+  queueMessage(
+    text: string,
+    operationId: string,
+    images: Array<{ media_type: string; data: string }> = [],
+    requestId: string = randomUuid(),
+  ): string {
+    this.sendRaw({
+      type: "queue_message", text, images,
+      session_id: this.sessionId, operation_id: operationId, request_id: requestId,
+    });
+    return requestId;
+  }
+
+  queuedMessageAction(requestId: string, action: "steer" | "remove" | "edit", operationId: string): void {
+    this.sendRaw({
+      type: "queued_message_action", request_id: requestId, action,
+      session_id: this.sessionId, operation_id: operationId,
+    });
+  }
+
   interrupt(operationId?: string | null): void {
     this.sendRaw({
       type: "interrupt",

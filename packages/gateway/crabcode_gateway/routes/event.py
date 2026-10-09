@@ -935,6 +935,10 @@ async def websocket_endpoint(ws: WebSocket):
                     await _handle_document_selection_translate(ws, msg)
                 elif msg_type == "steer_message":
                     await _handle_steer_message(ws, msg)
+                elif msg_type == "queue_message":
+                    await _handle_queue_message(ws, msg)
+                elif msg_type == "queued_message_action":
+                    await _handle_queued_message_action(ws, msg)
                 elif msg_type == "new_session":
                     await _handle_new_session(ws, msg)
                 elif msg_type == "resume_session":
@@ -1104,6 +1108,8 @@ async def _send_ws_command_error(
         payload["session_id"] = session_id
     if operation_id:
         payload["operation_id"] = operation_id
+    if request is not None and isinstance(request.get("request_id"), str):
+        payload["request_id"] = request["request_id"]
     await ws.send_text(json.dumps(payload))
 
 
@@ -1939,6 +1945,22 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
                     kwargs["message_origin"] = message_origin
                 pending_terminal = None
                 async for event in session.send_message(text, **kwargs):
+                    owner = asyncio.current_task()
+                    pending_follow_ups = getattr(owner, "_crabcode_pending_follow_ups", None)
+                    if pending_follow_ups is not None:
+                        # Accept input even while send_message is initializing.
+                        # Once its first event arrives, Core owns the live queues.
+                        setattr(owner, "_crabcode_pending_follow_ups", None)
+                        for queued_turn, follow_up_text, follow_up_images, request_id in pending_follow_ups:
+                            if queued_turn:
+                                await session.queue_message(
+                                    follow_up_text, images=follow_up_images, request_id=request_id,
+                                )
+                            else:
+                                await session.steer_message(
+                                    follow_up_text, images=follow_up_images,
+                                    **({"deduplicate": False} if request_id else {}),
+                                )
                     if isinstance(event, TurnCompleteEvent):
                         # Hold the terminal until the staged artifact passes
                         # Gateway validation and has been atomically published.
@@ -2164,6 +2186,8 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
             )
         ):
             task = asyncio.create_task(_run())
+            if not document_job or document_job.action != "translate":
+                setattr(task, "_crabcode_pending_follow_ups", [])
             track_task(
                 ws.app.state,
                 session.session_id,
@@ -2200,7 +2224,100 @@ async def _handle_send_message(ws: WebSocket, msg: dict) -> None:
 
 
 async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
-    """Inject user guidance at the foreground loop's next safe boundary."""
+    await _handle_follow_up_message(ws, msg, queued_turn=False)
+
+
+async def _handle_queue_message(ws: WebSocket, msg: dict) -> None:
+    await _handle_follow_up_message(ws, msg, queued_turn=True)
+
+
+async def _handle_queued_message_action(ws: WebSocket, msg: dict) -> None:
+    """Mutate a pending message only within its original foreground operation."""
+    from crabcode_core.types.event import QueuedMessageUpdatedEvent
+
+    command = "queued_message_action"
+    request_id = msg.get("request_id")
+    operation_id = msg.get("operation_id")
+    action = msg.get("action")
+    if (
+        not isinstance(request_id, str) or not request_id or len(request_id) > 128
+        or not isinstance(operation_id, str) or not operation_id
+        or not isinstance(action, str) or action not in {"remove", "edit", "steer"}
+    ):
+        await _send_ws_command_error(
+            ws, "request_id, operation_id and a valid queue action are required",
+            command=command, request=msg, error_type="invalid_request",
+        )
+        return
+    session = _resolve_session(ws, msg)
+    if session is None:
+        await _send_ws_command_error(
+            ws, "no active session", command=command, request=msg,
+            operation_id=operation_id, error_type="session_not_found",
+        )
+        return
+
+    async def _update() -> str | None:
+        async with get_session_lock(ws.app.state):
+            owner = get_operation_task(ws.app.state, session.session_id, operation_id)
+            if owner is None:
+                return "operation_not_found"
+            if getattr(owner, "_crabcode_operation_scope", None) != "foreground":
+                return "follow_up_rejected"
+            pending = getattr(owner, "_crabcode_pending_follow_ups", None)
+            if pending is not None:
+                index = next((i for i, entry in enumerate(pending)
+                              if entry[0] and entry[3] == request_id), None)
+                if index is None:
+                    return "queued_message_not_found"
+                if action == "steer" and sum(not entry[0] for entry in pending) >= 100:
+                    raise RuntimeError("Too many pending steering messages")
+                _, text, images, queued_id = pending.pop(index)
+                if action == "steer":
+                    pending.append((False, text, images, queued_id))
+            elif not await session.update_queued_message(request_id, action):
+                return "queued_message_not_found"
+            # Enqueue the acknowledgement before the model can consume promoted
+            # guidance. Clients must see this before steering_applied or completion.
+            ws.app.state.event_bus.publish_nowait(
+                session.session_id, QueuedMessageUpdatedEvent(request_id, action),
+                source=session, operation_id=operation_id, operation_scope="foreground",
+            )
+        return None
+
+    try:
+        error_type = await run_session_operation(ws.app.state, session, _update, **_ws_owner_args(ws))
+    except SessionOperationRejected:
+        error_type = "session_closing"
+    except RuntimeError as exc:
+        await _send_ws_command_error(
+            ws, str(exc), command=command, request=msg,
+            session_id=session.session_id, operation_id=operation_id,
+            error_type="follow_up_rejected",
+        )
+        return
+    if error_type:
+        await _send_ws_command_error(
+            ws, "Queued message is no longer available for this operation",
+            command=command, request=msg, session_id=session.session_id,
+            operation_id=operation_id, error_type=error_type,
+        )
+
+
+async def _handle_follow_up_message(
+    ws: WebSocket, msg: dict, *, queued_turn: bool,
+) -> None:
+    """Bind follow-up input to the named live foreground operation."""
+    command = "queue_message" if queued_turn else "steer_message"
+    request_id = msg.get("request_id")
+    if request_id is not None and (
+        not isinstance(request_id, str) or not request_id or len(request_id) > 128
+    ):
+        await _send_ws_command_error(
+            ws, "request_id must be a non-empty string of at most 128 characters",
+            command=command, request=msg, error_type="invalid_request",
+        )
+        return
     text = msg.get("text", "")
     raw_images = msg.get("images")
     requested_operation_id = msg.get("operation_id")
@@ -2208,7 +2325,7 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         await _send_ws_command_error(
             ws,
             "text must be a string",
-            command="steer_message",
+            command=command,
             request=msg,
             operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
             error_type="invalid_request",
@@ -2221,7 +2338,7 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         await _send_ws_command_error(
             ws,
             "operation_id must be a non-empty string",
-            command="steer_message",
+            command=command,
             request=msg,
             error_type="invalid_request",
         )
@@ -2232,7 +2349,7 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         await _send_ws_command_error(
             ws,
             str(exc),
-            command="steer_message",
+            command=command,
             request=msg,
             operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
             error_type="invalid_images",
@@ -2242,7 +2359,7 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         await _send_ws_command_error(
             ws,
             "text or at least one image is required",
-            command="steer_message",
+            command=command,
             request=msg,
             operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
             error_type="invalid_request",
@@ -2254,7 +2371,7 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         await _send_ws_command_error(
             ws,
             "no active session",
-            command="steer_message",
+            command=command,
             request=msg,
             operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
         )
@@ -2270,16 +2387,30 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         that case: doing so can put a late steering message into the next
         user request.
         """
-        if requested_operation_id is not None:
-            async with get_session_lock(ws.app.state):
+        async with get_session_lock(ws.app.state):
+            if requested_operation_id is not None:
                 owner = get_operation_task(
                     ws.app.state,
                     session.session_id,
                     requested_operation_id,
-                    operation_scope="foreground",
                 )
                 if owner is None:
                     return None
+                if getattr(owner, "_crabcode_operation_scope", None) != "foreground":
+                    raise RuntimeError("This operation does not accept chat follow-ups")
+            else:
+                active = get_active_operation(
+                    ws.app.state, session.session_id, operation_scope="foreground",
+                )
+                owner = active[1] if active else None
+            pending = getattr(owner, "_crabcode_pending_follow_ups", None)
+            if pending is not None:
+                if sum(entry[0] == queued_turn for entry in pending) >= 100:
+                    raise RuntimeError("Too many pending follow-up messages")
+                pending.append((queued_turn, text, images or None, request_id))
+                return True
+        if queued_turn:
+            return await session.queue_message(text, images=images or None, request_id=request_id)
         return await session.steer_message(text, images=images or None)
 
     try:
@@ -2293,7 +2424,7 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         await _send_ws_command_error(
             ws,
             "session is closing",
-            command="steer_message",
+            command=command,
             request=msg,
             session_id=session.session_id,
             operation_id=(requested_operation_id if isinstance(requested_operation_id, str) else None),
@@ -2301,11 +2432,20 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         )
         return
 
+    except RuntimeError as exc:
+        await _send_ws_command_error(
+            ws, str(exc), command=command, request=msg,
+            session_id=session.session_id, operation_id=requested_operation_id,
+            error_type="follow_up_rejected",
+        )
+        return
+
     if queued is None:
         await _send_ws_command_error(
             ws,
             f"operation not found or not foreground: {requested_operation_id}",
-            command="steer_message",
+            command=command,
+            request=msg,
             session_id=session.session_id,
             operation_id=requested_operation_id,
             error_type="operation_not_found",
@@ -2313,17 +2453,19 @@ async def _handle_steer_message(ws: WebSocket, msg: dict) -> None:
         return
 
     logger.info(
-        "ws steer_message %s session=%s chars=%d images=%d",
+        "ws %s %s session=%s chars=%d images=%d",
+        command,
         "queued" if queued else "continued as a new turn",
         session.session_id,
         len(text),
         len(images),
     )
-    if not queued and requested_operation_id is not None:
+    if not queued and (requested_operation_id is not None or queued_turn):
         await _send_ws_command_error(
             ws,
-            f"operation is no longer active: {requested_operation_id}",
-            command="steer_message",
+            f"operation is not accepting follow-ups: {requested_operation_id or 'current'}",
+            command=command,
+            request=msg,
             session_id=session.session_id,
             operation_id=requested_operation_id,
             error_type="operation_inactive",

@@ -337,6 +337,40 @@ export function applyGatewayEvent(
 ): SessionViewState {
   const now = Date.now();
   switch (event.type) {
+    case "queued_message_updated": {
+      if (state.operationId && event.operation_id && state.operationId !== event.operation_id) return state;
+      const pending = state.pendingFollowUps ?? [];
+      const entry = pending.find((item) => item.item.id === event.request_id);
+      if (!entry) return state;
+      if (event.action === "edit") {
+        return { ...state, pendingFollowUps: pending.map((item) => item === entry
+          ? { ...item, status: "editing", action: undefined } : item) };
+      }
+      if (event.action !== "remove" && event.action !== "steer") return state;
+      return {
+        ...state,
+        pendingFollowUps: pending.filter((item) => item !== entry),
+        items: event.action === "steer" ? [...state.items, entry.item] : state.items,
+      };
+    }
+    case "queued_message_started": {
+      if (state.operationId && event.operation_id && state.operationId !== event.operation_id) return state;
+      const pending = state.pendingFollowUps ?? [];
+      const index = event.request_id
+        ? pending.findIndex((entry) => entry.item.id === event.request_id)
+        : pending.findIndex((entry) => entry.status === "pending");
+      const userItem: ChatItem = index >= 0 ? pending[index].item : {
+        id: event.request_id ?? randomUuid(), kind: "user",
+        ...displayedUserText("user", event.text ?? ""), images: event.images,
+      };
+      return {
+        ...state, busy: true, operationId: event.operation_id ?? state.operationId,
+        runStartedAt: now,
+        currentStep: { kind: "response", label: "执行排队消息", startedAt: now },
+        pendingFollowUps: pending.filter((_, itemIndex) => itemIndex !== index),
+        items: [...appendTurnDuration(completeRunning(state.items, now), state.runStartedAt, now), userItem],
+      };
+    }
     case "server.connected":
     case "server.heartbeat":
       return { ...state, connected: true, error: null };
@@ -642,6 +676,13 @@ export function applyGatewayEvent(
       const clearsTurn = documentCommandError || resumeCommandError || staleForegroundCommandError;
       return {
         ...state,
+        pendingFollowUps: state.pendingFollowUps?.map((entry) => (
+          (clearsTurn && entry.status === "pending") || (event.command_error && event.command === "queue_message"
+            && (!event.request_id || entry.item.id === event.request_id))
+            ? { ...entry, status: "cancelled", action: undefined }
+            : event.command_error && event.command === "queued_message_action" && entry.item.id === event.request_id
+              ? { ...entry, action: undefined } : entry
+        )),
         loading: false,
         error: event.message ?? "Gateway error",
         connected: resumeCommandError ? false : state.connected,
@@ -697,6 +738,8 @@ export function applyGatewayEvent(
       return {
         ...state,
         busy: false,
+        pendingFollowUps: state.pendingFollowUps?.map((entry) => entry.status === "pending"
+          ? { ...entry, status: "cancelled", action: undefined } : entry),
         operationId: null,
         runStartedAt: null,
         currentStep: null,

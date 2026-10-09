@@ -25,6 +25,76 @@ afterEach(() => {
 });
 
 describe("Gateway event reducer", () => {
+  it("recalls, deletes and promotes only acknowledged queue entries", () => {
+    const current: SessionViewState = {
+      ...state(), busy: true,
+      pendingFollowUps: ["edit", "remove", "steer"].map((id) => ({
+        item: { id, kind: "user", text: id }, text: `${id} with context`,
+        images: [{ media_type: "image/png", data: "image-data" }], status: "pending",
+      })),
+    };
+    const edited = applyGatewayEvent(current, { type: "queued_message_updated", request_id: "edit", action: "edit" });
+    expect(edited.pendingFollowUps?.[0]).toMatchObject({ status: "editing", text: "edit with context", images: current.pendingFollowUps![0].images });
+    const removed = applyGatewayEvent(edited, { type: "queued_message_updated", request_id: "remove", action: "remove" });
+    expect(removed.items).toHaveLength(0);
+    expect(removed.pendingFollowUps?.map((entry) => entry.item.id)).toEqual(["edit", "steer"]);
+    const steered = applyGatewayEvent(removed, { type: "queued_message_updated", request_id: "steer", action: "steer" });
+    expect(steered.items.map((item) => item.text)).toEqual(["steer"]);
+    expect(steered.pendingFollowUps).toHaveLength(1);
+    expect(applyGatewayEvent(steered, { type: "turn_complete" }).pendingFollowUps?.[0].status).toBe("editing");
+    expect(applyGatewayEvent(steered, { type: "queued_message_updated", request_id: "steer", action: "steer" })).toBe(steered);
+  });
+
+  it("a rejected queue action unlocks its card without falsely removing or cancelling it", () => {
+    const current: SessionViewState = {
+      ...state(), busy: true,
+      pendingFollowUps: [{ item: { id: "q", kind: "user", text: "queued" }, text: "queued", images: [], status: "pending", action: "steer" }],
+    };
+    const updated = applyGatewayEvent(current, {
+      type: "error", command_error: true, command: "queued_message_action", request_id: "q", error_type: "follow_up_rejected", message: "full",
+    });
+    expect(updated.pendingFollowUps?.[0]).toMatchObject({ status: "pending", action: undefined });
+    expect(updated.busy).toBe(true);
+    expect(applyGatewayEvent(current, { type: "queued_message_updated", operation_id: "old", request_id: "q", action: "remove" })).toBe(current);
+  });
+
+  it("starts queued messages after the previous reply and leaves other pending messages alone", () => {
+    const current: SessionViewState = {
+      ...state(), busy: true, runStartedAt: Date.now() - 1000,
+      items: [{ id: "reply", kind: "assistant", text: "first result", status: "running" }],
+      pendingFollowUps: ["q1", "q2"].map((id) => ({
+        item: { id, kind: "user", text: id }, text: id, images: [], status: "pending",
+      })),
+    };
+    const updated = applyGatewayEvent(current, {
+      type: "queued_message_started", operation_id: "operation-1", request_id: "q1", text: "q1",
+    });
+    expect(updated.items.filter((item) => item.kind !== "turn_duration").map((item) => item.text)).toEqual(["first result", "q1"]);
+    expect(updated.items[0].status).toBe("complete");
+    expect(updated.busy).toBe(true);
+    expect(updated.pendingFollowUps?.map((entry) => entry.item.id)).toEqual(["q2"]);
+    expect(applyGatewayEvent(updated, { type: "turn_complete", reason: "interrupted" }).pendingFollowUps?.[0].status).toBe("cancelled");
+  });
+
+  it("keeps rejected queue content recoverable and correlates failures by request id", () => {
+    const current: SessionViewState = {
+      ...state(), busy: true,
+      pendingFollowUps: ["q1", "q2"].map((id) => ({
+        item: { id, kind: "user", text: id }, text: id,
+        images: [{ media_type: "image/png", data: "base64" }], status: "pending",
+      })),
+    };
+    const updated = applyGatewayEvent(current, {
+      type: "error", command_error: true, command: "queue_message", request_id: "q2", message: "Queue full",
+    });
+    expect(updated.pendingFollowUps?.map((entry) => entry.status)).toEqual(["pending", "cancelled"]);
+    expect(updated.pendingFollowUps?.[1].images[0].data).toBe("base64");
+    expect(updated.busy).toBe(true);
+    expect(applyGatewayEvent(updated, {
+      type: "queued_message_started", operation_id: "unrelated", request_id: "q1", text: "q1",
+    })).toBe(updated);
+  });
+
   it("keeps prompt estimates separate from the server context count", () => {
     const current = state();
     current.status = {

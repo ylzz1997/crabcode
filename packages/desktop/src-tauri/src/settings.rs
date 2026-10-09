@@ -108,6 +108,7 @@ fn default_settings() -> Value {
         "session_notify_on_complete": true,
         "session_notify_on_interaction": true,
         "composer_send_key": "enter",
+        "follow_up_mode": "queue",
         "approval_shortcuts": {
             "enabled": true,
             "approve": "Ctrl+Alt+Shift+F9",

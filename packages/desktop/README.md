@@ -3,6 +3,16 @@
 Crab Desktop is the shared React client for local and remote CrabCode Gateways.
 It runs either in a browser or inside the Tauri desktop shell.
 
+Choose **Queue** (default) or **Steer** under **Settings → General → Conversation →
+Follow-up behavior**. Enter uses the
+default; Cmd+Enter (macOS) / Ctrl+Enter (Windows/Linux) sends the opposite for just
+one message. Shift+Enter inserts a newline. Queue executes follow-ups in order
+after the current turn; Steer adds guidance at a safe boundary. After a stop or
+failure, unexecuted queued messages can be restored into the composer.
+Queued cards above the composer offer Steer and Delete. Their menu offers Edit
+message, which recalls the message and its images for editing, and Disable queue,
+which changes the default to Steer while keeping existing queued messages.
+
 ## Local macOS virtual machine
 
 Computer Use supports an isolated local macOS VM managed by Lume, with guest

@@ -67,6 +67,7 @@ from crabcode_core.types.event import (
     PermissionResponseEvent,
     PeerMessageEvent,
     PlanReadyEvent,
+    QueuedMessageStartedEvent,
     ScheduleRunEvent,
     StreamModeEvent,
     StreamRetryEvent,
@@ -164,6 +165,7 @@ def _render_context_usage(event: TurnCompleteEvent) -> None:
 # Slash commands with their arguments for auto-completion
 _SLASH_COMMANDS: dict[str, list[str]] = {
     "/help": [],
+    "/follow-up": ["queue", "steer"],
     "/goal": ["set", "edit", "pause", "resume", "complete", "blocked", "clear"],
     "/plan": [],
     "/agent": [],
@@ -369,6 +371,7 @@ class _CrabCodeCompleter(Completer):
     def _get_command_description(self, cmd: str) -> str:
         descriptions = {
             "/help": "show help",
+            "/follow-up": "choose queue or steer for follow-up messages",
             "/goal": "set or manage the persistent task goal",
             "/plan": "switch to plan mode (read-only analysis)",
             "/agent": "switch to agent mode / show agent (<id>)",
@@ -527,11 +530,11 @@ def _composer_prompt(
     )
 
 
-def _composer_toolbar(*, busy: bool = False, queued_count: int = 0) -> HTML:
-    if busy and queued_count:
-        hint = f" {queued_count} queued · Enter adds · Ctrl+J newline · Ctrl+C interrupts "
-    elif busy:
-        hint = " Enter queues · Ctrl+J newline · Ctrl+C interrupts "
+def _composer_toolbar(*, busy: bool = False, queued_count: int = 0, follow_up_mode: str = "queue") -> HTML:
+    if busy:
+        action, opposite = ("queues", "steers") if follow_up_mode == "queue" else ("steers", "queues")
+        prefix = f" {queued_count} pending ·" if queued_count else ""
+        hint = f"{prefix} Enter {action} · Ctrl+S {opposite} · Ctrl+J newline · Ctrl+C stops "
     else:
         hint = f" Enter sends · {_alt_enter_label()} / Ctrl+J newline · Ctrl+D exits "
     fitted_hint, dashes = _composer_frame_parts("╰─", hint, "╯")
@@ -542,7 +545,7 @@ def _composer_toolbar(*, busy: bool = False, queued_count: int = 0) -> HTML:
 
 
 def _configure_modified_enter_keys() -> None:
-    """Normalize terminal-reported modified Enter to the newline key.
+    """Normalize modified Enter; reserve Ctrl+Enter for follow-up override.
 
     prompt_toolkit 3.x aliases xterm modified Enter to plain Enter and lacks
     CSI-u mappings. Register both encodings before reading composer input.
@@ -551,8 +554,9 @@ def _configure_modified_enter_keys() -> None:
     cannot expose these modifiers; Ctrl+J and Esc, Enter remain available.
     """
     for modifier in range(2, 9):  # Shift, Alt, Ctrl, and their combinations.
-        ANSI_SEQUENCES[f"\x1b[13;{modifier}u"] = Keys.ControlJ
-        ANSI_SEQUENCES[f"\x1b[27;{modifier};13~"] = Keys.ControlJ
+        key = Keys.F24 if modifier == 5 else Keys.ControlJ
+        ANSI_SEQUENCES[f"\x1b[13;{modifier}u"] = key
+        ANSI_SEQUENCES[f"\x1b[27;{modifier};13~"] = key
     # The parser caches unmatched prefixes too; earlier prompts may have
     # encountered these sequences before the composer was constructed.
     _IS_PREFIX_OF_LONGER_MATCH_CACHE.clear()
@@ -679,6 +683,8 @@ class _PersistentComposer:
         self._verb_index = 0
         self._notice = ""
         self._queued_messages: list[str] = []
+        self._queued_turns: list[str] = []
+        self._submit_opposite = False
         self._task: asyncio.Task[str] | None = None
         self._animation_task: asyncio.Task[None] | None = None
         self._exit_keys = _CtrlCDoubleExit()
@@ -689,6 +695,19 @@ class _PersistentComposer:
         def _submit(event: Any) -> None:
             self._exit_keys.clear()
             event.current_buffer.validate_and_handle()
+
+        @bindings.add("f24", filter=has_focus(DEFAULT_BUFFER))
+        @bindings.add("c-s", filter=has_focus(DEFAULT_BUFFER))
+        def _submit_other_mode(event: Any) -> None:
+            if not self._busy:
+                event.current_buffer.insert_text("\n")
+                return
+            self._exit_keys.clear()
+            self._submit_opposite = True
+            try:
+                event.current_buffer.validate_and_handle()
+            finally:
+                self._submit_opposite = False
 
         @bindings.add("c-j", filter=has_focus(DEFAULT_BUFFER))
         @bindings.add("escape", "enter", filter=has_focus(DEFAULT_BUFFER))
@@ -715,7 +734,8 @@ class _PersistentComposer:
             ),
             bottom_toolbar=lambda: _composer_toolbar(
                 busy=self._busy,
-                queued_count=len(self._queued_messages),
+                queued_count=len(self._queued_messages) + len(self._queued_turns),
+                follow_up_mode=self.follow_up_mode,
             ),
             history=InMemoryHistory(),
             completer=_CrabCodeCompleter(session),
@@ -733,7 +753,7 @@ class _PersistentComposer:
             self.prompt_session,
             status_text=self._status_text,
             queued_text=self._queued_text,
-            has_queued_text=lambda: bool(self._queued_messages),
+            has_queued_text=lambda: bool(self._queued_messages or self._queued_turns),
         )
         self.prompt_session.default_buffer.accept_handler = self._accept
 
@@ -741,8 +761,12 @@ class _PersistentComposer:
         text = buffer.text.strip()
         if text:
             self._notice = ""
-            self._events.put_nowait(("submit", text))
+            self._events.put_nowait(("submit_opposite" if self._submit_opposite else "submit", text))
         return False
+
+    @property
+    def follow_up_mode(self) -> str:
+        return getattr(getattr(self._session, "settings", None), "follow_up_mode", "queue")
 
     def _status_text(self) -> list[tuple[str, str]]:
         # Status labels are literal text. HTML parsing would treat command
@@ -767,12 +791,8 @@ class _PersistentComposer:
         return [("class:gray", "  ● Ready")]
 
     def _queued_text(self) -> list[tuple[str, str]]:
-        latest = self._queued_messages[-1] if self._queued_messages else ""
-        suffix = (
-            f"  ({len(self._queued_messages)} queued)"
-            if len(self._queued_messages) > 1
-            else ""
-        )
+        latest = (self._queued_turns or self._queued_messages or [""])[-1]
+        suffix = f"  ({len(self._queued_turns)} queued · {len(self._queued_messages)} steering)"
         return [
             ("fg:ansicyan", "  ↳ "),
             ("", latest),
@@ -880,6 +900,22 @@ class _PersistentComposer:
     def add_guidance(self, text: str) -> None:
         self._queued_messages.append(text)
         self._invalidate()
+
+    def add_queued_turn(self, text: str) -> None:
+        self._queued_turns.append(text)
+        self._invalidate()
+
+    def mark_queued_turn_started(self) -> None:
+        if self._queued_turns:
+            self._queued_turns.pop(0)
+        self._invalidate()
+
+    def cancel_pending_follow_ups(self) -> list[str]:
+        pending = self._queued_turns + self._queued_messages
+        self._queued_turns = []
+        self._queued_messages = []
+        self._invalidate()
+        return pending
 
     def mark_guidance_applied(self, count: int) -> list[str]:
         count = min(max(0, count), len(self._queued_messages))
@@ -2064,7 +2100,7 @@ async def run_repl(
         )
     console.print(
         "  Type /help for commands. "
-        "You can send guidance while the agent is working. "
+        "Use /follow-up queue|steer for messages sent while working; Ctrl+S sends the opposite. "
         f"Ctrl+C interrupts; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit. "
         f"Enter sends; Ctrl+J or {_alt_enter_label()} inserts a newline "
         "(or press Esc, then Enter). Ctrl+D exits.",
@@ -2169,7 +2205,7 @@ async def run_repl(
             else:
                 while True:
                     event_kind, event_text = await composer.next_event()
-                    if event_kind == "submit":
+                    if event_kind in {"submit", "submit_opposite"}:
                         user_input = event_text
                         break
                     if event_kind == "eof":
@@ -2281,12 +2317,33 @@ async def run_repl(
             async def _consume_turn_input() -> None:
                 while True:
                     event_kind, event_text = await composer.next_event()
-                    if event_kind == "submit":
+                    if event_kind in {"submit", "submit_opposite"}:
                         text = event_text.strip()
                         if not text:
                             continue
-                        if await session.steer_message(text):
-                            composer.add_guidance(text)
+                        if text.split(None, 1)[0].lower() in {"/follow-up", "/image"}:
+                            try:
+                                await _handle_command(text, session, settings, pending_images)
+                            except Exception as exc:
+                                _render_repl_error(str(exc))
+                            composer._invalidate()
+                            continue
+                        mode = composer.follow_up_mode
+                        if event_kind == "submit_opposite":
+                            mode = "steer" if mode == "queue" else "queue"
+                        try:
+                            images = pending_images.copy() if pending_images else None
+                            submit = session.queue_message if mode == "queue" else session.steer_message
+                            accepted = await submit(text, images=images)
+                        except RuntimeError as exc:
+                            _render_repl_error(f"{exc}: {text}")
+                            continue
+                        if accepted:
+                            pending_images.clear()
+                            if mode == "queue":
+                                composer.add_queued_turn(text)
+                            else:
+                                composer.add_guidance(text)
                             continue
                         input_state.setdefault("deferred", []).append(text)
                         return
@@ -2527,6 +2584,11 @@ async def run_repl(
                         for guidance in applied:
                             _render_submitted_input(guidance, steering=True)
 
+                    elif isinstance(event, QueuedMessageStartedEvent):
+                        composer.mark_queued_turn_started()
+                        _finish_stream_line()
+                        _render_submitted_input(event.text)
+
             except _REPL_INTERRUPT_EXCS:
                 await spinner.stop()
                 if ctrl_c_exit.should_exit_now():
@@ -2567,6 +2629,8 @@ async def run_repl(
                     plan_pending = False
                 await _stop_spinner_with_thinking()
                 composer.set_busy(False)
+                for pending in composer.cancel_pending_follow_ups():
+                    console.print(f"  [yellow]Not sent (run stopped):[/] {escape(pending)}")
 
             if input_state.pop("interrupt_requested", False):
                 if streamed_text_for_context.strip():
@@ -2700,6 +2764,17 @@ async def _handle_command(
     # --- Built-in commands take priority over skill names ---
     skills = getattr(session, "skills", [])
 
+    if cmd == "/follow-up":
+        if arg and arg not in {"queue", "steer"}:
+            console.print("[yellow]Usage: /follow-up [queue|steer][/]")
+            return True
+        if arg:
+            from crabcode_core.config.manager import ConfigManager
+            ConfigManager(cwd=session.cwd).update_settings("userSettings", {"follow_up_mode": arg})
+            session.settings.follow_up_mode = arg
+        console.print(f"  Follow-up mode: [bold]{session.settings.follow_up_mode}[/] · Ctrl+S / Ctrl+Enter sends the opposite while working")
+        return True
+
     if cmd == "/image":
         if not arg:
             if pending_images is not None and pending_images:
@@ -2746,6 +2821,7 @@ async def _handle_command(
             skills_section = f"\n\n[bold]Skills[/]\n{skill_lines}"
         console.print(Panel(
             "[bold]/help[/] — show this help\n"
+            "[bold]/follow-up [queue|steer][/] — choose how follow-ups are sent (saved)\n"
             "[bold]/goal [objective][/] — set or view the persistent task goal\n"
             "[bold]/goal edit <objective>[/] — edit the current goal\n"
             "[bold]/goal pause|resume|complete|blocked|clear[/] — manage goal state\n"
@@ -2809,7 +2885,7 @@ async def _handle_command(
             "[bold]/image <path>[/] — attach image(s) to your next message\n"
             "[bold]/exit[/] — exit CrabCode\n"
             f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
-            "[bold]While working[/] — type and press Enter to steer after the next tool call\n"
+            "[bold]While working[/] — Enter uses /follow-up mode; Ctrl+S / Ctrl+Enter sends the opposite\n"
             "\n"
             "[bold]! <cmd>[/] — run a shell command"
             + skills_section,

@@ -231,6 +231,10 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
 export type ChatMessageRole = "user" | "assistant" | "system";
 
 export interface ChatMessage {
+  followUpMode?: "queue" | "steer";
+  followUpAction?: "steer" | "remove" | "edit";
+  followUpFailed?: boolean;
+  followUpPrompt?: string;
   id: string;
   role: ChatMessageRole;
   text: string;
@@ -374,6 +378,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private sessionStates = new Map<string, SessionState>();
   private displayedSessionId: string | null = null;
+  private followUpModeUpdate: { mode: "queue" | "steer" } | null = null;
   private busySessions = new Set<string>();
   private interruptRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private latestModelRequestId = 0;
@@ -502,7 +507,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             msg.includeIdeContext === true ? this.ideContext : null,
             references,
           );
-          this.handleUserMessage(prompt, msg.images);
+          void this.handleUserMessage(prompt, msg.images, msg.oppositeFollowUp === true);
+          break;
+        }
+        case "setFollowUpMode":
+          if (msg.mode === "queue" || msg.mode === "steer") {
+            void this.setFollowUpMode(msg.mode);
+          }
+          break;
+        case "queuedMessageAction":
+          if (typeof msg.id === "string" && (msg.action === "steer" || msg.action === "remove" || msg.action === "edit")) {
+            this.handleQueuedMessageAction(msg.id, msg.action);
+          }
+          break;
+        case "restoreFollowUp": {
+          const state = this.currentState;
+          const index = state.pendingSteeringMessages.findIndex((entry) => entry.id === msg.id && entry.followUpFailed);
+          if (index < 0) break;
+          const [entry] = state.pendingSteeringMessages.splice(index, 1);
+          this.postMessage({ type: "restoreFollowUp", text: entry.followUpPrompt ?? entry.text, images: entry.images ?? [] });
+          this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
           break;
         }
         case "copyText":
@@ -637,7 +661,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "invokeSkill":
           if (typeof msg.name === "string") {
-            void this.invokeSkill(msg.name, typeof msg.userInput === "string" ? msg.userInput : "");
+            void this.invokeSkill(msg.name, typeof msg.userInput === "string" ? msg.userInput : "", msg.oppositeFollowUp === true);
           }
           break;
         case "newSession": {
@@ -1393,7 +1417,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async invokeSkill(name: string, userInput: string): Promise<void> {
+  private async invokeSkill(name: string, userInput: string, opposite = false): Promise<void> {
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
     if (!sessionId) return;
     try {
@@ -1405,19 +1429,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) throw new Error(`skill expansion failed: ${response.status}`);
       const data = (await response.json()) as { prompt: string };
       const displayText = `/${name}${userInput ? ` ${userInput}` : ""}`;
-      this.sendExpandedPrompt(displayText, data.prompt);
+      this.sendExpandedPrompt(displayText, data.prompt, opposite);
     } catch {
       this.addSessionSystemMessage(sessionId, `Skill /${name} 展开失败。`);
     }
   }
 
-  private sendExpandedPrompt(displayText: string, prompt: string): void {
+  private sendExpandedPrompt(displayText: string, prompt: string, opposite = false): void {
     this.ensureSessionIfNeeded();
     if (this.isBusy) {
-      this.queueSteeringMessageOnState(this.currentState, displayText);
-      this.connection.steer(prompt, {
-        sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
-      });
+      this.sendFollowUp(this.currentState, prompt, undefined, opposite, displayText);
     } else {
       this.addMessage("user", displayText);
       this.setBusy(true);
@@ -3053,6 +3074,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pendingEditsVisibleFiles,
       fileUploadMaxSizeMb,
       composerSendKey,
+      followUpMode: this.followUpMode,
       connected: this.connection.connected,
     });
   }
@@ -3330,10 +3352,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public sendPrompt(text: string): void {
     this.ensureSessionIfNeeded();
     if (this.isBusy) {
-      this.queueSteeringMessageOnState(this.currentState, text);
-      this.connection.steer(text, {
-        sessionId: this.displayedSessionId ?? this.connection.sessionId ?? undefined,
-      });
+      this.sendFollowUp(this.currentState, text);
     } else {
       this.addMessage("user", text);
       this.setBusy(true);
@@ -3358,6 +3377,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async handleUserMessage(
     text: string,
     images?: ImageAttachment[],
+    opposite = false,
   ): Promise<void> {
     this.ensureSessionIfNeeded();
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
@@ -3365,8 +3385,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const state = sessionId ? this.getSessionState(sessionId) : this.currentState;
     const updateWebview = sessionId === this.displayedSessionId;
     if (state.isBusy) {
-      this.queueSteeringMessageOnState(state, text, images);
-      this.connection.steer(text, { sessionId: sessionId ?? undefined, images });
+      this.sendFollowUp(state, text, images, opposite, text, sessionId ?? undefined);
     } else {
       this.addMessageOnState(state, "user", text, updateWebview, images);
       state.isBusy = true;
@@ -3376,6 +3395,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         state.activeOperationId = operationId;
         this.busySessions.add(sessionId);
       }
+    }
+  }
+
+  private get followUpMode(): "queue" | "steer" {
+    return this.followUpModeUpdate?.mode
+      ?? (vscode.workspace.getConfiguration("crabcode").get<string>("followUpMode", "queue") === "steer" ? "steer" : "queue");
+  }
+
+  private async setFollowUpMode(mode: "queue" | "steer"): Promise<void> {
+    const update = { mode };
+    // A message sent immediately after closing the queue must use the new
+    // default even while VS Code is still writing its settings file.
+    this.followUpModeUpdate = update;
+    try {
+      await vscode.workspace.getConfiguration("crabcode").update("followUpMode", mode, vscode.ConfigurationTarget.Global);
+    } catch (error) {
+      this.addMessage("system", `保存跟进处理方式失败：${String(error)}`);
+    } finally {
+      if (this.followUpModeUpdate === update) this.followUpModeUpdate = null;
+    }
+    await this.pushChatOptions();
+  }
+
+  private sendFollowUp(
+    state: SessionState, text: string, images?: ImageAttachment[], opposite = false,
+    displayText = text, sessionId = this.displayedSessionId ?? this.connection.sessionId ?? undefined,
+  ): void {
+    const mode = opposite ? (this.followUpMode === "queue" ? "steer" : "queue") : this.followUpMode;
+    const message = this.queueSteeringMessageOnState(state, displayText, images, mode, text);
+    try {
+      const options = { sessionId, images, requestId: message.id, operationId: state.activeOperationId ?? undefined };
+      if (mode === "queue") this.connection.queue(text, options);
+      else this.connection.steer(text, options);
+    } catch (error) {
+      message.followUpFailed = true;
+      if (state === this.currentState) this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
+      this.addMessageOnState(state, "system", `消息未发送：${String(error)}`, state === this.currentState);
     }
   }
 
@@ -3543,6 +3599,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           (payload as SteeringAppliedPayload).count ?? 1,
         );
         break;
+      case "queued_message_updated": {
+        if (state.activeOperationId && payload.operation_id && state.activeOperationId !== payload.operation_id) break;
+        const index = state.pendingSteeringMessages.findIndex((entry) => entry.id === payload.request_id);
+        if (index < 0) break;
+        const [entry] = state.pendingSteeringMessages.splice(index, 1);
+        entry.followUpAction = undefined;
+        if (payload.action === "steer") {
+          entry.followUpMode = "steer";
+          state.pendingSteeringMessages.push(entry);
+        } else if (payload.action === "edit") {
+          if (updateWebview) {
+            this.postMessage({ type: "restoreFollowUp", text: entry.followUpPrompt ?? entry.text, images: entry.images ?? [] });
+          } else {
+            // A recall must not overwrite the composer of a different session.
+            entry.followUpFailed = true;
+            state.pendingSteeringMessages.splice(index, 0, entry);
+          }
+        }
+        if (updateWebview) this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
+        break;
+      }
+      case "queued_message_started": {
+        this.finalizeThinkingOnState(state, updateWebview);
+        state.startNewAssistantMessage = true;
+        const index = state.pendingSteeringMessages.findIndex((entry) => entry.followUpMode === "queue"
+          && (payload.request_id ? entry.id === payload.request_id : !entry.followUpFailed));
+        if (index >= 0) {
+          const [message] = state.pendingSteeringMessages.splice(index, 1);
+          state.messages.push(message);
+          state.history.push({ kind: "message", message });
+          if (updateWebview) this.postMessage({ type: "newMessage", message });
+        } else {
+          this.addMessageOnState(state, "user", payload.text, updateWebview, payload.images);
+        }
+        if (updateWebview) this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
+        break;
+      }
       case "agent_state":
         this.handleAgentStateOnState(state, payload as AgentStatePayload, updateWebview);
         break;
@@ -3683,8 +3776,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       case "error":
         this.addMessageOnState(state, "system", `CrabCode：${payload.message}`, updateWebview, undefined, "复制错误");
-        if (payload.command_error && payload.command === "steer_message") {
-          state.pendingSteeringMessages.shift();
+        if (payload.command_error && (payload.command === "steer_message" || payload.command === "queue_message" || payload.command === "queued_message_action")) {
+          const pending = state.pendingSteeringMessages.find((entry) => payload.request_id
+            ? entry.id === payload.request_id
+            : (entry.followUpMode ?? "steer") === (payload.command === "queue_message" ? "queue" : "steer") && !entry.followUpFailed);
+          if (pending) {
+            pending.followUpAction = undefined;
+            if (payload.command !== "queued_message_action") pending.followUpFailed = true;
+          }
+          if (payload.operation_id === state.activeOperationId
+            && (payload.error_type === "operation_not_found" || payload.error_type === "operation_inactive")) {
+            state.activeOperationId = null;
+            state.isBusy = false;
+            for (const entry of state.pendingSteeringMessages) {
+              entry.followUpFailed = true;
+              entry.followUpAction = undefined;
+            }
+            if (payload.session_id) this.busySessions.delete(payload.session_id);
+            if (updateWebview) this.postMessage({ type: "busyState", busy: false });
+          }
           if (updateWebview) {
             this.postMessage({
               type: "steeringQueue",
@@ -3730,7 +3840,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         state.activeOperationId = null;
         state.isBusy = false;
         state.batchDenied = false;
+        for (const pending of state.pendingSteeringMessages) {
+          pending.followUpFailed = true;
+          pending.followUpAction = undefined;
+        }
         if (updateWebview) {
+          this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
           this.postMessage({ type: "busyState", busy: false });
           setTimeout(() => void this.fetchAndSendCurrentTitle(), 2000);
         }
@@ -4331,26 +4446,52 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.addMessageOnState(this.currentState, role, text, true, images);
   }
 
+  private handleQueuedMessageAction(id: string, action: "steer" | "remove" | "edit"): void {
+    const state = this.currentState;
+    const entry = state.pendingSteeringMessages.find((message) => message.id === id);
+    if (!entry || entry.followUpAction) return;
+    if (entry.followUpFailed && action !== "steer") {
+      state.pendingSteeringMessages = state.pendingSteeringMessages.filter((message) => message !== entry);
+      if (action === "edit") this.postMessage({ type: "restoreFollowUp", text: entry.followUpPrompt ?? entry.text, images: entry.images ?? [] });
+      this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
+      return;
+    }
+    if (entry.followUpMode !== "queue" || !state.isBusy || !state.activeOperationId || !this.displayedSessionId) return;
+    try {
+      this.connection.queuedMessageAction(id, action, this.displayedSessionId, state.activeOperationId);
+      entry.followUpAction = action;
+      this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
+    } catch (error) {
+      this.addMessageOnState(state, "system", `排队操作失败：${String(error)}`, true);
+    }
+  }
+
   private queueSteeringMessageOnState(
     state: SessionState,
     text: string,
     images?: ImageAttachment[],
-  ): void {
+    mode: "queue" | "steer" = "steer",
+    prompt = text,
+  ): ChatMessage {
     const presented = presentUserMessage(text);
-    state.pendingSteeringMessages.push({
+    const message: ChatMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role: "user",
       text: presented.text,
       timestamp: Date.now(),
       images,
+      followUpMode: mode,
+      followUpPrompt: prompt,
       ...(presented.attachments.length ? { attachments: presented.attachments } : {}),
-    });
+    };
+    state.pendingSteeringMessages.push(message);
     if (state === this.currentState) {
       this.postMessage({
         type: "steeringQueue",
         messages: state.pendingSteeringMessages,
       });
     }
+    return message;
   }
 
   private flushSteeringMessagesOnState(
@@ -4360,7 +4501,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   ): void {
     if (state.pendingSteeringMessages.length === 0) return;
     const appliedCount = Math.max(0, Math.trunc(count));
-    const queued = state.pendingSteeringMessages.splice(0, appliedCount);
+    const queued = state.pendingSteeringMessages.filter((message) => (message.followUpMode ?? "steer") === "steer" && !message.followUpFailed).slice(0, appliedCount);
+    state.pendingSteeringMessages = state.pendingSteeringMessages.filter((message) => !queued.includes(message));
     for (const message of queued) {
       state.messages.push(message);
       state.history.push({ kind: "message", message });
@@ -5956,40 +6098,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       opacity: 0.65;
     }
     .composer-inline-mention button:hover { background: color-mix(in srgb, currentColor 12%, transparent); opacity: 1; }
-    #steering-hint {
-      display: none;
-      align-items: flex-start;
-      gap: 7px;
-      padding: 0 12px 7px;
-      color: var(--text-muted);
-      font-size: 10.5px;
-      line-height: 1.35;
-    }
-    #steering-hint.visible { display: flex; }
-    .steering-dot {
-      width: 6px;
-      height: 6px;
-      flex: 0 0 auto;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
-      margin-top: 4px;
-    }
-    .steering-copy {
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
     #steering-queue-preview {
       display: none;
-      color: color-mix(in srgb, var(--vscode-foreground) 78%, transparent);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 100%;
+      margin: 0 10px -24px;
+      padding: 2px 8px 18px;
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 16px 16px 0 0;
+      background: color-mix(in srgb, var(--surface-elevated) 88%, var(--vscode-foreground));
+      font-size: 13px;
     }
     #steering-queue-preview.visible { display: block; }
+    .follow-up-preview-row { display: flex; gap: 6px; align-items: center; min-height: 30px; }
+    .follow-up-preview-row > .follow-up-copy { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .follow-up-preview-row > .follow-up-icon { width: 16px; height: 16px; flex-shrink: 0; margin: 0 4px; color: var(--text-muted); }
+    .follow-up-preview-row button, .follow-up-menu button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      color: var(--text-muted); background: transparent; border: 0;
+      border-radius: 9px; padding: 4px; cursor: pointer; font: inherit; flex-shrink: 0;
+    }
+    .follow-up-preview-row svg, .follow-up-menu svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .follow-up-preview-row button:hover, .follow-up-preview-row button[aria-expanded="true"], .follow-up-menu button:hover {
+      background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); color: var(--vscode-foreground);
+    }
+    .follow-up-preview-row button:disabled, .follow-up-menu button:disabled { opacity: .4; cursor: default; }
+    .follow-up-preview-row button:focus-visible, .follow-up-menu button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+    .follow-up-status { color: var(--text-muted); font-size: 12px; }
+    .follow-up-menu {
+      position: fixed; z-index: 2200; width: 152px; padding: 6px;
+      border: 1px solid var(--border); border-radius: 18px;
+      background: var(--vscode-menu-background, var(--surface-elevated));
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .16); font-size: 13px;
+    }
+    .follow-up-menu button { width: 100%; justify-content: flex-start; padding: 9px 10px; color: var(--vscode-foreground); }
 
     /* ── Slash command popup ───────────────────────────────────── */
     #slash-popup {
@@ -7074,6 +7216,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="pending-edits-bar" class="pending-edits hidden"></div>
   <div id="composer-wrap">
+    <div id="steering-queue-preview" aria-label="后续消息队列" aria-live="polite"></div>
     <div id="composer-card">
       <div class="composer-meta">
         <button type="button" class="ctx-toggle" id="ctx-toggle" aria-expanded="false" title="展开或折叠附件">
@@ -7086,13 +7229,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         <div id="attachment-bar"></div>
       </div>
       <div id="input" contenteditable="true" role="textbox" aria-label="任务输入" aria-multiline="true" data-placeholder="输入问题或命令（如 /help）…"></div>
-      <div id="steering-hint" aria-live="polite">
-        <span class="steering-dot" aria-hidden="true"></span>
-        <span class="steering-copy">
-          <span id="steering-hint-label">Agent 正在运行；发送的新消息会在下一次工具调用后生效</span>
-          <span id="steering-queue-preview"></span>
-        </span>
-      </div>
       <div id="input-toolbar" class="composer-toolbar">
         <div class="toolbar-left">
           <div class="tb-left-wrap">
@@ -7215,8 +7351,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const input = document.getElementById('input');
         const sendBtn = document.getElementById('send-btn');
         const stopBtn = document.getElementById('stop-btn');
-        const steeringHint = document.getElementById('steering-hint');
-        const steeringHintLabel = document.getElementById('steering-hint-label');
         const steeringQueuePreview = document.getElementById('steering-queue-preview');
         const attachmentBar = document.getElementById('attachment-bar');
         const composerWrap = document.getElementById('composer-wrap');
@@ -7302,6 +7436,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const turns = [];
     const SEND_ICON_HTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
     let composerSendKey = 'enter';
+    let followUpMode = 'queue';
     let composerIsComposing = false;
     let compositionResetTimer = null;
     let runtimeState = { ready: false, pending: false, connected: false };
@@ -8857,11 +8992,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         busyLabel.textContent = 'CrabCode 正在处理';
       }
       if (composerCard) composerCard.classList.toggle('is-steering', busy);
-      if (steeringHint) steeringHint.classList.toggle('visible', busy);
+      renderSteeringQueue(pendingSteeringQueue);
       if (stopBtn) stopBtn.hidden = !busy;
       if (sendBtn) {
         sendBtn.innerHTML = SEND_ICON_HTML;
-        sendBtn.setAttribute('aria-label', busy ? '追加指令' : '发送');
+        sendBtn.setAttribute('aria-label', busy ? (followUpMode === 'queue' ? '加入队列' : '引导当前运行') : '发送');
       }
       updateSendButtonTitle();
       updateComposerPlaceholder();
@@ -8869,31 +9004,137 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function updateSendButtonTitle() {
       if (!sendBtn) return;
-      const action = isBusy ? '追加指令' : '发送';
-      const shortcut = composerSendKey === 'enter' ? 'Enter' : composerModifierLabel();
+      const action = isBusy ? (followUpMode === 'queue' ? '加入队列' : '引导当前运行') : '发送';
+      const shortcut = isBusy || composerSendKey === 'enter' ? 'Enter' : composerModifierLabel();
       sendBtn.title = action + ' (' + shortcut + ')';
+      sendBtn.setAttribute('aria-label', action);
     }
 
+    let followUpMenu = null;
+    let followUpMenuTrigger = null;
+    const FOLLOW_UP_ICONS = {
+      queue: '<path d="M4 4v12a2 2 0 0 0 2 2h14m-4-4 4 4-4 4M8 5h8M8 9h6"/>',
+      steer: '<path d="M4 4v7a3 3 0 0 0 3 3h13m-5-5 5 5-5 5"/>',
+      remove: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
+      more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+      edit: '<path d="m16 3 5 5M3 21l5-1L21 7a2 2 0 0 0-5-5L3 15v6Z"/>',
+    };
+    function followUpIcon(name) {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + FOLLOW_UP_ICONS[name] + '</svg>';
+    }
+    function closeFollowUpMenu(restoreFocus) {
+      if (followUpMenu) followUpMenu.remove();
+      if (followUpMenuTrigger) {
+        followUpMenuTrigger.setAttribute('aria-expanded', 'false');
+        if (restoreFocus) followUpMenuTrigger.focus();
+      }
+      followUpMenu = null;
+      followUpMenuTrigger = null;
+    }
+    function followUpButton(label, icon, handler, text) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.title = label;
+      button.setAttribute('aria-label', label);
+      button.innerHTML = followUpIcon(icon);
+      if (text) button.appendChild(document.createTextNode(text));
+      button.addEventListener('click', handler);
+      return button;
+    }
+    function openFollowUpMenu(message, trigger) {
+      const alreadyOpen = followUpMenuTrigger === trigger;
+      closeFollowUpMenu(false);
+      if (alreadyOpen) return;
+      followUpMenuTrigger = trigger;
+      trigger.setAttribute('aria-expanded', 'true');
+      const menu = document.createElement('div');
+      menu.className = 'follow-up-menu';
+      menu.setAttribute('role', 'menu');
+      menu.setAttribute('aria-label', '排队消息操作');
+      const edit = followUpButton('编辑消息', 'edit', function() {
+        closeFollowUpMenu(false);
+        vscode.postMessage({ type: 'queuedMessageAction', id: message.id, action: 'edit' });
+      }, '编辑消息');
+      const disableQueue = followUpButton('后续消息默认改为引导，已排队消息保留', 'queue', function() {
+        closeFollowUpMenu(true);
+        followUpMode = 'steer';
+        vscode.postMessage({ type: 'setFollowUpMode', mode: 'steer' });
+        updateSendButtonTitle();
+        updateComposerPlaceholder();
+      }, '关闭排队');
+      disableQueue.setAttribute('aria-label', '关闭排队');
+      disableQueue.disabled = followUpMode !== 'queue';
+      [edit, disableQueue].forEach(function(button) { button.setAttribute('role', 'menuitem'); menu.appendChild(button); });
+      const rect = trigger.getBoundingClientRect();
+      menu.style.left = Math.max(8, rect.right - 152) + 'px';
+      menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 104) + 'px';
+      document.body.appendChild(menu);
+      followUpMenu = menu;
+      edit.focus();
+    }
+    document.addEventListener('pointerdown', function(event) {
+      if (followUpMenu && !followUpMenu.contains(event.target) && !followUpMenuTrigger.contains(event.target)) closeFollowUpMenu(false);
+    });
+    document.addEventListener('keydown', function(event) {
+      if (!followUpMenu) return;
+      if (event.key === 'Escape') { event.preventDefault(); closeFollowUpMenu(true); }
+      else if (event.key === 'Tab') closeFollowUpMenu(false);
+      else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const items = Array.from(followUpMenu.querySelectorAll('button:not(:disabled)'));
+        const index = items.indexOf(document.activeElement);
+        items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+      }
+    });
+    window.addEventListener('resize', function() { closeFollowUpMenu(false); });
+    steeringQueuePreview.addEventListener('scroll', function() { closeFollowUpMenu(false); });
+
     function renderSteeringQueue(messages) {
+      closeFollowUpMenu(false);
       pendingSteeringQueue = Array.isArray(messages) ? messages : [];
-      const count = pendingSteeringQueue.length;
-      if (steeringHintLabel) {
-        steeringHintLabel.textContent = count > 0
-          ? count + ' 条消息待注入；将在下一次工具调用后生效'
-          : 'Agent 正在运行；发送的新消息会在下一次工具调用后生效';
-      }
-      if (steeringQueuePreview) {
-        const latest = count > 0 ? String(pendingSteeringQueue[count - 1].text || '').trim() : '';
-        steeringQueuePreview.textContent = latest ? '↳ ' + latest : '';
-        steeringQueuePreview.classList.toggle('visible', !!latest);
-        steeringQueuePreview.title = latest;
-      }
+      steeringQueuePreview.replaceChildren();
+      pendingSteeringQueue.forEach(function(message) {
+        const row = document.createElement('div');
+        row.className = 'follow-up-preview-row';
+        row.setAttribute('aria-busy', String(Boolean(message.followUpAction)));
+        const icon = document.createElement('span');
+        icon.className = 'follow-up-icon';
+        icon.innerHTML = followUpIcon(message.followUpMode === 'queue' ? 'queue' : 'steer');
+        icon.setAttribute('aria-label', message.followUpFailed ? '未发送' : message.followUpMode === 'queue' ? '排队中' : '待引导');
+        const copy = document.createElement('span');
+        copy.className = 'follow-up-copy';
+        copy.textContent = (message.followUpFailed ? '未发送 · ' : '') + (String(message.text || '').trim() || (message.images?.length ? '图片消息' : '附件消息'));
+        copy.title = message.followUpPrompt || copy.textContent;
+        row.append(icon, copy);
+        if (message.followUpMode === 'queue' || message.followUpFailed) {
+          const steer = followUpButton('引导当前运行', 'steer', function() {
+            vscode.postMessage({ type: 'queuedMessageAction', id: message.id, action: 'steer' });
+          }, '引导');
+          steer.disabled = !isBusy || message.followUpFailed || Boolean(message.followUpAction);
+          const remove = followUpButton('删除排队消息', 'remove', function() {
+            vscode.postMessage({ type: 'queuedMessageAction', id: message.id, action: 'remove' });
+          });
+          remove.disabled = Boolean(message.followUpAction);
+          const more = followUpButton('更多排队操作', 'more', function() { openFollowUpMenu(message, more); });
+          more.setAttribute('aria-haspopup', 'menu');
+          more.setAttribute('aria-expanded', 'false');
+          more.disabled = Boolean(message.followUpAction);
+          row.append(steer, remove, more);
+        } else {
+          const status = document.createElement('span');
+          status.className = 'follow-up-status';
+          status.textContent = '引导中';
+          row.appendChild(status);
+        }
+        steeringQueuePreview.appendChild(row);
+      });
+      steeringQueuePreview.classList.toggle('visible', pendingSteeringQueue.length > 0);
     }
 
     function updateComposerPlaceholder() {
       if (!input) return;
       if (isBusy) {
-        input.dataset.placeholder = '补充或纠正 Agent 的下一步行为…';
+        input.dataset.placeholder = followUpMode === 'queue' ? '输入后续任务，本轮结束后执行…' : '补充或纠正 Agent 的下一步行为…';
       } else {
         input.dataset.placeholder = currentMode === 'plan'
           ? '描述目标，CrabCode 会先只读分析并生成计划…'
@@ -9258,6 +9499,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       hasReceivedOptions = true;
       maxTextFileSizeMb = Math.min(100, Math.max(1, Math.floor(Number(msg.fileUploadMaxSizeMb) || 5)));
       composerSendKey = msg.composerSendKey === 'mod_enter' ? 'mod_enter' : 'enter';
+      followUpMode = msg.followUpMode === 'steer' ? 'steer' : 'queue';
+      renderSteeringQueue(pendingSteeringQueue);
+      updateComposerPlaceholder();
       updateSendButtonTitle();
       const models = msg.models || [];
       const previousValue = currentModelValue;
@@ -9839,8 +10083,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       const modifierSubmit = isComposerModifierSubmit(e);
+      if (isBusy && e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        closeMentionPopup();
+        closeSlashPopup();
+        send(modifierSubmit);
+        return;
+      }
       const shouldInsertLineBreak = e.key === 'Enter' && (
-        (composerSendKey === 'mod_enter' && !modifierSubmit)
+        e.shiftKey || e.altKey
+        || (composerSendKey === 'mod_enter' && !modifierSubmit)
         || (composerSendKey === 'enter' && modifierSubmit)
       );
       if (shouldInsertLineBreak) {
@@ -10591,7 +10843,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
     };
 
-    function send() {
+    function send(opposite) {
       let text = getInputText().trim();
       let extra = '';
       pendingTextFiles.forEach(function(f) {
@@ -10632,7 +10884,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         const skillName = cmd.startsWith('/') ? cmd.slice(1) : '';
         if (skillName && slashSkills.some(function(skill) { return skill.name === skillName; })) {
-          vscode.postMessage({ type: 'invokeSkill', name: skillName, userInput: args });
+          vscode.postMessage({ type: 'invokeSkill', name: skillName, userInput: args, oppositeFollowUp: opposite === true });
           clearInput();
           pendingImages.length = 0;
           pendingTextFiles.length = 0;
@@ -10648,6 +10900,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       vscode.postMessage({
         type: 'sendMessage',
+        oppositeFollowUp: opposite === true,
         text: text,
         images: images.length > 0 ? images : undefined,
         includeIdeContext: carriesIdeContext,
@@ -10664,7 +10917,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       closeMentionPopup();
     }
 
-    sendBtn.addEventListener('click', send);
+    sendBtn.addEventListener('click', function(event) { send(event.metaKey || event.ctrlKey); });
     if (stopBtn) {
       stopBtn.addEventListener('click', function() {
         if (isBusy) vscode.postMessage({ type: 'interrupt' });
@@ -11251,6 +11504,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           updateBusyLabel();
           updateAllTurnSummaries();
           scrollMessagesToBottom(true);
+          break;
+        case 'restoreFollowUp':
+          setInputText([getInputText(), msg.text].filter(Boolean).join('\\n\\n'));
+          (msg.images || []).forEach(function(img) {
+            pendingImages.push({ key: nextAttachmentKey('image'), name: '图片', media_type: img.media_type, data: img.data, dataUrl: 'data:' + img.media_type + ';base64,' + img.data });
+          });
+          renderAttachmentBar();
+          setComposerCaretAtEnd();
           break;
         case 'prefill':
           setInputText(msg.text);

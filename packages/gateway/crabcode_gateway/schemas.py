@@ -1277,6 +1277,7 @@ class ErrorPayload(BaseModel):
     # ownership.
     command: str | None = None
     command_error: bool = False
+    request_id: str | None = None
 
 
 class TurnCompletePayload(BaseModel):
@@ -1315,6 +1316,19 @@ class StreamRetryPayload(BaseModel):
 class SteeringAppliedPayload(BaseModel):
     type: Literal["steering_applied"] = "steering_applied"
     count: int = 1
+
+
+class QueuedMessageStartedPayload(BaseModel):
+    type: Literal["queued_message_started"] = "queued_message_started"
+    text: str
+    images: list[dict[str, Any]] = Field(default_factory=list)
+    request_id: str | None = None
+
+
+class QueuedMessageUpdatedPayload(BaseModel):
+    type: Literal["queued_message_updated"] = "queued_message_updated"
+    request_id: str
+    action: Literal["remove", "edit", "steer"]
 
 
 class DocumentJobPayload(BaseModel):
@@ -1506,6 +1520,8 @@ EventPayload = Union[
     StreamModePayload,
     StreamRetryPayload,
     SteeringAppliedPayload,
+    QueuedMessageStartedPayload,
+    QueuedMessageUpdatedPayload,
     DocumentJobPayload,
     DocumentSelectionTranslationPayload,
     AgentStatePayload,
@@ -1550,6 +1566,8 @@ def core_event_to_payload(event: Any) -> EventPayload:
         StreamModeEvent,
         StreamRetryEvent,
         SteeringAppliedEvent,
+        QueuedMessageStartedEvent,
+        QueuedMessageUpdatedEvent,
         StreamTextEvent,
         TaskUpdateEvent,
         TeamMessageEvent,
@@ -1659,6 +1677,10 @@ def core_event_to_payload(event: Any) -> EventPayload:
         )
     if isinstance(event, SteeringAppliedEvent):
         return SteeringAppliedPayload(count=event.count)
+    if isinstance(event, QueuedMessageStartedEvent):
+        return QueuedMessageStartedPayload(text=event.text, images=event.images, request_id=event.request_id)
+    if isinstance(event, QueuedMessageUpdatedEvent):
+        return QueuedMessageUpdatedPayload(request_id=event.request_id, action=event.action)
     if isinstance(event, DocumentJobEvent):
         return DocumentJobPayload(
             action=event.action,

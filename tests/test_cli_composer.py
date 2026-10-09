@@ -89,8 +89,8 @@ class ComposerTests(unittest.IsolatedAsyncioTestCase):
         for busy in (False, True):
             for newline in (
                 "\n", "\x1b\r",
-                "\x1b[13;2u", "\x1b[13;3u", "\x1b[13;5u",
-                "\x1b[27;2;13~", "\x1b[27;3;13~", "\x1b[27;5;13~",
+                "\x1b[13;2u", "\x1b[13;3u",
+                "\x1b[27;2;13~", "\x1b[27;3;13~",
             ):
                 with self.subTest(busy=busy, newline=repr(newline)):
                     async with self.composer(busy=busy) as (composer, pipe, _):
@@ -106,6 +106,18 @@ class ComposerTests(unittest.IsolatedAsyncioTestCase):
                             ("submit", "first\nsecond"),
                         )
                         self.assertEqual(composer.prompt_session.default_buffer.text, "")
+
+    async def test_reverse_follow_up_keys_only_override_while_busy(self):
+        for busy in (False, True):
+            for key in ("\x13", "\x1b[13;5u", "\x1b[27;5;13~"):
+                with self.subTest(busy=busy, key=repr(key)):
+                    async with self.composer(busy=busy) as (composer, pipe, _):
+                        pipe.send_text("follow up" + key)
+                        if busy:
+                            self.assertEqual(await asyncio.wait_for(composer.next_event(), 3), ("submit_opposite", "follow up"))
+                        else:
+                            await self.wait_for(lambda: composer.prompt_session.default_buffer.text == "follow up\n")
+                            self.assertTrue(composer._events.empty())
 
     async def test_modified_enter_sequence_can_arrive_in_chunks(self):
         async with self.composer() as (composer, pipe, _):

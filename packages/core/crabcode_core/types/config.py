@@ -335,6 +335,7 @@ class UserAppendPromptConfig(BaseModel):
 
 class CrabCodeSettings(BaseModel):
     """Full settings.json schema."""
+    follow_up_mode: Literal["queue", "steer"] = "queue"
     permissions: PermissionsSettings = Field(default_factory=PermissionsSettings)
     env: dict[str, str] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)

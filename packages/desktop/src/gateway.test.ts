@@ -45,6 +45,31 @@ describe("SessionChannel new-session controls", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
   });
 
+  it("routes queue and steering commands to the same active operation with attachments", async () => {
+    const api = {
+      authenticate: vi.fn().mockResolvedValue(undefined), webSocketUrl: () => "ws://localhost/ws",
+    } as unknown as GatewayApi;
+    const channel = new SessionChannel(api, { cwd: "/work", onEvent: vi.fn(), onReady: vi.fn(), onState: vi.fn() });
+    await channel.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.emit("open");
+    socket.receive({ type: "server.connected", properties: { session_id: "session-a" } });
+    const images = [{ media_type: "image/png", data: "image-data" }];
+    channel.queueMessage("next task", "op", images, "q1");
+    channel.steer("change direction", "op", images);
+    expect(socket.sent.map((value) => JSON.parse(value)).slice(-2)).toEqual([
+      { type: "queue_message", text: "next task", operation_id: "op", session_id: "session-a", request_id: "q1", images },
+      { type: "steer_message", text: "change direction", operation_id: "op", session_id: "session-a", images },
+    ]);
+    for (const action of ["edit", "remove", "steer"] as const) {
+      channel.queuedMessageAction("q1", action, "op");
+      expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+        type: "queued_message_action", request_id: "q1", action, operation_id: "op", session_id: "session-a",
+      });
+    }
+    channel.dispose();
+  });
+
   it("sends the remembered composer controls with the initial request", async () => {
     const api = {
       authenticate: vi.fn().mockResolvedValue(undefined),

@@ -35,6 +35,7 @@ from crabcode_core.types.event import (
     PermissionRequestEvent,
     PermissionResponseEvent,
     PlanReadyEvent,
+    QueuedMessageStartedEvent,
     SteeringAppliedEvent,
     TurnCompleteEvent,
 )
@@ -129,6 +130,8 @@ class CoreSession:
         self._permission_queue: asyncio.Queue[PermissionResponseEvent] = asyncio.Queue()
         self._choice_queue: asyncio.Queue[ChoiceResponseEvent] = asyncio.Queue()
         self._steering_messages: list[Message] = []
+        self._queued_follow_ups: list[tuple[str, list[dict[str, Any]] | None, str | None]] = []
+        self._accepts_queued_follow_ups = False
         self._abort_controller: asyncio.Event = asyncio.Event()
 
         self.skills: list = []
@@ -2932,6 +2935,7 @@ class CoreSession:
                 self._ensure_monitor_notification_dispatcher()
         async with self._turn_scope():
             self._foreground_turn_active = True
+            self._accepts_queued_follow_ups = True
             self._active_event_stream_token = self._active_turn_token
             stream = self._send_message_impl(
                 text,
@@ -2941,9 +2945,21 @@ class CoreSession:
             )
             try:
                 while True:
+                    failed = False
                     async for event in stream:
+                        # recoverable means the session can be retried; it
+                        # does not mean this failed turn completed its task.
+                        if isinstance(event, ErrorEvent) and event.agent_id is None:
+                            failed = True
+                        if isinstance(event, TurnCompleteEvent) and event.reason in {
+                            "error", "interrupted", "context_overflow", "empty_response",
+                            "max_tokens", "length", "model_context_window_exceeded",
+                        }:
+                            failed = True
                         yield event
                     await stream.aclose()
+                    if failed or self._abort_controller.is_set():
+                        break
 
                     # A steering message may arrive after query_loop emitted
                     # its final event but before the Gateway finished
@@ -2951,7 +2967,21 @@ class CoreSession:
                     # immediately run that input as the next continuation.
                     queued = self._drain_steering_messages_for_query()
                     if not queued:
-                        break
+                        if not self._queued_follow_ups:
+                            break
+                        next_text, next_images, request_id = self._queued_follow_ups.pop(0)
+                        yield QueuedMessageStartedEvent(
+                            text=next_text, images=next_images or [], request_id=request_id,
+                        )
+                        if self._abort_controller.is_set():
+                            yield TurnCompleteEvent(reason="interrupted")
+                            break
+                        # A real new user turn, with its own prompt/attachments;
+                        # never expose queued input to the current tool loop.
+                        stream = self._send_message_impl(
+                            next_text, max_turns=max_turns, images=next_images,
+                        )
+                        continue
                     yield SteeringAppliedEvent(count=len(queued))
                     self.messages.extend(queued)
                     latest = queued[-1]
@@ -2964,6 +2994,8 @@ class CoreSession:
                         message_origin="user-steering",
                     )
             finally:
+                self._accepts_queued_follow_ups = False
+                self._foreground_turn_active = False
                 try:
                     # ``async for`` does not own/finalize its iterator when the
                     # outer generator is closed at a yield point. Explicitly
@@ -2971,14 +3003,62 @@ class CoreSession:
                     # projection is flushed before releasing the turn scope.
                     await stream.aclose()
                 finally:
+                    self._queued_follow_ups.clear()
+                    self._steering_messages.clear()
                     self._active_event_stream_token = None
-                    self._foreground_turn_active = False
                     await self._release_computer_use()
+
+    async def queue_message(
+        self,
+        text: str,
+        images: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> bool:
+        """Accept a FIFO follow-up to run after the current user turn finishes.
+
+        Pending input is discarded when this foreground run stops or fails;
+        it must never leak into an unrelated future run. Return False when
+        there is no send_message stream to consume the queue.
+        """
+        if self._closed or self._closing or not self._accepts_queued_follow_ups:
+            return False
+        if len(self._queued_follow_ups) >= 100:
+            raise RuntimeError("Too many queued follow-up messages")
+        self._queued_follow_ups.append((
+            text, [dict(image) for image in images] if images else None, request_id,
+        ))
+        return True
+
+    async def update_queued_message(self, request_id: str, action: str) -> bool:
+        """Remove or promote exactly one still-pending follow-up atomically.
+
+        Once a message has started, it cannot be recalled into the composer.
+        A failed promotion leaves the original queued message intact.
+        """
+        if action not in {"remove", "edit", "steer"}:
+            raise ValueError("Unknown queued message action")
+        if self._closed or self._closing or not self._accepts_queued_follow_ups:
+            return False
+        for index, (text, images, queued_id) in enumerate(self._queued_follow_ups):
+            if queued_id != request_id:
+                continue
+            if action == "steer":
+                if self._abort_controller.is_set() or not await self.steer_message(
+                    text, images=images, deduplicate=False,
+                ):
+                    return False
+            # steer_message does not yield control, so consumption cannot race
+            # between accepting guidance and removing its queued counterpart.
+            self._queued_follow_ups.pop(index)
+            return True
+        return False
 
     async def steer_message(
         self,
         text: str,
         images: list[dict[str, Any]] | None = None,
+        *,
+        deduplicate: bool = True,
     ) -> bool:
         """Queue user guidance for the next safe foreground-turn boundary.
 
@@ -2999,7 +3079,7 @@ class CoreSession:
         # Repeated Enter/"继续" presses are common while a tool is running.
         # Coalesce an identical pending guidance message so UI retries cannot
         # turn into a burst of duplicate continuation turns.
-        if self._steering_messages:
+        if deduplicate and self._steering_messages:
             previous = self._steering_messages[-1]
             previous_images = (
                 [
@@ -3604,6 +3684,7 @@ class CoreSession:
         self._drain_monitor_notification_queue()
         self._drain_peer_notification_queue()
         self._drain_steering_messages_for_query()
+        self._queued_follow_ups.clear()
         self._drain_background_event_queue()
         self._drain_queue(self._agent_event_queue)
         self._drain_queue(self._permission_queue)
@@ -3855,6 +3936,7 @@ class CoreSession:
             self._pending_manual_compact = None
             self._current_plan = None
             self._drain_steering_messages_for_query()
+            self._queued_follow_ups.clear()
             return messages_before
 
     def checkpoint(

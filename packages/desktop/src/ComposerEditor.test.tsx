@@ -139,13 +139,14 @@ describe("ComposerEditor send shortcuts", () => {
     container.remove();
   });
 
-  function render(sendKey?: "enter" | "mod_enter") {
+  function render(sendKey?: "enter" | "mod_enter", busy = false) {
     act(() => root.render(
       <ComposerEditor
         value=""
         references={references}
         placeholder="输入任务"
         sendKey={sendKey}
+        busy={busy}
         onChange={vi.fn()}
         onSubmit={onSubmit}
       />,
@@ -157,6 +158,22 @@ describe("ComposerEditor send shortcuts", () => {
     const editor = render();
     act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
     expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it.each(["enter", "mod_enter"] as const)("uses Enter/default and modifier/opposite while busy regardless of %s", (sendKey) => {
+    const editor = render(sendKey, true);
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(onSubmit).toHaveBeenLastCalledWith(false);
+    const modifier = isMacPlatform() ? { metaKey: true } : { ctrlKey: true };
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ...modifier, bubbles: true, cancelable: true })));
+    expect(onSubmit).toHaveBeenLastCalledWith(true);
+    onSubmit.mockClear();
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, ...modifier, bubbles: true, cancelable: true })));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(editor.querySelector("br")).not.toBeNull();
+    act(() => editor.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ...modifier, bubbles: true, cancelable: true })));
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("does not send while an IME composition is active", () => {

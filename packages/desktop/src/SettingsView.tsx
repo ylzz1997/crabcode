@@ -101,7 +101,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     id: "general",
     title: "常规",
     description: "运行环境、文件上传、文件查看与会话设置",
-    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 CrabCode 套件 安装 Gateway Search Debugger Browser Playwright Chromium 浏览器工具 网页浏览 Ripgrep rg 语义搜索 文本搜索 调试 浏览器模式 文件 上传 内容 路径 引用 查看 浏览 标签 标签页 最大标签数 最大数量 上限 会话 显示 处理用时 耗时 仅秒数 时分秒 发送快捷键 Enter 回车 Ctrl Cmd Command Option 权限快捷键 全局 审批 允许 始终允许 拒绝 Windows macOS F9 F10 F11 系统通知 通知 执行时 执行完毕 开始执行 右下角 气泡 通知权限",
+    searchText: "常规 运行环境 Python 路径 自动检测 本地启动 CrabCode 套件 安装 Gateway Search Debugger Browser Playwright Chromium 浏览器工具 网页浏览 Ripgrep rg 语义搜索 文本搜索 调试 浏览器模式 文件 上传 内容 路径 引用 查看 浏览 标签 标签页 最大标签数 最大数量 上限 会话 跟进 处理方式 排队 引导 queue steer 反向发送 显示 处理用时 耗时 仅秒数 时分秒 发送快捷键 Enter 回车 Ctrl Cmd Command Option 权限快捷键 全局 审批 允许 始终允许 拒绝 Windows macOS F9 F10 F11 系统通知 通知 执行时 执行完毕 开始执行 右下角 气泡 通知权限",
   },
   {
     id: "appearance",
@@ -358,6 +358,7 @@ export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
   | "session_notify_on_complete"
   | "session_notify_on_interaction"
   | "composer_send_key"
+  | "follow_up_mode"
   | "approval_shortcuts"
   | "file_upload_mode"
   | "file_upload_max_size_mb"
@@ -1140,7 +1141,7 @@ export function SettingsView({
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
                       <strong>发送快捷键</strong>
-                      <span>选择按 Enter 发送，或按 {composerModifierLabel()} 发送。</span>
+                      <span>空闲时选择按 Enter 发送，或按 {composerModifierLabel()} 发送。</span>
                     </div>
                     <div className="settings-segmented" aria-label="发送快捷键">
                       {(["enter", "mod_enter"] as ComposerSendKey[]).map((key) => (
@@ -1153,6 +1154,23 @@ export function SettingsView({
                         >
                           {key === "enter" ? "Enter 发送" : `${composerModifierLabel()} 发送`}
                         </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settings-row compact">
+                    <div className="settings-row-copy">
+                      <strong>跟进处理方式</strong>
+                      <span>运行时将后续消息排队，或引导当前运行。按 {composerModifierLabel()} 对单条消息执行相反操作；Shift+Enter 换行。</span>
+                    </div>
+                    <div className="settings-segmented" aria-label="跟进处理方式">
+                      {(["queue", "steer"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={(settings.follow_up_mode ?? "queue") === mode ? "active" : ""}
+                          aria-pressed={(settings.follow_up_mode ?? "queue") === mode}
+                          onClick={() => onConversationChange({ follow_up_mode: mode })}
+                        >{mode === "queue" ? "排队" : "引导"}</button>
                       ))}
                     </div>
                   </div>

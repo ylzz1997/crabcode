@@ -156,6 +156,13 @@
           "maximum": 100,
           "description": "添加非图片文件并发送完整内容时的单文件大小上限（MB）"
         },
+        "crabcode.followUpMode": {
+          "type": "string",
+          "enum": ["queue", "steer"],
+          "enumDescriptions": ["排队：本轮结束后依次执行", "引导：在安全边界接入当前运行"],
+          "default": "queue",
+          "description": "跟进处理方式。运行中 Enter 使用此方式，Ctrl/Cmd+Enter 对单条消息执行相反操作，Shift+Enter 换行。"
+        },
         "crabcode.composerSendKey": {
           "type": "string",
           "enum": [

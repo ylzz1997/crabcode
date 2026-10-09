@@ -81,6 +81,29 @@ newline. You can also press **Esc**, then **Enter** to insert a newline. The
 input frame grows with newlines and wrapped text, and scrolls with the cursor
 when it fills the terminal. These keys also work while the agent is running.
 
+### Follow-up behavior
+
+CLI, VS Code, and Desktop support follow-ups during an active run. **Queue** is
+the default: messages run as separate turns in FIFO order after the current turn
+finishes. **Steer** adds guidance at a safe boundary of the current run, such as
+after a tool returns. Queued input retains its images and attached context.
+
+Choose the default in **Desktop Settings → General → Conversation → Follow-up
+behavior** or in VS Code's `crabcode.followUpMode` setting. Queued messages appear
+in cards above the composer, with Steer and Delete actions. The menu offers Edit
+message (recall the message and its images into the composer) and Disable queue
+(switch future messages to Steer while keeping existing queued messages).
+During a run, Enter uses the default and Cmd+Enter
+(macOS) / Ctrl+Enter (Windows/Linux) uses the opposite for just that message;
+Shift+Enter inserts a newline. Idle input keeps the configured send shortcut.
+
+In the CLI, `/follow-up queue` and `/follow-up steer` save `follow_up_mode` in user
+settings. Ctrl+S sends the opposite while working; Ctrl+Enter also works in
+terminals that report extended key codes. Ctrl+J and Alt/Opt+Enter insert newlines.
+
+Stopping or failing a run discards its unexecuted queue. Desktop and VS Code keep
+that input available to restore into the composer; CLI prints the unsent messages.
+
 ### Persistent Goals
 
 Use `/goal` to keep a measurable objective active across turns, compaction, and

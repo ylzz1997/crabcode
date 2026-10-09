@@ -161,6 +161,21 @@ class SteeringAppliedEvent:
 
 
 @dataclass
+class QueuedMessageStartedEvent:
+    """A queued follow-up is starting a separate user turn."""
+    text: str
+    images: list[dict[str, Any]] = field(default_factory=list)
+    request_id: str | None = None
+
+
+@dataclass
+class QueuedMessageUpdatedEvent:
+    """A pending follow-up was recalled, deleted, or promoted to guidance."""
+    request_id: str
+    action: str
+
+
+@dataclass
 class AgentStateEvent:
     """Lifecycle update for a managed sub-agent."""
     agent_id: str
@@ -300,6 +315,8 @@ CoreEvent = Union[
     StreamModeEvent,
     StreamRetryEvent,
     SteeringAppliedEvent,
+    QueuedMessageStartedEvent,
+    QueuedMessageUpdatedEvent,
     AgentStateEvent,
     AgentOutputEvent,
     ModeChangeEvent,

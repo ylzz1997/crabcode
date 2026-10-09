@@ -16,6 +16,7 @@ import {
   buildResumeSessionCommand,
   buildSendMessageCommand,
   buildSteerMessageCommand,
+  buildQueueMessageCommand,
   buildPushContextCommand,
   buildSwitchModelCommand,
   buildSetPermissionModeCommand,
@@ -238,6 +239,28 @@ export class CrabCodeConnection implements vscode.Disposable {
       operationId,
       images: options?.images,
     }));
+  }
+
+  queue(
+    text: string,
+    options: { sessionId?: string; operationId?: string; images?: ImageAttachment[]; requestId?: string } = {},
+  ): void {
+    const sessionId = options.sessionId ?? this._sessionId ?? undefined;
+    const operationId = options.operationId
+      ?? (sessionId ? this.activeForegroundOperations.get(sessionId) : undefined);
+    this.sendCommand(buildQueueMessageCommand(text, { ...options, sessionId, operationId }));
+  }
+
+  queuedMessageAction(
+    requestId: string,
+    action: "steer" | "remove" | "edit",
+    sessionId: string,
+    operationId: string,
+  ): void {
+    this.sendCommand({
+      type: "queued_message_action", request_id: requestId, action,
+      session_id: sessionId, operation_id: operationId,
+    });
   }
 
   pushContext(
@@ -466,6 +489,8 @@ export class CrabCodeConnection implements vscode.Disposable {
     switch (cmd.type) {
       case "send_message":
       case "steer_message":
+      case "queue_message":
+      case "queued_message_action":
       case "push_context":
       case "switch_model":
       case "set_permission_mode":

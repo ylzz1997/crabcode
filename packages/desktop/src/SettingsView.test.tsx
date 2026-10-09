@@ -419,6 +419,10 @@ describe("SettingsView", () => {
       .find((button) => button.textContent?.includes(composerModifierLabel()))!;
     act(() => modifierMode.click());
     expect(handlers.onConversationChange).toHaveBeenCalledWith({ composer_send_key: "mod_enter" });
+    const followUpButtons = container.querySelectorAll<HTMLButtonElement>('[aria-label="跟进处理方式"] button');
+    expect(followUpButtons[0].getAttribute("aria-pressed")).toBe("true");
+    act(() => followUpButtons[1].click());
+    expect(handlers.onConversationChange).toHaveBeenCalledWith({ follow_up_mode: "steer" });
   });
 
   it("records approval shortcuts, rejects duplicates, restores defaults and disables them", () => {

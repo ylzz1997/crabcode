@@ -98,6 +98,7 @@ export interface ConnectionPreset {
 }
 
 export interface DesktopSettings {
+  follow_up_mode?: "queue" | "steer";
   schema_version: 4;
   active_connection_id: string;
   connection_order: string[];
@@ -787,11 +788,22 @@ export interface SessionCurrentStep {
   startedAt: number;
 }
 
+export type QueuedMessageAction = "steer" | "remove" | "edit";
+
+export interface PendingFollowUp {
+  item: ChatItem;
+  text: string;
+  images: ImageAttachment[];
+  status: "pending" | "cancelled" | "editing";
+  action?: QueuedMessageAction;
+}
+
 export interface SessionViewState {
   id: string;
   cwd: string;
   title: string;
   items: ChatItem[];
+  pendingFollowUps?: PendingFollowUp[];
   loading: boolean;
   busy: boolean;
   connected: boolean;
@@ -817,6 +829,7 @@ export interface GatewayViewState {
 
 export interface GatewayEvent {
   type: string;
+  request_id?: string | null;
   session_id?: string;
   operation_id?: string;
   operation_scope?: string;

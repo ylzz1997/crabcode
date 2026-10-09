@@ -257,6 +257,7 @@ export function ComposerEditor({
   commands,
   placeholder,
   sendKey = "enter",
+  busy = false,
   onChange,
   onImages,
   onSubmit,
@@ -266,9 +267,10 @@ export function ComposerEditor({
   commands?: ComposerCommandOption[];
   placeholder: string;
   sendKey?: ComposerSendKey;
+  busy?: boolean;
   onChange: (value: string) => void;
   onImages?: (files: File[]) => void;
-  onSubmit: () => void;
+  onSubmit: (opposite?: boolean) => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const commandMenuRef = useRef<HTMLDivElement | null>(null);
@@ -509,8 +511,16 @@ export function ComposerEditor({
         }
       }
     }
+    if (busy && event.key === "Enter" && !event.shiftKey && !event.altKey) {
+      event.preventDefault();
+      closeMentions();
+      closeCommands();
+      onSubmit(modifierSubmit);
+      return;
+    }
     const shouldInsertLineBreak = event.key === "Enter" && (
-      (sendKey === "mod_enter" && !modifierSubmit)
+      event.shiftKey || event.altKey
+      || (sendKey === "mod_enter" && !modifierSubmit)
       || (sendKey === "enter" && modifierSubmit)
     );
     if (shouldInsertLineBreak) {

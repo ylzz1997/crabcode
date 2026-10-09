@@ -19,6 +19,7 @@ function loadPanel(fetch) {
     EventEmitter: class { event() {} fire() {} dispose() {} },
     FileType: { File: 1, Directory: 2 },
     QuickPickItemKind: { Separator: -1 },
+    ConfigurationTarget: { Global: 1 },
     Uri: { file: uriFor },
     window: {
       activeTextEditor: undefined,
@@ -33,7 +34,13 @@ function loadPanel(fetch) {
       },
     },
     workspace: {
-      getConfiguration: () => ({ get: (key, fallback) => config[key] ?? fallback }),
+      getConfiguration: () => ({
+        get: (key, fallback) => config[key] ?? fallback,
+        update: async (key, value) => {
+          if (config.update) await config.update(key, value);
+          config[key] = value;
+        },
+      }),
       workspaceFolders: [workspaceFolder],
       getWorkspaceFolder: uri => belongsToWorkspace(uri.fsPath) ? workspaceFolder : undefined,
       findFiles: async () => (config.workspaceFiles || []).map(uriFor),

@@ -44,6 +44,13 @@ be installed and running; the extension does not install them remotely.
 
 ## Features
 
+- Follow-up behavior: choose Queue (default) or Steer with `crabcode.followUpMode`.
+  Queued cards above the composer offer Steer and Delete. Their menu offers Edit
+  message (recall with images) and Disable queue (use Steer for future messages;
+  existing queued messages remain). Enter uses the default; Cmd+Enter on macOS
+  or Ctrl+Enter elsewhere sends the opposite for one message. Shift+Enter inserts
+  a newline. Queue runs messages in order after the current turn; Steer supplies
+  guidance at the next safe boundary. Unsent input remains recoverable after a stop.
 - Streaming chat with Markdown, code blocks, diffs, tool results, attachments,
   permissions, choices, and plans.
 - Explain, fix, refactor, test, or send the selected editor code to chat.

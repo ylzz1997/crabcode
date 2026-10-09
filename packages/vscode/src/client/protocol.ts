@@ -43,6 +43,19 @@ export interface SteerMessageCommand {
   images?: ImageAttachment[];
 }
 
+export interface QueueMessageCommand extends Omit<SteerMessageCommand, "type"> {
+  type: "queue_message";
+  request_id?: string;
+}
+
+export interface QueuedMessageActionCommand {
+  type: "queued_message_action";
+  session_id: string;
+  operation_id: string;
+  request_id: string;
+  action: "steer" | "remove" | "edit";
+}
+
 export interface PermissionResponseCommand {
   type: "permission_response";
   tool_use_id: string;
@@ -129,6 +142,8 @@ export interface PlanActionCommand {
 export type WsCommand =
   | SendMessageCommand
   | SteerMessageCommand
+  | QueueMessageCommand
+  | QueuedMessageActionCommand
   | NewSessionCommand
   | ResumeSessionCommand
   | InterruptCommand
@@ -190,6 +205,13 @@ export function buildSteerMessageCommand(
     cmd.images = options.images;
   }
   return cmd;
+}
+
+export function buildQueueMessageCommand(
+  text: string,
+  options: { sessionId?: string; operationId?: string; images?: ImageAttachment[]; requestId?: string } = {},
+): QueueMessageCommand {
+  return { ...buildSteerMessageCommand(text, options), type: "queue_message", request_id: options.requestId };
 }
 
 /**

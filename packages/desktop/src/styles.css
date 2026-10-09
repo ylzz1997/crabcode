@@ -16671,3 +16671,54 @@ html[data-theme="light"] .project-file-code .token.class-name {
     border-bottom: 1px solid var(--border-soft);
   }
 }
+.follow-up-queue {
+  position: relative;
+  margin: 0 10px -18px;
+  padding: 2px 8px 18px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px 16px 0 0;
+  background: var(--surface-hover);
+  font-size: 13px;
+}
+.follow-up-queue + .composer-context {
+  position: relative;
+  border-radius: 16px 16px 0 0;
+}
+.follow-up-card { display: flex; gap: 6px; align-items: center; min-height: 30px; }
+.follow-up-icon { width: 16px; height: 16px; flex-shrink: 0; margin: 0 4px; color: var(--muted); }
+.follow-up-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.follow-up-status { color: var(--muted); }
+.follow-up-card > button, .follow-up-menu button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.follow-up-card > button svg, .follow-up-menu svg { width: 16px; height: 16px; flex-shrink: 0; }
+.follow-up-card > button:hover, .follow-up-card > button[aria-expanded="true"], .follow-up-menu button:hover {
+  background: var(--surface-active); color: var(--text);
+}
+.follow-up-card > button:disabled, .follow-up-menu button:disabled { opacity: .4; cursor: default; }
+.follow-up-card > button:focus-visible, .follow-up-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.follow-up-menu {
+  position: fixed;
+  z-index: 2200;
+  width: 152px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-hover);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  font-size: 13px;
+}
+.follow-up-menu button { width: 100%; justify-content: flex-start; padding: 9px 10px; color: var(--text); }

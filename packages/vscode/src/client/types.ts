@@ -1009,6 +1009,7 @@ export interface CompactPayload {
 }
 
 export interface ErrorPayload {
+  request_id?: string | null;
   session_id?: string;
   operation_id?: string;
   operation_scope?: "foreground" | "plan" | "background";
@@ -1069,6 +1070,25 @@ export interface SteeringAppliedPayload {
   operation_scope?: "foreground" | "plan" | "background";
   type: "steering_applied";
   count?: number;
+}
+
+export interface QueuedMessageStartedPayload {
+  type: "queued_message_started";
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  request_id?: string | null;
+  text: string;
+  images?: ImageAttachment[];
+}
+
+export interface QueuedMessageUpdatedPayload {
+  type: "queued_message_updated";
+  session_id?: string;
+  operation_id?: string;
+  operation_scope?: "foreground" | "plan" | "background";
+  request_id: string;
+  action: "steer" | "remove" | "edit";
 }
 
 export interface DocumentJobPayload {
@@ -1297,6 +1317,8 @@ export type EventPayload =
     StreamModePayload |
     StreamRetryPayload |
     SteeringAppliedPayload |
+    QueuedMessageStartedPayload |
+    QueuedMessageUpdatedPayload |
     DocumentJobPayload |
     DocumentSelectionTranslationPayload |
     AgentStatePayload |

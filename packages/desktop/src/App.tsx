@@ -83,6 +83,8 @@ import DocumentWorkspace from "./DocumentWorkspace";
 import { ComposerEditor, composerModifierLabel, createComposerCommandOptions, type ComposerReferenceOption } from "./ComposerEditor";
 import { CopyButton } from "./CopyButton";
 import { applyGatewayEvent } from "./events";
+import { FollowUpQueue } from "./FollowUpQueue";
+import type { QueuedMessageAction } from "./types";
 import {
   DEFAULT_APPROVAL_SHORTCUTS,
   bindApprovalShortcuts,
@@ -864,6 +866,7 @@ function App() {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [pendingFolders, setPendingFolders] = useState<string[]>([]);
   const [pendingDocumentReferences, setPendingDocumentReferences] = useState<DocumentReference[]>([]);
+  const restoredFollowUpRef = useRef("");
   const [selectionTranslationEvents, setSelectionTranslationEvents] = useState<Record<string, GatewayEvent | null>>({});
   const [projectModal, setProjectModal] = useState<ProjectPreset | "new" | null>(null);
   const [projectTypeModal, setProjectTypeModal] = useState(false);
@@ -961,6 +964,27 @@ function App() {
   const activeSessionKey = activeConnection ? activeSessions[activeConnection.id] : null;
   const activeSession = activeSessionKey ? sessions[activeSessionKey] : null;
   const activeChannel = activeSessionKey ? channelRef.current.get(activeSessionKey) : null;
+  useEffect(() => {
+    const recalled = activeSession?.pendingFollowUps?.filter((entry) => entry.status === "editing") ?? [];
+    const batch = recalled.length ? `${activeSessionKey}:${recalled.map((entry) => entry.item.id).join(",")}` : "";
+    if (restoredFollowUpRef.current === batch) return;
+    restoredFollowUpRef.current = batch;
+    if (!recalled.length || !activeSessionKey) return;
+    // Keep any new draft and attachments the user entered while the recall was
+    // awaiting acknowledgement. Hidden sessions restore only when reopened.
+    setComposer((current) => [current, ...recalled.map((entry) => entry.text)].filter(Boolean).join("\n\n"));
+    setPendingImages((current) => [...current, ...recalled.flatMap((entry) => entry.images.map((image, index) => ({
+      ...image, id: randomUuid(), name: `图片 ${index + 1}`,
+      dataUrl: `data:${image.media_type};base64,${image.data}`,
+    })))]);
+    setSessions((current) => !current[activeSessionKey] ? current : ({
+      ...current, [activeSessionKey]: {
+        ...current[activeSessionKey],
+        pendingFollowUps: current[activeSessionKey].pendingFollowUps?.filter((entry) => !recalled.includes(entry)),
+      },
+    }));
+    document.querySelector<HTMLElement>(".composer-editor-input")?.focus();
+  }, [activeSession?.pendingFollowUps, activeSessionKey]);
   const pendingApproval = useMemo(() => uniquePendingApproval(sessions), [sessions]);
   const approvalShortcuts = settings?.approval_shortcuts ?? DEFAULT_APPROVAL_SHORTCUTS;
   approvalShortcutTargetRef.current = approvalShortcuts.enabled && !settingsOpen ? pendingApproval : null;
@@ -2455,7 +2479,7 @@ function App() {
     }
   };
 
-  const sendMessage = async () => {
+  const sendMessage = async (opposite = false) => {
     const text = composer.trim();
     if (
       (!text && pendingImages.length === 0 && pendingFiles.length === 0 && pendingFolders.length === 0 && pendingDocumentReferences.length === 0)
@@ -2484,28 +2508,41 @@ function App() {
     const now = Date.now();
     try {
       if (activeSession.busy && activeSession.operationId) {
-        activeChannel.steer(
-          messageText,
-          activeSession.operationId,
-          pendingImages.map(({ media_type, data }) => ({ media_type, data })),
-        );
+        const defaultMode = settings?.follow_up_mode ?? "queue";
+        const mode = opposite ? (defaultMode === "queue" ? "steer" : "queue") : defaultMode;
+        const images = pendingImages.map(({ media_type, data }) => ({ media_type, data }));
         const userItem = pendingUserMessage(text, pendingImages, pendingFiles, pendingFolders, pendingDocumentReferences, now);
-        setSessions((current) => ({
-          ...current,
-          [activeSessionKey]: {
-            ...current[activeSessionKey],
-            runStartedAt: current[activeSessionKey].runStartedAt ?? now,
-            currentStep: current[activeSessionKey].currentStep ?? {
-              kind: "response",
-              label: "接收引导",
-              startedAt: now,
+        if (mode === "queue") {
+          activeChannel.queueMessage(messageText, activeSession.operationId, images, userItem.id);
+          setSessions((current) => ({
+            ...current,
+            [activeSessionKey]: {
+              ...current[activeSessionKey],
+              pendingFollowUps: [
+                ...(current[activeSessionKey].pendingFollowUps ?? []),
+                { item: userItem, text: messageText, images, status: "pending" },
+              ],
             },
-            items: [
-              ...current[activeSessionKey].items,
-              userItem,
-            ],
-          },
-        }));
+          }));
+        } else {
+          activeChannel.steer(messageText, activeSession.operationId, images);
+          setSessions((current) => ({
+            ...current,
+            [activeSessionKey]: {
+              ...current[activeSessionKey],
+              runStartedAt: current[activeSessionKey].runStartedAt ?? now,
+              currentStep: current[activeSessionKey].currentStep ?? {
+                kind: "response",
+                label: "接收引导",
+                startedAt: now,
+              },
+              items: [
+                ...current[activeSessionKey].items,
+                userItem,
+              ],
+            },
+          }));
+        }
       } else {
         const operationId = activeChannel.sendMessage(
           messageText,
@@ -2536,6 +2573,29 @@ function App() {
       setPendingFiles([]);
       setPendingFolders([]);
       setPendingDocumentReferences([]);
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const queuedMessageAction = (id: string, action: QueuedMessageAction) => {
+    if (!activeSessionKey || !activeSession) return;
+    const entry = activeSession.pendingFollowUps?.find((pending) => pending.item.id === id);
+    if (!entry || entry.action) return;
+    if (entry.status === "cancelled" && action !== "steer") {
+      setSessions((current) => ({ ...current, [activeSessionKey]: applyGatewayEvent(current[activeSessionKey], {
+        type: "queued_message_updated", request_id: id, action,
+      }) }));
+      return;
+    }
+    if (!activeChannel || !activeSession.busy || !activeSession.operationId) return;
+    try {
+      activeChannel.queuedMessageAction(id, action, activeSession.operationId);
+      setSessions((current) => ({ ...current, [activeSessionKey]: {
+        ...current[activeSessionKey],
+        pendingFollowUps: current[activeSessionKey].pendingFollowUps?.map((pending) => pending.item.id === id
+          ? { ...pending, action } : pending),
+      } }));
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error));
     }
@@ -4182,6 +4242,14 @@ function App() {
                 <div ref={messageEndRef} />
               </div>}
               <div className="composer-wrap">
+                <FollowUpQueue
+                  key={activeSessionKey}
+                  messages={activeSession.pendingFollowUps ?? []}
+                  canSteer={activeSession.busy && activeSession.connected && Boolean(activeSession.operationId)}
+                  queueEnabled={(settings.follow_up_mode ?? "queue") === "queue"}
+                  onAction={queuedMessageAction}
+                  onDisableQueue={() => commitSettings((current) => ({ ...current, follow_up_mode: "steer" }))}
+                />
                 <div className="composer-context">
                   <span><Folder />{activeProject?.name}</span>
                   <span><Server />{activeConnection?.name}</span>
@@ -4240,10 +4308,11 @@ function App() {
                     references={composerReferences}
                     commands={composerCommands}
                     sendKey={settings.composer_send_key}
+                    busy={activeSession.busy}
                     onChange={setComposer}
                     onImages={(files) => void addImages(files)}
-                    onSubmit={() => void sendMessage()}
-                    placeholder={activeSession.loading ? "会话加载完成后即可输入" : activeSession.busy ? "输入内容以引导当前任务" : "输入任务"}
+                    onSubmit={(opposite) => void sendMessage(opposite)}
+                    placeholder={activeSession.loading ? "会话加载完成后即可输入" : activeSession.busy ? (settings.follow_up_mode === "steer" ? "输入内容以引导当前任务" : "输入后续任务，本轮结束后执行") : "输入任务"}
                   />
                   <div className="composer-toolbar">
                     <div className="toolbar-left">
@@ -4312,22 +4381,21 @@ function App() {
                         >
                           <Square />
                         </button>
-                      ) : (
-                        <button
-                          className="round-action send"
-                          title={settings.composer_send_key === "mod_enter" ? `发送 (${composerModifierLabel()})` : "发送 (Enter)"}
-                          disabled={(
-                            !composer.trim()
-                            && pendingImages.length === 0
-                            && pendingFiles.length === 0
-                            && pendingFolders.length === 0
-                            && pendingDocumentReferences.length === 0
-                          ) || activeSession.loading || !activeSession.connected}
-                          onClick={() => void sendMessage()}
-                        >
-                          <Send />
-                        </button>
-                      )}
+                      ) : null}
+                      <button
+                        className="round-action send"
+                        title={activeSession.busy ? (settings.follow_up_mode === "steer" ? "引导当前运行 (Enter)" : "加入队列 (Enter)") : settings.composer_send_key === "mod_enter" ? `发送 (${composerModifierLabel()})` : "发送 (Enter)"}
+                        disabled={(
+                          !composer.trim()
+                          && pendingImages.length === 0
+                          && pendingFiles.length === 0
+                          && pendingFolders.length === 0
+                          && pendingDocumentReferences.length === 0
+                        ) || activeSession.loading || !activeSession.connected}
+                        onClick={(event) => void sendMessage(event.metaKey || event.ctrlKey)}
+                      >
+                        <Send />
+                      </button>
                     </div>
                   </div>
                 </div>
