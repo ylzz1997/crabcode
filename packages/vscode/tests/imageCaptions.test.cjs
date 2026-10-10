@@ -77,6 +77,7 @@ test("restored tool captions remain ordered without duplicate user image message
     getSessionState: () => state,
     displayedSessionId: "different-session",
     busySessions: new Set(),
+    restoreClientTurnDetails: loadMethod("restoreClientTurnDetails"),
     fetchAndApplyContextUsage: async () => {},
   };
   loadMethod("handleSessionHistory").call(harness, {

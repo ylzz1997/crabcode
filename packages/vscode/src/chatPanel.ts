@@ -347,6 +347,7 @@ interface SessionState {
   activeThinkingId: string | null;
   activeOperationId: string | null;
   isBusy: boolean;
+  retryLabel: string | null;
   contextUsage: ContextUsageStatus | null;
   batchDenied: boolean;
   mode: "agent" | "plan";
@@ -366,6 +367,7 @@ function createEmptySessionState(): SessionState {
     activeThinkingId: null,
     activeOperationId: null,
     isBusy: false,
+    retryLabel: null,
     contextUsage: null,
     batchDenied: false,
     mode: "agent",
@@ -541,6 +543,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "requestHistory":
           this.postMessage({ type: "history", items: this.history });
+          this.postMessage({ type: "busyState", busy: this.isBusy, retryLabel: this.currentState.retryLabel });
           break;
         case "requestOptions":
           void this.pushChatOptions();
@@ -553,7 +556,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
           this.postMessage({ type: "history", items: this.history });
           void this.pushChatOptions();
-          this.postMessage({ type: "busyState", busy: this.isBusy });
+          this.postMessage({ type: "busyState", busy: this.isBusy, retryLabel: this.currentState.retryLabel });
           this.postMessage({ type: "contextUsage", usage: this.latestContextUsage ?? null });
           this.postMessage({ type: "pendingEditReview", summary: this.pendingEditReview });
           this.postMessage({ type: "ideContext", context: this.ideContext });
@@ -1533,7 +1536,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cached = this.sessionStates.get(sessionId);
     if (cached) {
       this.postMessage({ type: "history", items: cached.history });
-      this.postMessage({ type: "busyState", busy: cached.isBusy });
+      this.postMessage({ type: "busyState", busy: cached.isBusy, retryLabel: cached.retryLabel });
       this.postMessage({ type: "contextUsage", usage: cached.contextUsage ?? null });
       this.postMessage({ type: "modeChange", mode: cached.mode });
       this.postMessage({ type: "steeringQueue", messages: cached.pendingSteeringMessages });
@@ -3496,6 +3499,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         && payload.operation_id
         && payload.type !== "turn_complete"
       ) {
+        if (targetState.activeOperationId !== payload.operation_id) targetState.retryLabel = null;
         targetState.activeOperationId = payload.operation_id;
       }
       // Track busy state per-session for session list status dots.  A terminal
@@ -3573,6 +3577,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private routeEventToState(payload: EventPayload, state: SessionState, updateWebview: boolean): void {
     switch (payload.type) {
       case "stream_text":
+        state.retryLabel = null;
         this.finalizeThinkingOnState(state, updateWebview);
         if (updateWebview) this.postMessage({ type: "activityStatus", label: "CrabCode 正在处理" });
         this.appendAssistantTextOnState(state, payload.text, updateWebview);
@@ -3583,13 +3588,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.finalizeThinkingOnState(state, updateWebview);
         state.isBusy = true;
         state.startNewAssistantMessage = true;
+        state.retryLabel = retry.message || `模型连接中断，正在重试 ${retry.retry_count}/${retry.unbounded ? "∞" : retry.max_retries}`;
         if (updateWebview) {
-          this.postMessage({ type: "busyState", busy: true });
-          this.postMessage({ type: "activityStatus", label: retry.message || "Reconnecting..." });
+          this.postMessage({ type: "busyState", busy: true, retryLabel: state.retryLabel });
+          this.postMessage({ type: "activityStatus", label: state.retryLabel, retry: true });
         }
         break;
       }
       case "thinking":
+        state.retryLabel = null;
         if (updateWebview) this.postMessage({ type: "activityStatus", label: "CrabCode 正在处理" });
         this.handleThinkingOnState(state, payload.text, updateWebview);
         break;
@@ -3647,6 +3654,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.handleAgentOutputOnState(state, payload as AgentOutputPayload, updateWebview);
         break;
       case "tool_use":
+        state.retryLabel = null;
         this.finalizeThinkingOnState(state, updateWebview);
         if (updateWebview) this.postMessage({ type: "activityStatus", label: "CrabCode 正在处理" });
         this.handleToolUseOnState(state, payload as ToolUsePayload, updateWebview);
@@ -3850,6 +3858,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         state.activeOperationId = null;
         state.isBusy = false;
         state.batchDenied = false;
+        state.retryLabel = null;
         for (const pending of state.pendingSteeringMessages) {
           pending.followUpFailed = true;
           pending.followUpAction = undefined;
@@ -4052,7 +4061,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     state.isBusy = this.busySessions.has(sessionId);
     if (updateWebview) {
       this.postMessage({ type: "history", items: state.history });
-      this.postMessage({ type: "busyState", busy: state.isBusy });
+      this.postMessage({ type: "busyState", busy: state.isBusy, retryLabel: state.retryLabel });
       this.postMessage({ type: "contextUsage", usage: state.contextUsage });
     }
     // The server may not emit turn_complete when the projection came from
@@ -4133,6 +4142,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private setBusy(busy: boolean): void {
     if (this.isBusy === busy) return;
     this.isBusy = busy;
+    this.currentState.retryLabel = null;
     if (!busy) {
       this.clearInterruptRetry();
     }
@@ -4189,21 +4199,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleStreamModeOnState(state: SessionState, payload: StreamModePayload, updateWebview: boolean): void {
+    // Requesting follows stream_retry before any response arrives. Keep the
+    // retry count visible until the model makes progress.
+    if (payload.mode !== "requesting") state.retryLabel = null;
     switch (payload.mode) {
       case "requesting":
       case "thinking":
       case "responding":
         state.isBusy = true;
-        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true, retryLabel: state.retryLabel });
         break;
       case "tool-input":
         state.isBusy = true;
         state.batchDenied = false;
-        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true, retryLabel: state.retryLabel });
         break;
       case "tool-running":
         state.isBusy = true;
-        if (updateWebview) this.postMessage({ type: "busyState", busy: true });
+        if (updateWebview) this.postMessage({ type: "busyState", busy: true, retryLabel: state.retryLabel });
         break;
       default:
         break;
@@ -7483,6 +7496,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const busyLabel = busyIndicator ? busyIndicator.querySelector('.busy-label') : null;
     const rootEl = document.documentElement;
     let isBusy = false;
+    let retryActivityLabel = null;
     let stickToBottom = true;
     let hasReceivedOptions = false;
     let currentModelValue = '';
@@ -9114,7 +9128,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // ── Busy indicator ────────────────────────────────────────────
 
-    function setBusyState(busy) {
+    function setBusyState(busy, retryLabel) {
+      if (!busy || !isBusy) retryActivityLabel = null;
+      if (busy && retryLabel !== undefined) retryActivityLabel = retryLabel;
       isBusy = busy;
       if (busyIndicator) {
         busyIndicator.classList.toggle('visible', busy);
@@ -9128,7 +9144,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         updateTurnSummary(activeTurn);
       }
       if (busy && busyLabel) {
-        busyLabel.textContent = 'CrabCode 正在处理';
+        busyLabel.textContent = retryActivityLabel || 'CrabCode 正在处理';
       }
       if (composerCard) composerCard.classList.toggle('is-steering', busy);
       renderSteeringQueue(pendingSteeringQueue);
@@ -9283,6 +9299,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function updateBusyLabel() {
       if (!busyLabel || !isBusy) return;
+      if (retryActivityLabel) {
+        busyLabel.textContent = retryActivityLabel;
+        return;
+      }
       // Show contextual label based on current activity
       const activeTool = [...toolCards.values()].find(c => c.result === null);
       if (activeTool) {
@@ -11630,6 +11650,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'history':
+          retryActivityLabel = null;
           closeTurnDetails();
           msgContainer.innerHTML = '';
           toolCards.clear();
@@ -11793,10 +11814,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'busyState':
-          setBusyState(msg.busy);
+          setBusyState(msg.busy, msg.retryLabel);
           break;
         case 'activityStatus':
           if (busyLabel && typeof msg.label === 'string' && msg.label) {
+            retryActivityLabel = msg.retry ? msg.label : null;
             busyLabel.textContent = msg.label;
           }
           break;
