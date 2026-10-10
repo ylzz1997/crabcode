@@ -119,7 +119,7 @@ describe("document file workspace", () => {
     expect(Array.from(document.querySelectorAll('.document-view-menu-item')).map((item) => item.textContent)).toEqual(["Blog", "文件", "变更"]);
     expect(document.querySelector('.document-view-menu-item[aria-checked="true"]')?.textContent).toBe("Blog");
     act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(document.querySelector('.document-view-menu-item')).toBeNull();
+    expect(document.querySelector('[role="menu"][aria-label="切换工作区视图"]')).toBeNull();
     const scroll = container.querySelector<HTMLDivElement>(".document-pdf-scroll")!;
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="放大"]')!.click());
     scroll.scrollTop = 420;
@@ -127,7 +127,7 @@ describe("document file workspace", () => {
     clickTab("文件");
     expect(Array.from(container.querySelectorAll('.document-view-tabs [role="tab"]')).map((tab) => tab.textContent)).toEqual(["文档", "文件"]);
     expect(container.querySelector('.document-view-tabs [aria-selected="true"]')?.textContent).toBe("文件");
-    expect(document.querySelector('.document-view-menu-item')).toBeNull();
+    expect(document.querySelector('[role="menu"][aria-label="切换工作区视图"]')).toBeNull();
     expect(scroll.hidden).toBe(true);
     expect(container.querySelector(".document-file-workspace .project-files-workspace.embedded")).not.toBeNull();
     expect(container.querySelector(".project-files-resizer")).toBeNull();

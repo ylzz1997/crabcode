@@ -138,6 +138,7 @@ import {
   type ProjectFileTabsState,
 } from "./ProjectFilesWorkspace";
 import { TrajectoryView } from "./TrajectoryView";
+import { SlidingTabIndicator } from "./SlidingTabIndicator";
 import { getToolPresentation, parseChecklistResult, type ToolField } from "./toolPresentation";
 import { randomUuid } from "./uuid";
 import { useLumeInstaller } from "./lumeInstaller";
@@ -4246,6 +4247,7 @@ function App() {
                   )}
                 </div>
                 <div className="conversation-view-tabs" role="tablist" aria-label="会话视图">
+                  <SlidingTabIndicator activeKey={activeConversationView} className="conversation-view-indicator" />
                   <button
                     type="button"
                     role="tab"

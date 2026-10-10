@@ -6339,12 +6339,42 @@ body {
 }
 
 .document-view-tablist {
+  position: relative;
+  isolation: isolate;
   display: flex;
   gap: 3px;
 }
 
+.sliding-tab-indicator {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
+  border-radius: 5px;
+  background: var(--surface-active);
+  pointer-events: none;
+  transition: transform 240ms cubic-bezier(.22, 1, .36, 1), width 240ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.document-view-tablist > [role="tab"],
+.conversation-view-tabs > [role="tab"] {
+  position: relative;
+  z-index: 1;
+}
+
 .document-view-tabs button {
   white-space: nowrap;
+  transition: color 160ms ease;
+}
+
+.document-view-tabs button.active {
+  background: transparent;
+}
+
+.document-view-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  animation: document-view-label-in 180ms ease-out both;
 }
 
 .document-view-tabs .document-view-menu-trigger {
@@ -6352,6 +6382,58 @@ body {
   height: 30px;
   justify-content: center;
   padding: 0;
+}
+
+.document-view-menu-trigger svg {
+  transition: transform 180ms ease, color 180ms ease;
+}
+
+.document-view-menu-trigger[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+  color: var(--text);
+}
+
+.review-menu-animated {
+  transform-origin: top left;
+  animation: document-view-menu-in 180ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.review-menu-animated[data-state="closed"] {
+  pointer-events: none;
+  animation: document-view-menu-out 140ms ease-in both;
+}
+
+@keyframes document-view-label-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes document-view-menu-in {
+  from { opacity: 0; transform: translateY(-5px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes document-view-menu-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-3px) scale(.98); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sliding-tab-indicator,
+  .document-view-tabs button,
+  .document-view-menu-trigger svg {
+    transition: none;
+  }
+
+  .document-view-tab-label,
+  .review-menu-animated {
+    animation: none;
+  }
+
+  .review-menu-animated[data-state="closed"] {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 .document-view-menu-option {
@@ -14385,6 +14467,8 @@ html[data-theme="light"] .session-action-separator {
 }
 
 .conversation-view-tabs {
+  position: relative;
+  isolation: isolate;
   height: 31px;
   display: flex;
   align-items: center;
@@ -14397,7 +14481,14 @@ html[data-theme="light"] .session-action-separator {
   background: color-mix(in srgb, var(--panel-strong) 82%, transparent);
 }
 
+.conversation-view-indicator {
+  top: 3px;
+  bottom: 3px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+}
+
 .conversation-view-tabs button {
+  flex: 1 0 auto;
   height: 23px;
   padding: 0 11px;
   border: 0;
@@ -14406,6 +14497,7 @@ html[data-theme="light"] .session-action-separator {
   color: var(--muted);
   font-size: 11.5px;
   cursor: pointer;
+  transition: color 160ms ease;
 }
 
 .conversation-view-tabs button:hover {
@@ -14413,9 +14505,7 @@ html[data-theme="light"] .session-action-separator {
 }
 
 .conversation-view-tabs button.active {
-  background: var(--surface-active);
   color: var(--text);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
 }
 
 .trajectory-view {
@@ -14891,9 +14981,16 @@ html[data-theme="light"] .conversation-view-tabs {
   background: var(--surface);
 }
 
-html[data-theme="light"] .conversation-view-tabs button.active {
+html[data-theme="light"] .conversation-view-indicator {
   background: white;
   box-shadow: 0 1px 4px rgba(45, 60, 54, .14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-view-indicator,
+  .conversation-view-tabs button {
+    transition: none;
+  }
 }
 
 @media (max-width: 720px) {

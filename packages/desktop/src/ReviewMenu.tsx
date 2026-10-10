@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 
-export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, role = "menu", triggerIcon, triggerClassName = "", children }: {
+export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, role = "menu", triggerIcon, triggerClassName = "", animated = false, children }: {
   label: ReactNode;
   ariaLabel: string;
   width?: number;
@@ -10,14 +10,28 @@ export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, ro
   role?: "menu" | "dialog";
   triggerIcon?: ReactNode;
   triggerClassName?: string;
+  animated?: boolean;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [present, setPresent] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const id = useId();
   const close = () => { setOpen(false); triggerRef.current?.focus(); };
+
+  useEffect(() => {
+    if (!animated) return;
+    if (open) { setPresent(true); return; }
+    const timer = window.setTimeout(() => setPresent(false), 140);
+    return () => window.clearTimeout(timer);
+  }, [open, animated]);
+
+  useLayoutEffect(() => {
+    if (open) menuRef.current?.removeAttribute("inert");
+    else menuRef.current?.setAttribute("inert", "");
+  }, [open]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -72,8 +86,9 @@ export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, ro
       }}>
       {label != null && <span>{label}</span>}{triggerIcon ?? <ChevronDown aria-hidden="true" />}
     </button>
-    {open && !disabled && createPortal(
-      <div ref={menuRef} id={id} className="change-review-turn-menu" role={role} aria-label={ariaLabel}
+    {(open || (animated && present)) && !disabled && createPortal(
+      <div ref={menuRef} id={id} className={`change-review-turn-menu${animated ? " review-menu-animated" : ""}`}
+        role={open ? role : undefined} aria-hidden={!open || undefined} aria-label={ariaLabel} data-state={open ? "open" : "closed"}
         style={{ ...position, width: Math.min(width, window.innerWidth - 16) }}
         onKeyDown={(event) => {
           if (event.key === "Tab" && role === "menu") {
