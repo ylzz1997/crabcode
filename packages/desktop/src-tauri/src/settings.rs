@@ -89,7 +89,7 @@ fn default_settings() -> Value {
         "sidebar_width": 280,
         "project_files_width": 640,
         "project_files_max_tabs": 5,
-        "document_agent_width": 400,
+        "document_agent_width": 320,
         "document_agent_collapsed": false,
         "document_show_original_text": false,
         "document_translation_concurrency": 3,

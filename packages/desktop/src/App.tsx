@@ -4092,7 +4092,7 @@ function App() {
           style={documentMode ? {
             gridTemplateColumns: documentAgentCollapsed
               ? "minmax(0, 1fr) 44px"
-              : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 400}px, calc(100% - 180px))`,
+              : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 320}px, calc(100% - 180px))`,
           } : projectFilesWideLayout ? {
             "--project-files-width": `${projectFilesWidth}px`,
           } as CSSProperties : undefined}
@@ -4103,7 +4103,7 @@ function App() {
               connectionId={activeConnection.id}
               project={activeProject}
               documentView={activeProject.document_view}
-              agentWidth={settings.document_agent_width ?? 400}
+              agentWidth={settings.document_agent_width ?? 320}
               agentCollapsed={documentAgentCollapsed}
               showOriginalText={settings.document_show_original_text === true}
               translationConcurrency={settings.document_translation_concurrency}
