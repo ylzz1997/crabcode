@@ -290,7 +290,7 @@
             "run_everything"
           ],
           "default": "default",
-          "description": "CrabCode 工具权限：default 使用当前工作区加载的权限规则；ask 在高风险操作前确认；ai_review 使用 AI 审查；run_everything 自动批准所有工具。Computer Use 是否允许切到前台由独立设置控制"
+          "description": "CrabCode 工具权限：default 使用当前工作区加载的权限规则；ask 在高风险操作前确认；ai_review 使用 AI 审查；run_everything 自动批准所有工具。"
         },
         "crabcode.pythonPath": {
           "tags": [
