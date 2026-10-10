@@ -79,6 +79,10 @@ export class CrabCodeConnection implements vscode.Disposable {
 
   // ── Public state ───────────────────────────────────────────────
 
+  refreshConfiguration(): void {
+    this.config = vscode.workspace.getConfiguration("crabcode");
+  }
+
   get connected(): boolean {
     return this._connected || this.ws?.readyState === WebSocket.OPEN;
   }

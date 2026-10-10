@@ -4644,22 +4644,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async chooseSettingsDestination(): Promise<void> {
     const choice = await vscode.window.showQuickPick(
       [
-        { label: "上下文压缩", description: "自动压缩、预留 token 和提前触发阈值", id: "context" },
-        { label: "提示词", description: "自定义提示词模版，以及追加到用户输入的提示", id: "prompts" },
-        { label: "扩展设置", description: "连接、权限和其他 CrabCode 设置", id: "extension" },
+        { label: "CrabCode设置", description: "聊天、模型、权限、上下文压缩与提示词", id: "crabcode" },
+        { label: "扩展设置", description: "连接、安装、编辑器集成与调试", id: "extension" },
       ],
       { title: "CrabCode 设置", placeHolder: "选择要打开的设置" },
     );
     if (!choice) return;
-    if (choice.id === "context") {
-      await vscode.commands.executeCommand("crabcode.openContextSettings");
-      return;
-    }
-    if (choice.id === "prompts") {
-      await vscode.commands.executeCommand("crabcode.openPromptSettings");
-      return;
-    }
-    await vscode.commands.executeCommand("workbench.action.openSettings", "crabcode");
+    await vscode.commands.executeCommand(choice.id === "crabcode" ? "crabcode.openCrabCodeSettings" : "crabcode.openSettings");
   }
 
   // ── HTML ───────────────────────────────────────────────────────

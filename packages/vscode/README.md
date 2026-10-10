@@ -68,7 +68,24 @@ be installed and running; the extension does not install them remotely.
 
 ## Configuration
 
-Open **Settings** and search for `CrabCode`, or add settings such as:
+Use the chat toolbar's settings menu:
+
+- **CrabCode设置** opens a dedicated editor with General, Models, Permissions &
+  Tools, Context Compaction, Prompts, and Usage sections. Search jumps to an
+  individual setting. Chat preferences support VS Code user/workspace scopes;
+  Gateway settings use the selected user/project/local configuration layer.
+- **扩展设置** opens native VS Code settings filtered to connection, installation,
+  editor integration, and debugging options. Existing product preference keys
+  remain registered for settings JSON compatibility and Settings Sync.
+
+The old context-compaction and prompt commands now open the corresponding
+section of **CrabCode设置**. Local chat preferences remain editable offline;
+Gateway-backed sections require a reachable Gateway with the corresponding API.
+The page uses the first workspace folder, matching the chat session's default
+project. Numeric controls save on change, while model and prompt editors have
+explicit save/cancel actions and preserve drafts when navigating between sections.
+
+You can also configure existing keys in settings JSON:
 
 ```json
 {
@@ -150,6 +167,8 @@ Open the Command Palette and run one of the following:
 - `CrabCode：连接网关` / `CrabCode：断开网关`
 - `CrabCode：新建会话` / `CrabCode：中断当前任务`
 - `CrabCode：重启网关` / `CrabCode：打开扩展设置`
+- `CrabCode：打开CrabCode设置` (the unified product settings editor)
+- `CrabCode：打开提示词设置` / `CrabCode：打开上下文压缩设置` (section shortcuts)
 
 ## Troubleshooting
 

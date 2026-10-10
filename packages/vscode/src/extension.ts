@@ -8,8 +8,8 @@ import * as vscode from "vscode";
 
 import { CrabCodeConnection } from "./connection";
 import { ChatPanelProvider } from "./chatPanel";
-import { PromptSettingsPanel } from "./promptSettingsPanel";
-import { ContextSettingsPanel } from "./contextSettingsPanel";
+import { CrabCodeSettingsPanel } from "./crabCodeSettingsPanel";
+import { EXTENSION_SETTINGS_QUERY } from "./settings/catalog";
 import { chooseAndInstallGatewaySuite, ensureGateway, GatewayProcess } from "./gatewayManager";
 import { PendingEditManager } from "./pendingEdits";
 import type { IdeContextSnapshot } from "./ideContext";
@@ -388,6 +388,7 @@ function registerCommands(
   chatProvider: ChatPanelProvider,
   connection: CrabCodeConnection,
   extensionVersion: string,
+  extensionUri: vscode.Uri,
 ): void {
   // Open Chat
   push(
@@ -469,7 +470,7 @@ function registerCommands(
   // Open Settings
   push(
     vscode.commands.registerCommand("crabcode.openContextSettings", () => {
-      ContextSettingsPanel.show();
+      CrabCodeSettingsPanel.show(extensionUri, "context", () => chatProvider.notifyConfigurationChanged());
     }),
   );
 
@@ -477,16 +478,20 @@ function registerCommands(
     vscode.commands.registerCommand("crabcode.openSettings", () => {
       vscode.commands.executeCommand(
         "workbench.action.openSettings",
-        "crabcode",
+        EXTENSION_SETTINGS_QUERY,
       );
     }),
   );
 
   push(
     vscode.commands.registerCommand("crabcode.openPromptSettings", () => {
-      PromptSettingsPanel.show();
+      CrabCodeSettingsPanel.show(extensionUri, "prompts", () => chatProvider.notifyConfigurationChanged());
     }),
   );
+
+  push(vscode.commands.registerCommand("crabcode.openCrabCodeSettings", () => {
+    CrabCodeSettingsPanel.show(extensionUri, "general", () => chatProvider.notifyConfigurationChanged());
+  }));
 
   // Install optional local dependencies without changing lightweight auto-install.
   push(
@@ -683,6 +688,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("crabcode")) {
+        activeConnection.refreshConfiguration();
         activeChatProvider.notifyConfigurationChanged();
         if (activeConnection.connected && activeConnection.sessionId) {
           void activeChatProvider.syncSessionPreferencesFromSettings();
@@ -736,7 +742,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // 7. Register all commands
   const extensionVersion = String(context.extension.packageJSON.version ?? "");
-  registerCommands(activeChatProvider, activeConnection, extensionVersion);
+  registerCommands(activeChatProvider, activeConnection, extensionVersion, context.extensionUri);
 
   // 8. Status bar item
   push(createStatusBar(activeConnection));

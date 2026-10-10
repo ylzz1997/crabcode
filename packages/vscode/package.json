@@ -65,6 +65,10 @@
         "title": "CrabCode：新建会话"
       },
       {
+        "command": "crabcode.openCrabCodeSettings",
+        "title": "CrabCode：打开CrabCode设置"
+      },
+      {
         "command": "crabcode.openSettings",
         "title": "CrabCode：打开扩展设置"
       },
@@ -105,7 +109,7 @@
       "activitybar": [
         {
           "id": "crabcode",
-          "title": "CrabCode",
+          "title": "crabcode",
           "icon": "resources/icon.svg"
         }
       ]
@@ -114,7 +118,7 @@
       "crabcode": [
         {
           "id": "crabcode.chatPanel",
-          "name": "CrabCode 聊天",
+          "name": "crabcode",
           "type": "webview"
         }
       ]
@@ -123,26 +127,41 @@
       "title": "CrabCode",
       "properties": {
         "crabcode.serverUrl": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "string",
           "default": "ws://localhost:4096/ws",
           "description": "CrabCode 网关 WebSocket 地址（与 CrabCode 网关配置一致）"
         },
         "crabcode.password": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "string",
           "default": "",
           "description": "连接 CrabCode 网关时使用的访问密码（若网关启用鉴权）"
         },
         "crabcode.autoConnect": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "boolean",
           "default": true,
           "description": "CrabCode 扩展激活后是否自动连接网关"
         },
         "crabcode.showDiffOnFileChange": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "boolean",
           "default": false,
           "description": "CrabCode 修改文件后是否在编辑器中打开 diff 预览"
         },
         "crabcode.pendingEditsVisibleFiles": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "integer",
           "default": 5,
           "minimum": 1,
@@ -150,6 +169,9 @@
           "description": "待审核修改面板一次可见的文件行数；超过后列表滚动"
         },
         "crabcode.fileUploadMaxSizeMb": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "integer",
           "default": 5,
           "minimum": 1,
@@ -157,13 +179,25 @@
           "description": "添加非图片文件并发送完整内容时的单文件大小上限（MB）"
         },
         "crabcode.followUpMode": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "string",
-          "enum": ["queue", "steer"],
-          "enumDescriptions": ["排队：本轮结束后依次执行", "引导：在安全边界接入当前运行"],
+          "enum": [
+            "queue",
+            "steer"
+          ],
+          "enumDescriptions": [
+            "排队：本轮结束后依次执行",
+            "引导：在安全边界接入当前运行"
+          ],
           "default": "queue",
           "description": "跟进处理方式。运行中 Enter 使用此方式，Ctrl/Cmd+Enter 对单条消息执行相反操作，Shift+Enter 换行。"
         },
         "crabcode.composerSendKey": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "string",
           "enum": [
             "enter",
@@ -177,20 +211,41 @@
           "description": "CrabCode 聊天输入框的发送快捷键"
         },
         "crabcode.computerUseTargetScope": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "string",
-          "enum": ["app_window", "desktop"],
-          "enumDescriptions": ["Operate a specific macOS window.", "Operate the entire desktop; requires allow_foreground."],
+          "enum": [
+            "app_window",
+            "desktop"
+          ],
+          "enumDescriptions": [
+            "Operate a specific macOS window.",
+            "Operate the entire desktop; requires allow_foreground."
+          ],
           "default": "app_window",
           "description": "Computer Use target. Explicit values override the Gateway setting."
         },
         "crabcode.computerUseDeliveryPolicy": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "string",
-          "enum": ["strict_background", "allow_foreground"],
-          "enumDescriptions": ["Use process-targeted background input and never focus the target window.", "Allow activation and foreground interaction when background delivery is insufficient; may interrupt your work."],
+          "enum": [
+            "strict_background",
+            "allow_foreground"
+          ],
+          "enumDescriptions": [
+            "Use process-targeted background input and never focus the target window.",
+            "Allow activation and foreground interaction when background delivery is insufficient; may interrupt your work."
+          ],
           "default": "allow_foreground",
           "description": "Computer Use foreground permission and fallback policy. This is independent of Full Access, and the agent cannot override it in an action."
         },
         "crabcode.computerUseMode": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "deprecationMessage": "Use computerUseTargetScope and computerUseDeliveryPolicy. This legacy setting does not override foreground permission.",
           "type": "string",
           "enum": [
@@ -205,6 +260,9 @@
           "description": "Computer Use 操作模式；工作区或用户显式设置后覆盖 Gateway 的 computer_use.mode"
         },
         "crabcode.chatModels": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "array",
           "items": {
             "type": "string"
@@ -213,11 +271,17 @@
           "description": "CrabCode 聊天面板中的模型名称列表（须与网关侧 crabcode.toml 中 models 的键一致）"
         },
         "crabcode.chatModelDefault": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "string",
           "default": "",
           "description": "CrabCode 聊天默认选中的模型（须为 chatModels 中一项；留空则取列表第一项）"
         },
         "crabcode.permissionMode": {
+          "tags": [
+            "crabcodeProduct"
+          ],
           "type": "string",
           "enum": [
             "default",
@@ -229,17 +293,26 @@
           "description": "CrabCode 工具权限：default 使用当前工作区加载的权限规则；ask 在高风险操作前确认；ai_review 使用 AI 审查；run_everything 自动批准所有工具。Computer Use 是否允许切到前台由独立设置控制"
         },
         "crabcode.pythonPath": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "string",
           "default": "",
           "description": "Python 可执行文件路径（留空则自动检测 python3 / python）"
         },
         "crabcode.gatewayAutoInstall": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "boolean",
           "default": true,
           "description": "当检测不到 crabcode-gateway 时是否自动安装并启动",
           "markdownDescription": "当检测不到本地 Gateway 时，自动安装轻量的 `crabcode[gateway]` 并启动。需要可选能力时，可[勾选并安装其他组件](command:crabcode.installGatewaySuite)。"
         },
         "crabcode.debugLogRawWsPayload": {
+          "tags": [
+            "crabcodeExtension"
+          ],
           "type": "boolean",
           "default": false,
           "description": "调试用：在 CrabCode 输出中打印 WebSocket 收发原始 JSON（会截断，可能包含敏感文本）"
@@ -247,13 +320,6 @@
       }
     },
     "menus": {
-      "view/title": [
-        {
-          "command": "crabcode.openPromptSettings",
-          "when": "view == crabcode.chatPanel",
-          "group": "navigation"
-        }
-      ],
       "editor/context": [
         {
           "command": "crabcode.explainCode",
@@ -288,7 +354,7 @@
     "build": "node esbuild.js --production",
     "watch": "node esbuild.js",
     "test": "node --test tests/*.test.cjs",
-    "lint": "tsc --noEmit && node ../../scripts/audit_tool_cards.mjs",
+    "lint": "tsc --noEmit && tsc -p tsconfig.webview.json && node ../../scripts/audit_tool_cards.mjs",
     "package": "vsce package"
   },
   "dependencies": {
@@ -299,6 +365,7 @@
     "@types/ws": "^8.5.14",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.25.0",
+    "jsdom": "^26.1.0",
     "typescript": "^5.7.0"
   }
 }

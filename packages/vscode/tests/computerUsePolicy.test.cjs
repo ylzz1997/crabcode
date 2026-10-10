@@ -11,20 +11,34 @@ const source = buildSync({
 
 function connection(preferences) {
   const module = { exports: {} };
+  let currentPreferences = preferences;
+  const config = values => ({
+    get: (_key, fallback) => fallback,
+    inspect: key => values[key] ?? { defaultValue: 'allow_foreground' },
+  });
   vm.runInNewContext(source, {
     module, exports: module.exports,
-    require: name => name === 'vscode' ? {} : require(name),
+    require: name => name === 'vscode' ? { workspace: { getConfiguration: () => config(currentPreferences) } } : require(name),
     setTimeout, clearTimeout, console, process, Buffer,
   });
-  const conn = new module.exports.CrabCodeConnection({
-    get: (_key, fallback) => fallback,
-    inspect: key => preferences[key] ?? { defaultValue: 'allow_foreground' },
-  });
+  const conn = new module.exports.CrabCodeConnection(config(preferences));
   const messages = [];
   conn.sendRaw = raw => messages.push(JSON.parse(raw));
   conn.sendCommand = cmd => messages.push(JSON.parse(JSON.stringify(cmd)));
-  return { conn, messages };
+  return { conn, messages, update: next => { currentPreferences = next; conn.refreshConfiguration(); } };
 }
+
+test('saved Computer Use overrides and inherit changes apply to the next send', () => {
+  const h = connection({ computerUseTargetScope: { globalValue: 'desktop' } });
+  h.conn.send('first', { sessionId: 's' });
+  h.update({ computerUseTargetScope: { workspaceValue: 'app_window' } });
+  h.conn.send('second', { sessionId: 's' });
+  h.update({});
+  h.conn.send('third', { sessionId: 's' });
+  assert.equal(h.messages[0].computer_use_target_scope, 'desktop');
+  assert.equal(h.messages[1].computer_use_target_scope, 'app_window');
+  assert.equal(h.messages[2].computer_use_target_scope, undefined);
+});
 
 test('explicit scope and delivery permission cross create, resume and send', () => {
   const { conn, messages } = connection({

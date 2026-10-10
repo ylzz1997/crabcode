@@ -9,6 +9,16 @@ const esbuild = require("esbuild");
 
 const isProd = process.argv.includes("--production");
 
+const webviewOpts = {
+  entryPoints: ["src/settings/webview.ts"],
+  bundle: true,
+  outfile: "dist/settings.js",
+  platform: "browser",
+  target: "ES2022",
+  sourcemap: !isProd,
+  minify: isProd,
+};
+
 const buildOpts = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
@@ -26,10 +36,8 @@ const buildOpts = {
 
 if (!isProd) {
   // Watch mode
-  esbuild
-    .context(buildOpts)
-    .then((ctx) => ctx.watch())
+  Promise.all([buildOpts, webviewOpts].map(opts => esbuild.context(opts).then(ctx => ctx.watch())))
     .catch(() => process.exit(1));
 } else {
-  esbuild.build(buildOpts).catch(() => process.exit(1));
+  Promise.all([buildOpts, webviewOpts].map(opts => esbuild.build(opts))).catch(() => process.exit(1));
 }
