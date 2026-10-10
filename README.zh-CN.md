@@ -97,6 +97,10 @@ Desktop 可在 **设置 → 常规 → 会话 → 跟进处理方式** 中切换
 CLI 使用 `/follow-up queue` 或 `/follow-up steer` 保存默认方式（`settings.json` 的
 `follow_up_mode`）；运行中 Ctrl+S 临时反向发送，支持扩展键盘编码的终端也可使用
 Ctrl+Enter。Ctrl+J 或 Alt/Opt+Enter 换行。
+运行中输入框为空且没有待发送图片时，Ctrl+S / Ctrl+Enter 会将最早的排队消息
+连同原有附件转成引导，不修改默认方式。`/queue` 查看排队消息，
+`/queue steer [序号]` 转换指定消息（默认第 1 条）。引导在下一个安全边界生效，
+转换失败时原消息仍保留在队列中。
 
 停止或运行失败后，尚未执行的队列不会自动重启。Desktop / VS Code 保留未发送内容，
 可通过菜单的“编辑消息”恢复后重新提交；CLI 会在终端中列出未发送消息。

@@ -5,6 +5,12 @@ import asyncio
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
+
+from prompt_toolkit.application.current import create_app_session
+from prompt_toolkit.output import DummyOutput
+
+from crabcode_cli.repl import _PersistentComposer, _handle_queue_command
 
 from crabcode_core.events import CoreSession
 from crabcode_core.types.config import CrabCodeSettings
@@ -180,6 +186,76 @@ class FollowUpTests(unittest.IsolatedAsyncioTestCase):
             await session.queue_message("second")
             _ = [event async for event in stream]
             self.assertEqual([text for text, _ in session.started], expected)
+
+
+class CliFollowUpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_command_promotes_selected_message_with_images_exactly_once(self):
+        session = FollowUpSession()
+        stream = session.send_message("first")
+        await anext(stream)
+        image = {"media_type": "image/png", "data": "aGVsbG8="}
+        with create_app_session(output=DummyOutput()):
+            composer = _PersistentComposer(session, [])
+            for request_id in ("q1", "q2", "q3"):
+                await session.queue_message("same text", [image], request_id=request_id)
+                composer.add_queued_turn("same text", request_id)
+            with patch("crabcode_cli.repl.console") as console:
+                await _handle_queue_command("/queue", composer)
+                self.assertIn("#2 same text", str(console.print.call_args_list))
+                await _handle_queue_command("/queue steer 2", composer)
+            self.assertEqual([item.request_id for item in composer._queued_turns], ["q1", "q3"])
+            self.assertEqual([item[2] for item in session._queued_follow_ups], ["q1", "q3"])
+            self.assertEqual(session._steering_messages[0].content[1].source["data"], image["data"])
+            self.assertEqual(composer.follow_up_mode, "queue")
+            events = [event async for event in stream]
+            for event in events:
+                if isinstance(event, SteeringAppliedEvent):
+                    self.assertEqual(composer.mark_guidance_applied(event.count), ["same text"])
+                if isinstance(event, QueuedMessageStartedEvent):
+                    composer.mark_queued_turn_started(event.request_id)
+            self.assertEqual(session.guidance, ["same text"])
+            self.assertEqual([event.request_id for event in events if isinstance(event, QueuedMessageStartedEvent)], ["q1", "q3"])
+            self.assertEqual(len(session.started), 3)
+            self.assertEqual(composer.cancel_pending_follow_ups(), [])
+
+    async def test_invalid_commands_and_failed_promotion_preserve_both_queues(self):
+        session = FollowUpSession()
+        stream = session.send_message("first")
+        await anext(stream)
+        with create_app_session(output=DummyOutput()):
+            composer = _PersistentComposer(session, [])
+            await session.queue_message("keep", request_id="q1")
+            composer.add_queued_turn("keep", "q1")
+            with patch("crabcode_cli.repl.console"):
+                for text in ("/queue steer 0", "/queue steer -1", "/queue steer 2", "/queue steer bad", "/queue steer 1 extra", "/queue bad"):
+                    await _handle_queue_command(text, composer)
+                for index in range(100):
+                    await session.steer_message(str(index))
+                await _handle_queue_command("/queue steer", composer)
+            self.assertEqual([item.request_id for item in composer._queued_turns], ["q1"])
+            self.assertEqual(session._queued_follow_ups[0][2], "q1")
+            self.assertEqual(composer.cancel_pending_follow_ups(), ["keep"])
+        await stream.aclose()
+
+    async def test_already_started_message_does_not_promote_the_next_message(self):
+        session = FollowUpSession()
+        stream = session.send_message("first")
+        await anext(stream)
+        with create_app_session(output=DummyOutput()):
+            composer = _PersistentComposer(session, [])
+            for request_id in ("q1", "q2"):
+                await session.queue_message(request_id, request_id=request_id)
+                composer.add_queued_turn(request_id, request_id)
+            await anext(stream)  # First turn complete.
+            event = await anext(stream)  # q1 was removed from the core queue.
+            self.assertEqual(event.request_id, "q1")
+            # The display has not yet handled QueuedMessageStartedEvent.
+            self.assertFalse(await composer.promote_queued_turn("q1"))
+            self.assertEqual(session._steering_messages, [])
+            self.assertEqual(session._queued_follow_ups[0][2], "q2")
+            composer.mark_queued_turn_started(event.request_id)
+            self.assertEqual(composer.cancel_pending_follow_ups(), ["q2"])
+        await stream.aclose()
 
 
 class Socket:

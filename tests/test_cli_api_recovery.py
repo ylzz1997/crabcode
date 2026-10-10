@@ -21,7 +21,7 @@ from crabcode_core.events import CoreSession
 from crabcode_core.api.openai_adapter import OpenAIAdapter
 from crabcode_core.query.loop import QueryParams, query_loop
 from crabcode_core.types.config import ApiConfig, CrabCodeSettings
-from crabcode_core.types.event import ErrorEvent, StreamModeEvent, TurnCompleteEvent
+from crabcode_core.types.event import ErrorEvent, SteeringAppliedEvent, StreamModeEvent, TurnCompleteEvent
 from crabcode_core.types.message import create_user_message
 from crabcode_core.types.tool import ToolContext
 
@@ -149,6 +149,47 @@ class CliApiRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_connection_exception_keeps_cli_usable(self):
         await self.assert_recovery(httpx.ConnectError("Connection refused"), "Connection refused")
+
+    async def test_actual_repl_promotes_queued_messages_by_key_and_command(self):
+        class QueuedSession(RecoverySession):
+            def __init__(self):
+                super().__init__(None)
+                self.gate = asyncio.Event()
+                self.guidance = []
+
+            async def _send_message_impl(self, text, **kwargs):
+                self.completed.append(text)
+                yield StreamModeEvent(mode="requesting")
+                if text == "first":
+                    await self.gate.wait()
+                guidance = self._drain_steering_messages_for_query()
+                self.guidance.extend(message.text_content for message in guidance)
+                if guidance:
+                    yield SteeringAppliedEvent(count=len(guidance))
+                yield TurnCompleteEvent()
+
+        session = QueuedSession()
+        async with self.running_repl(session) as (pipe, composer, output, wait_for):
+            pipe.send_text("first\r")
+            await wait_for(lambda: session.completed == ["first"])
+            pipe.send_text("second\rthird\rfourth\r")
+            await wait_for(lambda: len(composer._queued_turns) == 3)
+            self.assertTrue(all(item[2] for item in session._queued_follow_ups))
+            pipe.send_text("\x13")
+            await wait_for(lambda: len(composer._queued_turns) == 2)
+            pipe.send_text("/queue\r")
+            await wait_for(lambda: "#2 fourth" in output.getvalue())
+            pipe.send_text("/queue steer 2\r")
+            await wait_for(lambda: len(composer._queued_turns) == 1)
+            self.assertEqual(composer._queued_turns[0].text, "third")
+            self.assertEqual(composer.follow_up_mode, "queue")
+            session.gate.set()
+            await wait_for(lambda: not composer._busy)
+            self.assertEqual(session.guidance, ["second", "fourth"])
+            self.assertEqual(session.completed, ["first", "third"])
+            self.assertEqual(composer.cancel_pending_follow_ups(), [])
+            pipe.send_text("/queue\r")
+            await wait_for(lambda: "No queued messages." in output.getvalue())
 
     async def test_resume_picker_select_cancel_and_continue_in_actual_repl(self):
         from crabcode_cli import session_picker

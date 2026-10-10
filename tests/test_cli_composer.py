@@ -131,6 +131,45 @@ class ComposerTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertTrue(composer._events.empty())
 
+    async def test_empty_override_promotes_captured_queue_identity_in_either_mode(self):
+        for mode in ("queue", "steer"):
+            for key in ("\x13", "\x1b[13;5u", "\x1b[27;5;13~"):
+                with self.subTest(mode=mode, key=repr(key)):
+                    async with self.composer(busy=True) as (composer, pipe, _):
+                        composer._session.settings = SimpleNamespace(follow_up_mode=mode)
+                        composer.add_queued_turn("first", "q1")
+                        composer.add_queued_turn("second", "q2")
+                        pipe.send_text(key)
+                        kind, request_id = await asyncio.wait_for(composer.next_event(), 3)
+                        self.assertEqual((kind, request_id), ("steer_queued", "q1"))
+                        composer.mark_queued_turn_started("q1")
+                        # A delayed shortcut cannot act on the new queue head.
+                        self.assertFalse(await composer.promote_queued_turn(request_id))
+                        self.assertEqual(composer._queued_turns[0].request_id, "q2")
+                        self.assertEqual(composer.follow_up_mode, mode)
+                        self.assertEqual(composer.prompt_session.default_buffer.text, "")
+
+    async def test_empty_override_does_not_promote_with_unsent_images(self):
+        async with self.composer(busy=True) as (composer, pipe, _):
+            composer.add_queued_turn("first", "q1")
+            composer._pending_images.append({"data": "unsent"})
+            pipe.send_text("\x13next\r")
+            self.assertEqual(await asyncio.wait_for(composer.next_event(), 3), ("submit", "next"))
+            self.assertTrue(composer._events.empty())
+            self.assertEqual(composer._queued_turns[0].request_id, "q1")
+            self.assertEqual(composer._pending_images, [{"data": "unsent"}])
+
+    async def test_queue_preview_keeps_shortcut_visible_and_multiline_text_on_one_row(self):
+        async with self.composer(busy=True) as (composer, _, _):
+            composer.add_queued_turn("中文" * 60 + "\nsecond line", "q1")
+            await self.wait_for(lambda: composer.prompt_session.app.renderer._last_screen is not None)
+            fragments = composer._queued_text()
+            preview = "".join(value for _, value in fragments)
+            self.assertNotIn("\n", preview)
+            self.assertIn("empty Ctrl+S steers #1 · /queue", preview)
+            from prompt_toolkit.utils import get_cwidth
+            self.assertLessEqual(get_cwidth(preview), 80)
+
     async def test_paste_preserves_literal_modified_enter_sequences(self):
         async with self.composer() as (composer, pipe, _):
             text = "literal \x1b[13;2u sequence"
@@ -189,6 +228,11 @@ class ComposerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 await asyncio.wait_for(composer.next_event(), 3),
                 ("submit", "first\nsecond"),
+            )
+            # Accepting resets the buffer; the next render reloads history.
+            # Wait for that boundary before sending search keys in one batch.
+            await self.wait_for(
+                lambda: "first\nsecond" in composer.prompt_session.default_buffer._working_lines
             )
             pipe.send_text("\x12first\r")
             await self.wait_for(

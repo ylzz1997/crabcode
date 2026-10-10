@@ -100,6 +100,11 @@ Shift+Enter inserts a newline. Idle input keeps the configured send shortcut.
 In the CLI, `/follow-up queue` and `/follow-up steer` save `follow_up_mode` in user
 settings. Ctrl+S sends the opposite while working; Ctrl+Enter also works in
 terminals that report extended key codes. Ctrl+J and Alt/Opt+Enter insert newlines.
+With an empty composer and no pending image attachments, Ctrl+S / Ctrl+Enter
+moves the oldest queued message into steering, including its original attachments,
+without changing the default mode. Use `/queue` to list pending messages and
+`/queue steer [number]` to promote one (the number defaults to 1). Promotion applies
+at the next safe boundary; it leaves the message queued if steering fails.
 
 Stopping or failing a run discards its unexecuted queue. Desktop and VS Code keep
 that input available to restore into the composer; CLI prints the unsent messages.

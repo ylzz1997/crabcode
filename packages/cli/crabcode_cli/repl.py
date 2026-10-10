@@ -9,6 +9,8 @@ import os
 import sys
 import threading
 import time
+import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -166,6 +168,7 @@ def _render_context_usage(event: TurnCompleteEvent) -> None:
 _SLASH_COMMANDS: dict[str, list[str]] = {
     "/help": [],
     "/follow-up": ["queue", "steer"],
+    "/queue": ["steer"],
     "/goal": ["set", "edit", "pause", "resume", "complete", "blocked", "clear"],
     "/plan": [],
     "/agent": [],
@@ -372,6 +375,7 @@ class _CrabCodeCompleter(Completer):
         descriptions = {
             "/help": "show help",
             "/follow-up": "choose queue or steer for follow-up messages",
+            "/queue": "list queued messages or steer one into the active turn",
             "/goal": "set or manage the persistent task goal",
             "/plan": "switch to plan mode (read-only analysis)",
             "/agent": "switch to agent mode / show agent (<id>)",
@@ -664,6 +668,12 @@ def _render_repl_error(message: str) -> None:
     console.print(Text(f"\nError: {safe_utf8_str(message)}", style="bold red"))
 
 
+@dataclass(frozen=True)
+class _QueuedTurn:
+    request_id: str
+    text: str
+
+
 class _PersistentComposer:
     """One long-lived input application shared by idle and working states."""
 
@@ -683,7 +693,7 @@ class _PersistentComposer:
         self._verb_index = 0
         self._notice = ""
         self._queued_messages: list[str] = []
-        self._queued_turns: list[str] = []
+        self._queued_turns: list[_QueuedTurn] = []
         self._submit_opposite = False
         self._task: asyncio.Task[str] | None = None
         self._animation_task: asyncio.Task[None] | None = None
@@ -703,6 +713,12 @@ class _PersistentComposer:
                 event.current_buffer.insert_text("\n")
                 return
             self._exit_keys.clear()
+            if not event.current_buffer.text.strip() and not self._pending_images:
+                if self._queued_turns:
+                    # Capture identity at key receipt, before a queued turn can
+                    # start. A delayed key must never promote a different item.
+                    self._events.put_nowait(("steer_queued", self._queued_turns[0].request_id))
+                return
             self._submit_opposite = True
             try:
                 event.current_buffer.validate_and_handle()
@@ -791,12 +807,25 @@ class _PersistentComposer:
         return [("class:gray", "  ● Ready")]
 
     def _queued_text(self) -> list[tuple[str, str]]:
-        latest = (self._queued_turns or self._queued_messages or [""])[-1]
+        if self._queued_turns:
+            preview = " ".join(self._queued_turns[0].text.split())
+            label = "  #1 "
+            hint = " · empty Ctrl+S steers #1 · /queue"
+        else:
+            preview = " ".join((self._queued_messages or [""])[-1].split())
+            label = "  ↳ "
+            hint = ""
         suffix = f"  ({len(self._queued_turns)} queued · {len(self._queued_messages)} steering)"
+        available = max(0, _composer_columns() - get_cwidth(label + suffix + hint))
+        fitted = ""
+        for char in preview:
+            if get_cwidth(fitted + char) > available:
+                break
+            fitted += char
         return [
-            ("fg:ansicyan", "  ↳ "),
-            ("", latest),
-            ("fg:ansigray", suffix),
+            ("fg:ansicyan", label),
+            ("", fitted),
+            ("fg:ansigray", suffix + hint),
         ]
 
     def _invalidate(self) -> None:
@@ -901,17 +930,24 @@ class _PersistentComposer:
         self._queued_messages.append(text)
         self._invalidate()
 
-    def add_queued_turn(self, text: str) -> None:
-        self._queued_turns.append(text)
+    def add_queued_turn(self, text: str, request_id: str) -> None:
+        self._queued_turns.append(_QueuedTurn(request_id, text))
         self._invalidate()
 
-    def mark_queued_turn_started(self) -> None:
-        if self._queued_turns:
-            self._queued_turns.pop(0)
+    def mark_queued_turn_started(self, request_id: str | None) -> None:
+        self._queued_turns = [item for item in self._queued_turns if item.request_id != request_id]
         self._invalidate()
+
+    async def promote_queued_turn(self, request_id: str) -> bool:
+        item = next((item for item in self._queued_turns if item.request_id == request_id), None)
+        if item is None or not await self._session.update_queued_message(request_id, "steer"):
+            return False
+        self.mark_queued_turn_started(request_id)
+        self.add_guidance(item.text)
+        return True
 
     def cancel_pending_follow_ups(self) -> list[str]:
-        pending = self._queued_turns + self._queued_messages
+        pending = [item.text for item in self._queued_turns] + self._queued_messages
         self._queued_turns = []
         self._queued_messages = []
         self._invalidate()
@@ -923,6 +959,40 @@ class _PersistentComposer:
         del self._queued_messages[:count]
         self._invalidate()
         return applied
+
+
+async def _handle_queue_command(text: str, composer: _PersistentComposer) -> None:
+    parts = text.lower().split()
+    if len(parts) == 1:
+        if not composer._queued_turns:
+            console.print("  No queued messages.", style="dim")
+        for index, item in enumerate(composer._queued_turns, 1):
+            console.print(Text(f"  #{index} {item.text}"))
+        console.print("  /queue steer [number] · move a queued message into the active turn", style="dim")
+        return
+    if parts[1] != "steer" or len(parts) > 3:
+        console.print("  Usage: /queue [steer [number]]", style="yellow")
+        return
+    try:
+        index = int(parts[2]) if len(parts) == 3 else 1
+    except ValueError:
+        index = 0
+    if not 1 <= index <= len(composer._queued_turns):
+        console.print("  No queued message at that number. Use /queue to see pending messages.", style="yellow")
+        return
+    await _promote_queued_turn(composer, composer._queued_turns[index - 1].request_id)
+
+
+async def _promote_queued_turn(composer: _PersistentComposer, request_id: str) -> None:
+    try:
+        accepted = await composer.promote_queued_turn(request_id)
+    except RuntimeError as exc:
+        _render_repl_error(str(exc))
+        return
+    if accepted:
+        console.print("  Queued message moved to steering · applies at the next safe boundary", style="dim")
+    else:
+        console.print("  Message is no longer queued or the active turn has stopped.", style="yellow")
 
 
 class _CtrlCDoubleExit:
@@ -2100,7 +2170,7 @@ async def run_repl(
         )
     console.print(
         "  Type /help for commands. "
-        "Use /follow-up queue|steer for messages sent while working; Ctrl+S sends the opposite. "
+        "Use /follow-up queue|steer while working; empty Ctrl+S steers the oldest queued message. "
         f"Ctrl+C interrupts; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit. "
         f"Enter sends; Ctrl+J or {_alt_enter_label()} inserts a newline "
         "(or press Esc, then Enter). Ctrl+D exits.",
@@ -2239,6 +2309,9 @@ async def run_repl(
             ctrl_c_exit.clear()
 
             if user_input.startswith("/"):
+                if user_input.split(None, 1)[0].lower() == "/queue":
+                    await _handle_queue_command(user_input, composer)
+                    continue
                 # A modal picker shares the terminal's input parser. Stop the
                 # composer first so its pending Escape flush cannot steal keys
                 # from the picker while in_terminal() has detached its input.
@@ -2317,9 +2390,15 @@ async def run_repl(
             async def _consume_turn_input() -> None:
                 while True:
                     event_kind, event_text = await composer.next_event()
+                    if event_kind == "steer_queued":
+                        await _promote_queued_turn(composer, event_text)
+                        continue
                     if event_kind in {"submit", "submit_opposite"}:
                         text = event_text.strip()
                         if not text:
+                            continue
+                        if text.split(None, 1)[0].lower() == "/queue":
+                            await _handle_queue_command(text, composer)
                             continue
                         if text.split(None, 1)[0].lower() in {"/follow-up", "/image"}:
                             try:
@@ -2333,15 +2412,18 @@ async def run_repl(
                             mode = "steer" if mode == "queue" else "queue"
                         try:
                             images = pending_images.copy() if pending_images else None
-                            submit = session.queue_message if mode == "queue" else session.steer_message
-                            accepted = await submit(text, images=images)
+                            request_id = str(uuid.uuid4())
+                            if mode == "queue":
+                                accepted = await session.queue_message(text, images=images, request_id=request_id)
+                            else:
+                                accepted = await session.steer_message(text, images=images)
                         except RuntimeError as exc:
                             _render_repl_error(f"{exc}: {text}")
                             continue
                         if accepted:
                             pending_images.clear()
                             if mode == "queue":
-                                composer.add_queued_turn(text)
+                                composer.add_queued_turn(text, request_id)
                             else:
                                 composer.add_guidance(text)
                             continue
@@ -2585,7 +2667,7 @@ async def run_repl(
                             _render_submitted_input(guidance, steering=True)
 
                     elif isinstance(event, QueuedMessageStartedEvent):
-                        composer.mark_queued_turn_started()
+                        composer.mark_queued_turn_started(event.request_id)
                         _finish_stream_line()
                         _render_submitted_input(event.text)
 
@@ -2822,6 +2904,7 @@ async def _handle_command(
         console.print(Panel(
             "[bold]/help[/] — show this help\n"
             "[bold]/follow-up [queue|steer][/] — choose how follow-ups are sent (saved)\n"
+            "[bold]/queue [steer [number]][/] — list queued messages or move one into the active turn\n"
             "[bold]/goal [objective][/] — set or view the persistent task goal\n"
             "[bold]/goal edit <objective>[/] — edit the current goal\n"
             "[bold]/goal pause|resume|complete|blocked|clear[/] — manage goal state\n"
@@ -2886,6 +2969,7 @@ async def _handle_command(
             "[bold]/exit[/] — exit CrabCode\n"
             f"[bold]Ctrl+C[/] — interrupt; press again within {_CTRL_C_EXIT_WINDOW_S:.0f}s to exit\n"
             "[bold]While working[/] — Enter uses /follow-up mode; Ctrl+S / Ctrl+Enter sends the opposite\n"
+            "[bold]Empty input while working[/] — Ctrl+S / Ctrl+Enter steers the oldest queued message\n"
             "\n"
             "[bold]! <cmd>[/] — run a shell command"
             + skills_section,
