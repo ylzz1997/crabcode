@@ -102,17 +102,32 @@ describe("document file workspace", () => {
   }
 
   function clickTab(label: string) {
-    act(() => Array.from(container.querySelectorAll<HTMLButtonElement>(".document-view-tabs button"))
-      .find((button) => button.textContent?.startsWith(label))!.click());
+    const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('.document-view-tabs [role="tab"]'))
+      .find((button) => button.textContent?.startsWith(label));
+    if (tab) act(() => tab.click());
+    else {
+      act(() => container.querySelector<HTMLButtonElement>('[aria-label="切换工作区视图"]')!.click());
+      act(() => Array.from(document.querySelectorAll<HTMLButtonElement>('.document-view-menu-item'))
+        .find((button) => button.textContent?.startsWith(label))!.click());
+    }
   }
 
   it("embeds files and changes in the document workspace and preserves the reader while hidden", async () => {
     await render();
+    expect(Array.from(container.querySelectorAll('.document-view-tabs [role="tab"]')).map((tab) => tab.textContent)).toEqual(["文档", "Blog"]);
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="切换工作区视图"]')!.click());
+    expect(Array.from(document.querySelectorAll('.document-view-menu-item')).map((item) => item.textContent)).toEqual(["Blog", "文件", "变更"]);
+    expect(document.querySelector('.document-view-menu-item[aria-checked="true"]')?.textContent).toBe("Blog");
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector('.document-view-menu-item')).toBeNull();
     const scroll = container.querySelector<HTMLDivElement>(".document-pdf-scroll")!;
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="放大"]')!.click());
     scroll.scrollTop = 420;
     act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
     clickTab("文件");
+    expect(Array.from(container.querySelectorAll('.document-view-tabs [role="tab"]')).map((tab) => tab.textContent)).toEqual(["文档", "文件"]);
+    expect(container.querySelector('.document-view-tabs [aria-selected="true"]')?.textContent).toBe("文件");
+    expect(document.querySelector('.document-view-menu-item')).toBeNull();
     expect(scroll.hidden).toBe(true);
     expect(container.querySelector(".document-file-workspace .project-files-workspace.embedded")).not.toBeNull();
     expect(container.querySelector(".project-files-resizer")).toBeNull();
@@ -126,6 +141,10 @@ describe("document file workspace", () => {
     clickTab("变更");
     expect(container.querySelector(".change-review-scroll")?.textContent).toContain("new content");
     clickTab("文档");
+    expect(container.querySelector('.document-view-tabs [aria-selected="true"]')?.textContent).toBe("文档");
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="切换工作区视图"]')!.click());
+    expect(document.querySelector('.document-view-menu-item[aria-checked="true"]')?.textContent).toBe("变更");
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
     expect(container.querySelector(".document-pdf-scroll")).toBe(scroll);
     expect(scroll.hidden).toBe(false);

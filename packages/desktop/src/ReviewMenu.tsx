@@ -2,12 +2,14 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 
-export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, role = "menu", children }: {
+export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, role = "menu", triggerIcon, triggerClassName = "", children }: {
   label: ReactNode;
   ariaLabel: string;
   width?: number;
   disabled?: boolean;
   role?: "menu" | "dialog";
+  triggerIcon?: ReactNode;
+  triggerClassName?: string;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -62,13 +64,13 @@ export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, ro
   }, [open]);
 
   return <>
-    <button ref={triggerRef} type="button" className="change-review-turn change-review-turn-trigger"
+    <button ref={triggerRef} type="button" className={`change-review-turn change-review-turn-trigger ${triggerClassName}`}
       disabled={disabled} aria-label={ariaLabel} aria-haspopup={role} aria-expanded={open}
       aria-controls={open ? id : undefined} onClick={() => setOpen((value) => !value)}
       onKeyDown={(event) => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); }
       }}>
-      <span>{label}</span><ChevronDown aria-hidden="true" />
+      {label != null && <span>{label}</span>}{triggerIcon ?? <ChevronDown aria-hidden="true" />}
     </button>
     {open && !disabled && createPortal(
       <div ref={menuRef} id={id} className="change-review-turn-menu" role={role} aria-label={ariaLabel}

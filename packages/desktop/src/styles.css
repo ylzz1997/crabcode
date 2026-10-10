@@ -6334,8 +6334,34 @@ body {
 }
 
 .document-view-tabs {
-  flex: 0 1 auto;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.document-view-tablist {
+  display: flex;
+  gap: 3px;
+}
+
+.document-view-tabs button {
+  white-space: nowrap;
+}
+
+.document-view-tabs .document-view-menu-trigger {
+  width: 24px;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+.document-view-menu-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.change-review-turn-menu .document-view-menu-item[aria-checked="true"] {
+  background: var(--surface-active);
 }
 
 .document-change-count {

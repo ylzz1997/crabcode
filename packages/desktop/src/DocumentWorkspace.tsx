@@ -6,8 +6,6 @@ import {
   Copy,
   Eye,
   FileText,
-  Folder,
-  GitCompareArrows,
   Highlighter,
   Languages,
   LoaderCircle,
@@ -58,6 +56,7 @@ import type {
 } from "./types";
 import { normalizeMarkdownMathDelimiters } from "./markdownMath";
 import { randomUuid } from "./uuid";
+import { DocumentViewTabs } from "./DocumentViewTabs";
 
 type DocumentView = "document" | "blog";
 type BlogView = "preview" | "raw";
@@ -2294,14 +2293,11 @@ export default function DocumentWorkspace({
           <FileText />
           <span><strong>{project.name}</strong><small>{manifest?.source.name ?? "正在读取文档"}</small></span>
         </div>
-        <div className="document-view-tabs" role="tablist" aria-label="文档视图">
-          <button type="button" role="tab" aria-selected={!filesView && view === "document"} className={!filesView && view === "document" ? "active" : ""} onClick={() => { setView("document"); filesWorkspace?.onViewChange(null); }}><FileText />文档</button>
-          <button type="button" role="tab" aria-selected={!filesView && view === "blog"} className={!filesView && view === "blog" ? "active" : ""} onClick={() => { setView("blog"); filesWorkspace?.onViewChange(null); }}><BookOpen />Blog</button>
-          {filesWorkspace && <>
-            <button type="button" role="tab" aria-selected={filesView === "files"} className={filesView === "files" ? "active" : ""} onClick={() => filesWorkspace.onViewChange("files")}><Folder />文件</button>
-            <button type="button" role="tab" aria-selected={filesView === "changes"} className={filesView === "changes" ? "active" : ""} onClick={() => filesWorkspace.onViewChange("changes")}><GitCompareArrows />变更{filesWorkspace.changeCount > 0 && <small className="document-change-count">{filesWorkspace.changeCount}</small>}</button>
-          </>}
-        </div>
+        <DocumentViewTabs activeView={filesView ?? view} filesAvailable={Boolean(filesWorkspace)}
+          changeCount={filesWorkspace?.changeCount ?? 0} onViewChange={(nextView) => {
+            if (nextView === "files" || nextView === "changes") filesWorkspace?.onViewChange(nextView);
+            else { setView(nextView); filesWorkspace?.onViewChange(null); }
+          }} />
         {!filesView && view === "document" && (
           <div className="document-tools">
             <DocumentToolbarNumberEditor
