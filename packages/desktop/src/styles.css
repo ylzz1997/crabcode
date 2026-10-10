@@ -10489,6 +10489,10 @@ html[data-theme="light"] .model-detail-field > small.default {
   background: color-mix(in srgb, var(--orange) 9%, transparent);
 }
 
+.permission-picker .permission-picker-trigger {
+  max-width: 190px;
+}
+
 .picker-menu,
 .context-popover {
   position: absolute;
@@ -10512,6 +10516,29 @@ html[data-theme="light"] .model-detail-field > small.default {
 .permission-picker-menu {
   left: 0;
   width: min(390px, calc(100vw - 44px));
+  max-height: min(560px, calc(100vh - 100px));
+  overflow-y: auto;
+}
+
+.permission-policy-summary {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.permission-policy-summary p {
+  margin: 0 0 5px;
+  white-space: pre-wrap;
+}
+
+.permission-policy-summary details {
+  margin-top: 5px;
+}
+
+.permission-policy-summary summary {
+  cursor: pointer;
 }
 
 .effort-picker-menu {
@@ -10939,11 +10966,6 @@ html[data-theme="light"] .model-detail-field > small.default {
 }
 
 @media (max-width: 760px) {
-  .permission-picker-menu {
-    left: auto;
-    right: -72px;
-  }
-
   .picker-trigger {
     max-width: 122px;
   }

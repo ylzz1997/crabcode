@@ -1007,6 +1007,9 @@ async def session_status(
         reasoning_effort = getattr(session, "reasoning_effort", None)
         ultra_mode = bool(getattr(session, "ultra_mode", False))
         permission_mode = getattr(session, "client_permission_mode", "default")
+        permission_manager = getattr(session, "_permission_manager", None)
+        describe_policy = getattr(permission_manager, "describe_policy", None)
+        permission_policy = describe_policy() if callable(describe_policy) else None
         sid = session.session_id
 
         enabled_tools = None
@@ -1106,6 +1109,7 @@ async def session_status(
             reasoning_effort=reasoning_effort,
             ultra_mode=ultra_mode,
             permission_mode=permission_mode,
+            permission_policy=permission_policy,
             context_used_tokens=used,
             context_token_source=token_source,
             context_window_tokens=window,

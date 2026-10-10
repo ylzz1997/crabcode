@@ -71,6 +71,7 @@ export interface SessionRuntimeStatus {
   reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
   ultra_mode?: boolean;
   permission_mode?: string;
+  permission_policy?: import("./permissionPresentation").PermissionPolicyInfo | null;
   context_used_tokens?: number;
   context_window_tokens?: number;
   context_remaining_tokens?: number;
@@ -871,6 +872,7 @@ export interface ModelSettingsResponse {
 
 /** Effective runtime and extra-tool settings visible from a workspace. */
 export interface RuntimeSettingsResponse {
+  permission_policy?: import("./permissionPresentation").PermissionPolicyInfo | null;
   cwd: string;
   snapshot_enabled?: boolean;
   snapshot_max_size_mb?: number;

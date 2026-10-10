@@ -228,6 +228,8 @@ test("Computer Use inherit removes only the selected override and sources stay s
   h.change("Computer Use 操作目标覆盖", "");
   await h.settle();
   assert.equal(h.user.computerUseTargetScope, undefined);
+  assert.match(h.doc.querySelector('[data-origin-key="computerUseTargetScope"]').textContent, /继承后：应用窗口/);
+  assert.match(h.doc.querySelector('[aria-label="Computer Use 操作目标覆盖"] option[value=""]').textContent, /跟随 Gateway（应用窗口）/);
   h.change("保存到配置层", "localSettings");
   h.click("上下文压缩");
   await h.settle();
@@ -236,6 +238,30 @@ test("Computer Use inherit removes only the selected override and sources stay s
     page.querySelector('[aria-label="保存到配置层"]').value,
     "localSettings",
   );
+  h.dom.window.close();
+});
+
+test("inherited permission and foreground hints resolve Gateway values and retain legacy target precedence", async () => {
+  const h = harness({ section: "tools", initial: { computerUseMode: "foreground_desktop" } });
+  h.state.runtime.permission_policy = {
+    configured_mode: "bypassPermissions", effective_mode: "bypassPermissions",
+    allow: [], ask: [], deny: [{ tool: "Bash", command: "rm *" }], runtime_allow_count: 0,
+  };
+  h.state.runtime.computer_use_delivery_policy = "strict_background";
+  await h.settle();
+  assert.match(h.doc.querySelector('[aria-label="默认权限模式"] option[value="default"]').textContent, /完全访问/);
+  assert.match(h.doc.querySelector('[data-origin-key="permissionMode"]').textContent, /自动批准工具权限请求/);
+  assert.match(h.doc.querySelector('[data-origin-key="permissionMode"]').title, /禁止：Bash/);
+  assert.match(h.doc.querySelector('[data-origin-key="computerUseDeliveryPolicy"]').textContent, /继承后：严格后台/);
+  assert.match(h.doc.querySelector('[data-origin-key="computerUseTargetScope"]').textContent, /旧版覆盖决定：整个桌面/);
+  h.change("旧版 Computer Use 覆盖", "");
+  await h.settle();
+  assert.match(h.doc.querySelector('[data-origin-key="computerUseTargetScope"]').textContent, /继承后：应用窗口/);
+  delete h.state.runtime.permission_policy;
+  h.changeConnection();
+  await h.settle();
+  assert.match(h.doc.querySelector('[data-origin-key="permissionMode"]').textContent, /暂无法读取/);
+  assert.ok(!h.doc.querySelector('[data-origin-key="permissionMode"]').title.includes("rm *"));
   h.dom.window.close();
 });
 

@@ -4,7 +4,12 @@ import type { SessionRuntimeStatus } from "./client/types";
 export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 type Preferences = { reasoning_effort?: ReasoningEffort | "auto"; ultra_mode?: boolean };
-export type RuntimeControlsState = Preferences & { ready: boolean; pending: boolean };
+export type RuntimeControlsState = Preferences & {
+  ready: boolean;
+  pending: boolean;
+  permission_policy?: SessionRuntimeStatus["permission_policy"];
+  permission_mode?: string;
+};
 
 export function normalizeRuntimePreferences(value: unknown): Preferences {
   const result: Preferences = {};
@@ -46,6 +51,8 @@ export class RuntimeControls {
       try {
         await action(key);
       } catch (error) {
+        const state = this.states.get(key);
+        if (state) this.states.set(key, { ...state, permission_policy: null });
         this.reportError(sessionId, `会话设置失败：${error instanceof Error ? error.message : String(error)}`);
       }
     });
@@ -70,7 +77,11 @@ export class RuntimeControls {
     return this.run(sessionId, async (key) => {
       if (key !== this.key(sessionId)) return;
       const status = await this.request("/session/status", sessionId);
-      this.states.set(key, { ...normalizeRuntimePreferences(status), ready: true, pending: true });
+      this.states.set(key, {
+        ...normalizeRuntimePreferences(status), ready: true, pending: true,
+        permission_policy: status.permission_policy,
+        permission_mode: status.permission_mode,
+      });
       if (!restore) return;
       const saved = normalizeRuntimePreferences(this.storage?.get(key));
       if (saved.reasoning_effort && saved.reasoning_effort !== status.reasoning_effort) {

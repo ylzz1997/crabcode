@@ -1,6 +1,7 @@
 import type { UserAttachmentChip } from "./userPromptDisplay";
 import type { LocalVmConfig } from "./virtualMachine";
 import type { TurnDetails } from "./turnDetails";
+import type { PermissionPolicyInfo } from "./permissionPresentation";
 
 export interface UsageDay {
   date: string;
@@ -497,6 +498,7 @@ export interface SessionStatus {
   reasoning_effort?: ReasoningEffort | null;
   ultra_mode?: boolean;
   permission_mode: string;
+  permission_policy?: PermissionPolicyInfo | null;
   context_used_tokens: number;
   context_window_tokens: number;
   context_remaining_tokens?: number;
@@ -583,6 +585,7 @@ export interface ModelSettingsMutation {
 
 export interface RuntimeSettingsResponse {
   cwd: string;
+  permission_policy?: PermissionPolicyInfo | null;
   snapshot_enabled: boolean;
   snapshot_max_size_mb: number;
   auto_compact_enabled?: boolean;

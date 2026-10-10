@@ -18,7 +18,7 @@ from crabcode_gateway.protocol import (
     GATEWAY_MIN_PROTOCOL_VERSION,
     GATEWAY_PROTOCOL_VERSION,
 )
-from crabcode_core.types.config import DEFAULT_COMPACT_BUFFER_TOKENS, ReasoningEffort
+from crabcode_core.types.config import DEFAULT_COMPACT_BUFFER_TOKENS, PermissionRule, ReasoningEffort
 
 
 class UsageDayResponse(BaseModel):
@@ -808,6 +808,17 @@ class PromptBudget(BaseModel):
     loaded_names: list[str] = Field(default_factory=list)
 
 
+class PermissionPolicyInfo(BaseModel):
+    """Loaded permission policy, independent of the client's inheritance choice."""
+
+    configured_mode: str
+    effective_mode: str
+    allow: list[PermissionRule] = Field(default_factory=list)
+    ask: list[PermissionRule] = Field(default_factory=list)
+    deny: list[PermissionRule] = Field(default_factory=list)
+    runtime_allow_count: int = 0
+
+
 class SessionRuntimeStatus(BaseModel):
     """Complete, non-secret runtime status shared by CLI-style clients."""
 
@@ -823,6 +834,7 @@ class SessionRuntimeStatus(BaseModel):
     reasoning_effort: ReasoningEffort | None = None
     ultra_mode: bool = False
     permission_mode: str = "default"
+    permission_policy: PermissionPolicyInfo | None = None
     context_used_tokens: int = 0
     context_window_tokens: int = 0
     context_remaining_tokens: int = 0
@@ -1128,6 +1140,7 @@ class RuntimeSettingsResponse(BaseModel):
     """Effective runtime and extra-tool settings visible from a workspace."""
 
     cwd: str
+    permission_policy: PermissionPolicyInfo | None = None
     snapshot_enabled: bool = True
     snapshot_max_size_mb: int = 1024
     auto_compact_enabled: bool = True

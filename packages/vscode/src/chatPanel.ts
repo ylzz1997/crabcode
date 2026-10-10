@@ -15,6 +15,7 @@ import * as os from "os";
 import * as path from "path";
 import type { CrabCodeConnection, SessionLaunchOverrides } from "./connection";
 import { RuntimeControls } from "./runtimeControls";
+import { permissionPolicyText } from "./client/permissionPresentation";
 import {
   buildIdeContextPrompt,
   presentUserMessage,
@@ -469,7 +470,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
       (sessionId, state) => {
         if (sessionId === this.displayedSessionId) {
-          this.postMessage({ type: "runtimeControls", sessionId, ...state, connected: this.connection.connected });
+          this.postMessage({ type: "runtimeControls", sessionId, ...state, permissionSummary: permissionPolicyText(state.permission_policy), connected: this.connection.connected });
         }
       },
       (sessionId, message) => this.addSessionSystemMessage(sessionId, message),
@@ -547,6 +548,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "requestOptions":
           void this.pushChatOptions();
+          break;
+        case "requestPermissionPolicy":
+          if (this.displayedSessionId && this.connection.connected) void this.runtimeControls.refresh(this.displayedSessionId);
           break;
         case "webviewReady":
           this.sendCurrentSessionInfo();
@@ -1064,6 +1068,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.postMessage({
       type: "runtimeControls", sessionId,
       ...(sessionId ? this.runtimeControls.get(sessionId) : { ready: false, pending: false }),
+      permissionSummary: permissionPolicyText(this.connection.connected && sessionId ? this.runtimeControls.get(sessionId).permission_policy : null),
       connected: this.connection.connected,
     });
   }
@@ -3515,6 +3520,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // Only update webview if this is the displayed session
       // Once displayedSessionId is set, reject events from other sessions
       const isDisplayed = this.displayedSessionId ? (eventSessionId === this.displayedSessionId) : false;
+      if (isDisplayed && (payload.type === "permission_mode_change" || payload.type === "mode_change" || payload.type === "turn_complete")) {
+        void this.runtimeControls.refresh(eventSessionId!);
+      }
 
       // Route event to the target session state (even if not displayed)
       this.routeEventToState(payload, targetState, isDisplayed);
@@ -6660,6 +6668,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       z-index: 200;
       padding: 3px 0;
       min-width: 245px;
+      width: min(390px, calc(100vw - 16px));
+      max-height: calc(100vh - 80px);
+      overflow-y: auto;
     }
     .perm-menu.hidden { display: none; }
     .perm-item {
@@ -6677,7 +6688,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .perm-item-text small { color: var(--text-muted); font-size: 10.5px; line-height: 1.25; }
     .perm-item .perm-check { width: 14px; text-align: center; opacity: 0; font-size: 11px; }
     .perm-item.active .perm-check { opacity: 1; }
-    .perm-item[data-perm="run_everything"] .perm-item-text { color: #e5c300; }
+    .perm-item[data-perm="run_everything"] .perm-item-text, .perm-item.perm-danger .perm-item-text { color: #e5c300; }
+    .permission-policy-summary { padding: 9px 12px; border-top: 1px solid var(--vscode-menu-border, #444); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+    .permission-policy-summary p { margin: 0 0 5px; white-space: pre-wrap; }
+    .permission-policy-summary details { margin-top: 5px; }
+    .permission-policy-summary summary { cursor: pointer; }
 
     /* ── Images in messages ────────────────────────────────────── */
     .msg-images {
@@ -7388,7 +7403,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <div id="perm-menu" class="perm-menu hidden" role="menu">
     <div class="perm-item active" data-perm="default" role="menuitem">
       <span class="perm-item-icon">⚙</span>
-      <span class="perm-item-text"><strong>工作区默认规则</strong><small>使用当前项目加载的 CrabCode 权限配置</small></span>
+      <span class="perm-item-text"><strong>工作区默认规则</strong><small id="perm-inherited-description">继承后：暂无法读取</small></span>
       <span class="perm-check">✓</span>
     </div>
     <div class="perm-item" data-perm="ask" role="menuitem">
@@ -7405,6 +7420,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <span class="perm-item-icon">⚡</span>
       <span class="perm-item-text"><strong>完全访问</strong><small>不再逐项确认；Computer Use 前台策略仍以设置为准</small></span>
       <span class="perm-check">✓</span>
+    </div>
+    <div class="permission-policy-summary" aria-live="polite">
+      <p id="perm-effective">当前生效：暂无法读取</p>
+      <p>工具自身限制及 Computer Use 前台策略仍有效。</p>
+      <small id="perm-rules"></small>
+      <details id="perm-rule-details" hidden><summary>查看具体规则</summary><p id="perm-rule-text"></p></details>
     </div>
   </div>
   <div id="model-menu" class="model-menu hidden" role="listbox" aria-label="选择模型">
@@ -9684,14 +9705,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         renderModelMenuItems(models, preferred, '');
       }
       const newPerm = msg.permissionMode === 'run_everything' ? 'run_everything' : (msg.permissionMode === 'ai_review' ? 'ai_review' : (msg.permissionMode === 'ask' ? 'ask' : 'default'));
-      if (permBtn && permLabel && permIcon && permMenu) {
-        permLabel.textContent = newPerm === 'run_everything' ? '完全访问' : (newPerm === 'ai_review' ? 'AI 审查' : (newPerm === 'ask' ? '每次确认' : '工作区默认规则'));
-        permIcon.textContent = newPerm === 'run_everything' ? '⚡' : (newPerm === 'ai_review' ? '🤖' : (newPerm === 'ask' ? '🛡' : '⚙'));
-        permBtn.classList.toggle('perm-danger', newPerm === 'run_everything');
-        permMenu.querySelectorAll('.perm-item').forEach(function(el) {
-          el.classList.toggle('active', el.getAttribute('data-perm') === newPerm);
-        });
-      }
+      renderPermissionPolicy(undefined, newPerm);
       const nextPendingEditsVisibleFiles = normalizePendingEditsVisibleFiles(msg.pendingEditsVisibleFiles);
       if (nextPendingEditsVisibleFiles !== pendingEditsVisibleFiles) {
         pendingEditsVisibleFiles = nextPendingEditsVisibleFiles;
@@ -11207,8 +11221,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       permMenu.style.visibility = '';
     }
 
+    let currentPermissionMode = 'default';
+    const emptyPermissionSummary = {
+      inheritedLabel: '暂无法读取',
+      inheritedDescription: '继承后：暂无法读取，请连接支持权限详情的 Gateway',
+      current: '当前生效：暂无法读取', rules: '', details: '',
+      inheritedDanger: false, effectiveDanger: false
+    };
+    let currentPermissionSummary = emptyPermissionSummary;
+    function renderPermissionPolicy(summary, mode) {
+      if (summary) currentPermissionSummary = summary;
+      if (mode) currentPermissionMode = mode;
+      const info = currentPermissionSummary;
+      const perm = currentPermissionMode;
+      if (permLabel) permLabel.textContent = perm === 'default' ? '默认 · ' + info.inheritedLabel : (perm === 'run_everything' ? '完全访问' : (perm === 'ai_review' ? 'AI 审查' : '每次确认'));
+      if (permIcon) permIcon.textContent = perm === 'run_everything' ? '⚡' : (perm === 'ai_review' ? '🤖' : (perm === 'ask' ? '🛡' : '⚙'));
+      if (permBtn) {
+        permBtn.classList.toggle('perm-danger', perm === 'run_everything' || (perm === 'default' && info.effectiveDanger));
+        permBtn.title = [info.current, perm === 'default' ? info.inheritedDescription : '', info.rules, info.details].filter(Boolean).join('\\n');
+      }
+      if (permMenu) permMenu.querySelectorAll('.perm-item').forEach(function(item) {
+        item.classList.toggle('active', item.getAttribute('data-perm') === perm);
+        item.classList.toggle('perm-danger', item.getAttribute('data-perm') === 'default' && info.inheritedDanger);
+      });
+      document.getElementById('perm-inherited-description').textContent = info.inheritedDescription;
+      document.getElementById('perm-effective').textContent = info.current;
+      document.getElementById('perm-rules').textContent = info.rules;
+      document.getElementById('perm-rule-details').hidden = !info.details;
+      document.getElementById('perm-rule-text').textContent = info.details;
+      if (permMenu && !permMenu.classList.contains('hidden')) positionPermMenu();
+    }
+
     function openPermMenu() {
       closeEffortMenu(); closePlusMenu(); closeModelMenu();
+      vscode.postMessage({ type: 'requestPermissionPolicy' });
       positionPermMenu();
       if (permBtn) permBtn.setAttribute('aria-expanded', 'true');
     }
@@ -11227,12 +11273,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     permMenu && permMenu.querySelectorAll('.perm-item').forEach(function(el) {
       el.addEventListener('click', function() {
         const perm = el.getAttribute('data-perm');
-        if (permLabel) permLabel.textContent = perm === 'run_everything' ? '完全访问' : (perm === 'ai_review' ? 'AI 审查' : (perm === 'ask' ? '每次确认' : '工作区默认规则'));
-        if (permIcon) permIcon.textContent = perm === 'run_everything' ? '⚡' : (perm === 'ai_review' ? '🤖' : (perm === 'ask' ? '🛡' : '⚙'));
-        if (permBtn) permBtn.classList.toggle('perm-danger', perm === 'run_everything');
-        permMenu.querySelectorAll('.perm-item').forEach(function(item) {
-          item.classList.toggle('active', item.getAttribute('data-perm') === perm);
-        });
+        renderPermissionPolicy(undefined, perm);
         vscode.postMessage({ type: 'setPermissionMode', mode: perm === 'run_everything' ? 'run_everything' : (perm === 'ai_review' ? 'ai_review' : (perm === 'ask' ? 'ask' : 'default')) });
         closePermMenu();
       });
@@ -11240,6 +11281,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     document.addEventListener('click', function() { closePermMenu(); });
     permMenu && permMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+    document.getElementById('perm-rule-details').addEventListener('toggle', function() {
+      if (permMenu && !permMenu.classList.contains('hidden')) positionPermMenu();
+    });
 
     // ── Model menu ────────────────────────────────────────────────
 
@@ -11844,7 +11888,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           mergeIdeReferences(msg.references);
           break;
         case 'runtimeControls':
-          if (msg.sessionId === currentSessionId) renderRuntimeControls(msg);
+          if (msg.sessionId === currentSessionId) {
+            renderRuntimeControls(msg);
+            renderPermissionPolicy(msg.permissionSummary, msg.pending ? undefined : msg.permission_mode);
+          }
           break;
         case 'addAttachments':
           mergeHostAttachments(msg);
@@ -11861,6 +11908,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'sessionInfo':
           if (msg.sessionId !== undefined && msg.sessionId !== currentSessionId) {
             closeEffortMenu(); closePlusMenu();
+            closePermMenu();
+            renderPermissionPolicy(emptyPermissionSummary, 'default');
             renderRuntimeControls({ ready: false, pending: false, connected: false });
             updateModeButton('agent');
           }

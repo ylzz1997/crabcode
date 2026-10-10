@@ -52,6 +52,17 @@ class PermissionManager:
         """Restore the mode selected by the loaded settings."""
         self.mode = self._configured_mode
 
+    def describe_policy(self) -> dict[str, Any]:
+        """Describe loaded rules and the active mode without re-reading files."""
+        return {
+            "configured_mode": self._configured_mode.value,
+            "effective_mode": self.mode.value,
+            "allow": [rule.model_dump(exclude_none=True) for rule in self.settings.allow],
+            "ask": [rule.model_dump(exclude_none=True) for rule in self.settings.ask],
+            "deny": [rule.model_dump(exclude_none=True) for rule in self.settings.deny],
+            "runtime_allow_count": len(self._runtime_allow_keys),
+        }
+
     def clear_runtime_allow(self) -> None:
         """Discard ephemeral ``always allow`` decisions for a session."""
         self._runtime_allow_keys.clear()

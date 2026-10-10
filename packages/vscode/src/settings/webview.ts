@@ -18,6 +18,7 @@ import type {
   UsageDailyResponse,
 } from "../client/types";
 import "./webview.css";
+import { permissionModeLabel, permissionPolicyText } from "../client/permissionPresentation";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -541,12 +542,23 @@ function syncLocalControls(): void {
       control.value = Array.isArray(value)
         ? value.join("\n")
         : String(value ?? "");
+    if (control instanceof HTMLSelectElement) {
+      const spec = LOCAL_SETTINGS.find((item) => item.key === key);
+      for (const option of control.options) {
+        const base = spec?.options?.find(([value]) => value === option.value)?.[1];
+        if (!base) continue;
+        const followed = inheritedSettingLabel(key);
+        option.textContent = followed && (option.value === "" || (key === "permissionMode" && option.value === "default"))
+          ? `${base}（${followed}）` : base;
+      }
+    }
   }
   for (const note of document.querySelectorAll<HTMLElement>(
     "[data-origin-key]",
   )) {
-    const info = snapshot.local[note.dataset.originKey!];
-    note.textContent =
+    const key = note.dataset.originKey!;
+    const info = snapshot.local[key];
+    const origin =
       info?.workspace !== undefined
         ? scope === "user"
           ? "当前由工作区覆盖"
@@ -554,7 +566,41 @@ function syncLocalControls(): void {
         : info?.user !== undefined
           ? "生效来源：用户"
           : "使用默认 / 继承配置";
+    const inherited = inheritedSettingLabel(key);
+    const follows = key === "permissionMode" ? info?.value === "default" : info?.value === "";
+    let hint = inherited && follows ? `；继承后：${inherited}` : "";
+    if (key === "computerUseTargetScope" && follows) {
+      const legacy = snapshot.local.computerUseMode?.value;
+      if (legacy) hint = `；当前由旧版覆盖决定：${legacy === "foreground_desktop" ? "整个桌面" : "应用窗口"}`;
+    }
+    if (key === "computerUseMode" && snapshot.local.computerUseTargetScope?.value) {
+      hint = `；当前由操作目标覆盖决定：${snapshot.local.computerUseTargetScope.value === "desktop" ? "整个桌面" : "应用窗口"}`;
+    }
+    note.textContent = origin + hint;
+    if (key === "permissionMode" && follows) {
+      const summary = permissionPolicyText(data.runtime?.permission_policy);
+      note.textContent = `${origin}；${summary.inheritedDescription}。已有会话以聊天菜单中的当前生效规则为准。`;
+      note.title = [summary.rules, summary.details].filter(Boolean).join("\n");
+    } else note.title = "";
   }
+}
+
+function inheritedSettingLabel(key: string): string | undefined {
+  const runtime = data.runtime as RuntimeSettingsResponse | undefined;
+  if (key === "permissionMode") return permissionModeLabel(runtime?.permission_policy?.configured_mode);
+  const labels: Record<string, string> = {
+    app_window: "应用窗口", desktop: "整个桌面",
+    strict_background: "严格后台", allow_foreground: "允许前台",
+    background_app: "后台应用（旧版）", foreground_desktop: "前台桌面（旧版）",
+  };
+  const fields = {
+    computerUseTargetScope: "computer_use_target_scope",
+    computerUseDeliveryPolicy: "computer_use_delivery_policy",
+    computerUseMode: "computer_use_mode",
+  } as const;
+  if (!(key in fields)) return undefined;
+  const value = runtime?.[fields[key as keyof typeof fields]];
+  return value ? labels[value] ?? "暂无法读取" : "暂无法读取";
 }
 function updateDirty(section: Section): void {
   if (!panelFor(section).querySelector('[data-dirty="true"], .model-editor'))

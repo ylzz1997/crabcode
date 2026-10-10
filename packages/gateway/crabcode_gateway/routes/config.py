@@ -422,6 +422,7 @@ def _runtime_settings_from_files(
 ) -> RuntimeSettingsResponse:
     """Read effective runtime settings by configuration layer."""
     from crabcode_core.config.manager import SETTING_SOURCES, _merge_settings
+    from crabcode_core.permissions.manager import PermissionManager
     from crabcode_core.types.config import CrabCodeSettings
     from pydantic import ValidationError
 
@@ -440,7 +441,7 @@ def _runtime_settings_from_files(
         relevant = {
             key: raw[key]
             for key in (
-                "snapshot", "computer_use", "extra_tools",
+                "snapshot", "computer_use", "extra_tools", "permissions",
                 "auto_compact_enabled", "compact_buffer_tokens", "max_context_length",
             )
             if key in raw
@@ -492,6 +493,7 @@ def _runtime_settings_from_files(
 
     return RuntimeSettingsResponse(
         cwd=cwd,
+        permission_policy=PermissionManager(settings.permissions).describe_policy(),
         snapshot_enabled=settings.snapshot.enabled,
         snapshot_max_size_mb=settings.snapshot.max_size_mb,
         auto_compact_enabled=settings.auto_compact_enabled,

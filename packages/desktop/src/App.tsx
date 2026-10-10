@@ -1,4 +1,5 @@
 import { normalizeVmConfig, vmHostId, manageVirtualMachine } from "./virtualMachine";
+import { permissionPolicyText } from "./permissionPresentation";
 import {
   AlertTriangle,
   Activity,
@@ -62,7 +63,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-light";
@@ -917,6 +918,7 @@ function App() {
   const connectionAttemptRef = useRef(new Map<string, symbol>());
   const deletingSessionIdsRef = useRef(new Set<string>());
   const sessionRefreshVersionRef = useRef(new Map<string, number>());
+  const sessionStatusVersionRef = useRef(new Map<string, number>());
   const autoOpeningDocumentRef = useRef<string | null>(null);
   const focusedSessionRef = useRef<FocusedSessionSnapshot | null>(null);
   const approvalShortcutTargetRef = useRef<ReturnType<typeof uniquePendingApproval>>(null);
@@ -1427,8 +1429,11 @@ function App() {
   ) => {
     const api = apiRef.current.get(connectionId);
     if (!api) return;
+    const version = (sessionStatusVersionRef.current.get(key) ?? 0) + 1;
+    sessionStatusVersionRef.current.set(key, version);
     try {
       const status = await api.sessionStatus(id);
+      if (sessionStatusVersionRef.current.get(key) !== version || apiRef.current.get(connectionId) !== api) return;
       setSessions((current) => current[key]
         ? { ...current, [key]: { ...current[key], status } }
         : current);
@@ -1444,6 +1449,13 @@ function App() {
       ));
     } catch {
       // The history still works if the optional status request races session setup.
+      if (sessionStatusVersionRef.current.get(key) !== version || apiRef.current.get(connectionId) !== api) return;
+      setSessions((current) => {
+        const session = current[key];
+        return session?.status
+          ? { ...current, [key]: { ...session, status: { ...session.status, permission_policy: null } } }
+          : current;
+      });
     }
   }, []);
 
@@ -1765,7 +1777,8 @@ function App() {
         });
         if (
           channel.sessionId
-          && (event.type === "turn_complete" || event.type === "compact" || event.type === "agent_state")
+          && (event.type === "turn_complete" || event.type === "compact" || event.type === "agent_state"
+            || event.type === "permission_mode_change" || event.type === "mode_change")
         ) {
           void updateSessionStatus(connection.id, key, channel.sessionId, true);
           if (event.type === "turn_complete") {
@@ -2827,6 +2840,7 @@ function App() {
   const selectPermissionMode = (mode: PermissionMode) => {
     if (!activeChannel || !activeSessionKey || !activeConnection || !activeProject || !activeSession) return;
     try {
+      sessionStatusVersionRef.current.set(activeSessionKey, (sessionStatusVersionRef.current.get(activeSessionKey) ?? 0) + 1);
       activeChannel.setPermissionMode(mode);
       updateSessionPreferences(activeConnection.id, activeProject.id, activeSession.id, {
         permission_mode: mode,
@@ -4485,6 +4499,8 @@ function App() {
                       <PermissionPicker
                         value={activePermissionMode}
                         disabled={activeSession.loading || !activeSession.connected}
+                        policy={activeSession.status?.permission_policy}
+                        onRefresh={() => { if (activeConnection && activeSessionKey) void updateSessionStatus(activeConnection.id, activeSessionKey, activeSession.id, true); }}
                         onChange={selectPermissionMode}
                       />
                       {activeSession.status?.mode === "plan" && (
@@ -6179,34 +6195,56 @@ function ReasoningEffortPicker({
   );
 }
 
-function PermissionPicker({
+export function PermissionPicker({
   value,
   disabled,
+  policy,
+  onRefresh,
   onChange,
 }: {
   value: PermissionMode;
   disabled: boolean;
+  policy?: import("./permissionPresentation").PermissionPolicyInfo | null;
+  onRefresh?: () => void;
   onChange: (value: PermissionMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const close = useCallback(() => setOpen(false), []);
   useDismissMenu(open, close, ref);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const anchor = ref.current;
+    const menu = anchor?.querySelector<HTMLElement>(".permission-picker-menu");
+    if (!anchor || !menu) return;
+    const position = () => {
+      const rect = anchor.getBoundingClientRect();
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 12));
+      menu.style.left = `${left - rect.left}px`;
+      menu.style.maxHeight = `${Math.max(100, Math.min(560, rect.top - 22))}px`;
+    };
+    position();
+    window.addEventListener("resize", position);
+    return () => window.removeEventListener("resize", position);
+  }, [open]);
   const selected = PERMISSION_OPTIONS.find((item) => item.value === value) ?? PERMISSION_OPTIONS[0];
+  const summary = permissionPolicyText(policy);
+  const inherited = value === "default";
+  const danger = inherited ? summary.effectiveDanger : selected.tone === "danger";
   const Icon = selected.icon;
   return (
     <div className="picker permission-picker" ref={ref}>
       <button
         type="button"
-        className={`picker-trigger permission-picker-trigger ${selected.tone === "danger" ? "danger" : ""}`}
+        className={`picker-trigger permission-picker-trigger ${danger ? "danger" : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
-        title="选择权限策略"
-        onClick={() => setOpen((current) => !current)}
+        title={[summary.current, inherited ? summary.inheritedDescription : selected.description, summary.rules, summary.details].filter(Boolean).join("\n")}
+        onClick={() => { if (!open) onRefresh?.(); setOpen((current) => !current); }}
       >
         <Icon />
-        <span className="picker-trigger-label">{selected.label}</span>
+        <span className="picker-trigger-label">{inherited ? `默认 · ${summary.inheritedLabel}` : selected.label}</span>
         <ChevronDown className={open ? "picker-chevron open" : "picker-chevron"} />
       </button>
       {open && (
@@ -6220,16 +6258,22 @@ function PermissionPicker({
                   type="button"
                   role="menuitemradio"
                   aria-checked={option.value === value}
-                  className={`permission-option ${option.value === value ? "selected" : ""} ${option.tone}`}
+                  className={`permission-option ${option.value === value ? "selected" : ""} ${option.value === "default" && summary.inheritedDanger ? "danger" : option.tone}`}
                   key={option.value}
                   onClick={() => { onChange(option.value); setOpen(false); }}
                 >
                   <span className="permission-option-icon"><OptionIcon /></span>
-                  <span className="permission-option-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
+                  <span className="permission-option-copy"><strong>{option.label}</strong><small>{option.value === "default" ? summary.inheritedDescription : option.description}</small></span>
                   {option.value === value && <Check className="picker-check" />}
                 </button>
               );
             })}
+          </div>
+          <div className="permission-policy-summary" aria-live="polite">
+            <p>{summary.current}</p>
+            <p>工具自身限制及 Computer Use 前台策略仍有效。</p>
+            {summary.rules && <small>{summary.rules}</small>}
+            {summary.details && <details><summary>查看具体规则</summary><p>{summary.details}</p></details>}
           </div>
         </div>
       )}
