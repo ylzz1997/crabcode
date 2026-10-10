@@ -1177,11 +1177,11 @@ function App() {
     } catch (error) {
       setModelSettingsState((current) => current?.key === key
         ? {
-            key,
-            data: current.data,
-            loading: false,
-            error: error instanceof Error ? error.message : String(error),
-          }
+          key,
+          data: current.data,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
         : current);
     }
   }, []);
@@ -1211,11 +1211,11 @@ function App() {
       if (runtimeSettingsRevisionRef.current.get(key) !== revision) return;
       setRuntimeSettingsState((current) => current?.key === key
         ? {
-            key,
-            data: current.data,
-            loading: false,
-            error: error instanceof Error ? error.message : String(error),
-          }
+          key,
+          data: current.data,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
         : current);
     }
   }, []);
@@ -1261,11 +1261,11 @@ function App() {
       if (promptSettingsRevisionRef.current.get(key) !== revision) return;
       setPromptSettingsState((current) => current?.key === key
         ? {
-            key,
-            data: current.data,
-            loading: false,
-            error: error instanceof Error ? error.message : String(error),
-          }
+          key,
+          data: current.data,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
         : current);
     }
   }, []);
@@ -1308,11 +1308,11 @@ function App() {
     } catch (error) {
       setModelSettingsState((current) => current?.key === key
         ? {
-            key,
-            data: current.data,
-            loading: false,
-            error: error instanceof Error ? error.message : String(error),
-          }
+          key,
+          data: current.data,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
         : current);
       throw error;
     }
@@ -1607,7 +1607,7 @@ function App() {
     const archiveRequest = target.sessionId.startsWith("new-")
       ? Promise.resolve()
       : apiRef.current.get(target.connectionId)?.archive(target.sessionId)
-        ?? Promise.reject(new Error("Gateway 尚未连接"));
+      ?? Promise.reject(new Error("Gateway 尚未连接"));
 
     // Remove local state before waiting for resource teardown on the gateway.
     removeSessionState(target);
@@ -1673,7 +1673,7 @@ function App() {
     const rememberedModel = info
       ? undefined
       : resolveRememberedModel(connection,
-          connection.id === activeConnection?.id && project.path === activeProject?.path ? projectModels.models : []);
+        connection.id === activeConnection?.id && project.path === activeProject?.path ? projectModels.models : []);
     let key = sessionKey(connection.id, info?.session_id ?? `new-${randomUuid()}`);
     const existingChannel = channelRef.current.get(key);
     if (existingChannel && !existingChannel.isDisposed) {
@@ -1707,13 +1707,13 @@ function App() {
         ...current,
         [key]: previous
           ? {
-              ...previous,
-              cwd: project.path,
-              title: info ? (info.title || "未命名会话") : previous.title,
-              loading: Boolean(info) && previous.items.length === 0,
-              connected: false,
-              error: null,
-            }
+            ...previous,
+            cwd: project.path,
+            title: info ? (info.title || "未命名会话") : previous.title,
+            loading: Boolean(info) && previous.items.length === 0,
+            connected: false,
+            error: null,
+          }
           : initial,
       };
     });
@@ -1860,14 +1860,14 @@ function App() {
         if (!isCurrentChannel()) return;
         setSessions((current) => current[key]
           ? {
-              ...current,
-              [key]: {
-                ...current[key],
-                loading: error ? false : current[key].loading,
-                connected,
-                error: error ?? null,
-              },
-            }
+            ...current,
+            [key]: {
+              ...current[key],
+              loading: error ? false : current[key].loading,
+              connected,
+              error: error ?? null,
+            },
+          }
           : current);
       },
     });
@@ -1984,9 +1984,9 @@ function App() {
       if (!isCurrentAttempt()) return;
       progress("loading_workspace", "正在加载工作区和模型");
       const workspace = await api.workspaceInfo().catch((error) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(`加载工作区失败：${detail}`);
-        });
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`加载工作区失败：${detail}`);
+      });
       if (!isCurrentAttempt()) return;
       for (const detail of gatewayEnvironmentLog(workspace)) progress("environment", detail);
       const projects = connection.projects.length > 0
@@ -1999,8 +1999,8 @@ function App() {
           directories: [workspace.startup_cwd],
           is_default: true,
           last_session_id: null,
-            favorite_session_ids: [],
-          }];
+          favorite_session_ids: [],
+        }];
       progress("loading_sessions", "正在加载会话列表");
       const sessionEntries = await Promise.all(
         projects.map(async (project) => [project.path, await api.sessions(project.path)] as const),
@@ -2199,16 +2199,16 @@ function App() {
     const sessionId = activeSession?.id;
     const info = sessionId && !sessionId.startsWith("new-")
       ? activeList.find((item) => item.session_id === sessionId) ?? {
-          session_id: sessionId,
-          message_count: activeSession.items.length,
-          model: activeSession.status?.model ?? "",
-          provider: activeSession.status?.provider ?? "",
-          created_at: "",
-          title: activeSession.title,
-          cwd: activeSession.cwd,
-          tokens_used: activeSession.status?.context_used_tokens ?? 0,
-          preview: "",
-        }
+        session_id: sessionId,
+        message_count: activeSession.items.length,
+        model: activeSession.status?.model ?? "",
+        provider: activeSession.status?.provider ?? "",
+        created_at: "",
+        title: activeSession.title,
+        cwd: activeSession.cwd,
+        tokens_used: activeSession.status?.context_used_tokens ?? 0,
+        preview: "",
+      }
       : undefined;
     openSession(activeConnection, activeProject, info);
   }, [
@@ -2605,19 +2605,23 @@ function App() {
     const entry = activeSession.pendingFollowUps?.find((pending) => pending.item.id === id);
     if (!entry || entry.action) return;
     if (entry.status === "cancelled" && action !== "steer") {
-      setSessions((current) => ({ ...current, [activeSessionKey]: applyGatewayEvent(current[activeSessionKey], {
-        type: "queued_message_updated", request_id: id, action,
-      }) }));
+      setSessions((current) => ({
+        ...current, [activeSessionKey]: applyGatewayEvent(current[activeSessionKey], {
+          type: "queued_message_updated", request_id: id, action,
+        })
+      }));
       return;
     }
     if (!activeChannel || !activeSession.busy || !activeSession.operationId) return;
     try {
       activeChannel.queuedMessageAction(id, action, activeSession.operationId);
-      setSessions((current) => ({ ...current, [activeSessionKey]: {
-        ...current[activeSessionKey],
-        pendingFollowUps: current[activeSessionKey].pendingFollowUps?.map((pending) => pending.item.id === id
-          ? { ...pending, action } : pending),
-      } }));
+      setSessions((current) => ({
+        ...current, [activeSessionKey]: {
+          ...current[activeSessionKey],
+          pendingFollowUps: current[activeSessionKey].pendingFollowUps?.map((pending) => pending.item.id === id
+            ? { ...pending, action } : pending),
+        }
+      }));
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error));
     }
@@ -3416,34 +3420,34 @@ function App() {
         const title = action === "translate" ? "翻译文档" : "生成 Blog";
         setSessions((current) => current[activeSessionKey]
           ? {
-              ...current,
-              [activeSessionKey]: {
-                ...current[activeSessionKey],
-                busy: true,
-                operationId,
-                error: null,
-                runStartedAt: current[activeSessionKey].runStartedAt ?? startedAt,
-                currentStep: { kind: "document", label: title, startedAt },
-                items: [
-                  ...current[activeSessionKey].items,
-                  {
-                    id: `${operationId}:document-job`,
-                    kind: "document_job" as const,
-                    title,
-                    text: "正在准备文档内容",
-                    action,
-                    locale: options.locale,
-                    language: options.language,
-                    source: options.source,
-                    engine: options.translation_engine === "legacy" ? "legacy" : undefined,
-                    current: 0,
-                    total: 0,
-                    status: "running" as const,
-                    startedAt,
-                  },
-                ],
-              },
-            }
+            ...current,
+            [activeSessionKey]: {
+              ...current[activeSessionKey],
+              busy: true,
+              operationId,
+              error: null,
+              runStartedAt: current[activeSessionKey].runStartedAt ?? startedAt,
+              currentStep: { kind: "document", label: title, startedAt },
+              items: [
+                ...current[activeSessionKey].items,
+                {
+                  id: `${operationId}:document-job`,
+                  kind: "document_job" as const,
+                  title,
+                  text: "正在准备文档内容",
+                  action,
+                  locale: options.locale,
+                  language: options.language,
+                  source: options.source,
+                  engine: options.translation_engine === "legacy" ? "legacy" : undefined,
+                  current: 0,
+                  total: 0,
+                  status: "running" as const,
+                  startedAt,
+                },
+              ],
+            },
+          }
           : current);
       }
       return true;
@@ -3786,795 +3790,795 @@ function App() {
           }}
         />
       ) : (
-      <>
-        <header className="gateway-tabs">
-        <button
-          className="icon-button sidebar-toggle"
-          title={sidebarOpen ? "隐藏侧栏" : "显示侧栏"}
-          onClick={() => setSidebarOpen((value) => !value)}
-        >
-          {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
-        </button>
-        <div className="top-brand" aria-label="Crab Desktop 工作台">
-          <span className={`top-brand-mark ${activeGateway?.status === "online" ? "online" : ""}`}><Code2 /></span>
-          <span className="top-brand-name">Crab Desktop</span>
-          <span className="top-brand-mode">WORKBENCH</span>
-        </div>
-        <div className="tab-strip">
-          {settings.connection_order.map((id) => {
-            const connection = settings.connections.find((item) => item.id === id);
-            if (!connection) return null;
-            const gateway = gateways[id];
-            const connectionSessions = Object.entries(sessions)
-              .filter(([key]) => key.startsWith(`${id}:`))
-              .map(([, value]) => value);
-            const running = connectionSessions.filter((item) => item.busy).length;
-            const pending = connectionSessions.flatMap((item) => item.items)
-              .filter((item) => item.status === "pending" && (item.kind === "permission" || item.kind === "choice"))
-              .length;
-            return (
-              <button
-                key={id}
-                className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
-                onClick={() => switchConnection(id)}
-                onDoubleClick={() => {
-                  const name = window.prompt("连接名称", connection.name)?.trim();
-                  if (name) updateConnection(id, (current) => ({ ...current, name }));
-                }}
-                title={`${connection.name}\n${connection.base_url}`}
-              >
-                <ConnectionDot status={gateway?.status ?? "connecting"} />
-                <span>{connection.name}</span>
-                {running > 0 && <span className="tab-count running">{running}</span>}
-                {pending > 0 && <span className="tab-count pending">{pending}</span>}
-              </button>
-            );
-          })}
-        </div>
-        <button className="icon-button" title="连接 Gateway" onClick={() => setConnectionModal("new")}>
-          <Plus />
-        </button>
-        </header>
-
-      <div className={`workbench ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-        <aside
-          className={`sidebar ${sidebarOpen ? "open" : "closed"}`}
-          style={{ width: sidebarOpen ? settings.sidebar_width : 0 }}
-          aria-hidden={!sidebarOpen}
-          {...(!sidebarOpen ? { inert: "" } : {})}
-        >
-          <div className="sidebar-content" style={{ width: settings.sidebar_width }}>
-            <div className="workspace-brand">
-              <div className="workspace-brand-lockup" title={activeProject?.path ?? activeConnection?.base_url}>
-                <span className="workspace-brand-copy">
-                  <strong>Crab Desktop</strong>
-                  <small>{activeProject?.name ?? "工作区"}</small>
-                </span>
-              </div>
-              <div className="workspace-brand-actions">
-                <button
-                  className="icon-button small"
-                  title="已安排"
-                  onClick={() => setWorkspaceView("scheduled")}
-                >
-                  <Clock />
-                </button>
-                <button
-                  className="icon-button small"
-                  title="重新连接"
-                  disabled={activeGateway?.status === "connecting"}
-                  onClick={() => {
-                    if (!activeConnection) return;
-                    connectedRef.current.add(activeConnection.id);
-                    void connectGateway(activeConnection, settings.python_path);
-                  }}
-                >
-                  <RefreshCw />
-                </button>
-              </div>
+        <>
+          <header className="gateway-tabs">
+            <button
+              className="icon-button sidebar-toggle"
+              title={sidebarOpen ? "隐藏侧栏" : "显示侧栏"}
+              onClick={() => setSidebarOpen((value) => !value)}
+            >
+              {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+            </button>
+            <div className="top-brand" aria-label="Crab Desktop 工作台">
+              <span className={`top-brand-mark ${activeGateway?.status === "online" ? "online" : ""}`}><Code2 /></span>
+              <span className="top-brand-name">Crab Desktop</span>
+              <span className="top-brand-mode">WORKBENCH</span>
             </div>
-
-            {activeGateway?.status === "error" && (
-              <button className="connection-error" onClick={() => setConnectionModal("new")}>
-                <WifiOff />
-                <span>{activeGateway.error}</span>
-              </button>
-            )}
-
-            <nav className="workspace-nav" aria-label="工作区">
-              <button
-                className={`workspace-nav-item ${workspaceView === "chat" ? "active" : ""}`}
-                disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
-                onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
-              >
-                <MessageSquarePlus />
-                <span>新会话</span>
-              </button>
-              <button
-                className={`workspace-nav-item ${workspaceView === "scheduled" ? "active" : ""}`}
-                onClick={() => setWorkspaceView("scheduled")}
-              >
-                <Clock />
-                <span>已安排</span>
-              </button>
-              <button
-                className={`workspace-nav-item ${workspaceView === "plugins" ? "active" : ""}`}
-                onClick={() => setWorkspaceView("plugins")}
-              >
-                <Puzzle />
-                <span>插件</span>
-              </button>
-              <button
-                className={`workspace-nav-item ${workspaceView === "favorites" ? "active" : ""}`}
-                disabled={!activeConnection || activeGateway?.status !== "online"}
-                onClick={() => setWorkspaceView("favorites")}
-              >
-                <Star />
-                <span>收藏</span>
-                {favoriteItemCount > 0 && <span className="workspace-nav-count">{favoriteItemCount}</span>}
-              </button>
-            </nav>
-
-            {workspaceView === "chat" && <section className={`sidebar-section projects-section ${projectsCollapsed ? "collapsed" : ""}`}>
-              <div className="section-label">
-                <button
-                  className="section-label-toggle"
-                  aria-expanded={!projectsCollapsed}
-                  onClick={() => setProjectsCollapsed((value) => !value)}
-                >
-                  <span>项目</span>
-                </button>
-                <span className="section-label-actions">
+            <div className="tab-strip">
+              {settings.connection_order.map((id) => {
+                const connection = settings.connections.find((item) => item.id === id);
+                if (!connection) return null;
+                const gateway = gateways[id];
+                const connectionSessions = Object.entries(sessions)
+                  .filter(([key]) => key.startsWith(`${id}:`))
+                  .map(([, value]) => value);
+                const running = connectionSessions.filter((item) => item.busy).length;
+                const pending = connectionSessions.flatMap((item) => item.items)
+                  .filter((item) => item.status === "pending" && (item.kind === "permission" || item.kind === "choice"))
+                  .length;
+                return (
                   <button
-                    className="icon-button tiny"
-                    title="添加项目"
-                    disabled={activeGateway?.status !== "online"}
-                    onClick={beginNewProject}
-                  >
-                    <Plus />
-                  </button>
-                  <button
-                    className="icon-button tiny section-collapse"
-                    title={projectsCollapsed ? "展开项目" : "折叠项目"}
-                    aria-expanded={!projectsCollapsed}
-                    onClick={() => setProjectsCollapsed((value) => !value)}
-                  >
-                    <ChevronDown className={projectsCollapsed ? "collapsed" : ""} />
-                  </button>
-                </span>
-              </div>
-              <div
-                className="section-content"
-                aria-hidden={projectsCollapsed}
-                {...(projectsCollapsed ? { inert: "" } : {})}
-              >
-                <div className="section-content-inner">
-                  <div className="project-list">
-                    {activeConnection?.projects.map((project) => {
-                      const projectFavorite = hasFavoriteProject(activeFavoriteEntries, project.id);
-                      return <div className="project-item-row" key={project.id}>
-                        <button
-                          className={`project-item ${activeProject?.id === project.id ? "active" : ""}`}
-                          title={projectDirectoryTitle(project)}
-                          onClick={() => switchProject(project)}
-                          onDoubleClick={() => setProjectModal(project)}
-                        >
-                          {project.kind === "document"
-                            ? <FileText />
-                            : activeProject?.id === project.id ? <FolderOpen /> : <Folder />}
-                          <span>{project.name}</span>
-                          {projectFavorite && <Star className="project-favorite" fill="currentColor" />}
-                        </button>
-                        <ProjectActionsMenu
-                          projectName={project.name}
-                          favorite={projectFavorite}
-                          newSessionDisabled={project.directories.length === 0 || activeGateway?.status !== "online"}
-                          deleteDisabled={project.id === defaultProjectId}
-                          onNewSession={() => {
-                            if (!activeConnection) return;
-                            setSearch("");
-                            updateConnection(activeConnection.id, (connection) => ({
-                              ...connection,
-                              last_project_path: project.path,
-                              last_project_id: project.id,
-                            }));
-                            openSession(activeConnection, project);
-                          }}
-                          onEdit={() => setProjectModal(project)}
-                          onToggleFavorite={() => toggleFavoriteProject(project.id)}
-                          onDelete={() => setProjectDeleteTarget(project)}
-                        />
-                      </div>
-                    })}
-                  </div>
-                </div>
-              </div>
-            </section>}
-
-            {workspaceView === "chat" && <section className={`sidebar-section sessions-section ${sessionsCollapsed ? "collapsed" : ""}`}>
-              <div className="section-label">
-                <button
-                  className="section-label-toggle"
-                  aria-expanded={!sessionsCollapsed}
-                  onClick={() => setSessionsCollapsed((value) => !value)}
-                >
-                  <span>会话</span>
-                </button>
-                <span className="section-label-actions">
-                  <span className="section-count">{filteredSessions.length}</span>
-                  <button
-                    className="icon-button tiny"
-                    type="button"
-                    title="新建会话"
-                    aria-label="新建会话"
-                    disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
-                    onClick={() => {
-                      if (!activeConnection || !activeProject) return;
-                      setSearch("");
-                      openSession(activeConnection, activeProject);
+                    key={id}
+                    className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
+                    onClick={() => switchConnection(id)}
+                    onDoubleClick={() => {
+                      const name = window.prompt("连接名称", connection.name)?.trim();
+                      if (name) updateConnection(id, (current) => ({ ...current, name }));
                     }}
+                    title={`${connection.name}\n${connection.base_url}`}
                   >
-                    <Plus />
+                    <ConnectionDot status={gateway?.status ?? "connecting"} />
+                    <span>{connection.name}</span>
+                    {running > 0 && <span className="tab-count running">{running}</span>}
+                    {pending > 0 && <span className="tab-count pending">{pending}</span>}
                   </button>
-                  <button
-                    className="icon-button tiny section-collapse"
-                    title={sessionsCollapsed ? "展开会话" : "折叠会话"}
-                    aria-expanded={!sessionsCollapsed}
-                    onClick={() => setSessionsCollapsed((value) => !value)}
-                  >
-                    <ChevronDown className={sessionsCollapsed ? "collapsed" : ""} />
-                  </button>
-                </span>
-              </div>
-              <div
-                className="section-content"
-                aria-hidden={sessionsCollapsed}
-                {...(sessionsCollapsed ? { inert: "" } : {})}
-              >
-                <div className="section-content-inner">
-                  <label className="session-search">
-                    <Search />
-                    <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索会话" />
-                  </label>
-                  <div className="session-list">
-                    {filteredSessions.map((info) => {
-                      const key = sessionKey(activeConnection!.id, info.session_id);
-                      const view = sessions[key];
-                      const isActive = activeSessionKey === key;
-                      const favorite = favoriteSessionIds.has(info.session_id);
-                      const deleting = deletingSessionIds.has(key);
-                      const forking = forkingSessionIds.has(key);
-                      const pending = view?.items.some((item) => item.status === "pending" && (
-                        item.kind === "permission" || item.kind === "choice"
-                      ));
-                      return (
-                        <div className={`session-item-row ${isActive ? "active" : ""}`} key={info.session_id}>
-                          <button
-                            type="button"
-                            className="session-item"
-                            onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject, info)}
-                          >
-                            <span className="session-title-row">
-                              {favorite && <Star className="session-favorite" fill="currentColor" />}
-                              <span className="session-title">{info.title || "未命名会话"}</span>
-                              {view?.busy && <LoaderCircle className="spin" />}
-                              {pending && <ShieldAlert className="pending-icon" />}
-                            </span>
-                            <span className="session-preview">{info.preview || formatDate(info.created_at)}</span>
-                          </button>
-                          <SessionActionsMenu
-                            info={info}
-                            status={view?.status ?? null}
-                            favorite={favorite}
-                            deleting={deleting}
-                            forking={forking}
-                            onFork={() => void forkSessionFromLatestReply(info)}
-                            onToggleFavorite={() => {
-                              if (activeProject) toggleFavoriteSession(activeProject.id, info.session_id);
-                            }}
-                            onDelete={() => {
-                              void archiveSession({
-                                connectionId: activeConnection!.id,
-                                cwd: info.cwd || activeProject?.path || "",
-                                key,
-                                sessionId: info.session_id,
-                              });
-                            }}
-                          />
-                        </div>
-                      );
-                    })}
-                    {activeGateway?.status === "online" && filteredSessions.length === 0 && (
-                      <div className="empty-sidebar">暂无会话</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </section>}
-
-            <div className="workspace-settings-footer">
-              <button className="workspace-settings-button" type="button" onClick={openSettings}>
-                <Settings />
-                <span>设置</span>
-              </button>
+                );
+              })}
             </div>
-          </div>
-        </aside>
+            <button className="icon-button" title="连接 Gateway" onClick={() => setConnectionModal("new")}>
+              <Plus />
+            </button>
+          </header>
 
-        <main
-          className={`main-panel ${documentMode ? "document-mode" : ""} ${documentAgentCollapsed ? "document-agent-collapsed" : ""} ${documentMode && documentAgentTransitioning ? "document-agent-transitioning" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
-          style={documentMode ? {
-            gridTemplateColumns: documentAgentCollapsed
-              ? "minmax(0, 1fr) 44px"
-              : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 320}px, calc(100% - 180px))`,
-          } : projectFilesWideLayout ? {
-            "--project-files-width": `${projectFilesWidth}px`,
-          } as CSSProperties : undefined}
-        >
-          {documentMode && activeProject && activeConnection && apiRef.current.get(activeConnection.id) && (
-            <DocumentWorkspace
-              api={apiRef.current.get(activeConnection.id)!}
-              connectionId={activeConnection.id}
-              project={activeProject}
-              documentView={activeProject.document_view}
-              agentWidth={settings.document_agent_width ?? 320}
-              agentCollapsed={documentAgentCollapsed}
-              showOriginalText={settings.document_show_original_text === true}
-              translationConcurrency={settings.document_translation_concurrency}
-              translationBatchSize={settings.document_translation_batch_size}
-              sessionBusy={Boolean(activeSession?.busy)}
-              sessionError={activeSession?.error ?? null}
-              selectionTranslationEvent={activeSessionKey ? selectionTranslationEvents[activeSessionKey] ?? null : null}
-              onAgentWidth={(width) => commitSettings((current) => ({ ...current, document_agent_width: width }))}
-              onAgentCollapsed={updateDocumentAgentCollapsed}
-              onDocumentViewState={(connectionId, projectId, state) => updateConnection(connectionId, (connection) => ({
-                ...connection,
-                projects: connection.projects.map((project) => project.id === projectId
-                  ? { ...project, document_view: state }
-                  : project),
-              }))}
-              onDocumentAction={startDocumentAction}
-              onDocumentReference={(reference) => setPendingDocumentReferences((current) => (
-                current.some((item) => item.text === reference.text && item.project_id === reference.project_id)
-                  ? current
-                  : [...current, reference]
-              ))}
-              onTranslateSelection={(text, locale) => {
-                if (!activeChannel || !activeSession?.connected) {
-                  setGlobalError("Agent 会话尚未就绪，请稍后重试");
-                  return null;
-                }
-                try {
-                  return activeChannel.translateDocumentSelection(text, locale);
-                } catch (reason) {
-                  setGlobalError(reason instanceof Error ? reason.message : String(reason));
-                  return null;
-                }
-              }}
-              filesWorkspace={projectFilesEligible ? {
-                activeView: documentFilesView,
-                changeCount: new Set(reviewTurns.flatMap((turn) => turn.summary.files.map((file) => file.path))).size,
-                content: filesWorkspace,
-                onViewChange: changeDocumentFilesView,
-              } : undefined}
-            />
-          )}
-          {workspaceView === "scheduled" ? (
-            <ScheduledTasksView
-              tab={automationTab}
-              onTabChange={setAutomationTab}
-              jobs={activeJobs}
-              tasks={activeMonitorTasks}
-              projects={activeConnection?.projects ?? []}
-              sessionsByProject={activeGateway?.sessionsByProject ?? {}}
-              loading={automationTab === "schedule" ? scheduleLoading : monitorLoading}
-              error={automationTab === "schedule" ? scheduleError : monitorError}
-              actionState={scheduleAction}
-              connected={activeGateway?.status === "online"}
-              onRefresh={() => {
-                if (!activeConnection) return;
-                if (automationTab === "monitor") void refreshMonitors(activeConnection.id);
-                else void refreshSchedules(activeConnection.id);
-              }}
-              onAction={(action, job) => {
-                if (action === "cancel") {
-                  setScheduleError(null);
-                  setScheduleDeleteTarget(job);
-                  return;
-                }
-                void updateSchedule(action, job);
-              }}
-              onNew={(prompt) => {
-                if (!activeConnection || !activeProject) return;
-                openSession(activeConnection, activeProject);
-                if (prompt) setComposer(prompt);
-              }}
-              onOpenSession={(project, session) => {
-                if (!activeConnection) return;
-                updateConnection(activeConnection.id, (connection) => ({
-                  ...connection,
-                  last_project_path: project.path,
-                  last_project_id: project.id,
-                }));
-                openSession(activeConnection, project, session);
-              }}
-            />
-          ) : workspaceView === "favorites" ? (
-            <FavoritesView
-              items={favoriteItems}
-              entries={activeFavoriteEntries}
-              connected={activeGateway?.status === "online"}
-              onOpenProject={(project) => switchProject(project)}
-              onOpenSession={(project, session) => {
-                if (!activeConnection) return;
-                updateConnection(activeConnection.id, (connection) => ({
-                  ...connection,
-                  last_project_path: project.path,
-                  last_project_id: project.id,
-                }));
-                openSession(activeConnection, project, session);
-              }}
-              onCreateFolder={(parentId, name) => {
-                updateFavorites((items) => addFavoriteEntry(items, parentId, {
-                  id: randomUuid(),
-                  type: "folder",
-                  name,
-                  children: [],
-                }));
-              }}
-              onRenameFolder={(folderId, name) => updateFavorites((items) => renameFavoriteFolder(items, folderId, name))}
-              onMove={(entryId, parentId) => updateFavorites((items) => moveFavoriteEntry(items, entryId, parentId))}
-              onRemove={(entryId) => updateFavorites((items) => removeFavoriteEntries(items, (entry) => entry.id === entryId))}
-              onDeleteFolder={(folderId, mode) => updateFavorites((items) => deleteFavoriteFolder(items, folderId, mode))}
-            />
-          ) : workspaceView === "plugins" ? (
-            <PluginsView
-              data={activePluginData}
-              loading={pluginLoading}
-              error={pluginError}
-              connected={activeGateway?.status === "online"}
-              onRefresh={() => activeConnection && void refreshPlugins(
-                activeConnection.id,
-                resourceSessionId,
-                activeProject?.path ?? activeGateway?.workspace?.startup_cwd,
-              )}
-            />
-          ) : !activeSession ? (
-            <EmptyWorkspace
-              connection={activeConnection}
-              project={activeProject}
-              gateway={activeGateway}
-              onNew={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
-              onConnect={() => setConnectionModal("new")}
-            />
-          ) : (
-            <>
-              <div className="conversation-header">
-                <div className="conversation-title">
-                  <h1 className={activeSession.loading ? "session-loading-title" : undefined}>
-                    {activeSession.loading && <LoaderCircle className="spin" />}
-                    {activeSession.loading ? "正在加载会话" : activeSession.title}
-                  </h1>
-                  <span>{activeSession.cwd}</span>
-                  {activeForkOrigin && (
-                    <small className="conversation-origin">来自“{activeForkOrigin}” · 分叉</small>
-                  )}
-                </div>
-                <div className="conversation-view-tabs" role="tablist" aria-label="会话视图">
-                  <SlidingTabIndicator activeKey={activeConversationView} className="conversation-view-indicator" />
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={activeConversationView === "chat"}
-                    className={activeConversationView === "chat" ? "active" : ""}
-                    onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "chat" }))}
-                  >对话</button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={activeConversationView === "trajectory"}
-                    className={activeConversationView === "trajectory" ? "active" : ""}
-                    onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "trajectory" }))}
-                  >轨迹</button>
-                </div>
-                <div className="conversation-actions">
-                  <div className="conversation-font-size" aria-label="Agent 字号">
-                    <button
-                      className="icon-button tiny"
-                      type="button"
-                      title="缩小 Agent 字号"
-                      aria-label="缩小 Agent 字号"
-                      disabled={settings.ui_font_size <= 11}
-                      onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size - 1 }))}
-                    ><ZoomOut /></button>
-                    <output>{settings.ui_font_size}px</output>
-                    <button
-                      className="icon-button tiny"
-                      type="button"
-                      title="放大 Agent 字号"
-                      aria-label="放大 Agent 字号"
-                      disabled={settings.ui_font_size >= 18}
-                      onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size + 1 }))}
-                    ><ZoomIn /></button>
-                  </div>
-                  <ConversationActionsMenu
-                    key={activeSessionKey}
-                    sessionTitle={activeSession.title}
-                    favorite={activeSessionFavorite}
-                    favoriteDisabled={activeSession.id.startsWith("new-")}
-                    onCheckpoint={() => setCheckpointModal(true)}
-                    onToggleFavorite={() => activeProject && toggleFavoriteSession(activeProject.id, activeSession.id)}
-                  />
-                  {documentMode && (
-                    <button
-                      className="icon-button"
-                      type="button"
-                      title="收起 Agent"
-                      aria-label="收起 Agent"
-                      onClick={() => updateDocumentAgentCollapsed(true)}
-                    >
-                      <PanelRightClose />
-                    </button>
-                  )}
-                  {projectFilesEligible && !documentMode && (
-                    <button
-                      className={`icon-button ${projectFilesVisible ? "active" : ""}`}
-                      type="button"
-                      title={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
-                      aria-label={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
-                      aria-pressed={projectFilesVisible}
-                      onClick={() => setProjectFilesOpen((value) => !value)}
-                    >
-                      {projectFilesVisible ? <PanelRightClose /> : <PanelRightOpen />}
-                    </button>
-                  )}
-                </div>
-              </div>
-              {activeSession.loading ? (
-                <div className="messages">
-                  <div className="conversation-empty session-loading-state" role="status" aria-live="polite">
-                    <LoaderCircle className="spin" />
-                    <h2>正在加载会话</h2>
-                    <p>正在恢复历史消息和会话状态…</p>
-                  </div>
-                </div>
-              ) : activeConversationView === "trajectory" ? (
-                <TrajectoryView items={activeSession.items} now={runClock} />
-              ) : <div className="messages">
-                {activeSession.items.length === 0 && (
-                  <div className="conversation-empty">
-                    <Bot />
-                    <h2>在 {activeProject?.name ?? "项目"} 中构建什么？</h2>
-                  </div>
-                )}
-                {withClientTurnDetails(activeSession.items, activeSession.id, activeSession.busy).map((item) => (
-                  <ChatItemView
-                    key={item.id}
-                    item={item}
-                    now={runClock}
-                    showTurnDuration={settings.show_turn_duration}
-                    showFileEditSummary={settings.show_file_edit_summary}
-                    turnDurationFormat={settings.turn_duration_format}
-                    onPermission={resolvePermission}
-                    approvalShortcuts={settings.approval_shortcuts}
-                    onToggleChoice={toggleChoice}
-                    onSubmitChoice={submitChoice}
-                    onPlan={(action) => activeChannel?.planAction(
-                      action,
-                      item.detail && typeof item.detail === "object" ? item.detail as Record<string, unknown> : undefined,
-                    )}
-                    onFork={forkSessionFromMessage}
-                    forkDisabled={activeSession.busy}
-                    onUndoFileEdits={!activeSession.busy && item.id === latestFileEditSummaryId(activeSession.items)
-                      ? undoLatestFileEdits
-                      : undefined}
-                    onOpenFileEdits={(request) => openFileChanges({
-                      summaryId: item.id,
-                      path: request.path,
-                      showAll: request.all,
-                    })}
-                    onCompatibilityRetry={item.kind === "document_job" && item.engine === "precise" && item.status === "failed"
-                      ? () => startDocumentAction("translate", {
-                          locale: item.locale,
-                          translation_concurrency: settings.document_translation_concurrency,
-                          translation_batch_size: settings.document_translation_batch_size,
-                          translation_engine: "legacy",
-                        })
-                      : undefined}
-                  />
-                ))}
-                {activeSession.busy && (
-                  <ExecutionStatusBar
-                    startedAt={activeSession.runStartedAt ?? runClock}
-                    currentStep={activeSession.currentStep ?? null}
-                    now={runClock}
-                  />
-                )}
-                <div ref={messageEndRef} />
-              </div>}
-              <div className="composer-wrap">
-                <FollowUpQueue
-                  key={activeSessionKey}
-                  messages={activeSession.pendingFollowUps ?? []}
-                  canSteer={activeSession.busy && activeSession.connected && Boolean(activeSession.operationId)}
-                  queueEnabled={(settings.follow_up_mode ?? "queue") === "queue"}
-                  onAction={queuedMessageAction}
-                  onDisableQueue={() => commitSettings((current) => ({ ...current, follow_up_mode: "steer" }))}
-                />
-                <div className="composer-context">
-                  <span><Folder />{activeProject?.name}</span>
-                  <span><Server />{activeConnection?.name}</span>
-                  {!activeSession.loading && !activeSession.connected && (
-                    <span
-                      className="danger connection-state"
-                      title={activeSession.error || "会话连接已断开，Crab Desktop 正在重连"}
-                    >
-                      <WifiOff />
-                      {activeSession.error || "连接中断，正在重连"}
+          <div className={`workbench ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+            <aside
+              className={`sidebar ${sidebarOpen ? "open" : "closed"}`}
+              style={{ width: sidebarOpen ? settings.sidebar_width : 0 }}
+              aria-hidden={!sidebarOpen}
+              {...(!sidebarOpen ? { inert: "" } : {})}
+            >
+              <div className="sidebar-content" style={{ width: settings.sidebar_width }}>
+                <div className="workspace-brand">
+                  <div className="workspace-brand-lockup" title={activeProject?.path ?? activeConnection?.base_url}>
+                    <span className="workspace-brand-copy">
+                      <strong>Crab Desktop</strong>
+                      <small>{activeProject?.name ?? "工作区"}</small>
                     </span>
-                  )}
-                </div>
-                <div className={`composer-box ${activeSession.status?.ultra_mode ? "ultra-mode" : ""}`}>
-                  {(pendingImages.length > 0 || pendingFiles.length > 0 || pendingFolders.length > 0 || pendingDocumentReferences.length > 0) && (
-                    <div className="attachment-strip">
-                      {pendingImages.map((image) => (
-                        <div className="attachment-thumb" key={image.id} title={image.name}>
-                          <PreviewableImage src={image.dataUrl} alt={image.name} />
-                          <button
-                            className="icon-button tiny"
-                            title="移除图片"
-                            onClick={() => setPendingImages((current) => current.filter((item) => item.id !== image.id))}
-                          ><X /></button>
-                        </div>
-                      ))}
-                      {pendingFiles.map((file) => (
-                        <FileAttachment
-                          key={file.id}
-                          file={file}
-                          onRemove={() => setPendingFiles((current) => current.filter((item) => item.id !== file.id))}
-                        />
-                      ))}
-                      {pendingFolders.map((path) => (
-                        <div className="folder-attachment" key={path} title={path}>
-                          <Folder />
-                          <span>{basename(path)}</span>
-                          <button
-                            type="button"
-                            title="移除文件夹引用"
-                            onClick={() => setPendingFolders((current) => current.filter((item) => item !== path))}
-                          ><X /></button>
-                        </div>
-                      ))}
-                      {pendingDocumentReferences.map((reference) => (
-                        <DocumentReferenceAttachment
-                          key={reference.id}
-                          reference={reference}
-                          onRemove={() => setPendingDocumentReferences((current) => current.filter((item) => item.id !== reference.id))}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  <ComposerEditor
-                    value={composer}
-                    references={composerReferences}
-                    commands={composerCommands}
-                    sendKey={settings.composer_send_key}
-                    busy={activeSession.busy}
-                    onChange={setComposer}
-                    onImages={(files) => void addImages(files)}
-                    onSubmit={(opposite) => void sendMessage(opposite)}
-                    placeholder={activeSession.loading ? "会话加载完成后即可输入" : activeSession.busy ? (settings.follow_up_mode === "steer" ? "输入内容以引导当前任务" : "输入后续任务，本轮结束后执行") : "输入任务"}
-                  />
-                  <div className="composer-toolbar">
-                    <div className="toolbar-left">
-                      <ComposerAddMenu
-                        disabled={activeSession.loading || !activeSession.connected}
-                        planActive={activeSession.status?.mode === "plan"}
-                        ultraActive={Boolean(activeSession.status?.ultra_mode)}
-                        onImages={(files) => void addImages(files)}
-                        onFiles={(files) => void addFiles(files)}
-                        fileUploadMode={settings.file_upload_mode}
-                        onFilePaths={() => setReferencePathModal("file")}
-                        onReferencePath={() => setReferencePathModal("all")}
-                        onGoal={() => setGoalModal(true)}
-                        onPlan={() => selectMode("plan")}
-                        onUltra={() => selectUltraMode(true)}
-                      />
-                      <ModelPicker
-                        models={activeGateway?.models ?? []}
-                        value={activeModel}
-                        fallback={activeSession.status?.model || "默认模型"}
-                        disabled={activeSession.loading || !activeSession.connected || projectModels.loading}
-                        onChange={selectModel}
-                      />
-                      {projectModels.error && <button type="button" title={projectModels.error}
-                        onClick={() => setModelCatalogRevision(current => current + 1)}>
-                        模型列表加载失败，点击重试
-                      </button>}
-                      <ReasoningEffortPicker
-                        value={activeSession.status?.reasoning_effort}
-                        disabled={activeSession.loading || !activeSession.connected}
-                        onChange={selectReasoningEffort}
-                      />
-                      <PermissionPicker
-                        value={activePermissionMode}
-                        disabled={activeSession.loading || !activeSession.connected}
-                        policy={activeSession.status?.permission_policy}
-                        onRefresh={() => { if (activeConnection && activeSessionKey) void updateSessionStatus(activeConnection.id, activeSessionKey, activeSession.id, true); }}
-                        onChange={selectPermissionMode}
-                      />
-                      {activeSession.status?.mode === "plan" && (
-                        <button
-                          type="button"
-                          className="composer-mode-chip plan"
-                          title="关闭计划模式"
-                          onClick={() => selectMode("agent")}
-                        >
-                          <ListTodo /><span>计划模式</span><X />
-                        </button>
-                      )}
-                      {activeSession.status?.ultra_mode && (
-                        <button
-                          type="button"
-                          className="composer-mode-chip ultra"
-                          title="关闭 Ultra 模式"
-                          onClick={() => selectUltraMode(false)}
-                        >
-                          <Sparkles /><span>Ultra 模式</span><X />
-                        </button>
-                      )}
-                    </div>
-                    <div className="toolbar-right">
-                      <ContextMeter status={activeSession.status} usage={activeSession.lastTurnUsage} />
-                      {activeSession.busy ? (
-                        <button
-                          className="round-action stop"
-                          title="中断任务"
-                          onClick={() => activeChannel?.interrupt(activeSession.operationId)}
-                        >
-                          <Square />
-                        </button>
-                      ) : null}
-                      <button
-                        className="round-action send"
-                        title={activeSession.busy ? (settings.follow_up_mode === "steer" ? "引导当前运行 (Enter)" : "加入队列 (Enter)") : settings.composer_send_key === "mod_enter" ? `发送 (${composerModifierLabel()})` : "发送 (Enter)"}
-                        disabled={(
-                          !composer.trim()
-                          && pendingImages.length === 0
-                          && pendingFiles.length === 0
-                          && pendingFolders.length === 0
-                          && pendingDocumentReferences.length === 0
-                        ) || activeSession.loading || !activeSession.connected}
-                        onClick={(event) => void sendMessage(event.metaKey || event.ctrlKey)}
-                      >
-                        <Send />
-                      </button>
-                    </div>
+                  </div>
+                  <div className="workspace-brand-actions">
+                    <button
+                      className="icon-button small"
+                      title="已安排"
+                      onClick={() => setWorkspaceView("scheduled")}
+                    >
+                      <Clock />
+                    </button>
+                    <button
+                      className="icon-button small"
+                      title="重新连接"
+                      disabled={activeGateway?.status === "connecting"}
+                      onClick={() => {
+                        if (!activeConnection) return;
+                        connectedRef.current.add(activeConnection.id);
+                        void connectGateway(activeConnection, settings.python_path);
+                      }}
+                    >
+                      <RefreshCw />
+                    </button>
                   </div>
                 </div>
+
+                {activeGateway?.status === "error" && (
+                  <button className="connection-error" onClick={() => setConnectionModal("new")}>
+                    <WifiOff />
+                    <span>{activeGateway.error}</span>
+                  </button>
+                )}
+
+                <nav className="workspace-nav" aria-label="工作区">
+                  <button
+                    className={`workspace-nav-item ${workspaceView === "chat" ? "active" : ""}`}
+                    disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
+                    onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
+                  >
+                    <MessageSquarePlus />
+                    <span>新会话</span>
+                  </button>
+                  <button
+                    className={`workspace-nav-item ${workspaceView === "scheduled" ? "active" : ""}`}
+                    onClick={() => setWorkspaceView("scheduled")}
+                  >
+                    <Clock />
+                    <span>已安排</span>
+                  </button>
+                  <button
+                    className={`workspace-nav-item ${workspaceView === "plugins" ? "active" : ""}`}
+                    onClick={() => setWorkspaceView("plugins")}
+                  >
+                    <Puzzle />
+                    <span>插件</span>
+                  </button>
+                  <button
+                    className={`workspace-nav-item ${workspaceView === "favorites" ? "active" : ""}`}
+                    disabled={!activeConnection || activeGateway?.status !== "online"}
+                    onClick={() => setWorkspaceView("favorites")}
+                  >
+                    <Star />
+                    <span>收藏</span>
+                    {favoriteItemCount > 0 && <span className="workspace-nav-count">{favoriteItemCount}</span>}
+                  </button>
+                </nav>
+
+                {workspaceView === "chat" && <section className={`sidebar-section projects-section ${projectsCollapsed ? "collapsed" : ""}`}>
+                  <div className="section-label">
+                    <button
+                      className="section-label-toggle"
+                      aria-expanded={!projectsCollapsed}
+                      onClick={() => setProjectsCollapsed((value) => !value)}
+                    >
+                      <span>项目</span>
+                    </button>
+                    <span className="section-label-actions">
+                      <button
+                        className="icon-button tiny"
+                        title="添加项目"
+                        disabled={activeGateway?.status !== "online"}
+                        onClick={beginNewProject}
+                      >
+                        <Plus />
+                      </button>
+                      <button
+                        className="icon-button tiny section-collapse"
+                        title={projectsCollapsed ? "展开项目" : "折叠项目"}
+                        aria-expanded={!projectsCollapsed}
+                        onClick={() => setProjectsCollapsed((value) => !value)}
+                      >
+                        <ChevronDown className={projectsCollapsed ? "collapsed" : ""} />
+                      </button>
+                    </span>
+                  </div>
+                  <div
+                    className="section-content"
+                    aria-hidden={projectsCollapsed}
+                    {...(projectsCollapsed ? { inert: "" } : {})}
+                  >
+                    <div className="section-content-inner">
+                      <div className="project-list">
+                        {activeConnection?.projects.map((project) => {
+                          const projectFavorite = hasFavoriteProject(activeFavoriteEntries, project.id);
+                          return <div className="project-item-row" key={project.id}>
+                            <button
+                              className={`project-item ${activeProject?.id === project.id ? "active" : ""}`}
+                              title={projectDirectoryTitle(project)}
+                              onClick={() => switchProject(project)}
+                              onDoubleClick={() => setProjectModal(project)}
+                            >
+                              {project.kind === "document"
+                                ? <FileText />
+                                : activeProject?.id === project.id ? <FolderOpen /> : <Folder />}
+                              <span>{project.name}</span>
+                              {projectFavorite && <Star className="project-favorite" fill="currentColor" />}
+                            </button>
+                            <ProjectActionsMenu
+                              projectName={project.name}
+                              favorite={projectFavorite}
+                              newSessionDisabled={project.directories.length === 0 || activeGateway?.status !== "online"}
+                              deleteDisabled={project.id === defaultProjectId}
+                              onNewSession={() => {
+                                if (!activeConnection) return;
+                                setSearch("");
+                                updateConnection(activeConnection.id, (connection) => ({
+                                  ...connection,
+                                  last_project_path: project.path,
+                                  last_project_id: project.id,
+                                }));
+                                openSession(activeConnection, project);
+                              }}
+                              onEdit={() => setProjectModal(project)}
+                              onToggleFavorite={() => toggleFavoriteProject(project.id)}
+                              onDelete={() => setProjectDeleteTarget(project)}
+                            />
+                          </div>
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </section>}
+
+                {workspaceView === "chat" && <section className={`sidebar-section sessions-section ${sessionsCollapsed ? "collapsed" : ""}`}>
+                  <div className="section-label">
+                    <button
+                      className="section-label-toggle"
+                      aria-expanded={!sessionsCollapsed}
+                      onClick={() => setSessionsCollapsed((value) => !value)}
+                    >
+                      <span>会话</span>
+                    </button>
+                    <span className="section-label-actions">
+                      <span className="section-count">{filteredSessions.length}</span>
+                      <button
+                        className="icon-button tiny"
+                        type="button"
+                        title="新建会话"
+                        aria-label="新建会话"
+                        disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
+                        onClick={() => {
+                          if (!activeConnection || !activeProject) return;
+                          setSearch("");
+                          openSession(activeConnection, activeProject);
+                        }}
+                      >
+                        <Plus />
+                      </button>
+                      <button
+                        className="icon-button tiny section-collapse"
+                        title={sessionsCollapsed ? "展开会话" : "折叠会话"}
+                        aria-expanded={!sessionsCollapsed}
+                        onClick={() => setSessionsCollapsed((value) => !value)}
+                      >
+                        <ChevronDown className={sessionsCollapsed ? "collapsed" : ""} />
+                      </button>
+                    </span>
+                  </div>
+                  <div
+                    className="section-content"
+                    aria-hidden={sessionsCollapsed}
+                    {...(sessionsCollapsed ? { inert: "" } : {})}
+                  >
+                    <div className="section-content-inner">
+                      <label className="session-search">
+                        <Search />
+                        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索会话" />
+                      </label>
+                      <div className="session-list">
+                        {filteredSessions.map((info) => {
+                          const key = sessionKey(activeConnection!.id, info.session_id);
+                          const view = sessions[key];
+                          const isActive = activeSessionKey === key;
+                          const favorite = favoriteSessionIds.has(info.session_id);
+                          const deleting = deletingSessionIds.has(key);
+                          const forking = forkingSessionIds.has(key);
+                          const pending = view?.items.some((item) => item.status === "pending" && (
+                            item.kind === "permission" || item.kind === "choice"
+                          ));
+                          return (
+                            <div className={`session-item-row ${isActive ? "active" : ""}`} key={info.session_id}>
+                              <button
+                                type="button"
+                                className="session-item"
+                                onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject, info)}
+                              >
+                                <span className="session-title-row">
+                                  {favorite && <Star className="session-favorite" fill="currentColor" />}
+                                  <span className="session-title">{info.title || "未命名会话"}</span>
+                                  {view?.busy && <LoaderCircle className="spin" />}
+                                  {pending && <ShieldAlert className="pending-icon" />}
+                                </span>
+                                <span className="session-preview">{info.preview || formatDate(info.created_at)}</span>
+                              </button>
+                              <SessionActionsMenu
+                                info={info}
+                                status={view?.status ?? null}
+                                favorite={favorite}
+                                deleting={deleting}
+                                forking={forking}
+                                onFork={() => void forkSessionFromLatestReply(info)}
+                                onToggleFavorite={() => {
+                                  if (activeProject) toggleFavoriteSession(activeProject.id, info.session_id);
+                                }}
+                                onDelete={() => {
+                                  void archiveSession({
+                                    connectionId: activeConnection!.id,
+                                    cwd: info.cwd || activeProject?.path || "",
+                                    key,
+                                    sessionId: info.session_id,
+                                  });
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
+                        {activeGateway?.status === "online" && filteredSessions.length === 0 && (
+                          <div className="empty-sidebar">暂无会话</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </section>}
+
+                <div className="workspace-settings-footer">
+                  <button className="workspace-settings-button" type="button" onClick={openSettings}>
+                    <Settings />
+                    <span>设置</span>
+                  </button>
+                </div>
               </div>
-            </>
-          )}
-          {projectFilesEligible && !documentMode && !activeSession && !projectFilesVisible && (
-            <button
-              className="project-files-floating-toggle"
-              type="button"
-              title="浏览文件"
-              onClick={() => setProjectFilesOpen(true)}
-            ><PanelRightOpen /><span>文件</span></button>
-          )}
-          {projectFilesDrawerVisible && (
-            <button
-              className="project-files-drawer-backdrop"
-              type="button"
-              aria-label="关闭文件工作区"
-              onClick={() => setProjectFilesOpen(false)}
-            />
-          )}
-          {!documentMode && filesWorkspace}
-        </main>
-      </div>
-      </>
+            </aside>
+
+            <main
+              className={`main-panel ${documentMode ? "document-mode" : ""} ${documentAgentCollapsed ? "document-agent-collapsed" : ""} ${documentMode && documentAgentTransitioning ? "document-agent-transitioning" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
+              style={documentMode ? {
+                gridTemplateColumns: documentAgentCollapsed
+                  ? "minmax(0, 1fr) 44px"
+                  : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 320}px, calc(100% - 180px))`,
+              } : projectFilesWideLayout ? {
+                "--project-files-width": `${projectFilesWidth}px`,
+              } as CSSProperties : undefined}
+            >
+              {documentMode && activeProject && activeConnection && apiRef.current.get(activeConnection.id) && (
+                <DocumentWorkspace
+                  api={apiRef.current.get(activeConnection.id)!}
+                  connectionId={activeConnection.id}
+                  project={activeProject}
+                  documentView={activeProject.document_view}
+                  agentWidth={settings.document_agent_width ?? 320}
+                  agentCollapsed={documentAgentCollapsed}
+                  showOriginalText={settings.document_show_original_text === true}
+                  translationConcurrency={settings.document_translation_concurrency}
+                  translationBatchSize={settings.document_translation_batch_size}
+                  sessionBusy={Boolean(activeSession?.busy)}
+                  sessionError={activeSession?.error ?? null}
+                  selectionTranslationEvent={activeSessionKey ? selectionTranslationEvents[activeSessionKey] ?? null : null}
+                  onAgentWidth={(width) => commitSettings((current) => ({ ...current, document_agent_width: width }))}
+                  onAgentCollapsed={updateDocumentAgentCollapsed}
+                  onDocumentViewState={(connectionId, projectId, state) => updateConnection(connectionId, (connection) => ({
+                    ...connection,
+                    projects: connection.projects.map((project) => project.id === projectId
+                      ? { ...project, document_view: state }
+                      : project),
+                  }))}
+                  onDocumentAction={startDocumentAction}
+                  onDocumentReference={(reference) => setPendingDocumentReferences((current) => (
+                    current.some((item) => item.text === reference.text && item.project_id === reference.project_id)
+                      ? current
+                      : [...current, reference]
+                  ))}
+                  onTranslateSelection={(text, locale) => {
+                    if (!activeChannel || !activeSession?.connected) {
+                      setGlobalError("Agent 会话尚未就绪，请稍后重试");
+                      return null;
+                    }
+                    try {
+                      return activeChannel.translateDocumentSelection(text, locale);
+                    } catch (reason) {
+                      setGlobalError(reason instanceof Error ? reason.message : String(reason));
+                      return null;
+                    }
+                  }}
+                  filesWorkspace={projectFilesEligible ? {
+                    activeView: documentFilesView,
+                    changeCount: new Set(reviewTurns.flatMap((turn) => turn.summary.files.map((file) => file.path))).size,
+                    content: filesWorkspace,
+                    onViewChange: changeDocumentFilesView,
+                  } : undefined}
+                />
+              )}
+              {workspaceView === "scheduled" ? (
+                <ScheduledTasksView
+                  tab={automationTab}
+                  onTabChange={setAutomationTab}
+                  jobs={activeJobs}
+                  tasks={activeMonitorTasks}
+                  projects={activeConnection?.projects ?? []}
+                  sessionsByProject={activeGateway?.sessionsByProject ?? {}}
+                  loading={automationTab === "schedule" ? scheduleLoading : monitorLoading}
+                  error={automationTab === "schedule" ? scheduleError : monitorError}
+                  actionState={scheduleAction}
+                  connected={activeGateway?.status === "online"}
+                  onRefresh={() => {
+                    if (!activeConnection) return;
+                    if (automationTab === "monitor") void refreshMonitors(activeConnection.id);
+                    else void refreshSchedules(activeConnection.id);
+                  }}
+                  onAction={(action, job) => {
+                    if (action === "cancel") {
+                      setScheduleError(null);
+                      setScheduleDeleteTarget(job);
+                      return;
+                    }
+                    void updateSchedule(action, job);
+                  }}
+                  onNew={(prompt) => {
+                    if (!activeConnection || !activeProject) return;
+                    openSession(activeConnection, activeProject);
+                    if (prompt) setComposer(prompt);
+                  }}
+                  onOpenSession={(project, session) => {
+                    if (!activeConnection) return;
+                    updateConnection(activeConnection.id, (connection) => ({
+                      ...connection,
+                      last_project_path: project.path,
+                      last_project_id: project.id,
+                    }));
+                    openSession(activeConnection, project, session);
+                  }}
+                />
+              ) : workspaceView === "favorites" ? (
+                <FavoritesView
+                  items={favoriteItems}
+                  entries={activeFavoriteEntries}
+                  connected={activeGateway?.status === "online"}
+                  onOpenProject={(project) => switchProject(project)}
+                  onOpenSession={(project, session) => {
+                    if (!activeConnection) return;
+                    updateConnection(activeConnection.id, (connection) => ({
+                      ...connection,
+                      last_project_path: project.path,
+                      last_project_id: project.id,
+                    }));
+                    openSession(activeConnection, project, session);
+                  }}
+                  onCreateFolder={(parentId, name) => {
+                    updateFavorites((items) => addFavoriteEntry(items, parentId, {
+                      id: randomUuid(),
+                      type: "folder",
+                      name,
+                      children: [],
+                    }));
+                  }}
+                  onRenameFolder={(folderId, name) => updateFavorites((items) => renameFavoriteFolder(items, folderId, name))}
+                  onMove={(entryId, parentId) => updateFavorites((items) => moveFavoriteEntry(items, entryId, parentId))}
+                  onRemove={(entryId) => updateFavorites((items) => removeFavoriteEntries(items, (entry) => entry.id === entryId))}
+                  onDeleteFolder={(folderId, mode) => updateFavorites((items) => deleteFavoriteFolder(items, folderId, mode))}
+                />
+              ) : workspaceView === "plugins" ? (
+                <PluginsView
+                  data={activePluginData}
+                  loading={pluginLoading}
+                  error={pluginError}
+                  connected={activeGateway?.status === "online"}
+                  onRefresh={() => activeConnection && void refreshPlugins(
+                    activeConnection.id,
+                    resourceSessionId,
+                    activeProject?.path ?? activeGateway?.workspace?.startup_cwd,
+                  )}
+                />
+              ) : !activeSession ? (
+                <EmptyWorkspace
+                  connection={activeConnection}
+                  project={activeProject}
+                  gateway={activeGateway}
+                  onNew={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
+                  onConnect={() => setConnectionModal("new")}
+                />
+              ) : (
+                <>
+                  <div className="conversation-header">
+                    <div className="conversation-title">
+                      <h1 className={activeSession.loading ? "session-loading-title" : undefined}>
+                        {activeSession.loading && <LoaderCircle className="spin" />}
+                        {activeSession.loading ? "正在加载会话" : activeSession.title}
+                      </h1>
+                      <span>{activeSession.cwd}</span>
+                      {activeForkOrigin && (
+                        <small className="conversation-origin">来自“{activeForkOrigin}” · 分叉</small>
+                      )}
+                    </div>
+                    <div className="conversation-view-tabs" role="tablist" aria-label="会话视图">
+                      <SlidingTabIndicator activeKey={activeConversationView} className="conversation-view-indicator" />
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeConversationView === "chat"}
+                        className={activeConversationView === "chat" ? "active" : ""}
+                        onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "chat" }))}
+                      >对话</button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeConversationView === "trajectory"}
+                        className={activeConversationView === "trajectory" ? "active" : ""}
+                        onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "trajectory" }))}
+                      >轨迹</button>
+                    </div>
+                    <div className="conversation-actions">
+                      <div className="conversation-font-size" aria-label="Agent 字号">
+                        <button
+                          className="icon-button tiny"
+                          type="button"
+                          title="缩小 Agent 字号"
+                          aria-label="缩小 Agent 字号"
+                          disabled={settings.ui_font_size <= 11}
+                          onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size - 1 }))}
+                        ><ZoomOut /></button>
+                        <output>{settings.ui_font_size}px</output>
+                        <button
+                          className="icon-button tiny"
+                          type="button"
+                          title="放大 Agent 字号"
+                          aria-label="放大 Agent 字号"
+                          disabled={settings.ui_font_size >= 18}
+                          onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size + 1 }))}
+                        ><ZoomIn /></button>
+                      </div>
+                      <ConversationActionsMenu
+                        key={activeSessionKey}
+                        sessionTitle={activeSession.title}
+                        favorite={activeSessionFavorite}
+                        favoriteDisabled={activeSession.id.startsWith("new-")}
+                        onCheckpoint={() => setCheckpointModal(true)}
+                        onToggleFavorite={() => activeProject && toggleFavoriteSession(activeProject.id, activeSession.id)}
+                      />
+                      {documentMode && (
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="收起 Agent"
+                          aria-label="收起 Agent"
+                          onClick={() => updateDocumentAgentCollapsed(true)}
+                        >
+                          <PanelRightClose />
+                        </button>
+                      )}
+                      {projectFilesEligible && !documentMode && (
+                        <button
+                          className={`icon-button ${projectFilesVisible ? "active" : ""}`}
+                          type="button"
+                          title={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
+                          aria-label={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
+                          aria-pressed={projectFilesVisible}
+                          onClick={() => setProjectFilesOpen((value) => !value)}
+                        >
+                          {projectFilesVisible ? <PanelRightClose /> : <PanelRightOpen />}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {activeSession.loading ? (
+                    <div className="messages">
+                      <div className="conversation-empty session-loading-state" role="status" aria-live="polite">
+                        <LoaderCircle className="spin" />
+                        <h2>正在加载会话</h2>
+                        <p>正在恢复历史消息和会话状态…</p>
+                      </div>
+                    </div>
+                  ) : activeConversationView === "trajectory" ? (
+                    <TrajectoryView items={activeSession.items} now={runClock} />
+                  ) : <div className="messages">
+                    {activeSession.items.length === 0 && (
+                      <div className="conversation-empty">
+                        <Bot />
+                        <h2>在 {activeProject?.name ?? "项目"} 中构建什么？</h2>
+                      </div>
+                    )}
+                    {withClientTurnDetails(activeSession.items, activeSession.id, activeSession.busy).map((item) => (
+                      <ChatItemView
+                        key={item.id}
+                        item={item}
+                        now={runClock}
+                        showTurnDuration={settings.show_turn_duration}
+                        showFileEditSummary={settings.show_file_edit_summary}
+                        turnDurationFormat={settings.turn_duration_format}
+                        onPermission={resolvePermission}
+                        approvalShortcuts={settings.approval_shortcuts}
+                        onToggleChoice={toggleChoice}
+                        onSubmitChoice={submitChoice}
+                        onPlan={(action) => activeChannel?.planAction(
+                          action,
+                          item.detail && typeof item.detail === "object" ? item.detail as Record<string, unknown> : undefined,
+                        )}
+                        onFork={forkSessionFromMessage}
+                        forkDisabled={activeSession.busy}
+                        onUndoFileEdits={!activeSession.busy && item.id === latestFileEditSummaryId(activeSession.items)
+                          ? undoLatestFileEdits
+                          : undefined}
+                        onOpenFileEdits={(request) => openFileChanges({
+                          summaryId: item.id,
+                          path: request.path,
+                          showAll: request.all,
+                        })}
+                        onCompatibilityRetry={item.kind === "document_job" && item.engine === "precise" && item.status === "failed"
+                          ? () => startDocumentAction("translate", {
+                            locale: item.locale,
+                            translation_concurrency: settings.document_translation_concurrency,
+                            translation_batch_size: settings.document_translation_batch_size,
+                            translation_engine: "legacy",
+                          })
+                          : undefined}
+                      />
+                    ))}
+                    {activeSession.busy && (
+                      <ExecutionStatusBar
+                        startedAt={activeSession.runStartedAt ?? runClock}
+                        currentStep={activeSession.currentStep ?? null}
+                        now={runClock}
+                      />
+                    )}
+                    <div ref={messageEndRef} />
+                  </div>}
+                  <div className="composer-wrap">
+                    <FollowUpQueue
+                      key={activeSessionKey}
+                      messages={activeSession.pendingFollowUps ?? []}
+                      canSteer={activeSession.busy && activeSession.connected && Boolean(activeSession.operationId)}
+                      queueEnabled={(settings.follow_up_mode ?? "queue") === "queue"}
+                      onAction={queuedMessageAction}
+                      onDisableQueue={() => commitSettings((current) => ({ ...current, follow_up_mode: "steer" }))}
+                    />
+                    <div className="composer-context">
+                      <span><Folder />{activeProject?.name}</span>
+                      <span><Server />{activeConnection?.name}</span>
+                      {!activeSession.loading && !activeSession.connected && (
+                        <span
+                          className="danger connection-state"
+                          title={activeSession.error || "会话连接已断开，Crab Desktop 正在重连"}
+                        >
+                          <WifiOff />
+                          {activeSession.error || "连接中断，正在重连"}
+                        </span>
+                      )}
+                    </div>
+                    <div className={`composer-box ${activeSession.status?.ultra_mode ? "ultra-mode" : ""}`}>
+                      {(pendingImages.length > 0 || pendingFiles.length > 0 || pendingFolders.length > 0 || pendingDocumentReferences.length > 0) && (
+                        <div className="attachment-strip">
+                          {pendingImages.map((image) => (
+                            <div className="attachment-thumb" key={image.id} title={image.name}>
+                              <PreviewableImage src={image.dataUrl} alt={image.name} />
+                              <button
+                                className="icon-button tiny"
+                                title="移除图片"
+                                onClick={() => setPendingImages((current) => current.filter((item) => item.id !== image.id))}
+                              ><X /></button>
+                            </div>
+                          ))}
+                          {pendingFiles.map((file) => (
+                            <FileAttachment
+                              key={file.id}
+                              file={file}
+                              onRemove={() => setPendingFiles((current) => current.filter((item) => item.id !== file.id))}
+                            />
+                          ))}
+                          {pendingFolders.map((path) => (
+                            <div className="folder-attachment" key={path} title={path}>
+                              <Folder />
+                              <span>{basename(path)}</span>
+                              <button
+                                type="button"
+                                title="移除文件夹引用"
+                                onClick={() => setPendingFolders((current) => current.filter((item) => item !== path))}
+                              ><X /></button>
+                            </div>
+                          ))}
+                          {pendingDocumentReferences.map((reference) => (
+                            <DocumentReferenceAttachment
+                              key={reference.id}
+                              reference={reference}
+                              onRemove={() => setPendingDocumentReferences((current) => current.filter((item) => item.id !== reference.id))}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      <ComposerEditor
+                        value={composer}
+                        references={composerReferences}
+                        commands={composerCommands}
+                        sendKey={settings.composer_send_key}
+                        busy={activeSession.busy}
+                        onChange={setComposer}
+                        onImages={(files) => void addImages(files)}
+                        onSubmit={(opposite) => void sendMessage(opposite)}
+                        placeholder={activeSession.loading ? "会话加载完成后即可输入" : activeSession.busy ? (settings.follow_up_mode === "steer" ? "输入内容以引导当前任务" : "输入后续任务，本轮结束后执行") : "输入任务"}
+                      />
+                      <div className="composer-toolbar">
+                        <div className="toolbar-left">
+                          <ComposerAddMenu
+                            disabled={activeSession.loading || !activeSession.connected}
+                            planActive={activeSession.status?.mode === "plan"}
+                            ultraActive={Boolean(activeSession.status?.ultra_mode)}
+                            onImages={(files) => void addImages(files)}
+                            onFiles={(files) => void addFiles(files)}
+                            fileUploadMode={settings.file_upload_mode}
+                            onFilePaths={() => setReferencePathModal("file")}
+                            onReferencePath={() => setReferencePathModal("all")}
+                            onGoal={() => setGoalModal(true)}
+                            onPlan={() => selectMode("plan")}
+                            onUltra={() => selectUltraMode(true)}
+                          />
+                          <ModelPicker
+                            models={activeGateway?.models ?? []}
+                            value={activeModel}
+                            fallback={activeSession.status?.model || "默认模型"}
+                            disabled={activeSession.loading || !activeSession.connected || projectModels.loading}
+                            onChange={selectModel}
+                          />
+                          {projectModels.error && <button type="button" title={projectModels.error}
+                            onClick={() => setModelCatalogRevision(current => current + 1)}>
+                            模型列表加载失败，点击重试
+                          </button>}
+                          <ReasoningEffortPicker
+                            value={activeSession.status?.reasoning_effort}
+                            disabled={activeSession.loading || !activeSession.connected}
+                            onChange={selectReasoningEffort}
+                          />
+                          <PermissionPicker
+                            value={activePermissionMode}
+                            disabled={activeSession.loading || !activeSession.connected}
+                            policy={activeSession.status?.permission_policy}
+                            onRefresh={() => { if (activeConnection && activeSessionKey) void updateSessionStatus(activeConnection.id, activeSessionKey, activeSession.id, true); }}
+                            onChange={selectPermissionMode}
+                          />
+                          {activeSession.status?.mode === "plan" && (
+                            <button
+                              type="button"
+                              className="composer-mode-chip plan"
+                              title="关闭计划模式"
+                              onClick={() => selectMode("agent")}
+                            >
+                              <ListTodo /><span>计划模式</span><X />
+                            </button>
+                          )}
+                          {activeSession.status?.ultra_mode && (
+                            <button
+                              type="button"
+                              className="composer-mode-chip ultra"
+                              title="关闭 Ultra 模式"
+                              onClick={() => selectUltraMode(false)}
+                            >
+                              <Sparkles /><span>Ultra 模式</span><X />
+                            </button>
+                          )}
+                        </div>
+                        <div className="toolbar-right">
+                          <ContextMeter status={activeSession.status} usage={activeSession.lastTurnUsage} />
+                          {activeSession.busy ? (
+                            <button
+                              className="round-action stop"
+                              title="中断任务"
+                              onClick={() => activeChannel?.interrupt(activeSession.operationId)}
+                            >
+                              <Square />
+                            </button>
+                          ) : null}
+                          <button
+                            className="round-action send"
+                            title={activeSession.busy ? (settings.follow_up_mode === "steer" ? "引导当前运行 (Enter)" : "加入队列 (Enter)") : settings.composer_send_key === "mod_enter" ? `发送 (${composerModifierLabel()})` : "发送 (Enter)"}
+                            disabled={(
+                              !composer.trim()
+                              && pendingImages.length === 0
+                              && pendingFiles.length === 0
+                              && pendingFolders.length === 0
+                              && pendingDocumentReferences.length === 0
+                            ) || activeSession.loading || !activeSession.connected}
+                            onClick={(event) => void sendMessage(event.metaKey || event.ctrlKey)}
+                          >
+                            <Send />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+              {projectFilesEligible && !documentMode && !activeSession && !projectFilesVisible && (
+                <button
+                  className="project-files-floating-toggle"
+                  type="button"
+                  title="浏览文件"
+                  onClick={() => setProjectFilesOpen(true)}
+                ><PanelRightOpen /><span>文件</span></button>
+              )}
+              {projectFilesDrawerVisible && (
+                <button
+                  className="project-files-drawer-backdrop"
+                  type="button"
+                  aria-label="关闭文件工作区"
+                  onClick={() => setProjectFilesOpen(false)}
+                />
+              )}
+              {!documentMode && filesWorkspace}
+            </main>
+          </div>
+        </>
       )}
 
       <StatusBar
@@ -4599,11 +4603,11 @@ function App() {
           ? gatewaySuiteProgress?.detail ?? "正在安装 CrabCode 套件…"
           : systemToolBusy
             ? systemToolProgress?.detail ?? `正在安装系统工具 ${systemToolBusy}…`
-          : documentEngineBusy
-            ? documentEngineProgress?.detail ?? (documentEngineBusy === "install" ? "正在安装高精度 PDF 引擎…" : "正在移除高精度 PDF 引擎…")
-          : lumeInstaller.busy
-            ? lumeInstaller.progress?.detail ?? "正在安装 Lume…"
-            : null}
+            : documentEngineBusy
+              ? documentEngineProgress?.detail ?? (documentEngineBusy === "install" ? "正在安装高精度 PDF 引擎…" : "正在移除高精度 PDF 引擎…")
+              : lumeInstaller.busy
+                ? lumeInstaller.progress?.detail ?? "正在安装 Lume…"
+                : null}
         onConnections={() => setConnectionModal(activeConnection?.id ?? "new")}
         onRetry={activeConnection ? () => void connectGateway(activeConnection, settings.python_path) : undefined}
       />
@@ -5471,49 +5475,49 @@ const PERMISSION_OPTIONS: Array<{
   icon: typeof ShieldCheck;
   tone: string;
 }> = [
-  {
-    value: "default",
-    label: "工作区默认规则",
-    description: "使用当前项目加载的 CrabCode 权限配置",
-    icon: ShieldCheck,
-    tone: "neutral",
-  },
-  {
-    value: "ask",
-    label: "每次确认",
-    description: "执行高风险操作前先向你确认",
-    icon: ShieldAlert,
-    tone: "ask",
-  },
-  {
-    value: "ai_review",
-    label: "AI 审查",
-    description: "由审查器判断是否放行，必要时再询问",
-    icon: Bot,
-    tone: "review",
-  },
-  {
-    value: "run_everything",
-    label: "完全访问",
-    description: "不再弹出工具权限确认；Computer Use 前台策略仍以设置为准",
-    icon: Zap,
-    tone: "danger",
-  },
-];
+    {
+      value: "default",
+      label: "工作区默认规则",
+      description: "使用当前项目加载的 CrabCode 权限配置",
+      icon: ShieldCheck,
+      tone: "neutral",
+    },
+    {
+      value: "ask",
+      label: "每次确认",
+      description: "执行高风险操作前先向你确认",
+      icon: ShieldAlert,
+      tone: "ask",
+    },
+    {
+      value: "ai_review",
+      label: "AI 审查",
+      description: "由审查器判断是否放行，必要时再询问",
+      icon: Bot,
+      tone: "review",
+    },
+    {
+      value: "run_everything",
+      label: "完全访问",
+      description: "不再弹出工具权限确认，所有操作一律放行",
+      icon: Zap,
+      tone: "danger",
+    },
+  ];
 
 const REASONING_EFFORT_OPTIONS: Array<{
   value: ReasoningEffort | "auto";
   label: string;
 }> = [
-  { value: "auto", label: "自动" },
-  { value: "none", label: "关闭" },
-  { value: "minimal", label: "最低" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-  { value: "xhigh", label: "极高" },
-  { value: "max", label: "最大" },
-];
+    { value: "auto", label: "自动" },
+    { value: "none", label: "关闭" },
+    { value: "minimal", label: "最低" },
+    { value: "low", label: "低" },
+    { value: "medium", label: "中" },
+    { value: "high", label: "高" },
+    { value: "xhigh", label: "极高" },
+    { value: "max", label: "最大" },
+  ];
 
 function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
@@ -6294,13 +6298,13 @@ export function ContextMeter({
   const estimated = !status.context_token_source || status.context_token_source === "estimated";
   const searchDetail = status.search_index
     ? [
-        status.search_index.state,
-        status.search_index.files == null ? null : `${status.search_index.files} 文件`,
-        status.search_index.chunks == null ? null : `${status.search_index.chunks} 分块`,
-        status.search_index.done == null || status.search_index.total == null
-          ? null
-          : `${status.search_index.done}/${status.search_index.total}`,
-      ].filter(Boolean).join(" · ")
+      status.search_index.state,
+      status.search_index.files == null ? null : `${status.search_index.files} 文件`,
+      status.search_index.chunks == null ? null : `${status.search_index.chunks} 分块`,
+      status.search_index.done == null || status.search_index.total == null
+        ? null
+        : `${status.search_index.done}/${status.search_index.total}`,
+    ].filter(Boolean).join(" · ")
     : null;
   return (
     <div className="context-meter-wrap" ref={ref}>
@@ -7400,24 +7404,24 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
   }
   return (
     <Modal title={documentProject ? "编辑文档项目" : editing ? "编辑项目" : "新建项目"} onClose={onClose}>
-        <div className="project-form">
-          <label className="project-name-field">
-            <Folder />
-            <input
-              autoFocus
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && void save()}
-              placeholder="给项目起个名字"
-              disabled={busy}
-            />
-          </label>
-          <section className="project-directories">
-            <h3>{editing ? "项目目录" : "项目文件夹（可选）"}</h3>
-            <div className={`project-directory-box ${directories.length === 0 ? "empty" : ""}`}>
-              {directories.map((path, index) => {
-                const primaryDirectoryProtected = Boolean(protectedPrimaryDirectory) && index === 0;
-                return (
+      <div className="project-form">
+        <label className="project-name-field">
+          <Folder />
+          <input
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && void save()}
+            placeholder="给项目起个名字"
+            disabled={busy}
+          />
+        </label>
+        <section className="project-directories">
+          <h3>{editing ? "项目目录" : "项目文件夹（可选）"}</h3>
+          <div className={`project-directory-box ${directories.length === 0 ? "empty" : ""}`}>
+            {directories.map((path, index) => {
+              const primaryDirectoryProtected = Boolean(protectedPrimaryDirectory) && index === 0;
+              return (
                 <div className="project-directory-row" key={path} title={path}>
                   <Folder />
                   <span><strong>{basename(path)}</strong><small>{path}</small></span>
@@ -7433,30 +7437,30 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
                     {primaryDirectoryProtected ? <Lock /> : <X />}
                   </button>
                 </div>
-                );
-              })}
-              <button className="project-add-directory" type="button" disabled={busy} onClick={() => setChoosingDirectory(true)}>
-                <FolderInput />
-                <span>{directories.length === 0 ? "选择项目文件夹" : "继续加入目录"}</span>
-              </button>
-            </div>
-            {documentProject && <p>主目录由 CrabCode 托管；在这里可以补充供 Agent 参考的目录。</p>}
-            {directories.length === 0 && (
-              <p>{editing ? "每个项目都需要一个独立的主目录。" : "不选择时，将在用户主目录下自动创建同名文件夹。"}</p>
-            )}
-          </section>
-          {error && <div className="form-error"><AlertTriangle />{error}</div>}
-        </div>
-        <div className={`modal-actions project-actions ${editing ? "editing" : ""}`}>
-          {editing && onRemove && (
-            <button className="danger-button" type="button" onClick={onRemove}>移除项目</button>
+              );
+            })}
+            <button className="project-add-directory" type="button" disabled={busy} onClick={() => setChoosingDirectory(true)}>
+              <FolderInput />
+              <span>{directories.length === 0 ? "选择项目文件夹" : "继续加入目录"}</span>
+            </button>
+          </div>
+          {documentProject && <p>主目录由 CrabCode 托管；在这里可以补充供 Agent 参考的目录。</p>}
+          {directories.length === 0 && (
+            <p>{editing ? "每个项目都需要一个独立的主目录。" : "不选择时，将在用户主目录下自动创建同名文件夹。"}</p>
           )}
-          <span className="project-actions-spacer" />
-          <button type="button" disabled={busy} onClick={onClose}>取消</button>
-          <button className="primary" type="button" disabled={busy || (editing && directories.length === 0)} onClick={() => void save()}>
-            {busy && <LoaderCircle className="spin" />}{editing ? "保存更改" : "创建项目"}
-          </button>
-        </div>
+        </section>
+        {error && <div className="form-error"><AlertTriangle />{error}</div>}
+      </div>
+      <div className={`modal-actions project-actions ${editing ? "editing" : ""}`}>
+        {editing && onRemove && (
+          <button className="danger-button" type="button" onClick={onRemove}>移除项目</button>
+        )}
+        <span className="project-actions-spacer" />
+        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button className="primary" type="button" disabled={busy || (editing && directories.length === 0)} onClick={() => void save()}>
+          {busy && <LoaderCircle className="spin" />}{editing ? "保存更改" : "创建项目"}
+        </button>
+      </div>
     </Modal>
   );
 }
