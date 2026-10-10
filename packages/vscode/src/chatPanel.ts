@@ -6479,7 +6479,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       min-width: 0;
       max-width: 290px;
     }
-    .model-pill-wrap { flex: 1 1 90px; min-width: 0; max-width: 180px; }
+    .model-pill-wrap { flex: 0 1 auto; min-width: 0; max-width: 180px; }
     .tb-model-wrap {
       position: relative;
       width: 100%;
@@ -6501,7 +6501,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
       overflow: hidden;
     }
-    .tb-model-btn:hover {
+    .tb-model-btn:hover,
+    .tb-model-btn[aria-expanded="true"] {
       border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
       background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent);
     }
@@ -6512,10 +6513,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 11.5px;
+      font: inherit;
     }
     .tb-model-wrap.is-empty .tb-model-label { color: var(--text-muted); }
-    .tb-model-btn .model-chevron { font-size: 9px; opacity: 0.6; flex-shrink: 0; }
+    .tb-model-btn .model-chevron { width: 12px; height: 12px; opacity: 0.65; flex-shrink: 0; }
     .model-menu {
       position: fixed;
       top: 0; left: 0;
@@ -7128,16 +7129,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .composer-toolbar { align-items: flex-end; padding: 8px; border-top: 0; }
     .toolbar-left { flex-wrap: wrap; gap: 5px; }
     .tb-model-btn, .runtime-pill, .composer-mode-chip {
-      display: inline-flex; align-items: center; gap: 5px; height: 29px;
+      display: inline-flex; align-items: center; gap: 5px; height: 28px;
       max-width: 100%; padding: 0 9px; border-radius: 999px;
       border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
       background: color-mix(in srgb, var(--vscode-foreground) 4%, var(--surface-elevated));
-      color: var(--vscode-foreground); font: inherit; font-size: 11px;
+      color: var(--vscode-foreground); font: inherit; font-size: 12px; line-height: 16px;
       white-space: nowrap; cursor: pointer;
       transition: background-color 150ms, border-color 150ms, color 150ms;
     }
+    .tb-model-btn { font-weight: 500; }
     .tb-model-btn svg, .runtime-pill svg, .composer-mode-chip svg { width: 14px; height: 14px; flex-shrink: 0; }
-    #effort-btn { flex: 0 1 auto; min-width: 0; }
+    #effort-btn { flex: 0 0 auto; min-width: 0; }
     #effort-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .runtime-pill:hover:not(:disabled), .composer-mode-chip:hover:not(:disabled),
     .runtime-pill[aria-expanded="true"] { background: var(--accent-muted); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
@@ -7159,8 +7161,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       .composer-primary-controls { gap: 4px; }
       .composer-primary-controls .tb-model-btn,
       .composer-primary-controls .runtime-pill { padding-inline: 7px; }
-      .composer-primary-controls .tb-model-btn > svg,
-      .composer-primary-controls .tb-model-btn .model-chevron { display: none; }
     }
     .effort-menu {
       position: fixed; z-index: 220; width: min(210px, calc(100vw - 16px));
@@ -7321,9 +7321,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             <div class="model-pill-wrap">
               <div id="model-select-wrap" class="tb-model-wrap is-empty">
                 <button type="button" class="tb-model-btn" id="model-btn" title="选择模型" aria-haspopup="menu" aria-expanded="false" disabled>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="4"/><path d="M12 3v4M8 12v3m8-3v3M1 11v5m22-5v5"/></svg>
                   <span id="model-select-label" class="tb-model-label">（正在连接网关…）</span>
-                  <span class="model-chevron">▾</span>
+                  <svg class="model-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
                 </button>
               </div>
             </div>
