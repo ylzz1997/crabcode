@@ -68,6 +68,9 @@ echo "explain this codebase" | crabcode -p
 # 交互式 REPL
 crabcode
 
+# 本次运行启用完全访问（跳过工具权限询问）
+crabcode --yolo
+
 # 继续上次会话
 crabcode --continue      # 或 -c
 
@@ -1278,6 +1281,11 @@ AI 审查模式会让一个 reviewer 模型判断待执行的工具调用应该�
 ```
 
 旧写法 `"run_everything": true` 仍然兼容。
+
+也可以用 `crabcode --yolo` 一键为本次 CLI 运行启用完全访问，不修改
+`settings.json`。支持搭配 `-p`、`--continue` 和 `--resume`，沿用现有
+`run_everything` 模式，跳过配置中的权限规则及 AI 审查。Plan 模式和
+Computer Use 投递策略仍然生效。
 
 > **请谨慎使用。** 此模式下 CrabCode 将不经确认直接执行 shell 命令和写入文件。
 

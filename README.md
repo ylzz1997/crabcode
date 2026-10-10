@@ -69,6 +69,9 @@ echo "explain this codebase" | crabcode -p
 # Interactive REPL
 crabcode
 
+# Full Access for this run (skip tool permission prompts)
+crabcode --yolo
+
 # Resume last session
 crabcode --continue      # or -c
 
@@ -1309,6 +1312,11 @@ Set `"default_mode": "run_everything"` to skip all permission prompts and execut
 ```
 
 `"run_everything": true` is still accepted for backward compatibility.
+
+Use `crabcode --yolo` to enable Full Access for a single CLI run without
+changing `settings.json`. It also works with `-p`, `--continue`, and `--resume`,
+and overrides configured permission rules and AI review using the existing
+`run_everything` mode. Plan mode and Computer Use delivery policy still apply.
 
 > **Use with caution.** In this mode CrabCode will run shell commands and write files without asking.
 

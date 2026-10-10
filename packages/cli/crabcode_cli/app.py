@@ -114,6 +114,7 @@ def main(
     cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory"),
     resume: Optional[str] = typer.Option(None, "-r", "--resume", help="Resume a session by ID"),
     continue_last: bool = typer.Option(False, "-c", "--continue", help="Continue most recent session"),
+    yolo: bool = typer.Option(False, "--yolo", help="Enable Full Access for this run (skip tool permission prompts)"),
     image: Optional[list[str]] = typer.Option(None, "-i", "--image", help="Image file(s) to attach (repeatable)"),
 ) -> None:
     """CrabCode — AI coding assistant in the terminal."""
@@ -213,6 +214,10 @@ def main(
                 f"Available: {list(file_settings.models.keys()) or '(none configured)'}",
                 err=True,
             )
+
+    if yolo:
+        settings.permissions.default_mode = "run_everything"
+        explicit_settings.permissions.default_mode = "run_everything"
 
     settings._crabcode_explicit_settings = explicit_settings
 
