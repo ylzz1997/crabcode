@@ -7416,7 +7416,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <div class="perm-item" data-perm="run_everything" role="menuitem">
       <span class="perm-item-icon">⚡</span>
-      <span class="perm-item-text"><strong>完全访问</strong><small>不再逐项确认；Computer Use 前台策略仍以设置为准</small></span>
+      <span class="perm-item-text"><strong>完全访问</strong><small>不再逐项确认，所有操作一律放行</small></span>
       <span class="perm-check">✓</span>
     </div>
   </div>

@@ -26,7 +26,7 @@ export function permissionModeLabel(mode: string | undefined): string {
 export function permissionPolicyText(policy: PermissionPolicyInfo | null | undefined) {
   if (!policy) return {
     inheritedLabel: "暂无法读取",
-    inheritedDescription: "继承后：暂无法读取，请连接支持权限详情的 Gateway",
+    inheritedDescription: "当前生效：暂无法读取，请连接支持权限详情的 Gateway",
     current: "当前生效：暂无法读取",
     rules: "",
     details: "",
@@ -54,7 +54,7 @@ export function permissionPolicyText(policy: PermissionPolicyInfo | null | undef
   if (policy.runtime_allow_count) details.push(`本会话另有 ${policy.runtime_allow_count} 项“始终允许”授权`);
   return {
     inheritedLabel,
-    inheritedDescription: `继承后：${inheritedLabel}。${descriptions[policy.configured_mode] ?? ""}`,
+    inheritedDescription: `当前生效：${inheritedLabel}。${descriptions[policy.configured_mode] ?? ""}`,
     current: `当前生效：${permissionModeLabel(policy.effective_mode)}。${descriptions[policy.effective_mode] ?? ""}`,
     rules,
     details: details.join("\n"),

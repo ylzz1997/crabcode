@@ -462,10 +462,10 @@ function localRows(page: HTMLElement, section: Section): void {
       : spec.array
         ? el("textarea")
         : input(
-            String(current),
-            spec.title,
-            spec.min !== undefined ? "number" : "text",
-          );
+          String(current),
+          spec.title,
+          spec.min !== undefined ? "number" : "text",
+        );
     if (control instanceof HTMLTextAreaElement) {
       control.rows = 3;
       control.value = (current as string[]).join("\n");
@@ -484,13 +484,13 @@ function localRows(page: HTMLElement, section: Section): void {
     control.addEventListener("change", async () => {
       const value = spec.array
         ? [
-            ...new Set(
-              control.value
-                .split("\n")
-                .map((item) => item.trim())
-                .filter(Boolean),
-            ),
-          ]
+          ...new Set(
+            control.value
+              .split("\n")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          ),
+        ]
         : spec.min !== undefined
           ? control.value.trim()
             ? Number(control.value)
@@ -568,7 +568,7 @@ function syncLocalControls(): void {
           : "使用默认 / 继承配置";
     const inherited = inheritedSettingLabel(key);
     const follows = key === "permissionMode" ? info?.value === "default" : info?.value === "";
-    let hint = inherited && follows ? `；继承后：${inherited}` : "";
+    let hint = inherited && follows ? `；当前生效：${inherited}` : "";
     if (key === "computerUseTargetScope" && follows) {
       const legacy = snapshot.local.computerUseMode?.value;
       if (legacy) hint = `；当前由旧版覆盖决定：${legacy === "foreground_desktop" ? "整个桌面" : "应用窗口"}`;
@@ -884,44 +884,44 @@ function renderRuntime(section: "tools" | "context"): void {
 const MODEL_FIELDS: Array<
   [string, string, "text" | "number" | "boolean" | "json", string[]?]
 > = [
-  ["provider", "Provider", "text"],
-  ["model", "模型 ID", "text"],
-  ["base_url", "Base URL", "text"],
-  ["group", "配置组", "text"],
-  ["format", "API 格式", "text", ["anthropic", "openai", "codex"]],
-  ["api_key_env", "API Key 环境变量", "text"],
-  [
-    "reasoning_effort",
-    "推理强度",
-    "text",
-    ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-  ],
-  ["thinking_enabled", "Thinking", "boolean"],
-  ["thinking_budget", "Thinking Budget", "number"],
-  ["max_tokens", "最大输出 Token", "number"],
-  ["context_window", "上下文窗口", "number"],
-  ["timeout", "超时（秒）", "number"],
-  ["network_mode", "网络策略", "text", ["inherit", "direct", "proxy"]],
-  ["proxy_url", "代理地址", "text"],
-  ["request_max_retries", "请求建立重试", "number"],
-  ["max_retries", "流中断重连", "number"],
-  ["unbounded_connection_retries", "连接失败持续重连", "boolean"],
-  ["pass_reasoning_content", "传递推理内容", "boolean"],
-  [
-    "anthropic_stream_transport",
-    "Anthropic 流传输",
-    "text",
-    ["auto", "sdk", "httpx"],
-  ],
-  ["prompt_cache_key", "Prompt Cache Key", "text"],
-  ["prompt_cache_retention", "Prompt Cache 保留", "text", ["in_memory", "24h"]],
-  ["codex_auth_path", "Codex 认证文件", "text"],
-  ["azure_endpoint", "Azure Endpoint", "text"],
-  ["azure_api_version", "Azure API 版本", "text"],
-  ["azure_deployment", "Azure Deployment", "text"],
-  ["http_headers", "HTTP Headers", "json"],
-  ["extra_body", "Extra Body", "json"],
-];
+    ["provider", "Provider", "text"],
+    ["model", "模型 ID", "text"],
+    ["base_url", "Base URL", "text"],
+    ["group", "配置组", "text"],
+    ["format", "API 格式", "text", ["anthropic", "openai", "codex"]],
+    ["api_key_env", "API Key 环境变量", "text"],
+    [
+      "reasoning_effort",
+      "推理强度",
+      "text",
+      ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    ],
+    ["thinking_enabled", "Thinking", "boolean"],
+    ["thinking_budget", "Thinking Budget", "number"],
+    ["max_tokens", "最大输出 Token", "number"],
+    ["context_window", "上下文窗口", "number"],
+    ["timeout", "超时（秒）", "number"],
+    ["network_mode", "网络策略", "text", ["inherit", "direct", "proxy"]],
+    ["proxy_url", "代理地址", "text"],
+    ["request_max_retries", "请求建立重试", "number"],
+    ["max_retries", "流中断重连", "number"],
+    ["unbounded_connection_retries", "连接失败持续重连", "boolean"],
+    ["pass_reasoning_content", "传递推理内容", "boolean"],
+    [
+      "anthropic_stream_transport",
+      "Anthropic 流传输",
+      "text",
+      ["auto", "sdk", "httpx"],
+    ],
+    ["prompt_cache_key", "Prompt Cache Key", "text"],
+    ["prompt_cache_retention", "Prompt Cache 保留", "text", ["in_memory", "24h"]],
+    ["codex_auth_path", "Codex 认证文件", "text"],
+    ["azure_endpoint", "Azure Endpoint", "text"],
+    ["azure_api_version", "Azure API 版本", "text"],
+    ["azure_deployment", "Azure Deployment", "text"],
+    ["http_headers", "HTTP Headers", "json"],
+    ["extra_body", "Extra Body", "json"],
+  ];
 async function removeModel(
   kind: "model" | "group",
   name: string,
@@ -1001,30 +1001,30 @@ async function modelEditor(
     const control =
       type === "boolean"
         ? select(
-            [
-              ["", "继承"],
-              ["true", "开启"],
-              ["false", "关闭"],
-            ],
-            initial == null ? "" : String(initial),
-            label,
-          )
+          [
+            ["", "继承"],
+            ["true", "开启"],
+            ["false", "关闭"],
+          ],
+          initial == null ? "" : String(initial),
+          label,
+        )
         : choices
           ? select(
-              [
-                ["", "继承"],
-                ...choices.map((value) => [value, value] as const),
-              ],
-              String(initial ?? ""),
-              label,
-            )
+            [
+              ["", "继承"],
+              ...choices.map((value) => [value, value] as const),
+            ],
+            String(initial ?? ""),
+            label,
+          )
           : type === "json"
             ? el("textarea")
             : input(
-                String(initial ?? ""),
-                label,
-                type === "number" ? "number" : "text",
-              );
+              String(initial ?? ""),
+              label,
+              type === "number" ? "number" : "text",
+            );
     if (control instanceof HTMLTextAreaElement) {
       control.value = initial == null ? "" : JSON.stringify(initial, null, 2);
       control.rows = 4;
@@ -1181,7 +1181,7 @@ function renderModels(): void {
           Object.hasOwn(model.configured ?? {}, key)
             ? "模型配置"
             : model.group &&
-                Object.hasOwn(state.groups?.[model.group] ?? {}, key)
+              Object.hasOwn(state.groups?.[model.group] ?? {}, key)
               ? `继承 ${model.group}`
               : "默认",
         ),
