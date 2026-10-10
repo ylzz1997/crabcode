@@ -498,28 +498,6 @@ export function PromptSettingsPanel({
                       placeholder={section.default_text || (section.key === "extra" ? "留空则不追加额外段落" : "留空则使用默认")}
                       onChange={(event) => setDraft((current) => ({ ...current, [section.key]: event.target.value }))}
                     />
-                    {section.default_text && (
-                      <div className="prompt-settings-actions">
-                        <button
-                          className="settings-command"
-                          type="button"
-                          aria-label={`填入内置默认：${section.label}`}
-                          disabled={!canEdit || mutationBusy}
-                          onClick={() => setDraft((current) => ({ ...current, [section.key]: section.default_text! }))}
-                        >
-                          <span>填入内置默认</span>
-                        </button>
-                        <button
-                          className="settings-command"
-                          type="button"
-                          aria-label={`恢复默认：${section.label}`}
-                          disabled={!canEdit || mutationBusy || !draft[section.key]}
-                          onClick={() => setDraft((current) => ({ ...current, [section.key]: "" }))}
-                        >
-                          <span>恢复默认</span>
-                        </button>
-                      </div>
-                    )}
                   </div>
                 ))}
                 <div className="prompt-settings-actions">

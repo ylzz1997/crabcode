@@ -6,6 +6,8 @@ from crabcode_core.prompts.blocks import SystemPrompt
 from crabcode_core.prompts.profile import PromptProfile
 from crabcode_core.prompts.templates import (
     CYBER_RISK_INSTRUCTION,
+    DEFAULT_AGENT_PROMPT,
+    DEFAULT_COMPACT_PROMPT,
     DEFAULT_PREFIX,
     SUMMARIZE_TOOL_RESULTS_SECTION,
 )
@@ -107,6 +109,28 @@ def _get_session_guidance_section(
             "need not be loaded again unless it changes."
         )
     return None
+
+
+def get_default_prompt_sections() -> dict[str, str]:
+    """Return built-in template text for settings placeholders.
+
+    Session guidance is shown with Skill available; at runtime it is still
+    conditional on the session's enabled tools.
+    """
+    return {
+        "prefix": DEFAULT_PREFIX,
+        "intro": _get_intro_section(),
+        "system": _get_system_section(),
+        "doing_tasks": _get_doing_tasks_section(),
+        "actions": _get_actions_section(),
+        "git_safety": _get_git_safety_section(),
+        "using_tools": _get_using_tools_section([]),
+        "tone_and_style": _get_tone_and_style_section(),
+        "output_efficiency": _get_output_efficiency_section(),
+        "session_guidance": _get_session_guidance_section(["Skill"]) or "",
+        "agent_prompt": DEFAULT_AGENT_PROMPT,
+        "compact_prompt": DEFAULT_COMPACT_PROMPT,
+    }
 
 
 def _compute_env_info(

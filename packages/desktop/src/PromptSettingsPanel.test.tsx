@@ -42,7 +42,7 @@ const data: PromptSettingsResponse = {
     source: "userSettings",
   }],
   sections: [
-    { key: "intro", label: "介绍" },
+    { key: "intro", label: "介绍", default_text: "You are CrabCode." },
     { key: "compact_prompt", label: "上下文压缩提示词", default_text: "Create a durable checkpoint.", description: "用于手动和自动压缩，随模版生效。" },
     { key: "extra", label: "额外段落" },
   ],
@@ -103,7 +103,11 @@ describe("PromptSettingsPanel", () => {
     expect(options[0]?.textContent).toContain("默认");
     expect(options[0]?.getAttribute("aria-selected")).toBe("true");
     expect(options.map((option) => option.textContent ?? "")).toEqual(expect.arrayContaining([expect.stringContaining("客服")]));
-    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="介绍"]')?.placeholder).toBe("留空则使用默认");
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="介绍"]')?.placeholder).toBe("You are CrabCode.");
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="介绍"]')?.value).toBe("");
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="额外段落"]')?.placeholder).toBe("留空则不追加额外段落");
+    expect(container.textContent).not.toContain("填入内置默认");
+    expect(container.textContent).not.toContain("恢复默认");
 
     const name = container.querySelector<HTMLInputElement>('[aria-label="模版名称"]')!;
     const intro = container.querySelector<HTMLTextAreaElement>('[aria-label="介绍"]')!;
@@ -175,8 +179,6 @@ describe("PromptSettingsPanel", () => {
     expect(area.value).toBe("Previous checkpoint rules");
     expect(container.textContent).toContain("用于手动和自动压缩，随模版生效。");
 
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="填入内置默认：上下文压缩提示词"]')!.click());
-    expect(area.value).toBe("Create a durable checkpoint.");
     await act(async () => setValue(area, "保留目标、决策和未完成工作。"));
     await act(async () => container.querySelector<HTMLButtonElement>(".prompt-settings-actions .primary")!.click());
     expect(onMutate).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -189,7 +191,7 @@ describe("PromptSettingsPanel", () => {
     expect(JSON.parse(new TextDecoder().decode(savePromptExport.mock.calls[0][1])).sections.compact_prompt)
       .toBe("保留目标、决策和未完成工作。");
 
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="恢复默认：上下文压缩提示词"]')!.click());
+    await act(async () => setValue(area, ""));
     expect(area.value).toBe("");
     expect(area.placeholder).toBe("Create a durable checkpoint.");
     await act(async () => container.querySelector<HTMLButtonElement>(".prompt-settings-actions .primary")!.click());

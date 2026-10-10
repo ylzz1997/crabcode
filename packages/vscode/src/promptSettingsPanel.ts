@@ -386,23 +386,6 @@ function html(): string {
         area.addEventListener("input", () => { draft[section.key] = area.value; });
         label.append(area);
         fields.append(label);
-        if (section.default_text) {
-          const actions = document.createElement("div");
-          actions.className = "actions";
-          [["填入内置默认", section.default_text], ["恢复默认", ""]].forEach(([text, value]) => {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.textContent = text;
-            button.setAttribute("aria-label", text + "：" + section.label);
-            button.disabled = writableSources().length === 0;
-            button.addEventListener("click", () => {
-              draft[section.key] = value;
-              area.value = value;
-            });
-            actions.append(button);
-          });
-          fields.append(actions);
-        }
       });
     }
 

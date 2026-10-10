@@ -13,7 +13,7 @@ from crabcode_core.prompts.library import (
 )
 from crabcode_core.prompts.system import get_system_prompt
 from crabcode_core.prompts.profile import resolve_compact_prompt
-from crabcode_core.prompts.templates import DEFAULT_COMPACT_PROMPT
+from crabcode_core.prompts.templates import DEFAULT_AGENT_PROMPT, DEFAULT_COMPACT_PROMPT, DEFAULT_PREFIX
 from crabcode_core.query.loop import _append_user_prompts
 from crabcode_core.types.config import (
     CrabCodeSettings,
@@ -93,6 +93,15 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
         compact = next(section for section in body["sections"] if section["key"] == "compact_prompt")
         assert compact["label"] == "上下文压缩提示词"
         assert compact["default_text"] == DEFAULT_COMPACT_PROMPT
+        defaults = {section["key"]: section["default_text"] for section in body["sections"]}
+        assert defaults["extra"] is None
+        assert defaults["prefix"] == DEFAULT_PREFIX
+        assert defaults["agent_prompt"] == DEFAULT_AGENT_PROMPT
+        system_prompt = get_system_prompt(["Skill"], "test")
+        for key, text in defaults.items():
+            if key not in {"prefix", "agent_prompt", "compact_prompt", "extra"}:
+                assert text
+                assert text in system_prompt
 
         saved = client.post("/config/prompt-settings", json={
             "action": "save_template",
