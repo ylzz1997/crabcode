@@ -12,14 +12,14 @@ test('loaded permissions reach the chat menu, respect plan mode, and clear on se
   const h = loadPanel(async () => ({ ok: true, json: async () => ({ permission_mode: 'default', permission_policy: policy }) }));
   await h.panel.runtimeControls.refresh('a');
   const update = h.messages.filter(m => m.type === 'runtimeControls').at(-1);
-  assert.match(update.permissionSummary.inheritedDescription, /继承后：完全访问/);
+  assert.match(update.permissionSummary.inheritedDescription, /当前生效：完全访问/);
   assert.match(update.permissionSummary.current, /计划模式（只读）/);
   const sent = [];
   const dom = new JSDOM(h.panel.getHtmlForWebview({}), {
     runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(window) {
-      window.acquireVsCodeApi = () => ({ postMessage: m => sent.push(m), getState: () => ({}), setState() {} });
-      window.HTMLElement.prototype.scrollIntoView = function() {};
+      window.acquireVsCodeApi = () => ({ postMessage: m => sent.push(m), getState: () => ({}), setState() { } });
+      window.HTMLElement.prototype.scrollIntoView = function () { };
     },
   });
   try {
@@ -28,16 +28,17 @@ test('loaded permissions reach the chat menu, respect plan mode, and clear on se
     send({ type: 'sessionInfo', sessionId: 'a' });
     send(update);
     assert.equal(doc.getElementById('perm-label').textContent, '默认 · 完全访问');
-    assert.match(doc.getElementById('perm-effective').textContent, /计划模式（只读）/);
-    assert.match(doc.getElementById('perm-rule-text').textContent, /<script>rm \*<\/script>/);
-    assert.equal(doc.querySelector('#perm-rule-text script'), null);
+    assert.match(doc.getElementById('perm-btn').title, /计划模式（只读）/);
+    assert.match(doc.getElementById('perm-btn').title, /<script>rm \*<\/script>/);
+    assert.equal(doc.querySelector('.permission-policy-summary'), null);
+    assert.equal(doc.querySelector('#perm-menu script'), null);
     doc.getElementById('perm-btn').click();
     assert.ok(sent.some(m => m.type === 'requestPermissionPolicy'));
     send({ type: 'sessionInfo', sessionId: 'b' });
     assert.equal(doc.getElementById('perm-label').textContent, '默认 · 暂无法读取');
-    assert.equal(doc.getElementById('perm-rule-text').textContent, '');
+    assert.ok(!doc.getElementById('perm-btn').title.includes('rm *'));
     send(update); // late response for a cannot populate b
-    assert.equal(doc.getElementById('perm-rule-text').textContent, '');
+    assert.ok(!doc.getElementById('perm-btn').title.includes('rm *'));
   } finally { dom.window.close(); }
 });
 

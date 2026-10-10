@@ -24,17 +24,16 @@ it("shows inherited full access, actual plan restrictions, and clears details fo
     expect(container.textContent).toContain("默认 · 完全访问");
     await act(() => container.querySelector<HTMLButtonElement>("button")!.click());
     expect(refresh).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("继承后：完全访问");
-    expect(container.textContent).toContain("当前生效：计划模式（只读）");
-    expect(container.textContent).toContain("禁止：Bash · 命令 rm *");
-    expect(container.textContent).toContain("本会话另有 1 项");
-    await render({ ...policy, effective_mode: "bypassPermissions" });
     expect(container.textContent).toContain("当前生效：完全访问");
+    expect(container.querySelector<HTMLButtonElement>(".permission-picker-trigger")?.title).toContain("当前生效：计划模式（只读）");
+    expect(container.querySelector(".permission-policy-summary")).toBeNull();
+    await render({ ...policy, effective_mode: "bypassPermissions" });
+    expect(container.querySelector<HTMLButtonElement>(".permission-picker-trigger")?.title).toContain("当前生效：完全访问");
     expect(container.querySelector(".permission-picker-trigger")?.classList.contains("danger")).toBe(true);
     await render();
     expect(container.textContent).toContain("默认 · 暂无法读取");
     expect(container.textContent).not.toContain("rm *");
-    expect(container.textContent).not.toContain("继承后：完全访问");
+    expect(container.textContent).not.toContain("当前生效：完全访问");
     await act(() => container.querySelector<HTMLButtonElement>('[role="menuitemradio"]')!.click());
     expect(change).toHaveBeenCalledWith("default");
   } finally {

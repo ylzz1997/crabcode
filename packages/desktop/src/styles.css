@@ -10520,27 +10520,6 @@ html[data-theme="light"] .model-detail-field > small.default {
   overflow-y: auto;
 }
 
-.permission-policy-summary {
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.permission-policy-summary p {
-  margin: 0 0 5px;
-  white-space: pre-wrap;
-}
-
-.permission-policy-summary details {
-  margin-top: 5px;
-}
-
-.permission-policy-summary summary {
-  cursor: pointer;
-}
-
 .effort-picker-menu {
   left: 0;
   width: min(210px, calc(100vw - 44px));

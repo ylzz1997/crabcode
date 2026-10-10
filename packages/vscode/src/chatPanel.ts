@@ -2338,9 +2338,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       url.searchParams.set("session_id", sessionId);
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) throw new Error(`goal lookup failed: ${response.status}`);
-      const data = await response.json() as { goal?: {
-        objective: string; status: string; token_budget?: number | null; tokens_used?: number;
-      } | null };
+      const data = await response.json() as {
+        goal?: {
+          objective: string; status: string; token_budget?: number | null; tokens_used?: number;
+        } | null
+      };
       if (!data.goal) {
         this.addSessionSystemMessage(sessionId, "当前没有设置 Goal。");
         return;
@@ -3212,9 +3214,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const items: Array<ReferenceItem | vscode.QuickPickItem> = [
       ...(recent.length > 0
         ? [
-            { label: "最近打开", kind: vscode.QuickPickItemKind.Separator },
-            ...recent,
-          ]
+          { label: "最近打开", kind: vscode.QuickPickItemKind.Separator },
+          ...recent,
+        ]
         : []),
       { label: "文件夹", kind: vscode.QuickPickItemKind.Separator },
       ...folders,
@@ -6689,10 +6691,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .perm-item .perm-check { width: 14px; text-align: center; opacity: 0; font-size: 11px; }
     .perm-item.active .perm-check { opacity: 1; }
     .perm-item[data-perm="run_everything"] .perm-item-text, .perm-item.perm-danger .perm-item-text { color: #e5c300; }
-    .permission-policy-summary { padding: 9px 12px; border-top: 1px solid var(--vscode-menu-border, #444); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-    .permission-policy-summary p { margin: 0 0 5px; white-space: pre-wrap; }
-    .permission-policy-summary details { margin-top: 5px; }
-    .permission-policy-summary summary { cursor: pointer; }
 
     /* ── Images in messages ────────────────────────────────────── */
     .msg-images {
@@ -7403,7 +7401,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <div id="perm-menu" class="perm-menu hidden" role="menu">
     <div class="perm-item active" data-perm="default" role="menuitem">
       <span class="perm-item-icon">⚙</span>
-      <span class="perm-item-text"><strong>工作区默认规则</strong><small id="perm-inherited-description">继承后：暂无法读取</small></span>
+      <span class="perm-item-text"><strong>工作区默认规则</strong><small id="perm-inherited-description">当前生效：暂无法读取</small></span>
       <span class="perm-check">✓</span>
     </div>
     <div class="perm-item" data-perm="ask" role="menuitem">
@@ -7420,12 +7418,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <span class="perm-item-icon">⚡</span>
       <span class="perm-item-text"><strong>完全访问</strong><small>不再逐项确认；Computer Use 前台策略仍以设置为准</small></span>
       <span class="perm-check">✓</span>
-    </div>
-    <div class="permission-policy-summary" aria-live="polite">
-      <p id="perm-effective">当前生效：暂无法读取</p>
-      <p>工具自身限制及 Computer Use 前台策略仍有效。</p>
-      <small id="perm-rules"></small>
-      <details id="perm-rule-details" hidden><summary>查看具体规则</summary><p id="perm-rule-text"></p></details>
     </div>
   </div>
   <div id="model-menu" class="model-menu hidden" role="listbox" aria-label="选择模型">
@@ -11224,7 +11216,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let currentPermissionMode = 'default';
     const emptyPermissionSummary = {
       inheritedLabel: '暂无法读取',
-      inheritedDescription: '继承后：暂无法读取，请连接支持权限详情的 Gateway',
+      inheritedDescription: '当前生效：暂无法读取，请连接支持权限详情的 Gateway',
       current: '当前生效：暂无法读取', rules: '', details: '',
       inheritedDanger: false, effectiveDanger: false
     };
@@ -11245,10 +11237,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         item.classList.toggle('perm-danger', item.getAttribute('data-perm') === 'default' && info.inheritedDanger);
       });
       document.getElementById('perm-inherited-description').textContent = info.inheritedDescription;
-      document.getElementById('perm-effective').textContent = info.current;
-      document.getElementById('perm-rules').textContent = info.rules;
-      document.getElementById('perm-rule-details').hidden = !info.details;
-      document.getElementById('perm-rule-text').textContent = info.details;
       if (permMenu && !permMenu.classList.contains('hidden')) positionPermMenu();
     }
 
@@ -11281,9 +11269,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     document.addEventListener('click', function() { closePermMenu(); });
     permMenu && permMenu.addEventListener('click', function(e) { e.stopPropagation(); });
-    document.getElementById('perm-rule-details').addEventListener('toggle', function() {
-      if (permMenu && !permMenu.classList.contains('hidden')) positionPermMenu();
-    });
 
     // ── Model menu ────────────────────────────────────────────────
 

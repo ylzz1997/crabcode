@@ -6269,12 +6269,6 @@ export function PermissionPicker({
               );
             })}
           </div>
-          <div className="permission-policy-summary" aria-live="polite">
-            <p>{summary.current}</p>
-            <p>工具自身限制及 Computer Use 前台策略仍有效。</p>
-            {summary.rules && <small>{summary.rules}</small>}
-            {summary.details && <details><summary>查看具体规则</summary><p>{summary.details}</p></details>}
-          </div>
         </div>
       )}
     </div>
