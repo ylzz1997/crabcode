@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createSlashCommands } from "../packages/shared/slashCommands.js";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -58,7 +59,7 @@ if (functionStart < 0 || literalStart < 0 || literalEnd < "</html>`".length) {
   throw new Error("VS Code Webview template was not found");
 }
 const templateLiteral = chatPanel.slice(literalStart, literalEnd);
-const html = Function("nonce", `return ${templateLiteral}`)("audit-nonce");
+const html = Function("nonce", "createSlashCommands", `return ${templateLiteral}`)("audit-nonce", createSlashCommands);
 const webviewScript = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)?.[1];
 if (!webviewScript) throw new Error("VS Code Webview script was not found");
 Function(webviewScript);

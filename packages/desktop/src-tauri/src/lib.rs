@@ -31,6 +31,7 @@ pub fn run() {
             settings::save_desktop_settings,
             settings::save_theme_export,
             settings::save_prompt_export,
+            settings::save_session_export,
             settings::store_credential,
             settings::delete_credential,
             settings::set_dock_icon,

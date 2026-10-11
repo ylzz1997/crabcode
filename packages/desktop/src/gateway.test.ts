@@ -103,6 +103,16 @@ describe("SessionChannel new-session controls", () => {
     channel.dispose();
   });
 
+  it.each([undefined, "session-a"])("sends explicit launch overrides with new/resumed sessions (%s)", async (sessionId) => {
+    const api = { authenticate: vi.fn().mockResolvedValue(undefined), webSocketUrl: () => "ws://localhost/ws" } as unknown as GatewayApi;
+    const overrides = { model: "raw-model", provider: "custom", base_url: "http://example.test/api", api_format: "openai" };
+    const channel = new SessionChannel(api, { sessionId, cwd: "/work", launchOverrides: overrides, onEvent: vi.fn(), onReady: vi.fn(), onState: vi.fn() });
+    await channel.connect();
+    FakeWebSocket.instances[0].emit("open");
+    expect(JSON.parse(FakeWebSocket.instances[0].sent[0])).toMatchObject({ type: sessionId ? "resume_session" : "new_session", ...overrides });
+    channel.dispose();
+  });
+
   it.each([undefined, "session-b"])("isolates a thinking session from a new or resumed channel (%s)", async (sessionId) => {
     const api = {
       authenticate: vi.fn().mockResolvedValue(undefined),

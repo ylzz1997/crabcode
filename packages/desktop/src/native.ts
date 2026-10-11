@@ -459,6 +459,11 @@ export async function savePromptExport(filename: string, bytes: Uint8Array): Pro
   return invoke<string>("save_prompt_export", { filename, bytes: Array.from(bytes) });
 }
 
+export async function saveSessionExport(filename: string, bytes: Uint8Array, path?: string): Promise<string | null> {
+  if (!isDesktopShell()) return null;
+  return invoke<string>("save_session_export", { filename, bytes: Array.from(bytes), path: path ?? null });
+}
+
 export async function storeCredential(reference: string, password: string): Promise<void> {
   if (isDesktopShell()) {
     await invoke("store_credential", { credentialRef: reference, password });

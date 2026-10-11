@@ -238,7 +238,12 @@ fn safe_prompt_export_filename(filename: &str) -> bool {
         && !filename.ends_with(".crabtheme.json")
 }
 
-fn persist_download(filename: &str, bytes: &[u8], suffix: &str, kind: &str) -> Result<String, String> {
+fn persist_download(
+    filename: &str,
+    bytes: &[u8],
+    suffix: &str,
+    kind: &str,
+) -> Result<String, String> {
     let directory = dirs::download_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| "Unable to locate a Downloads directory".to_string())?;
@@ -294,6 +299,54 @@ pub fn save_prompt_export(filename: String, bytes: Vec<u8>) -> Result<String, St
         return Err("Prompt export must be between 1 byte and 12MB".to_string());
     }
     persist_download(&filename, &bytes, ".json", "prompt export")
+}
+
+#[tauri::command]
+pub fn save_session_export(
+    filename: String,
+    bytes: Vec<u8>,
+    path: Option<String>,
+) -> Result<String, String> {
+    if !safe_download_basename(&filename)
+        || !(filename.ends_with(".md") || filename.ends_with(".json"))
+        || bytes.is_empty()
+        || bytes.len() > 32 * 1024 * 1024
+    {
+        return Err("Session export filename or size is invalid".to_string());
+    }
+    if let Some(path) = path {
+        let path =
+            if let Some(relative) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+                dirs::home_dir()
+                    .ok_or("Unable to locate the home directory")?
+                    .join(relative)
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                path
+            };
+        let destination = Path::new(&path);
+        if !destination.is_absolute() || destination.file_name().is_none() {
+            return Err("Session export path must be an absolute file path".to_string());
+        }
+        let directory = destination.parent().ok_or("Invalid export path")?;
+        fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
+        temporary
+            .write_all(&bytes)
+            .map_err(|error| error.to_string())?;
+        temporary
+            .persist(destination)
+            .map_err(|error| error.error.to_string())?;
+        return Ok(path);
+    }
+    let suffix = if filename.ends_with(".json") {
+        ".json"
+    } else {
+        ".md"
+    };
+    persist_download(&filename, &bytes, suffix, "session export")
 }
 
 #[tauri::command]
@@ -397,7 +450,35 @@ pub fn read_credential(credential_ref: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_settings, safe_export_filename, safe_prompt_export_filename};
+    use super::{
+        default_settings, safe_export_filename, safe_prompt_export_filename, save_session_export,
+    };
+
+    #[test]
+    fn session_export_writes_the_explicit_path_and_rejects_relative_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("nested/session.md");
+        let path = destination.to_string_lossy().into_owned();
+        assert_eq!(
+            save_session_export(
+                "session.md".into(),
+                b"# Session".to_vec(),
+                Some(path.clone())
+            )
+            .unwrap(),
+            path
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"# Session");
+        assert!(save_session_export(
+            "session.md".into(),
+            b"content".to_vec(),
+            Some("relative.md".into())
+        )
+        .is_err());
+        assert!(
+            save_session_export("../session.md".into(), b"content".to_vec(), Some(path)).is_err()
+        );
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

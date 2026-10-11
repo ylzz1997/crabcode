@@ -489,8 +489,8 @@ function registerCommands(
     }),
   );
 
-  push(vscode.commands.registerCommand("crabcode.openCrabCodeSettings", () => {
-    CrabCodeSettingsPanel.show(extensionUri, "general", () => chatProvider.notifyConfigurationChanged());
+  push(vscode.commands.registerCommand("crabcode.openCrabCodeSettings", (section?: string) => {
+    CrabCodeSettingsPanel.show(extensionUri, section === "models" ? "models" : "general", () => chatProvider.notifyConfigurationChanged());
   }));
 
   // Install optional local dependencies without changing lightweight auto-install.

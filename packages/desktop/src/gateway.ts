@@ -97,6 +97,12 @@ export class GatewayApi {
   }
 
   async request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+    const response = await this.response(path, init, retry);
+    if (response.status === 204) return undefined as T;
+    return response.json() as Promise<T>;
+  }
+
+  async response(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
     await this.authenticate();
     const headers = new Headers(init.headers);
     if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
@@ -109,7 +115,7 @@ export class GatewayApi {
     });
     if (response.status === 401 && retry) {
       await this.authenticate(true);
-      return this.request<T>(path, init, false);
+      return this.response(path, init, false);
     }
     if (!response.ok) {
       const fallback = `${response.status} ${response.statusText}`;
@@ -121,8 +127,7 @@ export class GatewayApi {
       }
       throw new Error(detail);
     }
-    if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
+    return response;
   }
 
   workspaceInfo(): Promise<WorkspaceInfo> {
@@ -575,11 +580,20 @@ export class GatewayApi {
   }
 }
 
+export interface SessionLaunchOverrides {
+  model?: string;
+  provider?: string;
+  base_url?: string;
+  api_format?: string;
+  model_profile?: string;
+}
+
 interface SessionChannelOptions {
   sessionId?: string;
   cwd: string;
   additionalDirectories?: string[];
   modelProfile?: string;
+  launchOverrides?: SessionLaunchOverrides;
   reasoningEffort?: ReasoningEffort;
   ultraMode?: boolean;
   mode?: "agent" | "plan";
@@ -694,6 +708,7 @@ export class SessionChannel {
         type: "resume_session",
         session_id: this.sessionId,
         additional_directories: this.options.additionalDirectories ?? [],
+        ...this.options.launchOverrides,
         computer_use_host_id: this.options.computerUseHostId,
         computer_use_enabled: this.options.computerUseEnabled,
       });
@@ -707,6 +722,7 @@ export class SessionChannel {
         ultra_mode: this.options.ultraMode,
         mode: this.options.mode,
         permission_mode: this.options.permissionMode,
+        ...this.options.launchOverrides,
         computer_use_host_id: this.options.computerUseHostId,
         computer_use_enabled: this.options.computerUseEnabled,
       });

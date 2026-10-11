@@ -4,6 +4,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const ts = require("typescript");
+const { createSlashCommands } = require("./helpers/slashCommands.cjs");
 
 const filename = path.join(__dirname, "../src/chatPanel.ts");
 const source = ts.createSourceFile(filename, fs.readFileSync(filename, "utf8"), ts.ScriptTarget.Latest, true);
@@ -20,7 +21,7 @@ function loadMethod(name) {
   const script = ts.transpileModule(`class Harness { ${method.getText(source)} }; globalThis.Harness = Harness;`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const sandbox = { getNonce: () => "test-nonce" };
+  const sandbox = { getNonce: () => "test-nonce", createSlashCommands };
   vm.runInNewContext(script, sandbox);
   return sandbox.Harness.prototype[name];
 }

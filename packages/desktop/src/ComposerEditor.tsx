@@ -1,3 +1,4 @@
+import { createSlashCommands } from "../../shared/slashCommands.js";
 import { FileText, Folder, Image as ImageIcon, Quote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { ComposerSendKey } from "./types";
@@ -25,52 +26,22 @@ type SlashCompletion = {
   items: ComposerCommandOption[];
 };
 
-const BUILTIN_COMMANDS: Array<Omit<ComposerCommandOption, "kind" | "children">> = [
-  { name: "/help", description: "显示帮助" },
-  { name: "/plan", description: "切换到计划模式（只读分析）" },
-  { name: "/agent", description: "切换到 Agent 模式" },
-  { name: "/plan-status", description: "显示当前计划状态" },
-  { name: "/agents", description: "列出托管的 Agent" },
-  { name: "/agent-log", description: "查看 Agent transcript" },
-  { name: "/agent-send", description: "向 Agent 追加输入" },
-  { name: "/wait", description: "等待 Agent 完成" },
-  { name: "/cancel-agent", description: "取消 Agent" },
-  { name: "/spawn-agent", description: "启动后台 Agent（支持类型/名称/模型）" },
-  { name: "/goal", description: "设置或管理持久 Goal" },
-  { name: "/tasks", description: "列出、查看、停止后台任务" },
-  { name: "/peers", description: "列出其他 CrabCode 会话" },
-  { name: "/peer-send", description: "向其他会话发送消息" },
-  { name: "/status", description: "显示会话状态" },
-  { name: "/effort", description: "查看/设置推理强度" },
-  { name: "/ultra", description: "切换/设置 Ultra mode" },
-  { name: "/model", description: "显示/切换模型" },
-  { name: "/new", description: "开始新会话" },
-  { name: "/compact", description: "压缩对话上下文" },
-  { name: "/clear", description: "清除历史记录" },
-  { name: "/sessions", description: "列出所有会话" },
-  { name: "/recent", description: "列出最近的会话" },
-  { name: "/search", description: "搜索会话" },
-  { name: "/archive", description: "归档会话" },
-  { name: "/prune", description: "归档/清理过期会话" },
-  { name: "/export", description: "导出会话（md/json，可指定路径）" },
-  { name: "/stats", description: "使用统计" },
-  { name: "/checkpoint", description: "创建检查点（含文件快照）" },
-  { name: "/checkpoints", description: "列出检查点" },
-  { name: "/rollback", description: "回滚对话到检查点" },
-  { name: "/revert", description: "还原文件和对话到检查点" },
-  { name: "/undo", description: "撤销最后一个检查点" },
-  { name: "/resume", description: "恢复会话" },
-  { name: "/logs", description: "显示后台日志" },
-  { name: "/team", description: "团队管理（创建/协作/任务板）" },
-  { name: "/schedule", description: "定时任务管理（创建/执行/历史）" },
-  { name: "/image", description: "附加图片到下一条消息" },
-];
+const BUILTIN_COMMANDS = createSlashCommands({ postMessage() {}, showMessage() {} }).commands
+  .map(({ name, desc }) => ({ name, description: desc }));
 
 function subcommands(items: Array<[string, string]>): ComposerCommandOption[] {
   return items.map(([name, description]) => ({ name, description, kind: "subcommand" }));
 }
 
 const STATIC_SUBCOMMANDS: Record<string, ComposerCommandOption[]> = {
+  "/follow-up": subcommands([["queue", "排队执行"], ["steer", "引导当前运行"]]),
+  "/queue": subcommands([["steer", "将排队消息接入当前运行"]]),
+  "/add": subcommands([["model", "添加模型"], ["group", "添加配置组"]]),
+  "/del": subcommands([["model", "删除模型"], ["group", "删除配置组"]]),
+  "/goal": subcommands([["set", "设置 Goal"], ["edit", "编辑 Goal"], ["pause", "暂停 Goal"], ["resume", "恢复 Goal"], ["complete", "完成 Goal"], ["blocked", "标记阻塞"], ["clear", "清除 Goal"]]),
+  "/effort": subcommands(["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"].map(name => [name, name])),
+  "/ultra": subcommands([["true", "开启"], ["false", "关闭"]]),
+  "/logs": subcommands([["-f", "跟踪日志"], ["--follow", "跟踪日志"], ["--tail", "查看指定行数"], ["--clear", "清空日志"], ["--stop", "停止跟踪"]]),
   "/tasks": subcommands([
     ["list", "列出后台任务"], ["show", "查看任务详情"], ["output", "查看任务输出"], ["stop", "停止后台任务"],
   ]),
