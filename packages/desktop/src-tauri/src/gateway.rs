@@ -667,16 +667,6 @@ pub async fn remove_document_engine(python_path: Option<String>) -> Result<Value
     .map_err(|error| format!("Document engine removal task failed: {error}"))?
 }
 
-#[cfg(debug_assertions)]
-fn installed_gateway_version(python: &str) -> Option<String> {
-    let script = "import crabcode_gateway; print(getattr(crabcode_gateway, '__version__', ''))";
-    let mut command = Command::new(python);
-    configure_python_utf8(&mut command);
-    command.args(["-c", script]);
-    let version = run_probe_command(&mut command, Duration::from_secs(15)).ok()?;
-    (!version.is_empty()).then_some(version)
-}
-
 // Probe imports in a separate, time-limited process: a broken interpreter or
 // dependency must not prevent trying the next environment. A file avoids pipe
 // backpressure while we wait; only its bounded tail is read into memory.
@@ -1108,7 +1098,8 @@ fn default_gateway_package() -> Result<String, String> {
 }
 
 fn playwright_module_installed(python: &str) -> bool {
-    let script = "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('playwright') else 1)";
+    let script =
+        "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('playwright') else 1)";
     let mut command = Command::new(python);
     configure_python_utf8(&mut command);
     command.args(["-c", script]);
@@ -1127,6 +1118,53 @@ fn install_gateway(python: &str, on_output: &(impl Fn(&str) + Sync)) -> Result<(
     install_gateway_package(python, &package, on_output)?;
     install_playwright_chromium(python, on_output)?;
     check_playwright_chromium(python)
+}
+
+#[cfg(debug_assertions)]
+fn ensure_development_gateway(
+    python: &str,
+    progress: &(impl Fn(&str, &str) + Sync),
+) -> Result<(), String> {
+    // Development versions may not exist on PyPI yet. Preserve source imports
+    // and editable installs when filling in Gateway or Browser dependencies.
+    if check_gateway_installation(python).is_err() || !playwright_module_installed(python) {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let root = root.canonicalize().map_err(|error| {
+            format!("Unable to locate the CrabCode development source: {error}")
+        })?;
+        let package = format!("{}[gateway,browser]", root.display());
+        progress(
+            "installing",
+            "正在从本地源码补齐 Gateway 与 Browser 开发依赖",
+        );
+        let mut command = Command::new(python);
+        configure_python_utf8(&mut command);
+        command.args([
+            "-u",
+            "-m",
+            "pip",
+            "install",
+            "--no-input",
+            "--progress-bar",
+            "off",
+            "--editable",
+            &package,
+        ]);
+        let (status, detail) =
+            run_streaming_command(&mut command, &|line| progress("installing", line))?;
+        if !status.success() {
+            return Err(format!(
+                "Failed to install CrabCode development dependencies. Run `{python} -m pip install --editable \"{package}\"` manually. {detail}"
+            ));
+        }
+        check_gateway_installation(python)?;
+    }
+    if !playwright_browsers_ready(python) {
+        progress("installing", "正在安装 Chromium，首次补齐可能需要几分钟");
+        install_playwright_chromium(python, &|line| progress("installing", line))?;
+        check_playwright_chromium(python)?;
+    }
+    Ok(())
 }
 
 fn ensure_default_browser(
@@ -1878,16 +1916,7 @@ fn ensure_local_gateway_blocking(
             "environment",
             &format!("开发模式直接使用 Python 环境：{python}"),
         );
-        let installed_version = installed_gateway_version(&python);
-        if installed_version.as_deref() != Some(env!("CARGO_PKG_VERSION")) {
-            progress(
-                "installing",
-                "正在安装 CrabCode、Browser 和 Chromium，首次启动可能需要几分钟",
-            );
-            install_gateway(&python, &|line| progress("installing", line))?;
-        } else {
-            ensure_default_browser(&python, progress)?;
-        }
+        ensure_development_gateway(&python, progress)?;
         start_gateway(
             &python,
             &base,
