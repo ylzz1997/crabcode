@@ -188,10 +188,10 @@ pub fn install(source: &Path, dir: &Path) -> Result<PathBuf, String> {
     }
     // Do not replace a component while another client owns an active task.
     if let Ok(endpoint) = read_endpoint(dir) {
-        if let Ok(info) = rpc(&endpoint, "ping", json!({})) {
-            if info["build_id"] == env!("CRABCODE_COMPUTER_USE_BUILD") {
-                return Ok(target);
-            }
+        if rpc(&endpoint, "ping", json!({})).is_ok() {
+            // The executable already differs. Signing the same build with a
+            // new identity also requires installation; build_id covers source
+            // inputs, not the app's code signature.
             rpc(&endpoint, "shutdown_if_idle", json!({})).map_err(|_| "Computer Use is in use or requires a restart. Finish active Computer Use tasks, then refresh the component.".to_string())?;
             let deadline = Instant::now() + Duration::from_secs(5);
             while rpc(&endpoint, "ping", json!({})).is_ok() {
@@ -743,6 +743,48 @@ mod tests {
         assert_eq!(std::fs::read(&installed).unwrap(), b"newer");
         install(&newest, &state).unwrap();
         assert_eq!(std::fs::read(&installed).unwrap(), b"newest");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn signing_change_is_installed_even_when_build_id_is_unchanged() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join(
+            "bundle/Crab Computer Use.app/Contents/MacOS/crabcode-computer-use-host",
+        );
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "ad-hoc signature").unwrap();
+        let directory = temp.path().join("state");
+        let installed = install(&source, &directory).unwrap();
+        std::fs::write(&source, "Apple Development signature").unwrap();
+        File::options().write(true).open(&source).unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(1)).unwrap();
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint = Endpoint {
+            protocol_version: 1,
+            port: listener.local_addr().unwrap().port(),
+            token: "a".repeat(64),
+            instance_id: "same-build".into(),
+            pid: std::process::id(),
+        };
+        std::fs::write(directory.join("endpoint.json"), serde_json::to_vec(&endpoint).unwrap()).unwrap();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let stop = stopping.clone();
+        let thread = std::thread::spawn(move || {
+            let state = Mutex::new(NativeState::default());
+            // The ping reply contains this test binary's build_id, just as the
+            // installer does. A source-only build comparison must not skip it.
+            for _ in 0..2 {
+                if serve_connection(listener.accept().unwrap().0, &endpoint, &state, &stop).unwrap() {
+                    return;
+                }
+            }
+        });
+        install(&source, &directory).unwrap();
+        assert!(stopping.load(Ordering::SeqCst));
+        thread.join().unwrap();
+        assert_eq!(std::fs::read(&installed).unwrap(), b"Apple Development signature");
     }
 
     fn test_server() -> (Endpoint, std::thread::JoinHandle<()>) {

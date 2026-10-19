@@ -1,9 +1,21 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, cpSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdirSync, cpSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const signingConfigPath = path.resolve(root, "../../.crabcode/computer-use-signing.json");
+function signingIdentity() {
+  const override = process.env.CRABCODE_SIGNING_IDENTITY?.trim();
+  if (override) return override;
+  if (!existsSync(signingConfigPath)) return "-";
+  const config = JSON.parse(readFileSync(signingConfigPath, "utf8"));
+  if (typeof config.identity !== "string" || !config.identity.trim()) {
+    throw new Error(`Set a nonempty identity in ${signingConfigPath}; refusing to fall back to ad-hoc signing`);
+  }
+  return config.identity.trim();
+}
+const identity = process.platform === "darwin" ? signingIdentity() : null;
 const version = readFileSync(path.join(root, "host/Cargo.toml"), "utf8").match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 if (!version) throw new Error("Computer Use component version is missing");
 const debug = process.argv.includes("--debug");
@@ -33,9 +45,10 @@ if (process.platform === "darwin") {
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>`);
-  // Release CI supplies a stable Developer ID. Local builds are explicitly ad hoc.
-  const identity = process.env.CRABCODE_SIGNING_IDENTITY || "-";
+  // Local builds can pin an Apple Development identity without committing
+  // personal certificate details. Release CI supplies its Developer ID via env.
   execFileSync("/usr/bin/codesign", ["--force", "--sign", identity, ...(identity === "-" ? [] : ["--timestamp", "--options", "runtime"]), bundle], { stdio: "inherit" });
+  execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", bundle], { stdio: "inherit" });
 } else {
   cpSync(binary, path.join(destination, executable));
 }

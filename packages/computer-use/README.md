@@ -51,6 +51,14 @@ VS Code or `crabcode computer-use permissions`; CLI can select either pane
 directly with `--screen-recording` or `--accessibility`. Existing Desktop
 permissions do not transfer to the new app.
 Local ad-hoc builds can require renewed authorization after recompilation.
+For a persistent local development signature, create
+`.crabcode/computer-use-signing.json` at the repository root (already gitignored)
+with `{"identity":"<certificate SHA-1 from security find-identity -v -p codesigning>"}`.
+All local client build commands use this identity automatically. An explicit
+`CRABCODE_SIGNING_IDENTITY` overrides it, including `-` for ad-hoc signing.
+A configured certificate that is unavailable causes the build to fail rather
+than silently switching identity. Apple Development certificates are for local
+development; release builds still need Developer ID signing and notarization.
 Local client build commands copy the same signed bundle into Desktop, VS Code,
 and the local companion. The shared installer keeps a newer installed build
 when an older client starts, so switching clients does not repeatedly replace
