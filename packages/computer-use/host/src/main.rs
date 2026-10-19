@@ -10,6 +10,14 @@ fn main() {
             println!("{}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
+        if args.iter().any(|arg| arg == "--probe-capabilities") {
+            // Do not start an executor, install an app, or open permission
+            // prompts. A fresh process avoids macOS's cached TCC answers.
+            println!("{}", serde_json::to_string(
+                &crabcode_computer_use_core::detect_capabilities()
+            ).map_err(|error| error.to_string())?);
+            return Ok(());
+        }
         let dir = args
             .windows(2)
             .find(|pair| pair[0] == "--state-dir")

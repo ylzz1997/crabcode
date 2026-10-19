@@ -40,8 +40,11 @@ regenerate with `node packages/computer-use/client/build.mjs`.
 Each platform distribution bundles `host`. First enablement installs it in the
 per-user application-data directory, under `CrabCode/ComputerUse`. macOS uses
 `~/Library/Application Support/CrabCode/ComputerUse/Crab Computer Use.app`.
-Grant that app Accessibility and Screen Recording access, then select refresh
-in the client. On macOS the shared executor's permissions action opens the
+Grant that app Accessibility and Screen Recording access. Desktop and VS Code
+recheck local component permissions every 30 seconds while enabled; select
+refresh in the client to check immediately. macOS checks run in a fresh process
+so a long-running executor cannot keep reporting a revoked grant. The shared
+executor's permissions action opens the
 relevant settings pane and a floating card that drags the installed app bundle
 into the Screen Recording or Accessibility list. The card appears from Desktop,
 VS Code or `crabcode computer-use permissions`; CLI can select either pane

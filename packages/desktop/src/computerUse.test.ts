@@ -38,6 +38,98 @@ describe("ComputerUseChannel", () => {
     window.sessionStorage.clear();
   });
 
+  it("automatically publishes revoked and restored permissions without reconnecting", async () => {
+    vi.useFakeTimers();
+    const caps = { gui_available: true, input_available: true, capture_available: true,
+      ax_available: true, instance_id: "same-executor", platform: "macos", displays: [],
+      supported_modes: ["background_app"], reason: null as string | null };
+    invokeMock.mockImplementation(async (command: string) => command === "computer_use_capabilities" ? { ...caps } : null);
+    const states: ComputerUseState[] = [];
+    const channel = new ComputerUseChannel({ authenticate: async () => {}, computerUseWebSocketUrl: () => "ws://localhost/test" } as unknown as GatewayApi,
+      "host", true, state => states.push(state));
+    try {
+      await channel.connect();
+      const socket = FakeWebSocket.instances[0];
+      const send = vi.spyOn(socket, "send");
+      socket.emit("open");
+      socket.emit("message", { data: JSON.stringify({ type: "computer_use_host_registered", available: true }) });
+      states.length = 0;
+      caps.capture_available = false;
+      caps.reason = "Screen Recording permission is required";
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(states.at(-1)).toMatchObject({ status: "ready", capabilities: { capture_available: false, ax_available: true }, error: caps.reason });
+      expect(send).toHaveBeenLastCalledWith(expect.stringContaining('"capture_available":false'));
+      expect(states.every(state => state.status !== "connecting")).toBe(true);
+      caps.gui_available = caps.input_available = caps.ax_available = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(states.at(-1)).toMatchObject({ status: "unavailable", capabilities: { input_available: false, capture_available: false } });
+      expect(send).toHaveBeenLastCalledWith(expect.stringContaining('"gui_available":false'));
+      caps.gui_available = caps.input_available = caps.ax_available = caps.capture_available = true;
+      caps.reason = null;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(states.at(-1)).toMatchObject({ status: "ready", error: null, capabilities: { capture_available: true } });
+      const publications = states.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(states).toHaveLength(publications);
+      channel.setEnabled(false);
+      const checks = invokeMock.mock.calls.filter(([command]) => command === "computer_use_capabilities").length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(invokeMock.mock.calls.filter(([command]) => command === "computer_use_capabilities")).toHaveLength(checks);
+    } finally {
+      channel.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries permission detection after a probe fails without an executor instance", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockRejectedValueOnce(new Error("permission check timed out"))
+      .mockResolvedValue({ gui_available: true, input_available: true, capture_available: true,
+        platform: "macos", displays: [], supported_modes: ["background_app"] });
+    const publish = vi.fn();
+    const channel = new ComputerUseChannel({ authenticate: async () => {}, computerUseWebSocketUrl: () => "ws://localhost/test" } as unknown as GatewayApi,
+      "host", true, publish);
+    try {
+      await channel.connect();
+      FakeWebSocket.instances[0].emit("open");
+      expect(publish.mock.lastCall?.[0]).toMatchObject({ status: "unavailable", error: "permission check timed out" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(publish.mock.lastCall?.[0]).toMatchObject({ status: "ready", error: null });
+    } finally {
+      channel.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a running action busy when background permission checks and acknowledgements arrive", async () => {
+    vi.useFakeTimers();
+    let finishAction!: (result: object) => void;
+    const caps = { gui_available: true, input_available: true, capture_available: true,
+      platform: "macos", displays: [], supported_modes: ["background_app"] };
+    invokeMock.mockImplementation((command: string) => command === "computer_use_execute"
+      ? new Promise(resolve => { finishAction = resolve; }) : Promise.resolve({ ...caps }));
+    const publish = vi.fn();
+    const channel = new ComputerUseChannel({ authenticate: async () => {}, computerUseWebSocketUrl: () => "ws://localhost/test" } as unknown as GatewayApi,
+      "host", true, publish);
+    try {
+      await channel.connect();
+      const socket = FakeWebSocket.instances[0]; socket.emit("open");
+      socket.emit("message", { data: JSON.stringify({ type: "computer_use_request", request_id: "pending",
+        session_id: "session", action: { action: "observe" } }) });
+      await vi.advanceTimersByTimeAsync(0);
+      caps.capture_available = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      socket.emit("message", { data: JSON.stringify({ type: "computer_use_host_state_ack", available: true }) });
+      expect(publish.mock.lastCall?.[0]).toMatchObject({ status: "busy", capabilities: { capture_available: false } });
+      finishAction({ ok: true, action: "observe" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(publish.mock.lastCall?.[0].status).toBe("ready");
+    } finally {
+      channel.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("rotates AX ownership and clears previews when the shared executor restarts", async () => {
     let instance = "before";
     invokeMock.mockImplementation(async (command: string) => command === "computer_use_capabilities"
@@ -402,6 +494,8 @@ describe("ComputerUseChannel", () => {
     vi.useFakeTimers();
     try {
       invokeMock
+        .mockResolvedValue({ gui_available: true, input_available: true, platform: "macos", displays: [],
+          supported_modes: ["background_app", "foreground_desktop"], delivery_policy_version: 1 })
         .mockResolvedValueOnce({
           gui_available: true,
           input_available: true,
@@ -468,6 +562,8 @@ describe("ComputerUseChannel", () => {
     vi.useFakeTimers();
     try {
       invokeMock
+        .mockResolvedValue({ gui_available: true, input_available: true, platform: "macos", displays: [],
+          supported_modes: ["background_app", "foreground_desktop"], delivery_policy_version: 1 })
         .mockResolvedValueOnce({
           gui_available: true,
           input_available: true,

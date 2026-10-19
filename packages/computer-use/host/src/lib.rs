@@ -58,6 +58,61 @@ const REQUEST_LIMIT: u64 = 1024 * 1024;
 const RESPONSE_LIMIT: u64 = 64 * 1024 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(95);
 
+#[cfg(target_os = "macos")]
+fn fresh_capabilities(executable: &Path, timeout: Duration) -> Result<Value, String> {
+    // CGPreflightScreenCaptureAccess/AXIsProcessTrusted in a long-running
+    // executor can retain a grant removed in System Settings. Probe the same
+    // signed app in a fresh process without replacing the shared executor or
+    // invalidating its leases and AX references.
+    let mut child = Command::new(executable)
+        .arg("--probe-capabilities")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Unable to recheck Computer Use permissions: {error}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match result {
+                    Err(error) => format!("Unable to recheck Computer Use permissions: {error}"),
+                    _ => "Computer Use permission check timed out; refresh to try again".into(),
+                });
+            }
+        }
+    }
+    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err("Computer Use permission check failed; refresh to try again".into());
+    }
+    let caps: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Invalid Computer Use permission check result: {error}"))?;
+    if !["gui_available", "input_available", "capture_available", "ax_available"]
+        .iter().all(|key| caps[key].is_boolean())
+    {
+        return Err("Incomplete Computer Use permission check result".into());
+    }
+    Ok(caps)
+}
+
+fn detect_capabilities() -> Result<Value, String> {
+    #[cfg(target_os = "macos")]
+    return fresh_capabilities(
+        &std::env::current_exe().map_err(|error| error.to_string())?,
+        Duration::from_secs(10),
+    );
+    #[cfg(not(target_os = "macos"))]
+    serde_json::to_value(crabcode_computer_use_core::detect_capabilities())
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Endpoint {
     pub protocol_version: u32,
@@ -388,8 +443,7 @@ fn dispatch(
     let text = |key: &str| params[key].as_str().unwrap_or("");
     match method {
         "capabilities" => {
-            let mut caps = serde_json::to_value(crabcode_computer_use_core::detect_capabilities())
-                .map_err(|e| e.to_string())?;
+            let mut caps = detect_capabilities()?;
             #[cfg(target_os = "macos")]
             permission_guide::hide_if_granted(caps["capture_available"] == true, caps["ax_available"] == true);
             caps["instance_id"] = json!(instance);
@@ -606,6 +660,42 @@ pub fn serve(dir: PathBuf) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    fn probe_script(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, format!("#!/bin/sh\n[ \"$1\" = --probe-capabilities ] || exit 3\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fresh_permission_probe_does_not_reuse_previous_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("probe");
+        for granted in [true, false, true] {
+            let caps = json!({"gui_available": granted, "input_available": granted,
+                "capture_available": granted, "ax_available": granted});
+            probe_script(&executable, &format!("printf '%s\\n' '{caps}'"));
+            assert_eq!(fresh_capabilities(&executable, Duration::from_secs(2)).unwrap(), caps);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn failed_or_incomplete_probes_cannot_report_cached_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("probe");
+        for body in ["exit 1", "echo invalid-json", "echo '{}'", "echo '{\"gui_available\":true}'"] {
+            probe_script(&executable, body);
+            assert!(fresh_capabilities(&executable, Duration::from_secs(2)).is_err());
+        }
+        probe_script(&executable, "exec /bin/sleep 30");
+        let started = Instant::now();
+        assert!(fresh_capabilities(&executable, Duration::from_millis(40))
+            .unwrap_err().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

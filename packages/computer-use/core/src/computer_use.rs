@@ -277,7 +277,12 @@ pub fn detect_capabilities() -> ComputerUseCapabilities {
         Err(reason) => Err(reason.clone()),
     })
     .err();
-    let input_error = Enigo::new(&Settings::default())
+    // Capability checks must remain read-only, including checks from a fresh
+    // short-lived process after permissions have been revoked.
+    let input_error = Enigo::new(&Settings {
+        open_prompt_to_get_permissions: false,
+        ..Settings::default()
+    })
         .err()
         .map(|error| format!("Desktop input permission is unavailable: {error}"));
     let (capture_available, input_available, reason) =

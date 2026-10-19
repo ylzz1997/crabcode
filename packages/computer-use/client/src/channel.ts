@@ -197,7 +197,7 @@ export class ComputerUseChannel {
     }
   }
 
-  private async refreshCapabilities(): Promise<boolean> {
+  private async refreshCapabilities(background = false): Promise<boolean> {
     const generation = ++this.capabilityGeneration;
     let capabilities: ComputerUseCapabilities;
     if (!this.platform.isNative()) {
@@ -226,6 +226,7 @@ export class ComputerUseChannel {
       }
     }
     if (this.disposed || !this.enabled || generation !== this.capabilityGeneration) return false;
+    if (background && JSON.stringify(capabilities) === JSON.stringify(this.capabilities)) return false;
     if (!this.vm && capabilities.instance_id && this.capabilities?.instance_id && capabilities.instance_id !== this.capabilities.instance_id) {
       this.axConnectionId = this.platform.randomUuid();
       this.cancelAllReleases();
@@ -244,7 +245,8 @@ export class ComputerUseChannel {
     this.scheduleHeartbeat();
     this.publish({
       capabilities,
-      status: capabilities.gui_available ? (this.socket?.readyState === 1 ? "ready" : "connecting") : "unavailable",
+      status: background && this.state.previews.some(preview => preview.status === "busy") ? "busy"
+        : capabilities.gui_available ? (this.socket?.readyState === 1 ? "ready" : "connecting") : "unavailable",
       error: capabilities.reason ?? null,
     });
     return true;
@@ -275,7 +277,11 @@ export class ComputerUseChannel {
       ...(!enabled ? { active: false, previews: [] } : {}),
       error: enabled ? this.capabilities?.reason ?? null : null,
     });
-    if (!enabled) this.cancelAllReleases();
+    if (!enabled) {
+      this.cancelAllReleases();
+      if (this.heartbeatTimer !== null) this.platform.clearTimeout(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     this.send({
       type: "computer_use_host_state",
       enabled,
@@ -315,12 +321,22 @@ export class ComputerUseChannel {
   }
 
   private scheduleHeartbeat(): void {
-    if (this.disposed || this.vm || !this.capabilities?.instance_id || this.heartbeatTimer !== null) return;
+    if (this.disposed || !this.enabled || this.vm || !this.platform.isNative() || this.heartbeatTimer !== null) return;
     this.heartbeatTimer = this.platform.setTimeout(() => {
       this.heartbeatTimer = null;
       if (this.disposed || !this.enabled) return;
-      void this.platform.invoke("computer_use_heartbeat", { hostId: this.hostId, connectionId: this.axConnectionId,
-        instanceId: this.capabilities?.instance_id }).catch(() => this.refresh()).finally(() => this.scheduleHeartbeat());
+      void (async () => {
+        if (this.capabilities?.instance_id) {
+          await this.platform.invoke("computer_use_heartbeat", { hostId: this.hostId, connectionId: this.axConnectionId,
+            instanceId: this.capabilities.instance_id }).catch(() => {});
+        }
+        if (this.disposed || !this.enabled) return;
+        const applied = await this.refreshCapabilities(true);
+        if (applied && this.enabled && !this.disposed) {
+          this.send({ type: "computer_use_host_state", enabled: true,
+            gui_available: this.capabilities?.gui_available === true, capabilities: this.capabilities });
+        }
+      })().finally(() => this.scheduleHeartbeat());
     }, 30_000);
   }
 
@@ -471,7 +487,8 @@ export class ComputerUseChannel {
     if (message.type === "computer_use_host_registered" || message.type === "computer_use_host_state_ack") {
       const available = message.available === true;
       this.publish({
-        status: !this.enabled ? "disabled" : available ? "ready" : "unavailable",
+        status: !this.enabled ? "disabled" : this.state.previews.some(preview => preview.status === "busy") ? "busy"
+          : available ? "ready" : "unavailable",
         error: this.capabilities?.reason ?? null,
       });
       if (message.type === "computer_use_host_registered") this.restorePreviews(message.previews);
