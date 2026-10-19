@@ -1093,6 +1093,7 @@ fn run_streaming_command(
     })
 }
 
+#[cfg(any(not(debug_assertions), test))]
 fn default_gateway_package() -> Result<String, String> {
     gateway_features_package(&["browser".to_string()])
 }
@@ -1113,6 +1114,7 @@ fn playwright_browsers_ready(python: &str) -> bool {
     run_probe_command(&mut command, Duration::from_secs(20)).is_ok()
 }
 
+#[cfg(any(not(debug_assertions), test))]
 fn install_gateway(python: &str, on_output: &(impl Fn(&str) + Sync)) -> Result<(), String> {
     let package = default_gateway_package()?;
     install_gateway_package(python, &package, on_output)?;
@@ -1167,6 +1169,7 @@ fn ensure_development_gateway(
     Ok(())
 }
 
+#[cfg(any(not(debug_assertions), test))]
 fn ensure_default_browser(
     python: &str,
     progress: &(impl Fn(&str, &str) + Sync),
