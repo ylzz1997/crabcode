@@ -28,6 +28,7 @@ export interface ComputerUsePlatform {
 }
 export type ComputerUseStatus = "disabled" | "unavailable" | "connecting" | "ready" | "busy" | "error";
 export declare const COMPUTER_USE_RELEASE_RETENTION_MS = 15000;
+export type ComputerUsePermissionKind = "screen_recording" | "accessibility";
 export interface ComputerUseCapabilities {
     environment?: "host" | "local_vm";
     environment_id?: string;
@@ -38,6 +39,7 @@ export interface ComputerUseCapabilities {
     input_available: boolean;
     capture_available?: boolean;
     ax_available?: boolean;
+    reauthorization_required?: ComputerUsePermissionKind[];
     ax_protocol_version?: number | null;
     window_observation_version?: number | null;
     platform: string;
@@ -56,6 +58,7 @@ export interface ComputerUseCapabilities {
     strict_background_reason?: string;
     reason?: string | null;
 }
+export declare function computerUseReauthorizationHint(capabilities: ComputerUseCapabilities | null | undefined, kind: ComputerUsePermissionKind): string;
 export interface ComputerUseFrame {
     data: string;
     media_type: string;

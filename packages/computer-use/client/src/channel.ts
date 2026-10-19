@@ -20,6 +20,7 @@ function vmEnvironmentId(vm: ComputerUseVmConfig): string { return `lume:${vm.st
 
 export type ComputerUseStatus = "disabled" | "unavailable" | "connecting" | "ready" | "busy" | "error";
 export const COMPUTER_USE_RELEASE_RETENTION_MS = 15_000;
+export type ComputerUsePermissionKind = "screen_recording" | "accessibility";
 
 export interface ComputerUseCapabilities {
   environment?: "host" | "local_vm";
@@ -31,6 +32,7 @@ export interface ComputerUseCapabilities {
   input_available: boolean;
   capture_available?: boolean;
   ax_available?: boolean;
+  reauthorization_required?: ComputerUsePermissionKind[];
   ax_protocol_version?: number | null;
   window_observation_version?: number | null;
   platform: string;
@@ -40,6 +42,13 @@ export interface ComputerUseCapabilities {
   strict_background_input_available?: boolean;
   strict_background_reason?: string;
   reason?: string | null;
+}
+
+export function computerUseReauthorizationHint(capabilities: ComputerUseCapabilities | null | undefined, kind: ComputerUsePermissionKind): string {
+  if (capabilities?.platform !== "macos" || capabilities.environment === "local_vm"
+    || !capabilities.reauthorization_required?.includes(kind)
+    || (kind === "screen_recording" ? capabilities.capture_available : capabilities.ax_available) !== false) return "";
+  return "检测到旧版 Crab Computer Use 已被替换。若权限列表中已有同名条目，请先移除旧条目，再将当前应用卡片拖入列表并开启开关，完成后重新检测。";
 }
 
 export interface ComputerUseFrame {

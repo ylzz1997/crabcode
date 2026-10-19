@@ -1,5 +1,5 @@
 import { nodeComputerUseChannel } from './nodeChannel.js';
-import { initialComputerUseState } from './channel.js';
+import { computerUseReauthorizationHint, initialComputerUseState } from './channel.js';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const labels = { disabled: '已关闭', connecting: '正在连接', unavailable: '不可用', ready: '可用', busy: '正在操作', error: '错误' };
@@ -35,13 +35,13 @@ export class VSCodeComputerUseHost {
 
   get capturePermissionHint() {
     return this.state.capabilities?.platform === 'macos' && this.state.capabilities.capture_available === false
-      ? '窗口列表和截图需要录屏权限。选择「打开录屏权限设置」后，将弹出的 Crab Computer Use.app 卡片拖到录屏列表并打开开关；也可点＋，按 ⌘⇧G 输入 ~/Library/Application Support/CrabCode/ComputerUse/Crab Computer Use.app 后添加。Crab Desktop 或 VS Code 的授权不能代替此组件的授权。完成后选择「重新检测组件与权限」。'
+      ? computerUseReauthorizationHint(this.state.capabilities, 'screen_recording') + '窗口列表和截图需要录屏权限。选择「打开录屏权限设置」后，将弹出的 Crab Computer Use.app 卡片拖到录屏列表并打开开关；也可点＋，按 ⌘⇧G 输入 ~/Library/Application Support/CrabCode/ComputerUse/Crab Computer Use.app 后添加。Crab Desktop 或 VS Code 的授权不能代替此组件的授权。完成后选择「重新检测组件与权限」。'
       : '';
   }
 
   get accessibilityPermissionHint() {
     return this.state.capabilities?.platform === 'macos' && this.state.capabilities.input_available === false
-      ? '点击、输入和滚动需要辅助功能权限。选择「打开辅助功能权限设置」后，将弹出的 Crab Computer Use.app 卡片拖到辅助功能列表并打开开关；完成后选择「重新检测组件与权限」。'
+      ? computerUseReauthorizationHint(this.state.capabilities, 'accessibility') + '点击、输入和滚动需要辅助功能权限。选择「打开辅助功能权限设置」后，将弹出的 Crab Computer Use.app 卡片拖到辅助功能列表并打开开关；完成后选择「重新检测组件与权限」。'
       : '';
   }
 

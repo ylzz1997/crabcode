@@ -21,6 +21,7 @@ mod permission_guide {
         fn crab_show_permission_drag_guide(
             application_path: *const std::ffi::c_char,
             screen_recording: bool,
+            reauthorization: bool,
         ) -> bool;
         fn crab_hide_permission_drag_guide_if_granted(
             capture_granted: bool,
@@ -37,11 +38,11 @@ mod permission_guide {
             .ok_or_else(|| "Computer Use is not running from its installed macOS app bundle".into())
     }
 
-    pub fn show(screen_recording: bool) -> Result<(), String> {
+    pub fn show(screen_recording: bool, reauthorization: bool) -> Result<(), String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let bundle = installed_bundle(&executable)?;
         let path = CString::new(bundle.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
-        if unsafe { crab_show_permission_drag_guide(path.as_ptr(), screen_recording) } {
+        if unsafe { crab_show_permission_drag_guide(path.as_ptr(), screen_recording, reauthorization) } {
             Ok(())
         } else {
             Err("Unable to show the Computer Use drag-to-authorize guide".into())
@@ -138,6 +139,58 @@ pub fn installed_executable(dir: &Path) -> PathBuf {
 }
 
 #[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
+struct PermissionRecovery {
+    screen_recording: bool,
+    accessibility: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl PermissionRecovery {
+    fn load(dir: &Path) -> Self {
+        std::fs::read(dir.join("permission-recovery.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, dir: &Path) -> Result<(), String> {
+        let path = dir.join("permission-recovery.json");
+        if !self.screen_recording && !self.accessibility {
+            if path.exists() {
+                std::fs::remove_file(path).map_err(|error| error.to_string())?;
+            }
+            return Ok(());
+        }
+        let mut file = private_file(&path)?;
+        file.set_len(0).map_err(|error| error.to_string())?;
+        serde_json::to_writer(&mut file, self).map_err(|error| error.to_string())
+    }
+
+    fn apply(dir: &Path, caps: &mut Value) {
+        let mut recovery = Self::load(dir);
+        let previous = recovery;
+        // Clear each hint as soon as that permission is verified. A later
+        // revocation must not be described as an old installation's grant.
+        recovery.screen_recording &= caps["capture_available"] != true;
+        recovery.accessibility &= caps["ax_available"] != true;
+        let mut required = Vec::new();
+        if recovery.screen_recording && caps["capture_available"] == false {
+            required.push("screen_recording");
+        }
+        if recovery.accessibility && caps["ax_available"] == false {
+            required.push("accessibility");
+        }
+        caps["reauthorization_required"] = json!(required);
+        if recovery != previous {
+            // Recovery guidance must not make otherwise usable capabilities
+            // fail when its advisory state cannot be saved.
+            let _ = recovery.save(dir);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
     for item in std::fs::read_dir(source).map_err(|e| e.to_string())? {
@@ -204,6 +257,7 @@ pub fn install(source: &Path, dir: &Path) -> Result<PathBuf, String> {
     }
     #[cfg(target_os = "macos")]
     {
+        let replaces_previous = target.is_file();
         let bundle = source
             .parent()
             .and_then(Path::parent)
@@ -228,6 +282,14 @@ pub fn install(source: &Path, dir: &Path) -> Result<PathBuf, String> {
         }
         if backup.exists() {
             let _ = std::fs::remove_dir_all(backup);
+        }
+        if replaces_previous {
+            // Do not infer grants from a matching display name or read TCC's
+            // database. Remember the actual upgrade, then probe each grant.
+            let _ = PermissionRecovery {
+                screen_recording: true,
+                accessibility: true,
+            }.save(dir);
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -404,6 +466,8 @@ fn now_ms() -> u64 {
 
 #[derive(Default)]
 struct NativeState {
+    #[cfg(target_os = "macos")]
+    state_dir: Option<PathBuf>,
     // Heartbeats keep AX owners alive while the model is thinking. A crashed
     // frontend loses its references, but never causes an input action to replay.
     owners: std::collections::HashMap<(String, String), Instant>,
@@ -445,7 +509,12 @@ fn dispatch(
         "capabilities" => {
             let mut caps = detect_capabilities()?;
             #[cfg(target_os = "macos")]
-            permission_guide::hide_if_granted(caps["capture_available"] == true, caps["ax_available"] == true);
+            {
+                if let Some(dir) = &state.state_dir {
+                    PermissionRecovery::apply(dir, &mut caps);
+                }
+                permission_guide::hide_if_granted(caps["capture_available"] == true, caps["ax_available"] == true);
+            }
             caps["instance_id"] = json!(instance);
             caps["environment"] = json!("host");
             caps["host_protocol_version"] = json!(PROTOCOL_VERSION);
@@ -506,7 +575,19 @@ fn dispatch(
             let screen_recording_pane =
                 crabcode_computer_use_core::open_input_settings(params["kind"].as_str())?;
             #[cfg(target_os = "macos")]
-            permission_guide::show(screen_recording_pane)?;
+            {
+                if let Some(dir) = &state.state_dir {
+                    if let Ok(mut caps) = detect_capabilities() {
+                        PermissionRecovery::apply(dir, &mut caps);
+                    }
+                }
+                let recovery = state.state_dir.as_deref().map(PermissionRecovery::load).unwrap_or_default();
+                permission_guide::show(screen_recording_pane, if screen_recording_pane {
+                    recovery.screen_recording
+                } else {
+                    recovery.accessibility
+                })?;
+            }
             Ok(json!({"drag_guide_visible": true, "kind": if screen_recording_pane { "screen_recording" } else { "accessibility" }}))
         }
         _ => Err("Unknown Computer Use executor method".into()),
@@ -611,7 +692,11 @@ pub fn serve(dir: PathBuf) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let _ = std::fs::remove_file(dir.join("endpoint.json"));
     std::fs::rename(temp_path, dir.join("endpoint.json")).map_err(|e| e.to_string())?;
-    let state = Arc::new(Mutex::new(NativeState::default()));
+    let state = Arc::new(Mutex::new(NativeState {
+        #[cfg(target_os = "macos")]
+        state_dir: Some(dir.clone()),
+        ..NativeState::default()
+    }));
     let stopping = Arc::new(AtomicBool::new(false));
     let connections = Arc::new(AtomicUsize::new(0));
     let cleanup = state.clone();
@@ -737,12 +822,54 @@ mod tests {
         let state = temp.path().join("state");
         let installed = install(&older, &state).unwrap();
         assert_eq!(std::fs::read(&installed).unwrap(), b"older");
+        assert!(!state.join("permission-recovery.json").exists());
+        let mut caps = json!({"capture_available": false, "ax_available": false});
+        PermissionRecovery::apply(&state, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!([]));
         install(&newer, &state).unwrap();
         assert_eq!(std::fs::read(&installed).unwrap(), b"newer");
+        PermissionRecovery::apply(&state, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!(["screen_recording", "accessibility"]));
+        install(&newer, &state).unwrap();
+        assert!(PermissionRecovery::load(&state).screen_recording);
+        caps["capture_available"] = json!(true);
+        caps["ax_available"] = json!(true);
+        PermissionRecovery::apply(&state, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!([]));
+        assert!(!state.join("permission-recovery.json").exists());
         install(&older, &state).unwrap();
         assert_eq!(std::fs::read(&installed).unwrap(), b"newer");
+        assert!(!state.join("permission-recovery.json").exists());
         install(&newest, &state).unwrap();
         assert_eq!(std::fs::read(&installed).unwrap(), b"newest");
+        assert!(PermissionRecovery::load(&state).screen_recording);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn upgrade_recovery_survives_restarts_and_clears_each_verified_permission() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        PermissionRecovery { screen_recording: true, accessibility: true }.save(dir).unwrap();
+        let mut caps = json!({"capture_available": false, "ax_available": false});
+        PermissionRecovery::apply(dir, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!(["screen_recording", "accessibility"]));
+        caps["capture_available"] = json!(true);
+        PermissionRecovery::apply(dir, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!(["accessibility"]));
+        assert!(!PermissionRecovery::load(dir).screen_recording);
+        // Reloading the recovery file cannot resurrect a cleared grant hint,
+        // even if that permission is revoked while the other one is pending.
+        caps["capture_available"] = json!(false);
+        PermissionRecovery::apply(dir, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!(["accessibility"]));
+        caps["ax_available"] = json!(true);
+        PermissionRecovery::apply(dir, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!([]));
+        assert!(!dir.join("permission-recovery.json").exists());
+        caps["ax_available"] = json!(false);
+        PermissionRecovery::apply(dir, &mut caps);
+        assert_eq!(caps["reauthorization_required"], json!([]));
     }
 
     #[cfg(target_os = "macos")]

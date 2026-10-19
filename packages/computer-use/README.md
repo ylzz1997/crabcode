@@ -51,6 +51,11 @@ VS Code or `crabcode computer-use permissions`; CLI can select either pane
 directly with `--screen-recording` or `--accessibility`. Existing Desktop
 permissions do not transfer to the new app.
 Local ad-hoc builds can require renewed authorization after recompilation.
+When the shared installer replaces an existing macOS component and a fresh
+probe finds missing permissions, Desktop, VS Code, and the native drag card
+explain how to remove an old same-name entry and authorize the current app.
+The hint clears separately for each verified grant; first installs and upgrades
+with valid grants do not show it. No system permission entries are read or reset.
 For a persistent local development signature, create
 `.crabcode/computer-use-signing.json` at the repository root (already gitignored)
 with `{"identity":"<certificate SHA-1 from security find-identity -v -p codesigning>"}`.

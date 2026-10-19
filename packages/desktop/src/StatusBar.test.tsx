@@ -200,6 +200,43 @@ describe("desktop status bar", () => {
     expect(container.querySelector(".computer-use-frame img")?.getAttribute("alt")).toContain("最近一次");
   });
 
+  it("guides old-component reauthorization only for missing local permissions", () => {
+    const onOpenInputSettings = vi.fn();
+    const computerUse: ComputerUseState = {
+      ...initialComputerUseState("desktop-test", true), status: "unavailable",
+      capabilities: { gui_available: false, input_available: false, capture_available: false,
+        ax_available: false, platform: "macos", displays: [], supported_modes: [],
+        reauthorization_required: ["screen_recording", "accessibility"] },
+    };
+    const render = () => act(() => root.render(<StatusBar computerUse={computerUse} onComputerUseOpenInputSettings={onOpenInputSettings} />));
+    render();
+    act(() => container.querySelector<HTMLButtonElement>(".status-computer-use")!.click());
+    expect(container.textContent).toContain("需要重新授权录屏");
+    expect(container.textContent).toContain("需要重新授权辅助功能");
+    expect(container.querySelectorAll(".computer-use-permission")).toHaveLength(2);
+    for (const card of container.querySelectorAll(".computer-use-permission")) {
+      expect(card.textContent).toContain("请先移除旧条目");
+      act(() => card.querySelector<HTMLButtonElement>("button")!.click());
+    }
+    expect(onOpenInputSettings.mock.calls).toEqual([["accessibility"], ["screen_recording"]]);
+    computerUse.capabilities!.capture_available = true;
+    render();
+    expect(container.textContent).not.toContain("需要重新授权录屏");
+    expect(container.textContent).toContain("需要重新授权辅助功能");
+    computerUse.capabilities!.input_available = computerUse.capabilities!.ax_available = true;
+    render();
+    expect(container.textContent).not.toContain("旧版 Crab Computer Use");
+    computerUse.capabilities!.capture_available = false;
+    computerUse.capabilities!.reauthorization_required = [];
+    render();
+    expect(container.textContent).toContain("录屏不可用");
+    expect(container.textContent).not.toContain("请先移除旧条目");
+    computerUse.capabilities!.reauthorization_required = ["screen_recording"];
+    computerUse.capabilities!.environment = "local_vm";
+    render();
+    expect(container.textContent).not.toContain("请先移除旧条目");
+  });
+
   it("shows the current configured policy while keeping preview policy as action history", () => {
     const computerUse: ComputerUseState = {
       ...initialComputerUseState("desktop-test", true),

@@ -2,6 +2,7 @@ import { AlertTriangle, Check, ChevronUp, Clock, Folder, LoaderCircle, Maximize2
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ComputerUsePreview, ComputerUseState } from "./computerUse";
+import { computerUseReauthorizationHint } from "./computerUse";
 import type { GatewayStartupState } from "./gatewayStartup";
 import type { ConnectionPreset, GatewayViewState, ProjectPreset, RuntimeSettingsResponse } from "./types";
 
@@ -116,6 +117,8 @@ export function StatusBar({ connection, gateway, startup, project, loading, erro
   const needsMacInputPermission = computerUse?.enabled
     && computerUse.capabilities?.platform === "macos"
     && computerUse.capabilities.input_available === false;
+  const inputReauthorizationHint = computerUseReauthorizationHint(computerUse?.capabilities, "accessibility");
+  const captureReauthorizationHint = computerUseReauthorizationHint(computerUse?.capabilities, "screen_recording");
   const detailLogs = computerDetail ? (computerUse?.logs ?? []).filter(
     (entry) => entry.sessionId === computerDetail.sessionId && entry.agentId === computerDetail.agentId,
   ) : [];
@@ -230,7 +233,8 @@ export function StatusBar({ connection, gateway, startup, project, loading, erro
             <section className="computer-use-permission" aria-label="需要辅助功能权限">
               <AlertTriangle />
               <div>
-                <strong>需要开启辅助功能权限</strong>
+                <strong>{inputReauthorizationHint ? "需要重新授权辅助功能" : "需要开启辅助功能权限"}</strong>
+                {inputReauthorizationHint && <span>{inputReauthorizationHint}</span>}
                 <span>{computerUse.capabilities?.environment === "local_vm" ? "请在虚拟机内为 Crab Computer Use 授予辅助功能和录屏权限。宿主机权限不影响虚拟机输入。" : "点击、输入和滚动需要在 macOS“系统设置 → 隐私与安全性 → 辅助功能”中允许 Crab Computer Use。点击“打开系统设置”后，可将弹出的应用卡片拖入辅助功能列表。当前仍可查看屏幕。"}</span>
               </div>
               <div className="computer-use-permission-actions">
@@ -249,7 +253,8 @@ export function StatusBar({ connection, gateway, startup, project, loading, erro
             <section className="computer-use-permission" aria-label="录屏不可用">
               <AlertTriangle />
               <div>
-                <strong>录屏不可用</strong>
+                <strong>{captureReauthorizationHint ? "需要重新授权录屏" : "录屏不可用"}</strong>
+                {captureReauthorizationHint && <span>{captureReauthorizationHint}</span>}
                 <span>{computerUse.capabilities.environment === "local_vm"
                   ? "请在虚拟机内为 Crab Computer Use 授予录屏权限，再重新检测。宿主机授权不能代替虚拟机内的授权。"
                   : computerUse.capabilities.platform === "macos"

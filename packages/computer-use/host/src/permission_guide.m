@@ -78,7 +78,7 @@ static CrabPermissionDragView *dragView;
 static NSTextField *instructionLabel;
 static BOOL guideScreenRecording;
 
-static BOOL showGuide(NSString *applicationPath, BOOL screenRecording) {
+static BOOL showGuide(NSString *applicationPath, BOOL screenRecording, BOOL reauthorization) {
     @autoreleasepool {
         BOOL isDirectory = NO;
         if (![[NSFileManager defaultManager] fileExistsAtPath:applicationPath
@@ -86,7 +86,7 @@ static BOOL showGuide(NSString *applicationPath, BOOL screenRecording) {
             ![[applicationPath pathExtension] isEqualToString:@"app"]) return NO;
 
         if (!guidePanel) {
-            NSRect frame = NSMakeRect(0, 0, 460, 154);
+            NSRect frame = NSMakeRect(0, 0, 460, 184);
             guidePanel = [[NSPanel alloc] initWithContentRect:frame
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                       backing:NSBackingStoreBuffered defer:NO];
@@ -98,7 +98,9 @@ static BOOL showGuide(NSString *applicationPath, BOOL screenRecording) {
             NSView *content = guidePanel.contentView;
             instructionLabel = [NSTextField labelWithString:@""];
             instructionLabel.font = [NSFont systemFontOfSize:13];
-            instructionLabel.frame = NSMakeRect(18, 103, 424, 27);
+            instructionLabel.frame = NSMakeRect(18, 103, 424, 63);
+            instructionLabel.maximumNumberOfLines = 3;
+            instructionLabel.lineBreakMode = NSLineBreakByWordWrapping;
             [content addSubview:instructionLabel];
 
             dragView = [[CrabPermissionDragView alloc] initWithFrame:NSMakeRect(18, 17, 424, 76)];
@@ -107,7 +109,8 @@ static BOOL showGuide(NSString *applicationPath, BOOL screenRecording) {
         guideScreenRecording = screenRecording;
         guidePanel.title = screenRecording ? @"Crab Computer Use · 录屏授权" :
                                              @"Crab Computer Use · 辅助功能授权";
-        instructionLabel.stringValue = screenRecording ?
+        instructionLabel.stringValue = reauthorization ?
+            @"检测到旧版应用已被替换。如列表中已有同名条目，请先选中并点 − 移除，再拖入下方当前应用并打开开关。" : screenRecording ?
             @"将下方应用拖到“录屏与系统录音”的上方列表，然后打开开关" :
             @"将下方应用拖到“辅助功能”列表，然后打开开关";
         dragView.applicationPath = applicationPath;
@@ -123,14 +126,15 @@ static BOOL showGuide(NSString *applicationPath, BOOL screenRecording) {
     }
 }
 
-bool crab_show_permission_drag_guide(const char *application_path, bool screen_recording) {
+bool crab_show_permission_drag_guide(const char *application_path, bool screen_recording,
+                                    bool reauthorization) {
     @autoreleasepool {
         if (!application_path) return false;
         NSString *path = [NSString stringWithUTF8String:application_path];
         if (!path) return false;
-        if (pthread_main_np()) return showGuide(path, screen_recording);
+        if (pthread_main_np()) return showGuide(path, screen_recording, reauthorization);
         __block BOOL visible = NO;
-        dispatch_sync(dispatch_get_main_queue(), ^{ visible = showGuide(path, screen_recording); });
+        dispatch_sync(dispatch_get_main_queue(), ^{ visible = showGuide(path, screen_recording, reauthorization); });
         return visible;
     }
 }
