@@ -29,15 +29,27 @@ function harness(remote = false) {
   return { create, values, bindings, commands, local, env, vscode, errors };
 }
 
-test('local windows have distinct host identities and need no companion', async () => {
+test('local windows have distinct host identities and delegate to the UI companion', async () => {
   const h = harness();
   const a = h.create(), b = h.create();
   await a.configure(); await b.configure();
-  assert.equal(h.commands.length, 0);
-  assert.notEqual(h.local[0].options.hostId, h.local[1].options.hostId);
-  assert.equal(h.local[0].options.enabled, true);
+  assert.equal(h.local.length, 0);
+  assert.equal(h.commands.length, 2);
+  assert.ok(h.commands.every(call => call.command === 'crabcode.computerUse.configureLocal'));
+  assert.notEqual(h.commands[0].options.hostId, h.commands[1].options.hostId);
+  assert.equal(h.commands[0].options.enabled, true);
+  assert.equal(h.commands[0].options.gatewayUrl, h.values.serverUrl);
   a.dispose(); b.dispose();
-  assert.ok(h.local.every(host => host.disposed));
+  assert.ok(h.commands.slice(2).every(call => call.command === 'crabcode.computerUse.disposeLocal'));
+});
+
+test('a disabled local window does not start its companion', async () => {
+  const h = harness(), controller = h.create();
+  h.values.computerUseEnabled = false;
+  await controller.configure();
+  assert.equal(h.bindings.at(-1).enabled, false);
+  assert.ok(h.commands.every(call => call.command === 'crabcode.computerUse.disposeLocal'));
+  controller.dispose();
 });
 
 test('remote workspace forwards Gateway credentials and delegates only to the local UI companion', async () => {
@@ -72,8 +84,8 @@ test('an obsolete forwarding result cannot re-enable a disabled remote host', as
   controller.dispose();
 });
 
-test('missing local companion leaves the remote session explicitly disabled', async () => {
-  const h = harness(true), controller = h.create();
+for (const remote of [false, true]) test(`missing companion disables Computer Use in a ${remote ? 'remote' : 'local'} window`, async () => {
+  const h = harness(remote), controller = h.create();
   h.vscode.commands.executeCommand = async () => { throw new Error('command not found'); };
   await controller.configure();
   assert.equal(h.bindings.at(-1).enabled, false);

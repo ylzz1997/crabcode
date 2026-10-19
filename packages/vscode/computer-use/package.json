@@ -1,7 +1,7 @@
 {
   "name": "crabcode-computer-use",
   "displayName": "CrabCode Computer Use",
-  "description": "Local Computer Use companion for CrabCode Remote SSH and container workspaces",
+  "description": "Local Computer Use companion for CrabCode in local and remote workspaces",
   "publisher": "crabcode",
   "version": "0.1.6",
   "license": "MIT",
@@ -13,7 +13,7 @@
   "scripts": {
     "build": "node esbuild.cjs",
     "computer-use:build": "node ../../computer-use/scripts/build.mjs --out resources/computer-use --sync-local-clients",
-    "vscode:prepublish": "npm run computer-use:build && npm run build"
+    "vscode:prepublish": "npm run build"
   },
   "dependencies": { "ws": "^8.18.0" },
   "devDependencies": { "esbuild": "^0.25.0" }

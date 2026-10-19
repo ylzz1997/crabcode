@@ -1,0 +1,51 @@
+name: Client Apple signing
+description: Import the optional shared Computer Use and Desktop signing identity
+inputs:
+  certificate:
+    description: Base64 encoded signing certificate in PKCS12 format
+    required: false
+  password:
+    description: PKCS12 password
+    required: false
+  identity:
+    description: Developer ID signing identity
+    required: false
+outputs:
+  identity:
+    description: Imported identity, or ad-hoc signing when no credentials are configured
+    value: ${{ steps.import.outputs.identity }}
+runs:
+  using: composite
+  steps:
+    - id: import
+      shell: bash
+      env:
+        CLIENT_SIGNING_CERTIFICATE: ${{ inputs.certificate }}
+        CLIENT_SIGNING_PASSWORD: ${{ inputs.password }}
+        CLIENT_SIGNING_IDENTITY: ${{ inputs.identity }}
+      run: |
+        if [ -z "$CLIENT_SIGNING_CERTIFICATE" ] && [ -z "$CLIENT_SIGNING_IDENTITY" ]; then
+          echo 'identity=-' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ -z "$CLIENT_SIGNING_CERTIFICATE" ] || [ -z "$CLIENT_SIGNING_IDENTITY" ]; then
+          echo 'Configure both CRABCODE_SIGNING_CERTIFICATE_P12_BASE64 and CRABCODE_SIGNING_IDENTITY.' >&2
+          exit 1
+        fi
+        certificate="$RUNNER_TEMP/client-signing.p12"
+        trap 'rm -f "$certificate"' EXIT
+        python - <<'PY'
+        import base64, os
+        from pathlib import Path
+        (Path(os.environ['RUNNER_TEMP']) / 'client-signing.p12').write_bytes(
+            base64.b64decode(''.join(os.environ['CLIENT_SIGNING_CERTIFICATE'].split()), validate=True))
+        PY
+        keychain="$RUNNER_TEMP/client-signing.keychain-db"
+        keychain_password="$(openssl rand -base64 32)"
+        security create-keychain -p "$keychain_password" "$keychain"
+        security set-keychain-settings -lut 21600 "$keychain"
+        security unlock-keychain -p "$keychain_password" "$keychain"
+        security import "$certificate" -k "$keychain" -P "$CLIENT_SIGNING_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain" >/dev/null
+        security list-keychains -d user -s "$keychain" login.keychain-db
+        printf 'identity=%s\n' "$CLIENT_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"

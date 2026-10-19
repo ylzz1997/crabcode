@@ -100,6 +100,13 @@ local UI side. The main extension forwards the Gateway URL using
 `vscode.env.asExternalUri`; the local companion owns native execution and the
 monitor. A remote machine's desktop is not selected implicitly.
 
+The universal VS Code main extension also delegates to the local companion in
+ordinary local windows. Companion platform VSIXs and the all-platform VSIX store
+native bundles in `resources/computer-use/<platform>-<arch>/`; the Node client
+selects the current platform. Desktop and Python keep the original flat layout.
+The manual **Client Packages** workflow builds all VSIXs and Desktop DMG/MSI
+installers from the same native bundles. See [client packaging](../../CLIENT_PACKAGING.md).
+
 ## CLI
 
 Platform Python wheels for macOS (arm64 / x86_64) and Windows x64 include the
@@ -185,11 +192,13 @@ component already installed by CLI, Desktop or another CrabCode extension.
 The local companion uses the same native build command from its own package
 directory.
 
-Desktop's Tauri build hook and both VS Code extensions' `vscode:prepublish`
-scripts include the native component. Package platform-specific VSIX files;
-build Windows binaries on Windows and macOS binaries on macOS, matching the
-target architecture. `--out` selects a client resource directory. Release
-builds are the default; `--debug` is intended for development only.
+Desktop's ordinary Tauri build hook builds the native component. The manual
+Client Packages workflow builds it separately on each native runner and stages
+the resulting bundles into VSIXs and Desktop installers. VS Code prepublish hooks
+only build JavaScript, so they cannot replace a prebuilt multi-platform payload.
+Build Windows binaries on Windows and macOS binaries on macOS, matching the
+target architecture. `--out` selects a client resource directory. Release builds
+are the default; `--debug` is intended for development only.
 
 The core's ignored macOS tests exercise live input and need an unlocked GUI
 and OS permissions. The opt-in `scripts/live-smoke.py` uses the real Gateway

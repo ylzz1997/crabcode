@@ -100,9 +100,11 @@ You can also configure existing keys in settings JSON:
 }
 ```
 
-`crabcode.computerUseEnabled` defaults to `true`, enabling the bundled standalone
-native component without Crab Desktop. Set it to `false` to disable Computer Use.
-Source extensions without a native bundle can reuse an installed shared component
+`crabcode.computerUseEnabled` defaults to `true`, enabling the standalone native
+component through the **CrabCode Computer Use** companion without Crab Desktop.
+The main extension includes the companion in its extension pack. For offline
+installation, install both VSIXs. Set the setting to `false` to disable Computer Use.
+Source companions without a native bundle can reuse an installed shared component
 from CLI, Desktop or another CrabCode extension.
 The Computer Use status-bar menu provides
 monitoring, permission settings and refresh. On macOS, grant **Crab Computer
@@ -206,17 +208,25 @@ tools (Xcode Command Line Tools on macOS).
 ```bash
 nvm use
 npm ci
+npm ci --prefix computer-use
 npm run lint
 npm test
 npm run package
 ```
 
-The package command builds the extension and creates `crabcode-0.1.6.vsix`.
+The package command builds the universal main extension and creates `crabcode-0.1.6.vsix`.
+It does not embed native components. The companion must also be installed.
 For extension-host development, `npm run watch` (also used by the F5 launch task)
-builds a debug native component before starting the JavaScript watcher.
+builds a debug native component and the companion before starting the JavaScript watcher.
+The F5 launch configuration loads both extensions.
 Install it with **Extensions → … → Install from VSIX…**, or run
 `code --install-extension crabcode-0.1.6.vsix`. Node.js and npm are only required
 for building the extension, not for installing the VSIX in VS Code.
+
+For platform and all-platform VSIXs, run **Actions → Client Packages → Run workflow**
+and download the `vsix-*` artifact. The same manual workflow builds Desktop DMGs
+and MSI. See [client packaging](../../CLIENT_PACKAGING.md) for artifacts, signing
+and offline installation. Python Release publishing is independent.
 
 ## Support and source
 

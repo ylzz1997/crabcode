@@ -322,6 +322,11 @@ plans, diffs, and checkpoint recovery. Tauri additionally provides system
 credential storage and automatic local Gateway startup; browser mode connects
 to an already-running Gateway and retains passwords only for the current tab.
 
+Downloadable Desktop DMG/MSI installers and platform/universal VSIXs are built
+through **Actions → Client Packages → Run workflow**. See
+[manual client packaging](CLIENT_PACKAGING.md) for downloads and signing.
+Python Release publishing remains independent.
+
 In Desktop and the VS Code extension, every completed assistant reply can be
 forked into a new session. The new session opens immediately, preserves the
 conversation up to that reply, and shows its source session/title. Running

@@ -44,7 +44,19 @@ class NativeComputerUse {
   async start() {
     if (this.starting) return this.starting;
     this.starting = (async () => {
-      let executable = bundledExecutable(this.bundleDirectory);
+      // Platform VSIXs and the all-platform VSIX use the same directory layout.
+      // Keep the flat layout for Desktop, Python and existing source builds.
+      const platformBundle = path.join(this.bundleDirectory, `${process.platform}-${process.arch}`);
+      let executable = bundledExecutable(platformBundle);
+      let platformPayload = true;
+      try { await fs.access(executable); }
+      catch { platformPayload = false; executable = bundledExecutable(this.bundleDirectory); }
+      if (platformPayload) {
+        const manifest = JSON.parse(await fs.readFile(path.join(platformBundle, 'runtime.json'), 'utf8'));
+        if (manifest.platform !== process.platform || manifest.arch !== process.arch || manifest.protocol_version !== 1) {
+          throw new Error('Computer Use 原生组件的平台或协议不匹配，请重新安装当前平台的扩展。');
+        }
+      }
       try { await fs.access(executable); }
       catch {
         executable = bundledExecutable(this.stateDir);

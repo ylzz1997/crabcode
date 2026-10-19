@@ -251,7 +251,7 @@
         "crabcode.computerUseEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "默认启用本机 Computer Use 原生组件，无需运行 Crab Desktop；可在状态栏 CrabCode 菜单的 Computer Use 中或设置中关闭。Remote SSH 需在本机安装 CrabCode Computer Use 配套扩展。"
+          "description": "通过本机 CrabCode Computer Use 配套扩展启用原生组件，无需运行 Crab Desktop；可在状态栏 CrabCode 菜单的 Computer Use 中或设置中关闭。本地和 Remote SSH 窗口均需在本机安装配套扩展。"
         },
         "crabcode.computerUseTargetScope": {
           "tags": [
@@ -393,10 +393,10 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run computer-use:build && npm run build",
+    "vscode:prepublish": "npm run build",
     "computer-use:build": "node ../computer-use/scripts/build.mjs --out resources/computer-use --sync-local-clients",
     "build": "node esbuild.js --production",
-    "prewatch": "npm run computer-use:build -- --debug",
+    "prewatch": "npm run computer-use:build -- --debug && npm --prefix computer-use run build",
     "watch": "node esbuild.js",
     "test": "node --test tests/*.test.cjs",
     "lint": "tsc --noEmit && tsc -p tsconfig.webview.json && node ../../scripts/audit_tool_cards.mjs",

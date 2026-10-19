@@ -8,7 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { request, bundledExecutable } = require('../../computer-use/client/nativeClient.cjs');
 
-async function startupHarness(t) {
+async function startupHarness(t, platform = process.platform, arch = process.arch) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'crabcode-native-start-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const bundle = path.join(root, 'bundle'), state = path.join(root, 'state');
@@ -17,7 +17,7 @@ async function startupHarness(t) {
   const module = { exports: {} };
   const source = await fs.readFile(require.resolve('../../computer-use/client/nativeClient.cjs'), 'utf8');
   vm.runInNewContext(source, {
-    module, process,
+    module, process: { ...process, platform, arch },
     require: name => name === 'node:child_process' ? {
       execFile: (executable, args, options, callback) => {
         calls.push({ executable, args, options });
@@ -26,7 +26,7 @@ async function startupHarness(t) {
     } : require(name),
   });
   const payload = async directory => {
-    const executable = bundledExecutable(directory);
+    const executable = module.exports.bundledExecutable(directory);
     await fs.mkdir(path.dirname(executable), { recursive: true });
     await fs.writeFile(executable, 'test payload');
     return executable;
@@ -53,6 +53,31 @@ test('the extension bundle takes precedence over an installed shared component',
   await h.client.start();
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].executable, executable);
+});
+
+for (const platform of ['darwin-arm64', 'darwin-x64', 'win32-x64']) {
+  test(`a universal VSIX selects only its ${platform} payload`, async t => {
+    const [targetOS, arch] = platform.split('-');
+    const h = await startupHarness(t, targetOS, arch);
+    const directory = path.join(h.bundle, platform);
+    const executable = await h.payload(directory);
+    await fs.writeFile(path.join(directory, 'runtime.json'), JSON.stringify({ platform: targetOS, arch, protocol_version: 1 }));
+    await h.payload(h.bundle);
+    await h.payload(h.state);
+    await h.client.start();
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].executable, executable);
+  });
+}
+
+test('a mismatched platform manifest is rejected without launching or falling back', async t => {
+  const h = await startupHarness(t, 'darwin', 'arm64');
+  const directory = path.join(h.bundle, 'darwin-arm64');
+  await h.payload(directory);
+  await fs.writeFile(path.join(directory, 'runtime.json'), JSON.stringify({ platform: 'darwin', arch: 'x64', protocol_version: 1 }));
+  await h.payload(h.state);
+  await assert.rejects(h.client.start(), /平台或协议不匹配/);
+  assert.equal(h.calls.length, 0);
 });
 
 test('missing bundled and shared components report an installation error without launching', async t => {

@@ -145,6 +145,15 @@ npm run tauri build
 
 The Gateway WebSocket protocol remains version 1.
 
+## Downloadable installers
+
+Run **Actions → Client Packages → Run workflow** to build Apple Silicon and Intel
+Mac DMGs plus a Windows x64 MSI. Download the `desktop-*` artifacts from that run.
+The workflow also builds platform and universal VSIXs. It is manual-only and
+does not create or publish a GitHub Release or change Python publishing.
+See [client packaging](../../CLIENT_PACKAGING.md) for outputs, optional signing
+secrets, verification and retention periods.
+
 The opt-in macOS scroll integration test launches two overlapping, isolated
 AppKit windows in one process, checks the intended scroll offset and verifies
 that the other window, frontmost app and real pointer stay unchanged. It requires

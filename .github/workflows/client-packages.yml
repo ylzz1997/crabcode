@@ -1,0 +1,213 @@
+name: Client Packages
+run-name: Client packages · ${{ github.ref_name }} · ${{ github.run_number }}
+
+# Download the packages from this run's Artifacts and upload them manually.
+# Python Release/PyPI publishing is intentionally independent.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Check client versions and tests
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            packages/vscode/package-lock.json
+            packages/vscode/computer-use/package-lock.json
+            packages/desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check version metadata
+        run: |
+          python scripts/sync_version.py --check
+          python scripts/package_clients.py check
+      - run: npm ci
+        working-directory: packages/vscode
+      - run: npm run lint
+        working-directory: packages/vscode
+      - run: npm test
+        working-directory: packages/vscode
+      - run: python -m unittest discover -s tests -p test_client_packaging.py -v
+      - run: npm ci
+        working-directory: packages/desktop
+      - run: npm test
+        working-directory: packages/desktop
+
+  native:
+    name: Computer Use · ${{ matrix.platform }}
+    timeout-minutes: 45
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            os: macos-15
+          - platform: darwin-x64
+            os: macos-15-intel
+          - platform: win32-x64
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/computer-use -> target
+          shared-key: client-native-${{ matrix.platform }}
+      - id: signing
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/client-apple-signing
+        with:
+          certificate: ${{ secrets.CRABCODE_SIGNING_CERTIFICATE_P12_BASE64 }}
+          password: ${{ secrets.CRABCODE_SIGNING_CERTIFICATE_PASSWORD }}
+          identity: ${{ secrets.CRABCODE_SIGNING_IDENTITY }}
+      - run: cargo test --locked --workspace
+        working-directory: packages/computer-use
+      - name: Build native bundle once
+        env:
+          CRABCODE_SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+        run: node packages/computer-use/scripts/build.mjs
+      - name: Verify bundle and target architecture
+        run: python scripts/package_clients.py native --platform ${{ matrix.platform }}
+      - name: Archive bundle with executable permissions and signatures
+        shell: bash
+        run: tar -czf computer-use-${{ matrix.platform }}.tar.gz -C packages/computer-use/dist ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: computer-use-${{ matrix.platform }}
+          path: computer-use-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  vsix:
+    name: Platform and universal VSIXs
+    timeout-minutes: 20
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            packages/vscode/package-lock.json
+            packages/vscode/computer-use/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: computer-use-*
+          merge-multiple: true
+          path: native-bundles
+      - name: Restore all native bundles
+        run: |
+          mkdir -p packages/computer-use/dist
+          for archive in native-bundles/*.tar.gz; do
+            tar -xzf "$archive" -C packages/computer-use/dist
+          done
+      - run: npm ci
+        working-directory: packages/vscode
+      - run: npm ci
+        working-directory: packages/vscode/computer-use
+      - name: Package and inspect all VSIXs
+        run: python scripts/package_clients.py vsix --output dist/vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ github.run_number }}
+          path: dist/vsix/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      - name: Add download instructions
+        run: |
+          echo '## VSIX packages' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Download **vsix-${{ github.run_number }}** from Artifacts and unzip it. It contains the universal CrabCode main extension, three platform Computer Use companions, the all-platform companion, and SHA256SUMS. Upload the VSIXs to the extension store manually.' >> "$GITHUB_STEP_SUMMARY"
+
+  desktop:
+    name: Desktop installer · ${{ matrix.platform }}
+    timeout-minutes: 90
+    needs: native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            os: macos-15
+          - platform: darwin-x64
+            os: macos-15-intel
+          - platform: win32-x64
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri -> target
+          shared-key: client-desktop-${{ matrix.platform }}
+      - id: signing
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/client-apple-signing
+        with:
+          certificate: ${{ secrets.CRABCODE_SIGNING_CERTIFICATE_P12_BASE64 }}
+          password: ${{ secrets.CRABCODE_SIGNING_CERTIFICATE_PASSWORD }}
+          identity: ${{ secrets.CRABCODE_SIGNING_IDENTITY }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: computer-use-${{ matrix.platform }}
+          path: native-bundles
+      - name: Restore native bundle
+        shell: bash
+        run: |
+          mkdir -p packages/computer-use/dist
+          tar -xzf native-bundles/computer-use-${{ matrix.platform }}.tar.gz -C packages/computer-use/dist
+      - run: npm ci
+        working-directory: packages/desktop
+      - name: Package and verify DMG or MSI
+        env:
+          CRABCODE_SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+        run: python scripts/package_clients.py desktop --platform ${{ matrix.platform }} --output dist/desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ github.run_number }}
+          path: dist/desktop/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      - name: Add download instructions
+        shell: bash
+        run: |
+          echo '## Desktop installer' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Download **desktop-${{ matrix.platform }}-${{ github.run_number }}** from Artifacts. It contains the DMG or MSI and SHA256SUMS.' >> "$GITHUB_STEP_SUMMARY"
