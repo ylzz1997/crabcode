@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Check version metadata
+      - name: Check version metadata and Marketplace assets
         run: |
           python scripts/sync_version.py --check
           python scripts/package_clients.py check

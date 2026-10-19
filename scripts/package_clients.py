@@ -33,6 +33,24 @@ def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def check_marketplace_icon(data: bytes, label: str) -> None:
+    if len(data) < 33 or data[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+        raise ValueError(f"Extension icon must be a PNG: {label}")
+    width, height = struct.unpack(">II", data[16:24])
+    if not (128 <= width <= 1024 and 128 <= height <= 1024):
+        raise ValueError(
+            f"Extension icon dimensions {width}x{height} are outside the Marketplace "
+            f"limits of 128x128 to 1024x1024: {label}"
+        )
+
+
+def check_extension_assets(source: Path) -> None:
+    icon = read_json(source / "package.json").get("icon")
+    if icon:
+        path = source / icon
+        check_marketplace_icon(path.read_bytes(), str(path))
+
+
 def check_versions() -> str:
     version = re.search(
         r'^VERSION = "([^"]+)"',
@@ -95,6 +113,7 @@ def check_bundle(directory: Path, platform: str, version: str) -> dict:
 
 
 def copy_extension(source: Path, destination: Path) -> None:
+    check_extension_assets(source)
     destination.mkdir(parents=True)
     for name in ("dist", "resources", "logo.png", "README.md", "CHANGELOG.md", "LICENSE"):
         item = source / name
@@ -116,6 +135,9 @@ def check_vsix(archive_path: Path, bundles: dict[str, Path], version: str, targe
         expected_name = "crabcode-computer-use" if bundles else "crabcode"
         if manifest["version"] != version or manifest["name"] != expected_name:
             raise ValueError(f"Incorrect extension identity/version: {archive_path}")
+        if manifest.get("icon"):
+            icon = "extension/" + manifest["icon"]
+            check_marketplace_icon(archive.read(icon), f"{archive_path}: {icon}")
         identity = ET.fromstring(archive.read("extension.vsixmanifest")).find(".//{*}Identity")
         if identity is None or identity.get("TargetPlatform") != target:
             raise ValueError(f"Incorrect VSIX platform: {archive_path}")
@@ -263,7 +285,10 @@ def main() -> None:
     args = parser.parse_args()
     version = check_versions()
     if args.command == "check":
+        for relative in ("packages/vscode", "packages/vscode/computer-use"):
+            check_extension_assets(ROOT / relative)
         print(f"Client versions match {version}")
+        print("Extension icons meet Marketplace limits")
         return
     if args.command in ("native", "desktop") and not args.platform:
         parser.error("--platform is required for native/desktop")

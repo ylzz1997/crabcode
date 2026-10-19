@@ -56,12 +56,16 @@ class ClientPackagingTests(unittest.TestCase):
         binary.chmod(0o755)
         return directory
 
-    def archive(self, bundles, target=None, omit=None, tamper=None):
+    def archive(self, bundles, target=None, omit=None, tamper=None, icon=None):
         path = self.root / "extension.vsix"
         with zipfile.ZipFile(path, "w") as archive:
-            archive.writestr("extension/package.json", json.dumps({
+            manifest = {
                 "name": "crabcode-computer-use" if bundles else "crabcode", "version": self.version,
-            }))
+            }
+            if icon is not None:
+                manifest["icon"] = "logo.png"
+                archive.writestr("extension/logo.png", icon)
+            archive.writestr("extension/package.json", json.dumps(manifest))
             attribute = f' TargetPlatform="{target}"' if target else ""
             archive.writestr("extension.vsixmanifest", f"<PackageManifest><Metadata><Identity{attribute}/></Metadata></PackageManifest>")
             for platform, directory in bundles.items():
@@ -120,6 +124,27 @@ class ClientPackagingTests(unittest.TestCase):
         bundles = {"darwin-x64": self.bundle("darwin-x64")}
         with self.assertRaisesRegex(ValueError, "payload changed"):
             packaging.check_vsix(self.archive(bundles, tamper="CodeResources"), bundles, self.version)
+
+    @staticmethod
+    def png_header(width, height):
+        return b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II", width, height) + b"\x08\x02\x00\x00\x00" + b"\x00" * 4
+
+    def test_oversized_icon_is_rejected_before_staging(self):
+        source = self.root / "source"
+        source.mkdir()
+        (source / "package.json").write_text(json.dumps({"icon": "logo.png"}))
+        (source / "logo.png").write_bytes(self.png_header(1254, 1254))
+        staged = self.root / "staged"
+        with self.assertRaisesRegex(ValueError, "1254x1254.*1024x1024"):
+            packaging.copy_extension(source, staged)
+        self.assertFalse(staged.exists())
+
+    def test_packaged_icon_must_meet_marketplace_dimension_limits(self):
+        packaging.check_vsix(self.archive({}, icon=self.png_header(1024, 1024)), {}, self.version)
+        for width, height in ((1254, 1254), (2048, 512), (512, 2048), (64, 64)):
+            with self.subTest(width=width, height=height):
+                with self.assertRaisesRegex(ValueError, "Marketplace.*1024x1024"):
+                    packaging.check_vsix(self.archive({}, icon=self.png_header(width, height)), {}, self.version)
 
 
 if __name__ == "__main__":
