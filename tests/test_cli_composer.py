@@ -44,6 +44,29 @@ class ComposerTests(unittest.IsolatedAsyncioTestCase):
 
         await asyncio.wait_for(poll(), 3)
 
+    async def test_empty_frame_stays_compact_with_terminal_space_below_cursor(self):
+        async with self.composer() as (composer, _, output):
+            renderer = composer.prompt_session.app.renderer
+            renderer._min_available_height = output.size.rows
+            composer.prompt_session.app.invalidate()
+            window = composer.prompt_session.layout.current_window
+            await self.wait_for(
+                lambda: window.render_info is not None
+                and window.render_info.window_height == 1
+                and renderer._last_screen.height == output.size.rows
+            )
+            screen = renderer._last_screen
+            rows = [
+                "".join(screen.data_buffer[y][x].char for x in range(80))
+                for y in range(screen.height)
+            ]
+            top = next(i for i, row in enumerate(rows) if "CrabCode" in row)
+            bottom = next(i for i, row in enumerate(rows) if "Enter sends" in row)
+            self.assertEqual(bottom - top, 2)
+            self.assertTrue(rows[top + 1].startswith("│"))
+            self.assertTrue(rows[top + 1].endswith("│"))
+            self.assertIn("● Ready", rows[top - 1])
+
     async def test_second_ctrl_c_exits_without_waiting_for_input_consumer(self):
         async with self.composer(busy=True) as (composer, pipe, _):
             # Leave the first interrupt queued: the session consumer could be

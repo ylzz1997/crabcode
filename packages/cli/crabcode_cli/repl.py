@@ -594,6 +594,14 @@ def _configure_composer_layout(
     if not isinstance(root, HSplit) or not root.children:
         return
     main = root.children[0]
+    # Newer prompt_toolkit versions wrap the input in a conditional Frame.
+    # Follow its active branch before configuring our own frame and status.
+    while isinstance(main, ConditionalContainer):
+        main = (
+            main.content
+            if main.filter()
+            else getattr(main, "alternative_content", None)
+        )
     if not isinstance(main, FloatContainer) or not isinstance(main.content, HSplit):
         return
 
