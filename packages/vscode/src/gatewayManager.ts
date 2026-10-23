@@ -306,8 +306,9 @@ function protocolCompatibility(support: ProtocolSupport): { compatible: boolean;
  * Priority:
  *  1. `crabcode.pythonPath` setting
  *  2. Python from the ms-python extension (if installed)
- *  3. Conda environments (base + named envs)
- *  4. `python3` / `python` on PATH
+ *  3. Workspace .venv
+ *  4. Conda environments (base + named envs)
+ *  5. `python3` / `python` on PATH
  */
 export async function detectPython(
   config: vscode.WorkspaceConfiguration,
@@ -337,11 +338,19 @@ export async function detectPython(
     // Extension not available, ignore
   }
 
-  // 3. Conda environments
+  // 3. Prefer project dependencies to an unrelated Conda or system Python.
+  for (const folder of vscode.workspace?.workspaceFolders ?? []) {
+    const python = process.platform === "win32"
+      ? path.join(folder.uri.fsPath, ".venv", "Scripts", "python.exe")
+      : path.join(folder.uri.fsPath, ".venv", "bin", "python");
+    if (existsSync(python) && await checkPython(python)) return python;
+  }
+
+  // 4. Conda environments
   const condaPython = await detectCondaPython();
   if (condaPython) return condaPython;
 
-  // 4. Probe common names on PATH
+  // 5. Probe common names on PATH
   for (const candidate of ["python3", "python"]) {
     const v = await checkPython(candidate);
     if (v) return candidate;
@@ -484,8 +493,9 @@ async function getInstalledGatewayInfo(
 ): Promise<InstalledGatewayInfo | null> {
   const script = [
     "import json",
-    "import crabcode_cli",
+    "import crabcode_cli.app",
     "import crabcode_gateway",
+    "import crabcode_gateway.server",
     "try:",
     "    from crabcode_gateway.protocol import GATEWAY_MAX_PROTOCOL_VERSION, GATEWAY_MIN_PROTOCOL_VERSION, GATEWAY_PROTOCOL_VERSION",
     "except ImportError:",
@@ -707,11 +717,13 @@ export class GatewayProcess implements vscode.Disposable {
       },
     );
     this.proc = child;
+    let exited = false;
 
     child.stdout?.on("data", (d: Buffer) => outputChannel.append(d.toString()));
     child.stderr?.on("data", (d: Buffer) => outputChannel.append(d.toString()));
 
     child.on("close", (code) => {
+      exited = true;
       outputChannel.appendLine(tr("[CrabCode] 网关进程已退出（码 {0}）", { 0: code }));
       if (this.proc === child) {
         this._running = false;
@@ -720,6 +732,7 @@ export class GatewayProcess implements vscode.Disposable {
     });
 
     child.on("error", (err) => {
+      exited = true;
       outputChannel.appendLine(tr("[CrabCode] 网关进程出错: {0}", { 0: err.message }));
       if (this.proc === child) {
         this._running = false;
@@ -730,7 +743,9 @@ export class GatewayProcess implements vscode.Disposable {
     // Wait up to 10s for a compatible health response.
     for (let i = 0; i < 20; i++) {
       await new Promise((r) => setTimeout(r, 500));
+      if (exited || this.proc !== child) return false;
       const probe = await probeGatewayHealth(target, password, 500);
+      if (exited || this.proc !== child) return false;
       if (probe.health) {
         const compatibility = protocolCompatibility(probe.health);
         if (!compatibility.compatible) {
@@ -978,8 +993,24 @@ export async function ensureGateway(
     return { python: "", gatewayReady: false, startedByUs: false };
   }
 
+  outputChannel.appendLine(tr("[CrabCode] 使用 Python：{0}", { 0: python }));
   if (launchOptions.usingWorkspaceSources) {
-    outputChannel.appendLine(tr("[CrabCode] 检测到当前工作区源码，跳过已安装包检查"));
+    outputChannel.appendLine(tr("[CrabCode] 检测到当前工作区源码，正在检查 CLI 和网关依赖"));
+    const runtime = await execAsync(
+      python,
+      ["-c", "import crabcode_cli.app; import crabcode_gateway.server"],
+      launchOptions,
+    );
+    if (runtime.code !== 0) {
+      outputChannel.appendLine(runtime.stderr || runtime.stdout || tr("Python 运行依赖检查失败"));
+      const command = `${process.platform === "win32" ? "& " : ""}"${python}" ` +
+        `-m pip install -e "${launchOptions.cwd}[gateway]"`;
+      outputChannel.appendLine(tr("[CrabCode] 请为该 Python 安装工作区依赖：{0}", { 0: command }));
+      vscode.window.showErrorMessage(
+        tr("CrabCode：Python「{0}」无法加载工作区 CLI 或网关。请检查输出面板中的依赖错误和安装命令，或通过 crabcode.pythonPath 选择已安装依赖的 Python。", { 0: python }),
+      );
+      return { python, gatewayReady: false, startedByUs: false };
+    }
   } else {
     const installed = await getInstalledGatewayInfo(python, launchOptions);
     if (!installed) {

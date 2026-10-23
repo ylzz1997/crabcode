@@ -51,6 +51,14 @@ For a Gateway on another machine, start it there and configure
 the Gateway is accessed beyond the local machine. Remote Gateways must already
 be installed and running; the extension does not install them remotely.
 
+For local Python discovery, `crabcode.pythonPath` takes precedence, followed by
+the active Python extension interpreter, the workspace `.venv`, Conda, and PATH.
+When this repository is open, the Gateway runs from workspace sources and checks
+CLI/server imports before starting. Source code still needs its Python
+dependencies installed: use the workspace interpreter to run
+`python -m pip install -e ".[gateway]"` from the repository root. Dependency
+failures and the selected interpreter appear in the **CrabCode** output channel.
+
 ## Features
 
 - Follow-up behavior: choose Queue (default) or Steer with `crabcode.followUpMode`.
