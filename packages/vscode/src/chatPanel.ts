@@ -10,6 +10,8 @@
  * rendering, file-change notifications.
  */
 
+import { createI18n, webviewLocaleData, getLocale, html as trHtml } from "./i18n";
+import { t as tr } from "./i18n";
 import * as vscode from "vscode";
 import { createSlashCommands } from "../../shared/slashCommands.js";
 import { createTurnProcessPolicy } from "../../shared/turnProcess.js";
@@ -141,11 +143,11 @@ function buildCacheUsageDetail(payload: TurnCompletePayload): string | null {
   const totalInput = tokenValue("total_input_tokens") || tokenValue("input_tokens");
   const hitRate = totalInput ? cacheRead / totalInput * 100 : 0;
   const parts = [
-    `缓存命中 ${formatPercent(hitRate)}`,
-    `读取 ${formatTokenCount(cacheRead)}`,
+    tr("缓存命中 {0}", { 0: formatPercent(hitRate) }),
+    tr("读取 {0}", { 0: formatTokenCount(cacheRead) }),
   ];
   if ("cache_write_tokens" in usage) {
-    parts.push(`写入 ${formatTokenCount(tokenValue("cache_write_tokens"))}`);
+    parts.push(tr("写入 {0}", { 0: formatTokenCount(tokenValue("cache_write_tokens")) }));
   }
   return parts.join(" · ");
 }
@@ -197,9 +199,9 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
       remainingPercent: 0,
       cacheDetail: cacheDetail ?? undefined,
       details: [
-        `背景信息窗口${contextEstimateNote(payload.context_token_source)}：`,
-        `已用 ${formatTokenCount(used)} 标记`,
-        cacheDetail ? `总量未知 · ${cacheDetail}` : "总量未知",
+        tr("背景信息窗口{0}：", { 0: contextEstimateNote(payload.context_token_source) }),
+        tr("已用 {0} 标记", { 0: formatTokenCount(used) }),
+        cacheDetail ? tr("总量未知 · {0}", { 0: cacheDetail }) : tr("总量未知"),
       ],
     };
   }
@@ -213,7 +215,7 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
     0,
     Math.trunc(payload.context_remaining_tokens ?? window - used),
   );
-  const tokenDetail = `已用 ${formatTokenCount(used)} 标记，共 ${formatTokenCount(window)}`;
+  const tokenDetail = tr("已用 {0} 标记，共 {1}", { 0: formatTokenCount(used), 1: formatTokenCount(window) });
   const cacheDetail = buildCacheUsageDetail(payload);
   return {
     usedTokens: used,
@@ -223,8 +225,8 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
     remainingPercent,
     cacheDetail: cacheDetail ?? undefined,
     details: [
-      `背景信息窗口${contextEstimateNote(payload.context_token_source)}：`,
-      `${formatPercent(usedPercent)} 已用（剩余 ${formatPercent(remainingPercent)}）`,
+      tr("背景信息窗口{0}：", { 0: contextEstimateNote(payload.context_token_source) }),
+      tr("{0} 已用（剩余 {1}）", { 0: formatPercent(usedPercent), 1: formatPercent(remainingPercent) }),
       cacheDetail ? `${tokenDetail} · ${cacheDetail}` : tokenDetail,
     ],
   };
@@ -509,6 +511,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.flushPendingWebviewMessages();
       }
       switch (msg.type) {
+        case "reloadForLanguage":
+          this.webviewReady = false;
+          webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+          break;
         case "sendMessage": {
           const text = typeof msg.text === "string" ? msg.text : "";
           const references = this.normalizeIdeReferences(msg.references);
@@ -521,19 +527,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "fetchFollowUpMode":
-          this.addMessage("system", `当前跟进方式：${this.followUpMode}`);
+          this.addMessage("system", tr("当前跟进方式：{0}", { 0: this.followUpMode }));
           break;
         case "fetchQueue": {
           const queue = this.currentState.pendingSteeringMessages.filter(entry => entry.followUpMode === "queue" && !entry.followUpFailed && !entry.followUpAction);
-          this.addMessage("system", queue.length ? queue.map((entry, index) => `${index + 1}. ${entry.followUpPrompt ?? entry.text}`).join("\n") : "暂无排队消息");
+          this.addMessage("system", queue.length ? queue.map((entry, index) => `${index + 1}. ${entry.followUpPrompt ?? entry.text}`).join("\n") : tr("暂无排队消息"));
           break;
         }
         case "steerQueue": {
           const queue = this.currentState.pendingSteeringMessages.filter(entry => entry.followUpMode === "queue" && !entry.followUpFailed && !entry.followUpAction);
           const index = typeof msg.index === "number" ? msg.index - 1 : 0;
-          if (!this.currentState.isBusy || !this.currentState.activeOperationId) this.addMessage("system", "当前没有可引导的运行任务");
+          if (!this.currentState.isBusy || !this.currentState.activeOperationId) this.addMessage("system", tr("当前没有可引导的运行任务"));
           else if (Number.isInteger(index) && index >= 0 && queue[index]) this.handleQueuedMessageAction(queue[index].id, "steer");
-          else this.addMessage("system", "排队消息不存在，请用 /queue 查看序号");
+          else this.addMessage("system", tr("排队消息不存在，请用 /queue 查看序号"));
           break;
         }
         case "openModelSettings":
@@ -641,7 +647,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "screenshotHint":
           void vscode.window.showInformationMessage(
-            "CrabCode：请用系统截图（如 macOS ⌘⇧4 / ⌘⇧5，Windows Win+Shift+S），再在本聊天输入框中粘贴即可。",
+            tr("CrabCode：请用系统截图（如 macOS ⌘⇧4 / ⌘⇧5，Windows Win+Shift+S），再在本聊天输入框中粘贴即可。"),
           );
           break;
         case "toggleToolCard":
@@ -704,7 +710,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             cwd,
             normalizeSessionLaunchOverrides(msg.options),
           );
-          this.postMessage({ type: "sessionInfo", sessionId: null, title: "新会话", origin: null, status: "done" });
+          this.postMessage({ type: "sessionInfo", sessionId: null, title: tr("新会话"), origin: null, status: "done" });
           this.postMessage({ type: "history", items: [] });
           this.postMessage({ type: "busyState", busy: false });
           this.postMessage({ type: "contextUsage", usage: null });
@@ -1053,6 +1059,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     void this.pushChatOptions();
   }
 
+  /** The browser saves its composer before the localized shell is replaced. Session state stays here. */
+  public refreshLanguage(): void {
+    if (this.view) this.postMessage({ type: "prepareLanguageChange" });
+  }
+
   public updateIdeContext(context: IdeContextSnapshot | null): void {
     this.ideContext = context;
     this.postMessage({ type: "ideContext", context });
@@ -1130,9 +1141,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         usedPercent,
         remainingPercent,
         details: [
-          `背景信息窗口${contextEstimateNote(data.context_token_source)}：`,
-          `已用 ${formatTokenCount(used)} / ${formatTokenCount(window)} 标记`,
-          `剩余 ${remainingPercent.toFixed(1)}%`,
+          tr("背景信息窗口{0}：", { 0: contextEstimateNote(data.context_token_source) }),
+          tr("已用 {0} / {1} 标记", { 0: formatTokenCount(used), 1: formatTokenCount(window) }),
+          tr("剩余 {0}%", { 0: remainingPercent.toFixed(1) }),
         ],
       };
       state.contextUsage = usage;
@@ -1166,25 +1177,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async fetchAndShowStatus(): Promise<void> {
     const sessionId = this.displayedSessionId || this.connection.sessionId;
     if (!sessionId) {
-      this.addMessage("system", "CrabCode：当前没有活动会话。");
+      this.addMessage("system", tr("CrabCode：当前没有活动会话。"));
       return;
     }
 
     const status = await this.fetchSessionRuntimeStatus(sessionId);
     if (!status) {
-      this.addSessionSystemMessage(sessionId, "CrabCode：暂时无法读取会话状态。");
+      this.addSessionSystemMessage(sessionId, tr("CrabCode：暂时无法读取会话状态。"));
       return;
     }
 
-    const model = [status.provider, status.model].filter(Boolean).join("/") || "未配置";
+    const model = [status.provider, status.model].filter(Boolean).join("/") || tr("未配置");
     const effort = status.reasoning_effort || "auto";
-    const ultra = status.ultra_mode ? "开启" : "关闭";
+    const ultra = status.ultra_mode ? tr("开启") : tr("关闭");
     const permission = status.permission_mode || "default";
     const lines = [
-      `**CrabCode：** v${status.version || "unknown"} · **会话 ID：** \`${status.session_id || sessionId}\``,
-      `**模型：** ${model} · **模式：** ${status.mode || "agent"}`,
+      tr("**CrabCode：** v{0} · **会话 ID：** `{1}`", { 0: status.version || "unknown", 1: status.session_id || sessionId }),
+      tr("**模型：** {0} · **模式：** {1}", { 0: model, 1: status.mode || "agent" }),
       `**Effort：** ${effort} · **Ultra mode：** ${ultra}`,
-      `**工具权限：** ${permission}`,
+      tr("**工具权限：** {0}", { 0: permission }),
     ];
     const used = Math.max(0, Math.trunc(status.context_used_tokens ?? 0));
     const window = Math.max(0, Math.trunc(status.context_window_tokens ?? 0));
@@ -1194,30 +1205,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         Math.max(0, status.context_used_percent ?? (window ? used / window * 100 : 0)),
       );
       lines.push(
-        `**背景窗口${contextEstimateNote(status.context_token_source)}：** ${used.toLocaleString()} / ${window.toLocaleString()} tokens（${usedPercent.toFixed(1)}% 已用，剩余 ${Math.max(0, 100 - usedPercent).toFixed(1)}%）`,
+        tr("**背景窗口{0}：** {1} / {2} tokens（{3}% 已用，剩余 {4}%）", { 0: contextEstimateNote(status.context_token_source), 1: used.toLocaleString(getLocale()), 2: window.toLocaleString(getLocale()), 3: usedPercent.toFixed(1), 4: Math.max(0, 100 - usedPercent).toFixed(1) }),
       );
     } else {
-      lines.push("**背景窗口：** 暂无数据");
+      lines.push(tr("**背景窗口：** 暂无数据"));
     }
     const cachedUsage = this.getSessionState(sessionId).contextUsage;
     if (cachedUsage?.cacheDetail) {
-      lines.push(`**提示缓存：** ${cachedUsage.cacheDetail}`);
+      lines.push(tr("**提示缓存：** {0}", { 0: cachedUsage.cacheDetail }));
     }
-    const tools = status.tool_count == null ? "未加载" : status.tool_count.toLocaleString();
+    const tools = status.tool_count == null ? tr("未加载") : status.tool_count.toLocaleString(getLocale());
     const budget = status.prompt_budget;
     if (budget) {
-      lines.push(`**上次请求工具：** ${budget.loaded_tools}/${budget.available_tools} · ${budget.mode}`);
-      lines.push(`**Prompt（估算）：** system=${budget.system_tokens} · tools=${budget.tool_tokens} · 其中目录=${budget.directory_tokens} tokens`);
+      lines.push(tr("**上次请求工具：** {0}/{1} · {2}", { 0: budget.loaded_tools, 1: budget.available_tools, 2: budget.mode }));
+      lines.push(tr("**Prompt（估算）：** system={0} · tools={1} · 其中目录={2} tokens", { 0: budget.system_tokens, 1: budget.tool_tokens, 2: budget.directory_tokens }));
     }
     lines.push(
-      `**消息数：** ${status.message_count ?? 0} · **压缩次数：** ${status.compact_count ?? 0} · **自动压缩：** ${status.auto_compact_enabled === false ? "关闭" : "开启"}`,
-      `**配置：** think=${status.thinking_enabled ? "on" : "off"} · max_tokens=${status.max_tokens ?? 0} · tools=${tools}`,
+      tr("**消息数：** {0} · **压缩次数：** {1} · **自动压缩：** {2}", { 0: status.message_count ?? 0, 1: status.compact_count ?? 0, 2: status.auto_compact_enabled === false ? tr("关闭") : tr("开启") }),
+      tr("**配置：** think={0} · max_tokens={1} · tools={2}", { 0: status.thinking_enabled ? "on" : "off", 1: status.max_tokens ?? 0, 2: tools }),
     );
     if (status.compact_buffer_tokens != null) {
-      lines.push(`**压缩预留：** ${status.compact_buffer_tokens.toLocaleString()} tokens`);
+      lines.push(tr("**压缩预留：** {0} tokens", { 0: status.compact_buffer_tokens.toLocaleString(getLocale()) }));
     }
     if (status.auto_compact_enabled !== false && status.compact_input_limit != null) {
-      lines.push(`**压缩触发阈值：** 已用超过 ${status.compact_input_limit.toLocaleString()} tokens`);
+      lines.push(tr("**压缩触发阈值：** 已用超过 {0} tokens", { 0: status.compact_input_limit.toLocaleString(getLocale()) }));
     }
     if ((status.agent_total ?? 0) > 0) {
       lines.push(
@@ -1237,16 +1248,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (search.done != null && search.total != null) {
         details.push(`${search.done}/${search.total}`);
       }
-      lines.push(`**语义搜索：** ${search.state}${details.length > 0 ? `（${details.join("，")}）` : ""}`);
+      lines.push(tr("**语义搜索：** {0}{1}", { 0: search.state, 1: details.length > 0 ? `（${details.join("，")}）` : "" }));
     }
-    if (status.cwd) lines.push(`**工作目录：** \`${status.cwd}\``);
+    if (status.cwd) lines.push(tr("**工作目录：** `{0}`", { 0: status.cwd }));
     this.addSessionSystemMessage(sessionId, lines.join("\n"));
   }
 
   private async showOrSetReasoningEffort(effort: string | null): Promise<void> {
     const sessionId = this.displayedSessionId || this.connection.sessionId;
     if (!sessionId) {
-      this.addMessage("system", "CrabCode：当前没有活动会话。");
+      this.addMessage("system", tr("CrabCode：当前没有活动会话。"));
       return;
     }
 
@@ -1257,7 +1268,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const current = status.reasoning_effort || "auto";
       this.addSessionSystemMessage(
         sessionId,
-        `当前 reasoning effort：**${current}**`,
+        tr("当前 reasoning effort：**{0}**", { 0: current }),
       );
       return;
     }
@@ -1268,7 +1279,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async setUltraMode(enabled: boolean | null): Promise<void> {
     const sessionId = this.displayedSessionId || this.connection.sessionId;
     if (!sessionId) {
-      this.addMessage("system", "CrabCode：当前没有活动会话。");
+      this.addMessage("system", tr("CrabCode：当前没有活动会话。"));
       return;
     }
     await this.runtimeControls.setUltra(sessionId, enabled);
@@ -1291,7 +1302,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async forkSession(messageUuid: string | null): Promise<void> {
     const sourceSessionId = this.displayedSessionId ?? this.connection.sessionId;
     if (!sourceSessionId) {
-      this.addMessage("system", "无法分叉：当前没有活动会话。");
+      this.addMessage("system", tr("无法分叉：当前没有活动会话。"));
       return;
     }
     if (messageUuid) {
@@ -1299,13 +1310,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const matches = ids.filter(id => id === messageUuid || id.startsWith(messageUuid!));
       if (matches.length === 1) messageUuid = matches[0];
       else if (messageUuid.length < 36) {
-        this.addSessionSystemMessage(sourceSessionId, "找不到回复，或短 UUID 不唯一");
+        this.addSessionSystemMessage(sourceSessionId, tr("找不到回复，或短 UUID 不唯一"));
         return;
       }
     }
     let targetSessionId = sourceSessionId;
     if (this.busySessions.has(sourceSessionId) || this.getSessionState(sourceSessionId).isBusy) {
-      this.addMessage("system", "当前会话仍在运行，完成后才能分叉。");
+      this.addMessage("system", tr("当前会话仍在运行，完成后才能分叉。"));
       return;
     }
 
@@ -1316,12 +1327,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ session_id: sourceSessionId, message_uuid: messageUuid }),
       });
       if (!response.ok) {
-        this.addSessionSystemMessage(sourceSessionId, `分叉失败：${await this.gatewayError(response)}`);
+        this.addSessionSystemMessage(sourceSessionId, tr("分叉失败：{0}", { 0: await this.gatewayError(response) }));
         return;
       }
       const forked = await response.json() as SessionInfo;
       const forkedId = typeof forked.session_id === "string" ? forked.session_id : "";
-      if (!forkedId) throw new Error("网关没有返回新会话 ID");
+      if (!forkedId) throw new Error(tr("网关没有返回新会话 ID"));
       targetSessionId = forkedId;
 
       // Switch the displayed state before the resume handshake so late events
@@ -1337,15 +1348,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.postMessage({ type: "contextUsage", usage: state.contextUsage ?? null });
       this.postMessage({ type: "steeringQueue", messages: [] });
       const origin = forked.forked_from_title
-        || (forked.forked_from_session_id ? `会话 ${forked.forked_from_session_id.slice(0, 8)}…` : `会话 ${sourceSessionId.slice(0, 8)}…`);
-      this.postMessage({ type: "sessionInfo", sessionId: forkedId, title: forked.title || "分叉会话", origin, status: "done" });
+        || (forked.forked_from_session_id ? tr("会话 {0}…", { 0: forked.forked_from_session_id.slice(0, 8) }) : tr("会话 {0}…", { 0: sourceSessionId.slice(0, 8) }));
+      this.postMessage({ type: "sessionInfo", sessionId: forkedId, title: forked.title || tr("分叉会话"), origin, status: "done" });
       this.connection.sendResumeSession(forkedId);
       await this.fetchAndApplySessionHistory(forkedId);
       void this.fetchAndSendSessions();
     } catch (error) {
       this.addSessionSystemMessage(
         targetSessionId,
-        `分叉失败：${error instanceof Error ? error.message : String(error)}`,
+        tr("分叉失败：{0}", { 0: error instanceof Error ? error.message : String(error) }),
       );
     }
   }
@@ -1369,7 +1380,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const found = sessions.find((s) => s.session_id === sid);
       if (found?.title) {
         const origin = found.forked_from_title
-          || (found.forked_from_session_id ? `会话 ${found.forked_from_session_id.slice(0, 8)}…` : null);
+          || (found.forked_from_session_id ? tr("会话 {0}…", { 0: found.forked_from_session_id.slice(0, 8) }) : null);
         this.postMessage({ type: "sessionInfo", sessionId: sid, title: found.title, origin, status: null });
       }
     } catch {
@@ -1408,7 +1419,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // back to the last confirmed per-session mode if the gateway rejects the
       // request or is unavailable.
       if (sessionId === this.displayedSessionId) this.postMessage({ type: "modeChange", mode: state.mode });
-      this.addSessionSystemMessage(sessionId, "CrabCode：切换模式失败，会话模式未改变。");
+      this.addSessionSystemMessage(sessionId, tr("CrabCode：切换模式失败，会话模式未改变。"));
     }
   }
 
@@ -1438,12 +1449,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       const data = (await response.json()) as { status?: string };
       if (data.status === "not_compacted") {
-        this.addSessionSystemMessage(sessionId, "历史不足，或压缩检查点生成失败。");
+        this.addSessionSystemMessage(sessionId, tr("历史不足，或压缩检查点生成失败。"));
         return;
       }
       await this.fetchAndApplySessionHistory(sessionId);
     } catch {
-      this.addSessionSystemMessage(sessionId, "压缩对话失败。");
+      this.addSessionSystemMessage(sessionId, tr("压缩对话失败。"));
     }
   }
 
@@ -1458,9 +1469,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`clear failed: ${response.status}`);
       await this.fetchAndApplySessionHistory(sessionId);
-      this.addSessionSystemMessage(sessionId, "对话历史已清除。");
+      this.addSessionSystemMessage(sessionId, tr("对话历史已清除。"));
     } catch {
-      this.addSessionSystemMessage(sessionId, "清除对话历史失败。");
+      this.addSessionSystemMessage(sessionId, tr("清除对话历史失败。"));
     }
   }
 
@@ -1478,7 +1489,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const displayText = `/${name}${userInput ? ` ${userInput}` : ""}`;
       this.sendExpandedPrompt(displayText, data.prompt, opposite);
     } catch {
-      this.addSessionSystemMessage(sessionId, `Skill /${name} 展开失败。`);
+      this.addSessionSystemMessage(sessionId, tr("Skill /{0} 展开失败。", { 0: name }));
     }
   }
 
@@ -1564,7 +1575,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   ): Promise<void> {
     const sessionId = await this.resolveSessionId(selector);
     if (!sessionId) {
-      this.addMessage("system", `找不到会话，或短 ID 不唯一：\`${selector}\``);
+      this.addMessage("system", tr("找不到会话，或短 ID 不唯一：`{0}`", { 0: selector }));
       return;
     }
     // Immediately update displayed session before processing
@@ -1633,9 +1644,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private formatScheduleTime(value: string | null | undefined): string {
-    if (!value) return "未安排";
+    if (!value) return tr("未安排");
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString(getLocale());
   }
 
   private scheduleSessionId(): string | null {
@@ -1650,7 +1661,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   } = {}): Promise<void> {
     const sessionId = this.scheduleSessionId();
     if (!sessionId) {
-      this.addMessage("system", "暂无活跃会话。");
+      this.addMessage("system", tr("暂无活跃会话。"));
       return;
     }
     try {
@@ -1664,10 +1675,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) throw new Error(await this.gatewayError(response));
       const jobs = await response.json() as ScheduleJobInfo[];
       if (!jobs.length) {
-        this.addSessionSystemMessage(sessionId, "暂无定时任务。");
+        this.addSessionSystemMessage(sessionId, tr("暂无定时任务。"));
         return;
       }
-      const lines = ["## 定时任务", ""];
+      const lines = [tr("## 定时任务"), ""];
       for (const job of jobs) {
         const count = job.max_runs == null ? String(job.run_count ?? 0) : `${job.run_count ?? 0}/${job.max_runs}`;
         lines.push(
@@ -1677,14 +1688,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取定时任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取定时任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
   private async fetchSchedule(jobId: string): Promise<void> {
     const sessionId = this.scheduleSessionId();
     if (!sessionId) {
-      this.addMessage("system", "暂无活跃会话。");
+      this.addMessage("system", tr("暂无活跃会话。"));
       return;
     }
     try {
@@ -1695,32 +1706,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const job = await response.json() as ScheduleJobInfo;
       const count = job.max_runs == null ? String(job.run_count ?? 0) : `${job.run_count ?? 0}/${job.max_runs}`;
       const lines = [
-        `## 定时任务 \`${job.id.slice(0, 8)}\``,
-        `**名称：** ${job.name}`,
-        `**状态：** ${job.status}（${job.enabled === false ? "停用" : "启用"}）`,
-        `**计划：** ${job.schedule_type} \`${job.schedule}\``,
-        `**下次执行：** ${this.formatScheduleTime(job.next_run)}`,
-        `**执行次数：** ${count}`,
-        `**工作目录：** \`${job.cwd ?? ""}\``,
+        tr("## 定时任务 `{0}`", { 0: job.id.slice(0, 8) }),
+        tr("**名称：** {0}", { 0: job.name }),
+        tr("**状态：** {0}（{1}）", { 0: job.status, 1: job.enabled === false ? tr("停用") : tr("启用") }),
+        tr("**计划：** {0} `{1}`", { 0: job.schedule_type, 1: job.schedule }),
+        tr("**下次执行：** {0}", { 0: this.formatScheduleTime(job.next_run) }),
+        tr("**执行次数：** {0}", { 0: count }),
+        tr("**工作目录：** `{0}`", { 0: job.cwd ?? "" }),
       ];
-      if (job.description) lines.push(`**说明：** ${job.description}`);
-      if (job.tags?.length) lines.push(`**标签：** ${job.tags.join(", ")}`);
-      if (job.model_profile) lines.push(`**模型配置：** ${job.model_profile}`);
-      if (job.session_id) lines.push(`**复用会话：** \`${job.session_id}\``);
+      if (job.description) lines.push(tr("**说明：** {0}", { 0: job.description }));
+      if (job.tags?.length) lines.push(tr("**标签：** {0}", { 0: job.tags.join(", ") }));
+      if (job.model_profile) lines.push(tr("**模型配置：** {0}", { 0: job.model_profile }));
+      if (job.session_id) lines.push(tr("**复用会话：** `{0}`", { 0: job.session_id }));
       if (job.extra && Object.keys(job.extra).length > 0) {
-        lines.push(`**扩展数据：** \`${JSON.stringify(job.extra)}\``);
+        lines.push(tr("**扩展数据：** `{0}`", { 0: JSON.stringify(job.extra) }));
       }
-      lines.push("", "**提示词：**", "```", job.prompt, "```");
+      lines.push("", tr("**提示词：**"), "```", job.prompt, "```");
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取定时任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取定时任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
   private async fetchScheduleRuns(jobId: string, status?: string, limit = 50): Promise<void> {
     const sessionId = this.scheduleSessionId();
     if (!sessionId) {
-      this.addMessage("system", "暂无活跃会话。");
+      this.addMessage("system", tr("暂无活跃会话。"));
       return;
     }
     try {
@@ -1732,10 +1743,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) throw new Error(await this.gatewayError(response));
       const runs = await response.json() as ScheduleRunInfo[];
       if (!runs.length) {
-        this.addSessionSystemMessage(sessionId, `定时任务 \`${jobId.slice(0, 8)}\` 暂无执行历史。`);
+        this.addSessionSystemMessage(sessionId, tr("定时任务 `{0}` 暂无执行历史。", { 0: jobId.slice(0, 8) }));
         return;
       }
-      const lines = [`## 定时任务执行历史 \`${jobId.slice(0, 8)}\``, ""];
+      const lines = [tr("## 定时任务执行历史 `{0}`", { 0: jobId.slice(0, 8) }), ""];
       for (const run of runs) {
         const detail = run.error_message || run.result_summary || "";
         lines.push(
@@ -1747,14 +1758,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取执行历史失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取执行历史失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
   private async createSchedule(request: ScheduleCreateRequest): Promise<void> {
     const sessionId = this.scheduleSessionId();
     if (!sessionId) {
-      this.addMessage("system", "暂无活跃会话。");
+      this.addMessage("system", tr("暂无活跃会话。"));
       return;
     }
     try {
@@ -1767,10 +1778,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const job = await response.json() as ScheduleJobInfo;
       this.addSessionSystemMessage(
         sessionId,
-        `已创建定时任务 **${job.name}**（\`${job.id.slice(0, 8)}\`），下次执行：${this.formatScheduleTime(job.next_run)}。`,
+        tr("已创建定时任务 **{0}**（`{1}`），下次执行：{2}。", { 0: job.name, 1: job.id.slice(0, 8), 2: this.formatScheduleTime(job.next_run) }),
       );
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `创建定时任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("创建定时任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -1780,16 +1791,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   ): Promise<void> {
     const sessionId = this.scheduleSessionId();
     if (!sessionId) {
-      this.addMessage("system", "暂无活跃会话。");
+      this.addMessage("system", tr("暂无活跃会话。"));
       return;
     }
     if (action === "cancel") {
       const confirmed = await vscode.window.showWarningMessage(
-        `将永久删除定时任务 ${jobId} 及其执行历史。`,
+        tr("将永久删除定时任务 {0} 及其执行历史。", { 0: jobId }),
         { modal: true },
-        "删除",
+        tr("删除"),
       );
-      if (confirmed !== "删除") return;
+      if (confirmed !== tr("删除")) return;
     }
     const endpoint = action === "run" ? "trigger" : action;
     try {
@@ -1800,11 +1811,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(await this.gatewayError(response));
       const data = await response.json().catch(() => ({})) as ScheduleJobInfo & { started?: boolean; cancelled?: boolean };
-      const verb = action === "pause" ? "已暂停" : action === "resume" ? "已恢复" : action === "run" ? "已触发" : "已删除";
-      this.addSessionSystemMessage(sessionId, `${verb}定时任务 \`${data.id?.slice(0, 8) || jobId.slice(0, 8)}\`。`);
+      const verb = action === "pause" ? tr("已暂停") : action === "resume" ? tr("已恢复") : action === "run" ? tr("已触发") : tr("已删除");
+      this.addSessionSystemMessage(sessionId, tr("{0}定时任务 `{1}`。", { 0: verb, 1: data.id?.slice(0, 8) || jobId.slice(0, 8) }));
       if (action !== "cancel") void this.fetchSchedule(jobId);
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `定时任务操作失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("定时任务操作失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -1866,7 +1877,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ session_id: sessionId }),
       });
       if (!response.ok) {
-        this.addMessage("system", `归档失败：${response.statusText}`);
+        this.addMessage("system", tr("归档失败：{0}", { 0: response.statusText }));
         return;
       }
       const data = await response.json() as { session_id?: string };
@@ -1884,26 +1895,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
         this.connection.sendNewSession(cwd);
         void vscode.window.showInformationMessage(
-          `CrabCode：会话 ${archivedId.slice(0, 8)} 已归档，已创建新会话。`,
+          tr("CrabCode：会话 {0} 已归档，已创建新会话。", { 0: archivedId.slice(0, 8) }),
         );
       } else {
-        this.addMessage("system", `会话 \`${archivedId.slice(0, 8)}\` 已归档。`);
+        this.addMessage("system", tr("会话 `{0}` 已归档。", { 0: archivedId.slice(0, 8) }));
       }
       void this.fetchAndSendSessions();
     } catch (error) {
-      this.addMessage("system", `归档失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addMessage("system", tr("归档失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
   private async pruneSessions(days: number, deleteFiles: boolean): Promise<void> {
     const normalizedDays = Math.max(0, Math.trunc(days));
-    const action = deleteFiles ? "归档并永久清理文件" : "归档";
+    const action = deleteFiles ? tr("归档并永久清理文件") : tr("归档");
     const confirmed = await vscode.window.showWarningMessage(
-      `将${action} ${normalizedDays} 天前的非活动会话。`,
+      tr("将{0} {1} 天前的非活动会话。", { 0: action, 1: normalizedDays }),
       { modal: true },
-      "继续",
+      tr("继续"),
     );
-    if (confirmed !== "继续") return;
+    if (confirmed !== tr("继续")) return;
 
     try {
       const response = await fetch(this._gatewayUrl("/session/prune"), {
@@ -1921,16 +1932,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         failed?: string[];
       };
       const parts = [
-        `已归档 ${result.archived ?? 0} 个会话`,
-        `已清理 ${result.purged ?? 0} 个会话文件`,
+        tr("已归档 {0} 个会话", { 0: result.archived ?? 0 }),
+        tr("已清理 {0} 个会话文件", { 0: result.purged ?? 0 }),
       ];
-      if (result.failed?.length) parts.push(`${result.failed.length} 个清理失败`);
+      if (result.failed?.length) parts.push(tr("{0} 个清理失败", { 0: result.failed.length }));
       this.addMessage("system", `${parts.join("，")}。`);
       void this.fetchAndSendSessions();
     } catch (error) {
       this.addMessage(
         "system",
-        `清理会话失败：${error instanceof Error ? error.message : String(error)}`,
+        tr("清理会话失败：{0}", { 0: error instanceof Error ? error.message : String(error) }),
       );
     }
   }
@@ -1941,7 +1952,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     requestedSessionId?: string,
   ): Promise<void> {
     const sessionId = requestedSessionId?.trim() || this.displayedSessionId || this.connection.sessionId;
-    if (!sessionId) { this.addMessage("system", "暂无活跃会话。"); return; }
+    if (!sessionId) { this.addMessage("system", tr("暂无活跃会话。")); return; }
     try {
       const response = await fetch(this._gatewayUrl("/session/export"), {
         method: "POST",
@@ -1949,7 +1960,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ session_id: sessionId, format }),
       });
       if (!response.ok) {
-        this.addMessage("system", `导出失败：${await this.gatewayError(response)}`);
+        this.addMessage("system", tr("导出失败：{0}", { 0: await this.gatewayError(response) }));
         return;
       }
       const content = await response.text();
@@ -1963,34 +1974,34 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         : path.join(workspaceRoot ?? os.tmpdir(), filename);
       const uri = vscode.Uri.file(targetPath);
       await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf-8"));
-      this.addMessage("system", `会话已导出：\`${uri.fsPath}\``);
+      this.addMessage("system", tr("会话已导出：`{0}`", { 0: uri.fsPath }));
     } catch (error) {
-      this.addMessage("system", `导出失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addMessage("system", tr("导出失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
   private async fetchAndShowModel(): Promise<void> {
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
     if (!sessionId) {
-      this.addMessage("system", "暂无活跃会话。");
+      this.addMessage("system", tr("暂无活跃会话。"));
       return;
     }
     try {
       const status = await this.fetchSessionRuntimeStatus(sessionId);
-      if (!status) throw new Error("无法读取会话状态");
+      if (!status) throw new Error(tr("无法读取会话状态"));
       const url = new URL(this._gatewayUrl("/config/models"));
       url.searchParams.set("session_id", sessionId);
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
-      if (!response.ok) throw new Error(`读取模型列表失败：${response.status}`);
+      if (!response.ok) throw new Error(tr("读取模型列表失败：{0}", { 0: response.status }));
       const models = await response.json() as GatewayModelInfo[];
       const activeProfile = status.model_profile || this.connection.modelName || "";
-      const activeModel = [status.provider, status.model].filter(Boolean).join("/") || "未配置";
+      const activeModel = [status.provider, status.model].filter(Boolean).join("/") || tr("未配置");
       const lines = [
-        `**当前配置：** ${activeProfile || "默认"}`,
+        tr("**当前配置：** {0}", { 0: activeProfile || tr("默认") }),
         `**Provider/Model：** ${activeModel}`,
       ];
       if (models.length > 0) {
-        lines.push("", "**可用模型：**");
+        lines.push("", tr("**可用模型：**"));
         const groupedModels = new Map<string, GatewayModelInfo[]>();
         for (const model of models) {
           const group = model.group || "default";
@@ -2001,16 +2012,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         for (const [group, entries] of groupedModels) {
           lines.push("", `**${group}**`);
           for (const model of entries) {
-            const marker = model.name === activeProfile ? " ← 当前" : "";
+            const marker = model.name === activeProfile ? tr(" ← 当前") : "";
             lines.push(`- \`${model.name}\`${marker}${model.description ? ` · ${model.description}` : ""}`);
           }
         }
       } else {
-        lines.push("", "（网关没有返回已命名模型）");
+        lines.push("", tr("（网关没有返回已命名模型）"));
       }
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取模型失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取模型失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2026,15 +2037,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const g = data.global;
       const p = data.project;
       const lines = [
-        "## 使用统计",
+        tr("## 使用统计"),
         "",
-        `**全局：** ${g.total_sessions} 个会话，${g.total_messages.toLocaleString()} 条消息，${g.total_tokens.toLocaleString()} tokens`,
-        `**本周：** ${g.week_sessions} 个会话，${g.week_tokens.toLocaleString()} tokens`,
-        `**当前项目 (${p.cwd})：** ${p.total_sessions} 个会话，${p.total_tokens.toLocaleString()} tokens`,
+        tr("**全局：** {0} 个会话，{1} 条消息，{2} tokens", { 0: g.total_sessions, 1: g.total_messages.toLocaleString(getLocale()), 2: g.total_tokens.toLocaleString(getLocale()) }),
+        tr("**本周：** {0} 个会话，{1} tokens", { 0: g.week_sessions, 1: g.week_tokens.toLocaleString(getLocale()) }),
+        tr("**当前项目 ({0})：** {1} 个会话，{2} tokens", { 0: p.cwd, 1: p.total_sessions, 2: p.total_tokens.toLocaleString(getLocale()) }),
       ];
       if (data.by_model.length > 0) {
-        lines.push("", "**按模型：**");
-        data.by_model.forEach((m) => lines.push(`- ${m.model}：${m.sessions} 个会话，${m.tokens.toLocaleString()} tokens`));
+        lines.push("", tr("**按模型：**"));
+        data.by_model.forEach((m) => lines.push(tr("- {0}：{1} 个会话，{2} tokens", { 0: m.model, 1: m.sessions, 2: m.tokens.toLocaleString(getLocale()) })));
       }
       this.addMessage("system", lines.join("\n"));
     } catch { /* ignore */ }
@@ -2042,23 +2053,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private async createCheckpoint(label: string): Promise<void> {
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
-    if (!sessionId) { this.addMessage("system", "暂无活跃会话。"); return; }
+    if (!sessionId) { this.addMessage("system", tr("暂无活跃会话。")); return; }
     try {
       const response = await fetch(this._gatewayUrl("/snapshot/checkpoint"), {
         method: "POST",
         headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, label }),
       });
-      if (!response.ok) { this.addMessage("system", `创建检查点失败：${response.statusText}`); return; }
+      if (!response.ok) { this.addMessage("system", tr("创建检查点失败：{0}", { 0: response.statusText })); return; }
       const data = (await response.json()) as { checkpoint_id: string; snapshot_included?: boolean };
-      const snapshotNote = data.snapshot_included === false ? "（仅保存对话，文件快照已跳过）" : "";
-      this.addMessage("system", `检查点已创建：\`${data.checkpoint_id.slice(0, 8)}\`${label ? `（${label}）` : ""}${snapshotNote}`);
+      const snapshotNote = data.snapshot_included === false ? tr("（仅保存对话，文件快照已跳过）") : "";
+      this.addMessage("system", tr("检查点已创建：`{0}`{1}{2}", { 0: data.checkpoint_id.slice(0, 8), 1: label ? `（${label}）` : "", 2: snapshotNote }));
     } catch { /* ignore */ }
   }
 
   private async fetchCheckpoints(): Promise<void> {
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
-    if (!sessionId) { this.addMessage("system", "暂无活跃会话。"); return; }
+    if (!sessionId) { this.addMessage("system", tr("暂无活跃会话。")); return; }
     try {
       const url = new URL(this._gatewayUrl("/snapshot/list"));
       url.searchParams.set("session_id", sessionId);
@@ -2067,11 +2078,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const checkpoints = (await response.json()) as Array<{
         id: string; label?: string; created_at?: number; message_index?: number;
       }>;
-      if (checkpoints.length === 0) { this.addMessage("system", "无检查点。"); return; }
-      const lines = ["## 检查点", ""];
+      if (checkpoints.length === 0) { this.addMessage("system", tr("无检查点。")); return; }
+      const lines = [tr("## 检查点"), ""];
       checkpoints.forEach((cp) => {
-        const ts = cp.created_at ? new Date(cp.created_at * 1000).toLocaleString() : "未知时间";
-        lines.push(`- \`${cp.id.slice(0, 8)}\`  ${cp.label ? `**${cp.label}**  ` : ""}${ts}  消息数：${cp.message_index ?? "?"}`);
+        const ts = cp.created_at ? new Date(cp.created_at * 1000).toLocaleString(getLocale()) : tr("未知时间");
+        lines.push(tr("- `{0}`  {1}{2}  消息数：{3}", { 0: cp.id.slice(0, 8), 1: cp.label ? `**${cp.label}**  ` : "", 2: ts, 3: cp.message_index ?? "?" }));
       });
       this.addMessage("system", lines.join("\n"));
     } catch { /* ignore */ }
@@ -2086,9 +2097,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, checkpoint_id: checkpointId }),
       });
-      if (!response.ok) { this.addMessage("system", `回滚失败：${response.statusText}`); return; }
+      if (!response.ok) { this.addMessage("system", tr("回滚失败：{0}", { 0: response.statusText })); return; }
       await this.fetchAndApplySessionHistory(sessionId);
-      this.addSessionSystemMessage(sessionId, `对话已回滚到检查点 \`${checkpointId.slice(0, 8)}\`（文件未还原）。`);
+      this.addSessionSystemMessage(sessionId, tr("对话已回滚到检查点 `{0}`（文件未还原）。", { 0: checkpointId.slice(0, 8) }));
       void this.fetchAndSendSessions();
     } catch { /* ignore */ }
   }
@@ -2102,9 +2113,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, checkpoint_id: checkpointId }),
       });
-      if (!response.ok) { this.addMessage("system", `还原失败：${response.statusText}`); return; }
+      if (!response.ok) { this.addMessage("system", tr("还原失败：{0}", { 0: response.statusText })); return; }
       await this.fetchAndApplySessionHistory(sessionId);
-      this.addSessionSystemMessage(sessionId, `对话和文件已还原到检查点 \`${checkpointId.slice(0, 8)}\`。`);
+      this.addSessionSystemMessage(sessionId, tr("对话和文件已还原到检查点 `{0}`。", { 0: checkpointId.slice(0, 8) }));
     } catch { /* ignore */ }
   }
 
@@ -2117,12 +2128,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId }),
       });
-      if (!response.ok) { this.addMessage("system", `撤销失败：${response.statusText}`); return; }
+      if (!response.ok) { this.addMessage("system", tr("撤销失败：{0}", { 0: response.statusText })); return; }
       const data = (await response.json()) as { checkpoint_id: string; files_restored?: string[]; warning?: string | null };
       await this.fetchAndApplySessionHistory(sessionId);
-      const fileText = data.files_restored?.length ? `，恢复 ${data.files_restored.length} 个文件` : "";
+      const fileText = data.files_restored?.length ? tr("，恢复 {0} 个文件", { 0: data.files_restored.length }) : "";
       const warning = data.warning ? `\n\n${data.warning}` : "";
-      this.addMessage("system", `已撤销到检查点 \`${data.checkpoint_id.slice(0, 8)}\`${fileText}。${warning}`);
+      this.addMessage("system", tr("已撤销到检查点 `{0}`{1}。{2}", { 0: data.checkpoint_id.slice(0, 8), 1: fileText, 2: warning }));
     } catch { /* ignore */ }
   }
 
@@ -2136,12 +2147,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const agents = (await response.json()) as Array<{
         agent_id: string; title: string; status: string; subagent_type: string;
       }>;
-      if (agents.length === 0) { this.addSessionSystemMessage(sessionId ?? "", "无托管 Agent。"); return; }
+      if (agents.length === 0) { this.addSessionSystemMessage(sessionId ?? "", tr("无托管 Agent。")); return; }
       const lines = ["## Agents", ""];
       agents.forEach((a) => lines.push(`- \`${a.agent_id.slice(0, 8)}\`  **${a.title}**  [${a.subagent_type}]  ${a.status}`));
       this.addSessionSystemMessage(sessionId ?? "", lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId ?? "", `读取 Agents 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId ?? "", tr("读取 Agents 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2156,20 +2167,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const lines = [
         `## Agent \`${agent.agent_id.slice(0, 8)}\``,
         "",
-        `**标题：** ${agent.title}`,
-        `**状态：** ${agent.status} · **类型：** ${agent.subagent_type}`,
-        `**模型：** ${agent.model_profile || agent.model || "默认"} · **深度：** ${agent.depth ?? 0}`,
-        `**回调：** ${agent.callback_enabled ? (agent.callback_state || "enabled") : "disabled"}`,
+        tr("**标题：** {0}", { 0: agent.title }),
+        tr("**状态：** {0} · **类型：** {1}", { 0: agent.status, 1: agent.subagent_type }),
+        tr("**模型：** {0} · **深度：** {1}", { 0: agent.model_profile || agent.model || tr("默认"), 1: agent.depth ?? 0 }),
+        tr("**回调：** {0}", { 0: agent.callback_enabled ? (agent.callback_state || "enabled") : "disabled" }),
       ];
       if (agent.usage && Object.keys(agent.usage).length > 0) {
         lines.push(`**Usage：** \`${JSON.stringify(agent.usage)}\``);
       }
-      if (agent.final_result) lines.push("", "**结果：**", agent.final_result);
-      if (agent.error) lines.push("", `**错误：** ${agent.error}`);
+      if (agent.final_result) lines.push("", tr("**结果：**"), agent.final_result);
+      if (agent.error) lines.push("", tr("**错误：** {0}", { 0: agent.error }));
       if (agent.transcript_path) lines.push("", `**Transcript：** \`${agent.transcript_path}\``);
       this.addSessionSystemMessage(sessionId ?? this.connection.sessionId ?? "", lines.join("\n"));
     } catch (error) {
-      this.addMessage("system", `读取 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addMessage("system", tr("读取 Agent 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2182,13 +2193,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) throw new Error(`agent transcript failed: ${response.status}`);
       const data = await response.json() as AgentTranscriptResponse;
-      const body = data.lines?.length ? data.lines.join("\n") : "（无 transcript）";
+      const body = data.lines?.length ? data.lines.join("\n") : tr("（无 transcript）");
       this.addSessionSystemMessage(
         sessionId ?? "",
-        `## Agent Log \`${data.agent_id.slice(0, 8)}\`${data.truncated ? "（已截断）" : ""}\n\n\`\`\`\n${body}\n\`\`\``,
+        `## Agent Log \`${data.agent_id.slice(0, 8)}\`${data.truncated ? tr("（已截断）") : ""}\n\n\`\`\`\n${body}\n\`\`\``,
       );
     } catch (error) {
-      this.addMessage("system", `读取 Agent transcript 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addMessage("system", tr("读取 Agent transcript 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2202,9 +2213,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ prompt, interrupt, session_id: sessionId }),
       });
       if (!response.ok) throw new Error(`send input failed: ${response.status}`);
-      this.addSessionSystemMessage(sessionId, `已向 Agent \`${agentId.slice(0, 8)}\` 发送输入。`);
+      this.addSessionSystemMessage(sessionId, tr("已向 Agent `{0}` 发送输入。", { 0: agentId.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `发送 Agent 输入失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("发送 Agent 输入失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2226,10 +2237,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const agent = await response.json() as AgentInfo;
       this.addSessionSystemMessage(
         sessionId,
-        `Agent \`${agent.agent_id.slice(0, 8)}\` 已结束：**${agent.status}**${agent.final_result ? `\n\n${agent.final_result}` : ""}${agent.error ? `\n\n错误：${agent.error}` : ""}`,
+        tr("Agent `{0}` 已结束：**{1}**{2}{3}", { 0: agent.agent_id.slice(0, 8), 1: agent.status, 2: agent.final_result ? `\n\n${agent.final_result}` : "", 3: agent.error ? tr("\n\n错误：{0}", { 0: agent.error }) : "" }),
       );
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `等待 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("等待 Agent 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2244,9 +2255,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         headers: this._gatewayHeaders(),
       });
       if (!response.ok) throw new Error(`cancel failed: ${response.status}`);
-      this.addSessionSystemMessage(sessionId, `已请求取消 Agent \`${agentId.slice(0, 8)}\`。`);
+      this.addSessionSystemMessage(sessionId, tr("已请求取消 Agent `{0}`。", { 0: agentId.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `取消 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("取消 Agent 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2274,9 +2285,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`spawn failed: ${response.status}`);
       const agent = await response.json() as AgentInfo;
-      this.addSessionSystemMessage(sessionId, `已启动 Agent \`${agent.agent_id.slice(0, 8)}\`：${agent.title}`);
+      this.addSessionSystemMessage(sessionId, tr("已启动 Agent `{0}`：{1}", { 0: agent.agent_id.slice(0, 8), 1: agent.title }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `启动 Agent 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("启动 Agent 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2302,41 +2313,41 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       try {
         const stat = await vscode.workspace.fs.stat(uri);
         if ((stat.type & vscode.FileType.File) === 0) {
-          errors.push(`${trimmed} 不是文件`);
+          errors.push(tr("{0} 不是文件", { 0: trimmed }));
           continue;
         }
         if (stat.size > maxBytes) {
-          errors.push(`${trimmed} 超过 20MB`);
+          errors.push(tr("{0} 超过 20MB", { 0: trimmed }));
           continue;
         }
         const base = path.basename(filePath);
         const ext = path.extname(base).slice(1).toLowerCase();
         const mediaType = imageExts[ext];
         if (!mediaType) {
-          errors.push(`${trimmed} 不是支持的图片格式`);
+          errors.push(tr("{0} 不是支持的图片格式", { 0: trimmed }));
           continue;
         }
         const data = await vscode.workspace.fs.readFile(uri);
         images.push({ name: base, media_type: mediaType, data: Buffer.from(data).toString("base64") });
       } catch (error) {
-        errors.push(`${trimmed}：${error instanceof Error ? error.message : "无法读取"}`);
+        errors.push(`${trimmed}：${error instanceof Error ? error.message : tr("无法读取")}`);
       }
     }
     if (images.length > 0) {
       this.postMessage({ type: "addAttachments", images, textSnippets: [] });
     }
     if (errors.length > 0) {
-      this.addSessionSystemMessage(sessionId ?? "", `添加图片时跳过：\n${errors.map((item) => `- ${item}`).join("\n")}`);
+      this.addSessionSystemMessage(sessionId ?? "", tr("添加图片时跳过：\n{0}", { 0: errors.map((item) => `- ${item}`).join("\n") }));
     }
     if (images.length > 0) {
-      this.addSessionSystemMessage(sessionId ?? "", `已添加 ${images.length} 张图片到下一条消息。`);
+      this.addSessionSystemMessage(sessionId ?? "", tr("已添加 {0} 张图片到下一条消息。", { 0: images.length }));
     }
   }
 
   private runShellCommand(rawCommand: string): void {
     const command = rawCommand.trim();
     if (!command) {
-      this.addMessage("system", "用法：! <cmd>");
+      this.addMessage("system", trHtml("用法：! <cmd>"));
       return;
     }
 
@@ -2362,7 +2373,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     terminal.show(false);
     terminal.sendText(command, true);
     this.outputChannel?.appendLine(`[CrabCode][Shell][${cwd}] ${command}`);
-    this.addMessage("system", `已在终端运行：${command}`);
+    this.addMessage("system", tr("已在终端运行：{0}", { 0: command }));
   }
 
   private async fetchGoal(): Promise<void> {
@@ -2379,16 +2390,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         } | null
       };
       if (!data.goal) {
-        this.addSessionSystemMessage(sessionId, "当前没有设置 Goal。");
+        this.addSessionSystemMessage(sessionId, tr("当前没有设置 Goal。"));
         return;
       }
       const goal = data.goal;
       const budget = goal.token_budget == null
-        ? "无预算"
-        : `${(goal.tokens_used ?? 0).toLocaleString()} / ${goal.token_budget.toLocaleString()}`;
-      this.addSessionSystemMessage(sessionId, `## Goal\n\n${goal.objective}\n\n**状态：** ${goal.status} · **Tokens：** ${budget}`);
+        ? tr("无预算")
+        : `${(goal.tokens_used ?? 0).toLocaleString(getLocale())} / ${goal.token_budget.toLocaleString(getLocale())}`;
+      this.addSessionSystemMessage(sessionId, tr("## Goal\n\n{0}\n\n**状态：** {1} · **Tokens：** {2}", { 0: goal.objective, 1: goal.status, 2: budget }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取 Goal 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取 Goal 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2412,7 +2423,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) throw new Error(`goal update failed: ${response.status}`);
       await this.fetchGoal();
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `更新 Goal 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("更新 Goal 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2426,16 +2437,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) throw new Error(`task list failed: ${response.status}`);
       const tasks = await response.json() as BackgroundTaskInfo[];
       if (tasks.length === 0) {
-        this.addSessionSystemMessage(sessionId, "没有后台任务。");
+        this.addSessionSystemMessage(sessionId, tr("没有后台任务。"));
         return;
       }
-      const lines = ["## 后台任务", ""];
+      const lines = [tr("## 后台任务"), ""];
       tasks.forEach((task) => {
         lines.push(`- \`${task.task_id.slice(0, 8)}\` · **${task.status || "unknown"}** · ${task.task_type || "task"} · ${task.description || ""}`);
       });
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取后台任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取后台任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2451,16 +2462,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const lines = [
         `## Task \`${task.task_id}\``,
         "",
-        `**状态：** ${task.status || "unknown"}`,
-        `**类型：** ${task.task_type || "task"} · **来源：** ${task.source || "unknown"}`,
-        `**描述：** ${task.description || "（无）"}`,
+        tr("**状态：** {0}", { 0: task.status || "unknown" }),
+        tr("**类型：** {0} · **来源：** {1}", { 0: task.task_type || "task", 1: task.source || "unknown" }),
+        tr("**描述：** {0}", { 0: task.description || tr("（无）") }),
       ];
       if (task.agent_id) lines.push(`**Agent：** \`${task.agent_id}\``);
-      if (task.output_file) lines.push(`**输出：** \`${task.output_file}\``);
-      if (task.error) lines.push(`**错误：** ${task.error}`);
+      if (task.output_file) lines.push(tr("**输出：** `{0}`", { 0: task.output_file }));
+      if (task.error) lines.push(tr("**错误：** {0}", { 0: task.error }));
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2474,13 +2485,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) throw new Error(`task output failed: ${response.status}`);
       const data = await response.json() as { task_id?: string; path?: string | null; lines?: string[]; truncated?: boolean };
-      const body = data.lines?.length ? data.lines.join("\n") : "（无输出）";
+      const body = data.lines?.length ? data.lines.join("\n") : tr("（无输出）");
       this.addSessionSystemMessage(
         sessionId,
-        `## Task Output \`${data.task_id || taskId}\`${data.truncated ? "（已截断）" : ""}\n\n\`\`\`\n${body}\n\`\`\`${data.path ? `\n\n路径：\`${data.path}\`` : ""}`,
+        `## Task Output \`${data.task_id || taskId}\`${data.truncated ? tr("（已截断）") : ""}\n\n\`\`\`\n${body}\n\`\`\`${data.path ? tr("\n\n路径：`{0}`", { 0: data.path }) : ""}`,
       );
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取任务输出失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取任务输出失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2494,9 +2505,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ task_id: taskId, session_id: sessionId }),
       });
       if (!response.ok) throw new Error(`task stop failed: ${response.status}`);
-      this.addSessionSystemMessage(sessionId, `已请求停止后台任务 \`${taskId.slice(0, 8)}\`。`);
+      this.addSessionSystemMessage(sessionId, tr("已请求停止后台任务 `{0}`。", { 0: taskId.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `停止后台任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("停止后台任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2510,14 +2521,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!response.ok) throw new Error(`peer list failed: ${response.status}`);
       const peers = await response.json() as PeerInfo[];
       if (peers.length === 0) {
-        this.addSessionSystemMessage(sessionId, "没有可消息联系的其他会话。");
+        this.addSessionSystemMessage(sessionId, tr("没有可消息联系的其他会话。"));
         return;
       }
-      const lines = ["## CrabCode 会话 Peers", ""];
+      const lines = [tr("## CrabCode 会话 Peers"), ""];
       peers.forEach((peer) => lines.push(`- **${peer.name}** · \`${peer.session_id.slice(0, 8)}\` · ${peer.permission_class || "prompting"} · ${peer.cwd}`));
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取 Peers 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取 Peers 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2532,9 +2543,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`peer send failed: ${response.status}`);
       const delivery = await response.json() as { status: string; detail?: string };
-      this.addSessionSystemMessage(sessionId, `Peer 消息 ${delivery.status}${delivery.detail ? `：${delivery.detail}` : ""}。`);
+      this.addSessionSystemMessage(sessionId, tr("Peer 消息 {0}{1}。", { 0: delivery.status, 1: delivery.detail ? `：${delivery.detail}` : "" }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `发送 Peer 消息失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("发送 Peer 消息失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2547,9 +2558,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) throw new Error(`team list failed: ${response.status}`);
       const teams = await response.json() as string[];
-      this.addSessionSystemMessage(sessionId, teams.length ? `## Teams\n\n${teams.map((id) => `- \`${id}\``).join("\n")}` : "没有活动 Team。");
+      this.addSessionSystemMessage(sessionId, teams.length ? `## Teams\n\n${teams.map((id) => `- \`${id}\``).join("\n")}` : tr("没有活动 Team。"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取 Team 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取 Team 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2562,13 +2573,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
       if (!response.ok) throw new Error(`team status failed: ${response.status}`);
       const status = await response.json() as TeamStatusInfo;
-      const lines = [`## Team: ${status.team_id}`, "", `**状态：** ${status.state}`, `**Teammates：** ${status.teammate_count ?? 0}/${status.max_teammates ?? 0}`];
+      const lines = [`## Team: ${status.team_id}`, "", tr("**状态：** {0}", { 0: status.state }), `**Teammates：** ${status.teammate_count ?? 0}/${status.max_teammates ?? 0}`];
       (status.teammates ?? []).forEach((member) => lines.push(`- ${member.name || member.agent_id.slice(0, 8)} · ${member.role} · ${member.state}`));
       const tasks = status.tasks;
       if (tasks) lines.push("", `**Tasks：** ${tasks.total ?? 0}（pending ${tasks.pending ?? 0} · claimed ${tasks.claimed ?? 0} · done ${tasks.completed ?? 0} · failed ${tasks.failed ?? 0}）`);
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取 Team 状态失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取 Team 状态失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2589,13 +2600,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const messages = await response.json() as TeamMessageInfo[];
       const body = messages.length
         ? messages.slice(-50).map((message) => `- \`${(message.from_agent || "").slice(0, 8)} → ${(message.to_agent || "").slice(0, 8)}\`: ${message.text || ""}`).join("\n")
-        : "（无消息）";
+        : tr("（无消息）");
       this.addSessionSystemMessage(
         sessionId,
         `## Team Messages: ${teamId}${agentId ? ` · ${agentId.slice(0, 8)}` : ""}${unread ? " · unread" : ""}\n\n${body}`,
       );
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取 Team 消息失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2610,10 +2621,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const tasks = await response.json() as TeamTaskInfo[];
       const body = tasks.length
         ? tasks.map((task) => `- \`${task.id.slice(0, 8)}\` · **${task.status}** · ${task.description || ""}${task.assignee ? ` · ${task.assignee.slice(0, 8)}` : ""}`).join("\n")
-        : "（无任务）";
+        : tr("（无任务）");
       this.addSessionSystemMessage(sessionId, `## Team Tasks: ${teamId}\n\n${body}`);
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取 Team 任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2628,9 +2639,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`team create failed: ${response.status}`);
       const data = await response.json() as { team_id: string };
-      this.addSessionSystemMessage(sessionId, `Team \`${data.team_id}\` 已创建。`);
+      this.addSessionSystemMessage(sessionId, tr("Team `{0}` 已创建。", { 0: data.team_id }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `创建 Team 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("创建 Team 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2658,9 +2669,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`team spawn failed: ${response.status}`);
       const data = await response.json() as { team_id: string; agent_id: string };
-      this.addSessionSystemMessage(sessionId, `Team \`${data.team_id}\` 已添加 teammate \`${data.agent_id.slice(0, 8)}\`。`);
+      this.addSessionSystemMessage(sessionId, tr("Team `{0}` 已添加 teammate `{1}`。", { 0: data.team_id, 1: data.agent_id.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `添加 Team teammate 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("添加 Team teammate 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2674,9 +2685,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ team_id: teamId, agent_id: agentId, session_id: sessionId }),
       });
       if (!response.ok) throw new Error(await this.gatewayError(response));
-      this.addSessionSystemMessage(sessionId, `Team ${teamId} 已移除 teammate ${agentId.slice(0, 8)}。`);
+      this.addSessionSystemMessage(sessionId, tr("Team {0} 已移除 teammate {1}。", { 0: teamId, 1: agentId.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `移除 Team teammate 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("移除 Team teammate 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2691,9 +2702,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`team message failed: ${response.status}`);
       const data = await response.json() as { message_id?: string };
-      this.addSessionSystemMessage(sessionId, `已向 Team \`${teamId}\` 的 \`${to.slice(0, 8)}\` 发送消息${data.message_id ? `（${data.message_id.slice(0, 8)}）` : ""}。`);
+      this.addSessionSystemMessage(sessionId, tr("已向 Team `{0}` 的 `{1}` 发送消息{2}。", { 0: teamId, 1: to.slice(0, 8), 2: data.message_id ? `（${data.message_id.slice(0, 8)}）` : "" }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `发送 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("发送 Team 消息失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2708,9 +2719,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`team broadcast failed: ${response.status}`);
       const data = await response.json() as { recipient_count?: number };
-      this.addSessionSystemMessage(sessionId, `Team \`${teamId}\` 广播已发送给 ${data.recipient_count ?? 0} 个成员。`);
+      this.addSessionSystemMessage(sessionId, tr("Team `{0}` 广播已发送给 {1} 个成员。", { 0: teamId, 1: data.recipient_count ?? 0 }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `Team 广播失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("Team 广播失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2734,9 +2745,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(await this.gatewayError(response));
       const data = await response.json() as { marked_read?: number };
-      this.addSessionSystemMessage(sessionId, `已将 Team ${teamId} 的 ${data.marked_read ?? 0} 条消息标记为已读。`);
+      this.addSessionSystemMessage(sessionId, tr("已将 Team {0} 的 {1} 条消息标记为已读。", { 0: teamId, 1: data.marked_read ?? 0 }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `标记 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("标记 Team 消息失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2751,9 +2762,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(`team task add failed: ${response.status}`);
       const data = await response.json() as { task_id: string };
-      this.addSessionSystemMessage(sessionId, `Team 任务已添加：\`${data.task_id.slice(0, 8)}\`。`);
+      this.addSessionSystemMessage(sessionId, tr("Team 任务已添加：`{0}`。", { 0: data.task_id.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `添加 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("添加 Team 任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2767,9 +2778,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ team_id: teamId, task_id: taskId, agent_id: agentId || "", session_id: sessionId }),
       });
       if (!response.ok) throw new Error(`team task claim failed: ${response.status}`);
-      this.addSessionSystemMessage(sessionId, `Team 任务 \`${taskId.slice(0, 8)}\` 已认领。`);
+      this.addSessionSystemMessage(sessionId, tr("Team 任务 `{0}` 已认领。", { 0: taskId.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `认领 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("认领 Team 任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2783,9 +2794,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ team_id: teamId, task_id: taskId, result, agent_id: agentId || "", session_id: sessionId }),
       });
       if (!response.ok) throw new Error(`team task complete failed: ${response.status}`);
-      this.addSessionSystemMessage(sessionId, `Team 任务 \`${taskId.slice(0, 8)}\` 已完成。`);
+      this.addSessionSystemMessage(sessionId, tr("Team 任务 `{0}` 已完成。", { 0: taskId.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `完成 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("完成 Team 任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2799,9 +2810,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ team_id: teamId, task_id: taskId, reason, agent_id: agentId || "", session_id: sessionId }),
       });
       if (!response.ok) throw new Error(await this.gatewayError(response));
-      this.addSessionSystemMessage(sessionId, `Team 任务 ${taskId.slice(0, 8)} 已标记失败。`);
+      this.addSessionSystemMessage(sessionId, tr("Team 任务 {0} 已标记失败。", { 0: taskId.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `标记 Team 任务失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("标记 Team 任务失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2816,7 +2827,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const bridge = await response.json() as TeamBridgeInfo;
       this.addSessionSystemMessage(sessionId, `Team Bridge \`${bridge.team_a}\` ↔ \`${bridge.team_b}\`：**${bridge.policy}**。`);
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `读取 Team Bridge 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("读取 Team Bridge 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2828,7 +2839,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const sessionId = this.displayedSessionId ?? this.connection.sessionId;
     if (!sessionId) return;
     if (policy !== "allow_all" && policy !== "allow_tagged" && policy !== "deny") {
-      this.addSessionSystemMessage(sessionId, "Bridge policy 必须是 allow_all、allow_tagged 或 deny。");
+      this.addSessionSystemMessage(sessionId, tr("Bridge policy 必须是 allow_all、allow_tagged 或 deny。"));
       return;
     }
     try {
@@ -2839,9 +2850,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(await this.gatewayError(response));
       const bridge = await response.json() as TeamBridgeInfo;
-      this.addSessionSystemMessage(sessionId, `Team Bridge 已设置：\`${bridge.team_a}\` ↔ \`${bridge.team_b}\` = **${bridge.policy}**。`);
+      this.addSessionSystemMessage(sessionId, tr("Team Bridge 已设置：`{0}` ↔ `{1}` = **{2}**。", { 0: bridge.team_a, 1: bridge.team_b, 2: bridge.policy }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `设置 Team Bridge 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("设置 Team Bridge 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2869,9 +2880,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       if (!response.ok) throw new Error(await this.gatewayError(response));
       const message = await response.json() as CrossTeamMessageInfo;
-      this.addSessionSystemMessage(sessionId, `跨 Team 消息已发送：\`${message.id.slice(0, 8)}\`。`);
+      this.addSessionSystemMessage(sessionId, tr("跨 Team 消息已发送：`{0}`。", { 0: message.id.slice(0, 8) }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `发送跨 Team 消息失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("发送跨 Team 消息失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2885,9 +2896,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({ team_id: teamId, session_id: sessionId }),
       });
       if (!response.ok) throw new Error(`team shutdown failed: ${response.status}`);
-      this.addSessionSystemMessage(sessionId, `Team \`${teamId}\` 已关闭。`);
+      this.addSessionSystemMessage(sessionId, tr("Team `{0}` 已关闭。", { 0: teamId }));
     } catch (error) {
-      this.addSessionSystemMessage(sessionId, `关闭 Team 失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId, tr("关闭 Team 失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2903,8 +2914,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const mode = data.mode === "plan" ? "plan" : "agent";
       this.getSessionState(sessionId).mode = mode;
       this.postMessage({ type: "modeChange", mode });
-      const lines = [`**模式：** ${data.mode}`, `**计划模式：** ${data.in_plan_mode ? "是" : "否"}`];
-      if (data.plan) lines.push("", "**当前计划：**", "```json", JSON.stringify(data.plan, null, 2), "```");
+      const lines = [tr("**模式：** {0}", { 0: data.mode }), tr("**计划模式：** {0}", { 0: data.in_plan_mode ? tr("是") : tr("否") })];
+      if (data.plan) lines.push("", tr("**当前计划：**"), "```json", JSON.stringify(data.plan, null, 2), "```");
       this.addSessionSystemMessage(sessionId, lines.join("\n"));
     } catch { /* ignore */ }
   }
@@ -2924,14 +2935,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const entries = data.logs ?? [];
         const body = entries.length
           ? entries.map((entry) => `- **${entry.name}** · \`${entry.path}\`${entry.state ? ` · ${entry.state}` : ""}`).join("\n")
-          : "（无日志）";
-        this.addSessionSystemMessage(sessionId ?? "", "## 后台日志\n\n" + body);
+          : tr("（无日志）");
+        this.addSessionSystemMessage(sessionId ?? "", tr("## 后台日志\n\n") + body);
         return;
       }
-      const content = data.lines?.length ? "```\n" + data.lines.join("\n") + "\n```" : "（无日志）";
-      this.addSessionSystemMessage(sessionId ?? "", `## Log: ${name}${data.truncated ? "（已截断）" : ""}\n\n${content}${clear ? "\n\n已清空。" : ""}`);
+      const content = data.lines?.length ? "```\n" + data.lines.join("\n") + "\n```" : tr("（无日志）");
+      this.addSessionSystemMessage(sessionId ?? "", `## Log: ${name}${data.truncated ? tr("（已截断）") : ""}\n\n${content}${clear ? tr("\n\n已清空。") : ""}`);
     } catch (error) {
-      this.addSessionSystemMessage(sessionId ?? "", `读取日志失败：${error instanceof Error ? error.message : String(error)}`);
+      this.addSessionSystemMessage(sessionId ?? "", tr("读取日志失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -2955,7 +2966,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      this.addSessionSystemMessage(sessionId, `开始跟踪日志 \`${name}\`。再次执行 \`/logs --stop\` 停止。`);
+      this.addSessionSystemMessage(sessionId, tr("开始跟踪日志 `{0}`。再次执行 `/logs --stop` 停止。", { 0: name }));
       while (!controller.signal.aborted) {
         const chunk = await reader.read();
         if (chunk.done) break;
@@ -2971,7 +2982,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
       }
     } catch (error) {
-      if (!controller.signal.aborted) this.addSessionSystemMessage(sessionId, `日志跟踪失败：${error instanceof Error ? error.message : String(error)}`);
+      if (!controller.signal.aborted) this.addSessionSystemMessage(sessionId, tr("日志跟踪失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     } finally {
       if (this.logFollowAbort === controller) this.logFollowAbort = null;
     }
@@ -3132,9 +3143,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private async pickFilesForChat(): Promise<void> {
     const picked = await vscode.window.showOpenDialog({
-      title: "CrabCode：选择要附加的文件",
+      title: tr("CrabCode：选择要附加的文件"),
       canSelectMany: true,
-      openLabel: "添加",
+      openLabel: tr("添加"),
       filters: {
         "Text / code": [
           "txt",
@@ -3185,7 +3196,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     };
     const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
     if (workspaceFolders.length === 0) {
-      void vscode.window.showInformationMessage("CrabCode：请先打开一个工作区。");
+      void vscode.window.showInformationMessage(tr("CrabCode：请先打开一个工作区。"));
       return;
     }
 
@@ -3251,17 +3262,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const items: Array<ReferenceItem | vscode.QuickPickItem> = [
       ...(recent.length > 0
         ? [
-          { label: "最近打开", kind: vscode.QuickPickItemKind.Separator },
+          { label: tr("最近打开"), kind: vscode.QuickPickItemKind.Separator },
           ...recent,
         ]
         : []),
-      { label: "文件夹", kind: vscode.QuickPickItemKind.Separator },
+      { label: tr("文件夹"), kind: vscode.QuickPickItemKind.Separator },
       ...folders,
-      { label: "文件", kind: vscode.QuickPickItemKind.Separator },
+      { label: tr("文件"), kind: vscode.QuickPickItemKind.Separator },
       ...files.filter((item) => !recentPaths.has(item.uri.fsPath)),
     ];
     const picked = await vscode.window.showQuickPick(items, {
-      placeHolder: "搜索附件",
+      placeHolder: tr("搜索附件"),
       matchOnDescription: true,
     });
     if (!picked || !("uri" in picked)) return;
@@ -3285,7 +3296,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   ): Promise<(IdePathReference & { relativePath: string }) | null> {
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
     if (!workspaceFolder) {
-      void vscode.window.showWarningMessage("CrabCode：只能引用当前工作区内的文件或文件夹。");
+      void vscode.window.showWarningMessage(tr("CrabCode：只能引用当前工作区内的文件或文件夹。"));
       return null;
     }
     try {
@@ -3302,7 +3313,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         relativePath,
       };
     } catch {
-      void vscode.window.showWarningMessage(`CrabCode：无法引用\n${uri.fsPath}`);
+      void vscode.window.showWarningMessage(tr("CrabCode：无法引用\n{0}", { 0: uri.fsPath }));
       return null;
     }
   }
@@ -3319,11 +3330,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       try {
         const stat = await vscode.workspace.fs.stat(uri);
         if ((stat.type & vscode.FileType.File) === 0) {
-          void vscode.window.showWarningMessage(`CrabCode：已跳过非文件\n${uri.fsPath}`);
+          void vscode.window.showWarningMessage(tr("CrabCode：已跳过非文件\n{0}", { 0: uri.fsPath }));
           continue;
         }
         if (stat.size > maxBytes) {
-          void vscode.window.showWarningMessage(`CrabCode：已跳过过大文件（>${maxSizeMb}MB）\n${uri.fsPath}`);
+          void vscode.window.showWarningMessage(tr("CrabCode：已跳过过大文件（>{0}MB）\n{1}", { 0: maxSizeMb, 1: uri.fsPath }));
           continue;
         }
         const buf = await vscode.workspace.fs.readFile(uri);
@@ -3331,11 +3342,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const decoder = new TextDecoder("utf-8", { fatal: false });
         let text = decoder.decode(buf);
         if (text.length > maxTextChars) {
-          text = text.slice(0, maxTextChars) + "\n…(已截断)";
+          text = text.slice(0, maxTextChars) + tr("\n…(已截断)");
         }
         textSnippets.push({ name: base, text, path: uri.fsPath });
       } catch {
-        void vscode.window.showWarningMessage(`CrabCode：无法读取文件\n${uri.fsPath}`);
+        void vscode.window.showWarningMessage(tr("CrabCode：无法读取文件\n{0}", { 0: uri.fsPath }));
       }
     }
 
@@ -3462,7 +3473,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       await vscode.workspace.getConfiguration("crabcode").update("followUpMode", mode, vscode.ConfigurationTarget.Global);
     } catch (error) {
-      this.addMessage("system", `保存跟进处理方式失败：${String(error)}`);
+      this.addMessage("system", tr("保存跟进处理方式失败：{0}", { 0: String(error) }));
     } finally {
       if (this.followUpModeUpdate === update) this.followUpModeUpdate = null;
     }
@@ -3482,7 +3493,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } catch (error) {
       message.followUpFailed = true;
       if (state === this.currentState) this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
-      this.addMessageOnState(state, "system", `消息未发送：${String(error)}`, state === this.currentState);
+      this.addMessageOnState(state, "system", tr("消息未发送：{0}", { 0: String(error) }), state === this.currentState);
     }
   }
 
@@ -3626,7 +3637,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "stream_text":
         state.retryLabel = null;
         this.finalizeThinkingOnState(state, updateWebview);
-        if (updateWebview) this.postMessage({ type: "activityStatus", label: "CrabCode 正在处理" });
+        if (updateWebview) this.postMessage({ type: "activityStatus", label: tr("CrabCode 正在处理") });
         this.appendAssistantTextOnState(state, payload.text, updateWebview);
         break;
       case "stream_retry": {
@@ -3635,7 +3646,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.finalizeThinkingOnState(state, updateWebview);
         state.isBusy = true;
         state.startNewAssistantMessage = true;
-        state.retryLabel = retry.message || `模型连接中断，正在重试 ${retry.retry_count}/${retry.unbounded ? "∞" : retry.max_retries}`;
+        state.retryLabel = retry.message || tr("模型连接中断，正在重试 {0}/{1}", { 0: retry.retry_count, 1: retry.unbounded ? "∞" : retry.max_retries });
         if (updateWebview) {
           this.postMessage({ type: "busyState", busy: true, retryLabel: state.retryLabel });
           this.postMessage({ type: "activityStatus", label: state.retryLabel, retry: true });
@@ -3644,7 +3655,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       case "thinking":
         state.retryLabel = null;
-        if (updateWebview) this.postMessage({ type: "activityStatus", label: "CrabCode 正在处理" });
+        if (updateWebview) this.postMessage({ type: "activityStatus", label: tr("CrabCode 正在处理") });
         this.handleThinkingOnState(state, payload.text, updateWebview);
         break;
       case "stream_mode":
@@ -3703,7 +3714,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "tool_use":
         state.retryLabel = null;
         this.finalizeThinkingOnState(state, updateWebview);
-        if (updateWebview) this.postMessage({ type: "activityStatus", label: "CrabCode 正在处理" });
+        if (updateWebview) this.postMessage({ type: "activityStatus", label: tr("CrabCode 正在处理") });
         this.handleToolUseOnState(state, payload as ToolUsePayload, updateWebview);
         break;
       case "tool_result":
@@ -3746,12 +3757,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "compact": {
         const compact = payload as CompactPayload;
         const counts = compact.messages_before || compact.messages_after
-          ? `（${compact.messages_before} → ${compact.messages_after} 条消息）`
+          ? tr("（{0} → {1} 条消息）", { 0: compact.messages_before, 1: compact.messages_after })
           : "";
         this.addMessageOnState(
           state,
           "system",
-          `对话已压缩${counts}${compact.summary ? `\n\n${compact.summary}` : ""}`,
+          tr("对话已压缩{0}{1}", { 0: counts, 1: compact.summary ? `\n\n${compact.summary}` : "" }),
           updateWebview,
         );
         break;
@@ -3803,7 +3814,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.addMessageOnState(
           state,
           "system",
-          `定时任务 \`${schedule.job_id.slice(0, 8)}\`：${schedule.status}，${detail}`,
+          tr("定时任务 `{0}`：{1}，{2}", { 0: schedule.job_id.slice(0, 8), 1: schedule.status, 2: detail }),
           updateWebview,
         );
         break;
@@ -3814,7 +3825,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.addMessageOnState(
           state,
           "system",
-          `已创建文件快照 \`${snapshot.snapshot_id.slice(0, 8)}\`${files}`,
+          tr("已创建文件快照 `{0}`{1}", { 0: snapshot.snapshot_id.slice(0, 8), 1: files }),
           updateWebview,
         );
         break;
@@ -3825,7 +3836,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.addMessageOnState(
           state,
           "system",
-          `已恢复文件快照 \`${revert.snapshot_id.slice(0, 8)}\`${files}`,
+          tr("已恢复文件快照 `{0}`{1}", { 0: revert.snapshot_id.slice(0, 8), 1: files }),
           updateWebview,
         );
         break;
@@ -3834,7 +3845,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.handleFileChangeOnState(state, payload as FileChangePayload, updateWebview);
         break;
       case "error":
-        this.addMessageOnState(state, "system", `CrabCode：${payload.message}`, updateWebview, undefined, "复制错误");
+        this.addMessageOnState(state, "system", `CrabCode：${payload.message}`, updateWebview, undefined, tr("复制错误"));
         if (payload.command_error && (payload.command === "steer_message" || payload.command === "queue_message" || payload.command === "queued_message_action")) {
           const pending = state.pendingSteeringMessages.find((entry) => payload.request_id
             ? entry.id === payload.request_id
@@ -4577,7 +4588,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       entry.followUpAction = action;
       this.postMessage({ type: "steeringQueue", messages: state.pendingSteeringMessages });
     } catch (error) {
-      this.addMessageOnState(state, "system", `排队操作失败：${String(error)}`, true);
+      this.addMessageOnState(state, "system", tr("排队操作失败：{0}", { 0: String(error) }), true);
     }
   }
 
@@ -4706,10 +4717,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   async showSettingsMenu(): Promise<void> {
     const choice = await vscode.window.showQuickPick(
       [
-        { label: "CrabCode设置", description: "聊天、模型、权限、上下文压缩与提示词", id: "crabcode" },
-        { label: "VS Code 扩展设置", description: "连接、安装、编辑器集成与调试", id: "extension" },
+        { label: tr("CrabCode设置"), description: tr("聊天、模型、权限、上下文压缩与提示词"), id: "crabcode" },
+        { label: tr("VS Code 扩展设置"), description: tr("连接、安装、编辑器集成与调试"), id: "extension" },
       ],
-      { title: "CrabCode 设置", placeHolder: "选择要打开的设置" },
+      { title: tr("CrabCode 设置"), placeHolder: tr("选择要打开的设置") },
     );
     if (!choice) return;
     await vscode.commands.executeCommand(choice.id === "crabcode" ? "crabcode.openCrabCodeSettings" : "crabcode.openSettings");
@@ -4720,8 +4731,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private getHtmlForWebview(webview: vscode.Webview): string {
     const nonce = getNonce();
 
-    return /*html*/ `<!DOCTYPE html>
-<html lang="en">
+    return /*html*/ `${trHtml(`<!DOCTYPE html>
+<html lang="${getLocale()}">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
@@ -7479,8 +7490,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="model-menu-list" class="model-menu-list"></div>
   </div>
-  <script nonce="${nonce}">
-    (function() {
+  `)}<script nonce="${nonce}">(function() {
+      const localeData = ${webviewLocaleData(getLocale())};
+      const i18n = (${createI18n.toString()})(localeData.locale, localeData.dictionaries);
+      const { t: tr, html: trHtml, localized, getLocale } = i18n;
       try {
         const vscode = acquireVsCodeApi();
         const msgContainer = document.getElementById('messages');
@@ -7625,7 +7638,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let composerIsComposing = false;
     let compositionResetTimer = null;
     let runtimeState = { ready: false, pending: false, connected: false };
-    const effortLabels = { auto: '自动', none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' };
+    const effortLabels = { auto: tr("自动"), none: tr("关闭"), minimal: tr("最低"), low: tr("低"), medium: tr("中"), high: tr("高"), xhigh: tr("极高"), max: tr("最大") };
 
     function isMacPlatform() {
       return /Macintosh|MacIntel|MacPPC|Mac68K/i.test(navigator.platform || navigator.userAgent || '');
@@ -7657,7 +7670,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function referenceName(value) {
       const normalized = String(value || '').replace(/[\\/]+$/, '');
       const parts = normalized.split(/[\\/]/);
-      return parts[parts.length - 1] || normalized || '引用';
+      return parts[parts.length - 1] || normalized || tr("引用");
     }
 
     function ideReferenceKey(reference) {
@@ -7669,9 +7682,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function composerNodeText(node) {
-      if (node.nodeType === Node.TEXT_NODE) return String(node.textContent || '').replace(/\u200b/g, '');
+      if (node.nodeType === Node.TEXT_NODE) return String(node.textContent || '').replace(/​/g, '');
       if (!(node instanceof HTMLElement)) return '';
-      if (node.classList.contains('composer-inline-mention')) return '@' + (node.dataset.mentionLabel || '引用');
+      if (node.classList.contains('composer-inline-mention')) return '@' + (node.dataset.mentionLabel || tr("引用"));
       if (node.tagName === 'BR') return '\\n';
       const text = Array.from(node.childNodes).map(composerNodeText).join('');
       return node.tagName === 'DIV' || node.tagName === 'P' ? text + '\\n' : text;
@@ -7724,20 +7737,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // ── Session management state ────────────────────────────────────
     let allSessions = [];          // { session_id, message_count, status, title }
     let currentSessionId = null;
-    let currentSessionTitle = '新会话';
+    let currentSessionTitle = tr("新会话");
     let sessionListVisible = false;
     let historyPanelVisible = false;
     let historySearchQuery = '';
 
     function setSessionTitle(title) {
-      currentSessionTitle = title || '新会话';
+      currentSessionTitle = title || tr("新会话");
       if (sessionTitleEl) sessionTitleEl.textContent = currentSessionTitle;
     }
 
     function setSessionOrigin(origin) {
       const value = origin ? String(origin) : '';
       if (!sessionOriginEl) return;
-      sessionOriginEl.textContent = value ? '· 来自 ' + value : '';
+      sessionOriginEl.textContent = value ? tr("· 来自 ") + value : '';
       sessionOriginEl.title = value;
       sessionOriginEl.classList.toggle('visible', !!value);
     }
@@ -7772,11 +7785,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function formatSessionMeta(session) {
       const parts = [];
-      if (session.message_count != null) parts.push(session.message_count + ' 条消息');
-      if (session.tokens_used != null && session.tokens_used > 0) parts.push(session.tokens_used.toLocaleString() + ' tokens');
+      if (session.message_count != null) parts.push(session.message_count + tr(" 条消息"));
+      if (session.tokens_used != null && session.tokens_used > 0) parts.push(session.tokens_used.toLocaleString(getLocale()) + ' tokens');
       if (session.model) parts.push(session.model);
-      if (session.forked_from_title) parts.push('来自 ' + session.forked_from_title);
-      else if (session.forked_from_session_id) parts.push('来自 ' + session.forked_from_session_id.slice(0, 8) + '…');
+      if (session.forked_from_title) parts.push(tr("来自 ") + session.forked_from_title);
+      else if (session.forked_from_session_id) parts.push(tr("来自 ") + session.forked_from_session_id.slice(0, 8) + '…');
       if (session.cwd) {
         const cwdParts = String(session.cwd).split(/[\\/]/).filter(Boolean);
         if (cwdParts.length > 0) parts.push(cwdParts[cwdParts.length - 1]);
@@ -7789,10 +7802,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const diffMin = Math.floor(diffMs / 60000);
           const diffHr = Math.floor(diffMin / 60);
           const diffDay = Math.floor(diffHr / 24);
-          if (diffMin < 1) parts.push('刚刚');
-          else if (diffMin < 60) parts.push(diffMin + ' 分钟前');
-          else if (diffHr < 24) parts.push(diffHr + ' 小时前');
-          else parts.push(diffDay + ' 天前');
+          if (diffMin < 1) parts.push(tr("刚刚"));
+          else if (diffMin < 60) parts.push(diffMin + tr(" 分钟前"));
+          else if (diffHr < 24) parts.push(diffHr + tr(" 小时前"));
+          else parts.push(diffDay + tr(" 天前"));
         } catch { /* ignore */ }
       }
       return parts.join(' · ');
@@ -7805,7 +7818,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return s.message_count > 0 || s.session_id === currentSessionId;
       });
       if (visibleSessions.length === 0) {
-        sessionListItems.innerHTML = '<div class="session-list-empty">暂无会话</div>';
+        sessionListItems.innerHTML = trHtml("<div class=\\"session-list-empty\\">暂无会话</div>");
         return;
       }
       sessionListItems.innerHTML = visibleSessions.map(function(s) {
@@ -7843,7 +7856,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         });
       }
       if (items.length === 0) {
-        historyListItems.innerHTML = '<div class="history-list-empty">' + (query ? '无匹配结果' : '暂无历史记录') + '</div>';
+        historyListItems.innerHTML = '<div class="history-list-empty">' + (query ? tr("无匹配结果") : tr("暂无历史记录")) + '</div>';
         return;
       }
       historyListItems.innerHTML = items.map(function(s) {
@@ -7875,7 +7888,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (hdrNewBtn) {
       hdrNewBtn.addEventListener('click', function() {
         vscode.postMessage({ type: 'newSession' });
-        setSessionTitle('新会话');
+        setSessionTitle(tr("新会话"));
       });
     }
     if (hdrSettingsBtn) {
@@ -7893,7 +7906,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       sessionListNewBtn.addEventListener('click', function() {
         hideSessionList();
         vscode.postMessage({ type: 'newSession' });
-        setSessionTitle('新会话');
+        setSessionTitle(tr("新会话"));
       });
     }
     if (historyCloseBtn) {
@@ -7955,7 +7968,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function getTurnSummaryLabel(turn) {
-      return turn.status === 'running' ? '处理中' : '已完成';
+      return turn.status === 'running' ? tr("处理中") : tr("已完成");
     }
 
     function updateTurnSummary(turn) {
@@ -7989,14 +8002,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         turn.summaryEl.classList.toggle('is-running', !turn.completedConfirmed);
         turn.summaryEl.classList.toggle('is-expanded', !collapsed);
         turn.summaryEl.setAttribute('aria-expanded', String(!collapsed));
-        turn.summaryEl.setAttribute('aria-label', (collapsed ? '展开' : '收起') + '处理过程');
-        turn.summaryStatusEl.textContent = !turn.completedConfirmed ? '处理中'
-          : turn.reason === 'interrupted' ? '已中断'
-          : turn.reason && !['end_turn', 'stop'].includes(turn.reason) ? '处理已停止' : '已完成';
+        turn.summaryEl.setAttribute('aria-label', (collapsed ? tr("展开") : tr("收起")) + tr("处理过程"));
+        turn.summaryStatusEl.textContent = !turn.completedConfirmed ? tr("处理中")
+          : turn.reason === 'interrupted' ? tr("已中断")
+          : turn.reason && !['end_turn', 'stop'].includes(turn.reason) ? tr("处理已停止") : tr("已完成");
         turn.summaryTimeEl.textContent = [
           turn.durationMs != null ? formatTurnDuration(turn.durationMs) : turn.endTime && !turn.historical ? formatTurnDuration(getTurnDurationMs(turn)) : '',
-          showToolCallCount && turn.toolCount ? turn.toolCount + '次工具调用' : '',
-          showToolCallCount && turn.errorCount ? turn.errorCount + '次工具错误' : '',
+          showToolCallCount && turn.toolCount ? turn.toolCount + tr("次工具调用") : '',
+          showToolCallCount && turn.errorCount ? turn.errorCount + tr("次工具错误") : '',
         ].filter(Boolean).join(' · ');
         return;
       }
@@ -8015,7 +8028,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       turn.summaryStatusEl.textContent = getTurnSummaryLabel(turn);
       turn.summaryTimeEl.textContent = formatTurnDuration(getTurnDurationMs(turn));
       turn.summaryEl.setAttribute('aria-expanded', String(!!turn.expanded));
-      turn.summaryEl.setAttribute('aria-label', '展开或收起工具和思考');
+      turn.summaryEl.setAttribute('aria-label', tr("展开或收起工具和思考"));
       syncTurnDetailVisibility(turn);
     }
 
@@ -8190,7 +8203,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function openImagePreview(image) {
       imagePreviewReturnFocus = image;
       imagePreviewImage.src = image.currentSrc || image.src;
-      imagePreviewImage.alt = image.alt || '图片预览';
+      imagePreviewImage.alt = image.alt || tr("图片预览");
       imagePreview.hidden = false;
       rootEl.classList.add('image-preview-open');
       imagePreviewClose.focus();
@@ -8295,17 +8308,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function copyButtonHtml(text, label, extraClass) {
       if (!text) return '';
-      return '<button type="button" class="copy-button ' + (extraClass || '') + '" data-copy-text="' + escapeAttr(text) + '" data-copy-label="' + escapeAttr(label || '复制') + '" title="' + escapeAttr(label || '复制') + '" aria-label="' + escapeAttr(label || '复制') + '">' + copyIconSvg() + '</button>';
+      return '<button type="button" class="copy-button ' + (extraClass || '') + '" data-copy-text="' + escapeAttr(text) + '" data-copy-label="' + escapeAttr(label || tr("复制")) + '" title="' + escapeAttr(label || tr("复制")) + '" aria-label="' + escapeAttr(label || tr("复制")) + '">' + copyIconSvg() + '</button>';
     }
 
     function forkButtonHtml(messageUuid) {
       if (!messageUuid) return '';
-      return '<button type="button" class="copy-button fork-button" data-fork-message-uuid="' + escapeAttr(messageUuid) + '" title="从此处分叉" aria-label="从此处分叉"' + (isBusy ? ' disabled' : '') + '>' + forkIconSvg() + '</button>';
+      return '<button type="button" class="copy-button fork-button" data-fork-message-uuid="' + escapeAttr(messageUuid) + trHtml("\\" title=\\"从此处分叉\\" aria-label=\\"从此处分叉\\"") + (isBusy ? ' disabled' : '') + '>' + forkIconSvg() + '</button>';
     }
 
     function turnDetailsButtonHtml(details) {
       if (!details) return '';
-      return '<button type="button" class="copy-button turn-details-button" data-turn-details="' + escapeAttr(JSON.stringify(details)) + '" title="本轮详情" aria-label="本轮详情" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6M12 17h.01"></path></svg></button>';
+      return '<button type="button" class="copy-button turn-details-button" data-turn-details="' + escapeAttr(JSON.stringify(details)) + trHtml("\\" title=\\"本轮详情\\" aria-label=\\"本轮详情\\" aria-haspopup=\\"dialog\\"><svg viewBox=\\"0 0 24 24\\" fill=\\"none\\" stroke=\\"currentColor\\" stroke-width=\\"2\\" stroke-linecap=\\"round\\" aria-hidden=\\"true\\"><circle cx=\\"12\\" cy=\\"12\\" r=\\"9\\"></circle><path d=\\"M12 7v6M12 17h.01\\"></path></svg></button>");
     }
 
     let turnDetailsOverlay = null;
@@ -8340,24 +8353,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function openTurnDetails(details, trigger) {
       closeTurnDetails();
-      const count = value => value == null ? '未记录' : Number(value).toLocaleString('zh-CN') + ' 次';
-      const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '未记录';
-      const tokens = value => typeof value === 'number' ? value.toLocaleString('zh-CN') : '未记录';
-      const reasons = { end_turn: '正常结束', stop: '正常结束', interrupted: '已中断', max_turns_reached: '达到轮数上限', empty_response: '空回复', mode_switch_requested: '切换模式' };
+      const count = value => value == null ? tr("未记录") : Number(value).toLocaleString(getLocale()) + tr(" 次");
+      const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(getLocale(), { hour12: false }) : tr("未记录");
+      const tokens = value => typeof value === 'number' ? value.toLocaleString(getLocale()) : tr("未记录");
+      const reasons = { end_turn: tr("正常结束"), stop: tr("正常结束"), interrupted: tr("已中断"), max_turns_reached: tr("达到轮数上限"), empty_response: tr("空回复"), mode_switch_requested: tr("切换模式") };
       const usage = details.usage || {};
       const rows = [
-        ['启动时间', time(details.started_at)], ['结束时间', time(details.ended_at)],
-        ['耗时', details.duration_ms == null ? '未记录' : (details.duration_ms / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + ' 秒'],
-        ['工具调用次数', count(details.tool_call_count)], ['思考次数', count(details.thinking_count)],
-        ['模型请求次数', count(details.request_count)], ['重试次数', count(details.retry_count)], ['压缩次数', count(details.compact_count)],
-        ['模型', [details.provider, details.model].filter(Boolean).join(' / ') || '未记录'],
-        ['结束原因', details.reason ? reasons[details.reason] || details.reason : '未记录'],
-        ['输入 tokens', tokens(usage.total_input_tokens ?? usage.input_tokens)], ['输出 tokens', tokens(usage.output_tokens)],
-        ['缓存读取 tokens', tokens(usage.cache_read_tokens)], ['缓存写入 tokens', tokens(usage.cache_write_tokens)],
+        [tr("启动时间"), time(details.started_at)], [tr("结束时间"), time(details.ended_at)],
+        [tr("耗时"), details.duration_ms == null ? tr("未记录") : (details.duration_ms / 1000).toLocaleString(getLocale(), { maximumFractionDigits: 2 }) + tr(" 秒")],
+        [tr("工具调用次数"), count(details.tool_call_count)], [tr("思考次数"), count(details.thinking_count)],
+        [tr("模型请求次数"), count(details.request_count)], [tr("重试次数"), count(details.retry_count)], [tr("压缩次数"), count(details.compact_count)],
+        [tr("模型"), [details.provider, details.model].filter(Boolean).join(' / ') || tr("未记录")],
+        [tr("结束原因"), details.reason ? reasons[details.reason] || details.reason : tr("未记录")],
+        [tr("输入 tokens"), tokens(usage.total_input_tokens ?? usage.input_tokens)], [tr("输出 tokens"), tokens(usage.output_tokens)],
+        [tr("缓存读取 tokens"), tokens(usage.cache_read_tokens)], [tr("缓存写入 tokens"), tokens(usage.cache_write_tokens)],
       ];
       const overlay = document.createElement('div');
       overlay.className = 'turn-details-overlay';
-      overlay.innerHTML = '<section class="turn-details-dialog" role="dialog" aria-modal="true" aria-label="本轮详情" tabindex="-1"><header><h2>本轮详情</h2><button class="turn-details-close" type="button" aria-label="关闭本轮详情">×</button></header><dl><div><dt>Session ID</dt><dd><code>' + escapeHtml(details.session_id || '') + '</code>' + copyButtonHtml(details.session_id, '复制 Session ID') + '</dd></div>' + rows.map(row => '<div><dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd></div>').join('') + '</dl><p>次数统计本轮主会话；连续思考内容计为一次。' + (details.source === 'history' ? '此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。' : '') + '</p></section>';
+      overlay.innerHTML = trHtml("<section class=\\"turn-details-dialog\\" role=\\"dialog\\" aria-modal=\\"true\\" aria-label=\\"本轮详情\\" tabindex=\\"-1\\"><header><h2>本轮详情</h2><button class=\\"turn-details-close\\" type=\\"button\\" aria-label=\\"关闭本轮详情\\">×</button></header><dl><div><dt>Session ID</dt><dd><code>") + escapeHtml(details.session_id || '') + '</code>' + copyButtonHtml(details.session_id, tr("复制 Session ID")) + '</dd></div>' + rows.map(row => '<div><dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd></div>').join('') + trHtml("</dl><p>次数统计本轮主会话；连续思考内容计为一次。") + (details.source === 'history' ? tr("此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。") : '') + '</p></section>';
       turnDetailsOverlay = overlay;
       turnDetailsReturnFocus = trigger;
       turnDetailsPreviousOverflow = document.body.style.overflow;
@@ -8403,8 +8416,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const standaloneImage = (value) => {
         const match = String(value || '').trim().match(new RegExp('^!\\\\[([^\\\\]]*)\\\\]\\\\((https?:\\\\/\\\\/[^)\\\\s]+|data:image\\\\/[^)]+)\\\\)$', 'i'));
         if (!match) return '';
-        const alt = match[1] || '图片';
-        return '<img class="assistant-inline-image" data-image-preview src="' + escapeAttr(match[2]) + '" alt="' + escapeAttr(alt) + '" loading="lazy" role="button" tabindex="0" aria-label="放大查看：' + escapeAttr(alt) + '" />';
+        const alt = match[1] || tr("图片");
+        return '<img class="assistant-inline-image" data-image-preview src="' + escapeAttr(match[2]) + '" alt="' + escapeAttr(alt) + trHtml("\\" loading=\\"lazy\\" role=\\"button\\" tabindex=\\"0\\" aria-label=\\"放大查看：") + escapeAttr(alt) + '" />';
       };
 
       const flushParagraph = () => {
@@ -8418,7 +8431,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (code === null) return;
         const source = codeLines.join('\\n');
         const languageClass = code.trim() ? ' language-' + escapeAttr(code.trim().toLowerCase()) : '';
-        parts.push('<div class="copyable-content message-code-shell"><pre><code class="' + languageClass + '">' + escapeHtml(source) + '</code></pre>' + copyButtonHtml(source, '复制代码', 'tool-copy-button') + '</div>');
+        parts.push('<div class="copyable-content message-code-shell"><pre><code class="' + languageClass + '">' + escapeHtml(source) + '</code></pre>' + copyButtonHtml(source, tr("复制代码"), 'tool-copy-button') + '</div>');
         code = null;
         codeLines = [];
       };
@@ -8455,7 +8468,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const rows = tableLines.map(tableRowCells);
           const headHtml = rows[0].map(cell => '<th>' + escapeHtml(cell) + '</th>').join('');
           const bodyHtml = rows.slice(1).map(row => '<tr>' + header.map((_, cellIndex) => '<td>' + escapeHtml(row[cellIndex] || '') + '</td>').join('') + '</tr>').join('');
-          parts.push('<div class="copyable-content message-table-shell"><div class="message-table-wrap"><table><thead><tr>' + headHtml + '</tr></thead><tbody>' + bodyHtml + '</tbody></table></div>' + copyButtonHtml(tableSourceLines.join('\\n'), '复制表格', 'tool-copy-button') + '</div>');
+          parts.push('<div class="copyable-content message-table-shell"><div class="message-table-wrap"><table><thead><tr>' + headHtml + '</tr></thead><tbody>' + bodyHtml + '</tbody></table></div>' + copyButtonHtml(tableSourceLines.join('\\n'), tr("复制表格"), 'tool-copy-button') + '</div>');
           continue;
         }
         paragraph.push(line);
@@ -8478,16 +8491,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function userAttachmentHtml(msg) {
       const images = (msg.images || []).map(function(img) {
         const src = 'data:' + escapeAttr(img.media_type) + ';base64,' + img.data;
-        return '<img data-image-preview src="' + src + '" alt="附件图片" loading="lazy" role="button" tabindex="0" aria-label="放大查看附件图片" />';
+        return '<img data-image-preview src="' + src + trHtml("\\" alt=\\"附件图片\\" loading=\\"lazy\\" role=\\"button\\" tabindex=\\"0\\" aria-label=\\"放大查看附件图片\\" />");
       }).join('');
       const chips = (msg.attachments || []).map(function(item) {
         const detail = item.detail ? '<small>' + escapeHtml(item.detail) + '</small>' : '';
         return '<div class="user-attachment-chip" data-kind="' + escapeAttr(item.kind || 'file') + '" title="' + escapeAttr(item.title || item.label || '') + '">' +
           attachmentGlyph(item.kind) +
-          '<span><strong>' + escapeHtml(item.label || '附件') + '</strong>' + detail + '</span></div>';
+          '<span><strong>' + escapeHtml(item.label || tr("附件")) + '</strong>' + detail + '</span></div>';
       }).join('');
       if (!images && !chips) return '';
-      return '<div class="user-attachment-row" aria-label="附件">' + images + chips + '</div>';
+      return trHtml("<div class=\\"user-attachment-row\\" aria-label=\\"附件\\">") + images + chips + '</div>';
     }
 
     function addMessageEl(msg) {
@@ -8511,13 +8524,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           html += '<div class="msg-images">';
           for (const img of msg.images) {
             const src = 'data:' + escapeAttr(img.media_type) + ';base64,' + img.data;
-            html += '<img data-image-preview src="' + src + '" alt="附件图片" loading="lazy" role="button" tabindex="0" aria-label="放大查看附件图片" />';
+            html += '<img data-image-preview src="' + src + trHtml("\\" alt=\\"附件图片\\" loading=\\"lazy\\" role=\\"button\\" tabindex=\\"0\\" aria-label=\\"放大查看附件图片\\" />");
           }
           html += '</div>';
         }
       }
       if (copyable) {
-        html += '<div class="message-actions">' + (msg.role === 'assistant' ? turnDetailsButtonHtml(msg.turnDetails) : '') + copyButtonHtml(msg.text || '', msg.copyLabel || '复制回复') + (msg.role === 'assistant' ? forkButtonHtml(msg.messageUuid) : '') + '</div>';
+        html += '<div class="message-actions">' + (msg.role === 'assistant' ? turnDetailsButtonHtml(msg.turnDetails) : '') + copyButtonHtml(msg.text || '', msg.copyLabel || tr("复制回复")) + (msg.role === 'assistant' ? forkButtonHtml(msg.messageUuid) : '') + '</div>';
       }
       div.innerHTML = html;
       const processItem = { ...msg, kind: msg.role };
@@ -8585,17 +8598,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       let statusHtml = '';
       if (card.result !== null) {
         statusHtml = card.isError
-          ? '<span class="status error">失败</span>'
-          : '<span class="status ok">完成</span>';
+          ? trHtml("<span class=\\"status error\\">失败</span>")
+          : trHtml("<span class=\\"status ok\\">完成</span>");
       } else {
-        statusHtml = '<span class="status running">运行中</span>';
+        statusHtml = trHtml("<span class=\\"status running\\">运行中</span>");
       }
 
       const inputHtml = renderToolInput(card.toolName, card.input, presentation);
       const imagesHtml = (card.images || []).map(function(img, index) {
         const caption = typeof img.description === 'string' && img.description
           ? '<figcaption>' + escapeHtml(img.description) + '</figcaption>' : '';
-        return '<figure class="tool-result-figure"><img class="tool-result-image" data-image-preview src="data:' + escapeAttr(img.media_type) + ';base64,' + img.data + '" alt="图片 ' + (index + 1) + '" loading="lazy" role="button" tabindex="0" aria-label="放大查看图片 ' + (index + 1) + '" />' + caption + '</figure>';
+        return '<figure class="tool-result-figure"><img class="tool-result-image" data-image-preview src="data:' + escapeAttr(img.media_type) + ';base64,' + img.data + tr("\\" alt=\\"图片 ") + (index + 1) + trHtml("\\" loading=\\"lazy\\" role=\\"button\\" tabindex=\\"0\\" aria-label=\\"放大查看图片 ") + (index + 1) + '" />' + caption + '</figure>';
       }).join('');
       let bodyHtml = '';
       if (!card.collapsed) {
@@ -8621,58 +8634,58 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     const TOOL_PRESENTATIONS = {
-      toolsearch: ['search', '加载工具', 'S'],
-      read: ['file', '读取文件', 'R'], fileread: ['file', '读取文件', 'R'],
-      edit: ['file', '编辑文件', 'E'], fileedit: ['file', '编辑文件', 'E'],
-      apply_patch: ['file', '应用补丁', '±'],
-      write: ['file', '写入文件', 'W'], filewrite: ['file', '写入文件', 'W'],
-      bash: ['terminal', '运行命令', '>_'], lint: ['terminal', '检查诊断', '!'],
-      grep: ['search', '搜索内容', 'G'], glob: ['search', '查找文件', '*'],
-      codebasesearch: ['search', '语义搜索', 'S'], websearch: ['web', '搜索网页', '↗'],
-      browser: ['web', '浏览器操作', '◎'], debugger: ['debug', '调试程序', 'D'],
-      computeruse: ['task', '电脑操作', '⌁'],
-      image: ['image', '发送图片', '▧'],
-      imagegenerate: ['image', '生成图片', '▧'],
-      processdebugger: ['debug', '进程调试', 'P'], memory: ['memory', '管理记忆', 'M'],
-      monitor: ['task', '启动监控', '◉'], tasklist: ['task', '查看后台任务', '≡'], taskstop: ['task', '停止后台任务', '■'],
-      agent: ['agent', '启动 Agent', 'A'], agentstatus: ['agent', '查看 Agent', 'A'],
-      agentwait: ['agent', '等待 Agent', 'A'], agentcancel: ['agent', '取消 Agent', 'A'], agentsendinput: ['agent', '向 Agent 发送输入', 'A'],
-      listagents: ['message', '查看会话', '↔'], sendmessage: ['message', '发送会话消息', '↗'], askuser: ['message', '请求用户选择', '?'],
-      checkpoint: ['checkpoint', '创建检查点', '◆'], revert: ['checkpoint', '回退检查点', '↶'], checklist: ['checklist', '任务清单', '✓'],
-      create_goal: ['goal', '创建 Goal', '◎'], get_goal: ['goal', '查看 Goal', '◎'], update_goal: ['goal', '更新 Goal', '◎'],
-      switchmode: ['mode', '切换工作模式', '⇄'],
-      teamcreate: ['team', '创建 Team', 'T'], teamspawn: ['team', '添加 Team 成员', 'T'], teammessage: ['team', '发送 Team 消息', 'T'],
-      teambroadcast: ['team', '广播 Team 消息', 'T'], teamstatus: ['team', '查看 Team', 'T'], teamtaskadd: ['team', '添加 Team 任务', 'T'],
-      teamtaskclaim: ['team', '认领 Team 任务', 'T'], teamtaskcomplete: ['team', '完成 Team 任务', 'T'], teamshutdown: ['team', '关闭 Team', 'T'],
-      schedulecreate: ['schedule', '创建定时任务', '◷'], schedulelist: ['schedule', '查看定时任务', '◷'],
-      schedulecancel: ['schedule', '删除定时任务', '◷'], schedulestatus: ['schedule', '查看任务状态', '◷'],
-      schedulepause: ['schedule', '暂停定时任务', '◷'], scheduleresume: ['schedule', '恢复定时任务', '◷'], schedulerun: ['schedule', '立即运行任务', '◷'],
-      skill: ['skill', '加载 Skill', '◇'],
+      toolsearch: ['search', tr("加载工具"), 'S'],
+      read: ['file', tr("读取文件"), 'R'], fileread: ['file', tr("读取文件"), 'R'],
+      edit: ['file', tr("编辑文件"), 'E'], fileedit: ['file', tr("编辑文件"), 'E'],
+      apply_patch: ['file', tr("应用补丁"), '±'],
+      write: ['file', tr("写入文件"), 'W'], filewrite: ['file', tr("写入文件"), 'W'],
+      bash: ['terminal', tr("运行命令"), '>_'], lint: ['terminal', tr("检查诊断"), '!'],
+      grep: ['search', tr("搜索内容"), 'G'], glob: ['search', tr("查找文件"), '*'],
+      codebasesearch: ['search', tr("语义搜索"), 'S'], websearch: ['web', tr("搜索网页"), '↗'],
+      browser: ['web', tr("浏览器操作"), '◎'], debugger: ['debug', tr("调试程序"), 'D'],
+      computeruse: ['task', tr("电脑操作"), '⌁'],
+      image: ['image', tr("发送图片"), '▧'],
+      imagegenerate: ['image', tr("生成图片"), '▧'],
+      processdebugger: ['debug', tr("进程调试"), 'P'], memory: ['memory', tr("管理记忆"), 'M'],
+      monitor: ['task', tr("启动监控"), '◉'], tasklist: ['task', tr("查看后台任务"), '≡'], taskstop: ['task', tr("停止后台任务"), '■'],
+      agent: ['agent', tr("启动 Agent"), 'A'], agentstatus: ['agent', tr("查看 Agent"), 'A'],
+      agentwait: ['agent', tr("等待 Agent"), 'A'], agentcancel: ['agent', tr("取消 Agent"), 'A'], agentsendinput: ['agent', tr("向 Agent 发送输入"), 'A'],
+      listagents: ['message', tr("查看会话"), '↔'], sendmessage: ['message', tr("发送会话消息"), '↗'], askuser: ['message', tr("请求用户选择"), '?'],
+      checkpoint: ['checkpoint', tr("创建检查点"), '◆'], revert: ['checkpoint', tr("回退检查点"), '↶'], checklist: ['checklist', tr("任务清单"), '✓'],
+      create_goal: ['goal', tr("创建 Goal"), '◎'], get_goal: ['goal', tr("查看 Goal"), '◎'], update_goal: ['goal', tr("更新 Goal"), '◎'],
+      switchmode: ['mode', tr("切换工作模式"), '⇄'],
+      teamcreate: ['team', tr("创建 Team"), 'T'], teamspawn: ['team', tr("添加 Team 成员"), 'T'], teammessage: ['team', tr("发送 Team 消息"), 'T'],
+      teambroadcast: ['team', tr("广播 Team 消息"), 'T'], teamstatus: ['team', tr("查看 Team"), 'T'], teamtaskadd: ['team', tr("添加 Team 任务"), 'T'],
+      teamtaskclaim: ['team', tr("认领 Team 任务"), 'T'], teamtaskcomplete: ['team', tr("完成 Team 任务"), 'T'], teamshutdown: ['team', tr("关闭 Team"), 'T'],
+      schedulecreate: ['schedule', tr("创建定时任务"), '◷'], schedulelist: ['schedule', tr("查看定时任务"), '◷'],
+      schedulecancel: ['schedule', tr("删除定时任务"), '◷'], schedulestatus: ['schedule', tr("查看任务状态"), '◷'],
+      schedulepause: ['schedule', tr("暂停定时任务"), '◷'], scheduleresume: ['schedule', tr("恢复定时任务"), '◷'], schedulerun: ['schedule', tr("立即运行任务"), '◷'],
+      skill: ['skill', tr("加载 Skill"), '◇'],
     };
 
     const TOOL_FIELD_LABELS = {
-      names: '工具名称', group: '工具分组',
-      reference_image_paths: '参考图片',
-      action: '操作', file_path: '文件', path: '路径', target_file: '文件', target_directory: '目录', cwd: '工作目录', program: '程序',
-      command: '命令', timeout: '超时', timeout_seconds: '超时', offset: '起始行', limit: '行数', old_string: '替换前', new_string: '替换后',
-      content: '内容', patch: '补丁', affected_paths: '影响文件', replace_all: '全部替换', pattern: '匹配模式', glob: '文件过滤', query: '查询', num_results: '结果数', mime_type: 'MIME 类型', mimeType: 'MIME 类型',
-      case_insensitive: '忽略大小写', url: '网址', selector: '选择器', script: '脚本', text: '消息', prompt: '任务', description: '说明',
-      objective: '目标', token_budget: 'Token 预算', status: '状态', target_mode: '目标模式', explanation: '原因', plan: '执行计划',
-      session_id: 'Session', agent_id: 'Agent', agent_ids: 'Agents', task_id: '任务 ID', team_id: 'Team', to: '接收方', role: '角色',
-      name: '名称', model_profile: '模型', run_in_background: '后台运行', checklist_id: '清单 ID', item: '清单项', items: '清单项',
-      remove_items: '移除项', checkpoint_id: '检查点', label: '标签', schedule: '时间规则', schedule_type: '调度类型', enabled: '启用',
-      max_runs: '最大次数', next_run: '下次运行', tags: '标签', language: '语言', adapter_id: '调试适配器', pid: '进程 ID',
-      lines: '行号', thread_id: '线程', frame_id: '栈帧', expression: '表达式', title: '标题', skill_name: 'Skill', user_input: '用户要求',
-      ws: 'WebSocket', timeout_ms: '超时', persistent: '持续监控', scope: '范围', memory_id: '记忆 ID', max_teammates: '成员上限',
-      headless: '无界面模式', tab_id: '标签页', wait_until: '等待条件', return_format: '返回格式', wait_any: '任一完成即返回', interrupt: '中断当前任务',
-      job_id: '任务 ID', run_limit: '运行记录数', extra: '附加配置', paths: '检查路径', linter: '检查器', args: '参数', levels: '栈深度',
-      variables_reference: '变量引用', start: '起始位置', count: '数量', context: '上下文', terminate_debuggee: '终止被调试程序',
-      launch_config: '启动配置', attach_config: '附加配置', duration_seconds: '持续时间', interval_seconds: '采样间隔', output_path: '输出文件',
-      module_filter: '模块过滤', target_address: '目标地址', address: '地址', base_address: '基址', module_path: '模块路径', module_offset: '模块偏移',
-      max_depth: '最大深度', max_offset: '最大偏移', offsets: '偏移链', pointer_size: '指针大小', align: '对齐', size: '大小',
-      value_type: '值类型', value: '值', value_hex: '十六进制值', patch_hex: '补丁字节', expected_hex: '预期字节', patch_id: '补丁 ID',
-      endian: '字节序', readable: '可读', writable: '可写', executable: '可执行', writable_only: '仅可写内存', executable_only: '仅可执行内存',
-      max_results: '结果数', max_scan_bytes: '最大扫描字节', search_id: '搜索 ID', freeze_id: '冻结 ID', comparison: '比较方式', all: '全部',
+      names: tr("工具名称"), group: tr("工具分组"),
+      reference_image_paths: tr("参考图片"),
+      action: tr("操作"), file_path: tr("文件"), path: tr("路径"), target_file: tr("文件"), target_directory: tr("目录"), cwd: tr("工作目录"), program: tr("程序"),
+      command: tr("命令"), timeout: tr("超时"), timeout_seconds: tr("超时"), offset: tr("起始行"), limit: tr("行数"), old_string: tr("替换前"), new_string: tr("替换后"),
+      content: tr("内容"), patch: tr("补丁"), affected_paths: tr("影响文件"), replace_all: tr("全部替换"), pattern: tr("匹配模式"), glob: tr("文件过滤"), query: tr("查询"), num_results: tr("结果数"), mime_type: tr("MIME 类型"), mimeType: tr("MIME 类型"),
+      case_insensitive: tr("忽略大小写"), url: tr("网址"), selector: tr("选择器"), script: tr("脚本"), text: tr("消息"), prompt: tr("任务"), description: tr("说明"),
+      objective: tr("目标"), token_budget: tr("Token 预算"), status: tr("状态"), target_mode: tr("目标模式"), explanation: tr("原因"), plan: tr("执行计划"),
+      session_id: 'Session', agent_id: 'Agent', agent_ids: 'Agents', task_id: tr("任务 ID"), team_id: 'Team', to: tr("接收方"), role: tr("角色"),
+      name: tr("名称"), model_profile: tr("模型"), run_in_background: tr("后台运行"), checklist_id: tr("清单 ID"), item: tr("清单项"), items: tr("清单项"),
+      remove_items: tr("移除项"), checkpoint_id: tr("检查点"), label: tr("标签"), schedule: tr("时间规则"), schedule_type: tr("调度类型"), enabled: tr("启用"),
+      max_runs: tr("最大次数"), next_run: tr("下次运行"), tags: tr("标签"), language: tr("语言"), adapter_id: tr("调试适配器"), pid: tr("进程 ID"),
+      lines: tr("行号"), thread_id: tr("线程"), frame_id: tr("栈帧"), expression: tr("表达式"), title: tr("标题"), skill_name: 'Skill', user_input: tr("用户要求"),
+      ws: 'WebSocket', timeout_ms: tr("超时"), persistent: tr("持续监控"), scope: tr("范围"), memory_id: tr("记忆 ID"), max_teammates: tr("成员上限"),
+      headless: tr("无界面模式"), tab_id: tr("标签页"), wait_until: tr("等待条件"), return_format: tr("返回格式"), wait_any: tr("任一完成即返回"), interrupt: tr("中断当前任务"),
+      job_id: tr("任务 ID"), run_limit: tr("运行记录数"), extra: tr("附加配置"), paths: tr("检查路径"), linter: tr("检查器"), args: tr("参数"), levels: tr("栈深度"),
+      variables_reference: tr("变量引用"), start: tr("起始位置"), count: tr("数量"), context: tr("上下文"), terminate_debuggee: tr("终止被调试程序"),
+      launch_config: tr("启动配置"), attach_config: tr("附加配置"), duration_seconds: tr("持续时间"), interval_seconds: tr("采样间隔"), output_path: tr("输出文件"),
+      module_filter: tr("模块过滤"), target_address: tr("目标地址"), address: tr("地址"), base_address: tr("基址"), module_path: tr("模块路径"), module_offset: tr("模块偏移"),
+      max_depth: tr("最大深度"), max_offset: tr("最大偏移"), offsets: tr("偏移链"), pointer_size: tr("指针大小"), align: tr("对齐"), size: tr("大小"),
+      value_type: tr("值类型"), value: tr("值"), value_hex: tr("十六进制值"), patch_hex: tr("补丁字节"), expected_hex: tr("预期字节"), patch_id: tr("补丁 ID"),
+      endian: tr("字节序"), readable: tr("可读"), writable: tr("可写"), executable: tr("可执行"), writable_only: tr("仅可写内存"), executable_only: tr("仅可执行内存"),
+      max_results: tr("结果数"), max_scan_bytes: tr("最大扫描字节"), search_id: tr("搜索 ID"), freeze_id: tr("冻结 ID"), comparison: tr("比较方式"), all: tr("全部"),
     };
 
     const TOOL_FIELD_ORDER = {
@@ -8693,23 +8706,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     };
 
     const TOOL_ACTION_LABELS = {
-      create: '创建', update: '更新', delete: '删除', list: '查看列表', search: '搜索', read: '读取', check: '标记完成',
-      uncheck: '取消完成', clear: '清空', launch: '启动', attach: '附加', navigate: '打开网页', click: '点击', type: '输入文本',
-      extract: '提取内容', screenshot: '截图', evaluate: '执行脚本', pause: '暂停', resume: '继续', stop: '停止', status: '查看状态',
-      create_session: '创建浏览器会话', goto: '打开网页', fill: '填写内容', press: '按键', wait_for: '等待元素', list_tabs: '查看标签页',
-      new_tab: '新建标签页', switch_tab: '切换标签页', close_tab: '关闭标签页', close_session: '关闭浏览器会话', start: '启动调试',
-      set_breakpoints: '设置断点', continue: '继续执行', step_over: '单步跳过', step_in: '单步进入', step_out: '单步跳出', threads: '查看线程',
-      stack: '查看调用栈', scopes: '查看作用域', variables: '查看变量', events: '查看事件', list_processes: '查看进程', inspect_process: '检查进程',
-      attach_debugger: '附加调试器', sample_stack: '采样调用栈', dump_core: '导出 Core Dump', memory_maps: '查看内存映射', memory_regions: '查看内存区域',
-      memory_read: '读取内存', memory_search: '搜索内存', memory_refine: '筛选内存搜索', memory_write: '写入内存', memory_freeze: '冻结内存值',
-      memory_unfreeze: '取消冻结', memory_freezes: '查看冻结项', aob_scan: '扫描字节特征', pointer_scan: '扫描指针', pointer_resolve: '解析指针',
-      code_read: '读取机器码', code_patch: '修改机器码', code_restore: '恢复机器码', code_patches: '查看机器码补丁', trace_syscalls: '跟踪系统调用',
-      detach: '断开调试器', terminate: '终止进程', kill: '强制结束进程',
+      create: tr("创建"), update: tr("更新"), delete: tr("删除"), list: tr("查看列表"), search: tr("搜索"), read: tr("读取"), check: tr("标记完成"),
+      uncheck: tr("取消完成"), clear: tr("清空"), launch: tr("启动"), attach: tr("附加"), navigate: tr("打开网页"), click: tr("点击"), type: tr("输入文本"),
+      extract: tr("提取内容"), screenshot: tr("截图"), evaluate: tr("执行脚本"), pause: tr("暂停"), resume: tr("继续"), stop: tr("停止"), status: tr("查看状态"),
+      create_session: tr("创建浏览器会话"), goto: tr("打开网页"), fill: tr("填写内容"), press: tr("按键"), wait_for: tr("等待元素"), list_tabs: tr("查看标签页"),
+      new_tab: tr("新建标签页"), switch_tab: tr("切换标签页"), close_tab: tr("关闭标签页"), close_session: tr("关闭浏览器会话"), start: tr("启动调试"),
+      set_breakpoints: tr("设置断点"), continue: tr("继续执行"), step_over: tr("单步跳过"), step_in: tr("单步进入"), step_out: tr("单步跳出"), threads: tr("查看线程"),
+      stack: tr("查看调用栈"), scopes: tr("查看作用域"), variables: tr("查看变量"), events: tr("查看事件"), list_processes: tr("查看进程"), inspect_process: tr("检查进程"),
+      attach_debugger: tr("附加调试器"), sample_stack: tr("采样调用栈"), dump_core: tr("导出 Core Dump"), memory_maps: tr("查看内存映射"), memory_regions: tr("查看内存区域"),
+      memory_read: tr("读取内存"), memory_search: tr("搜索内存"), memory_refine: tr("筛选内存搜索"), memory_write: tr("写入内存"), memory_freeze: tr("冻结内存值"),
+      memory_unfreeze: tr("取消冻结"), memory_freezes: tr("查看冻结项"), aob_scan: tr("扫描字节特征"), pointer_scan: tr("扫描指针"), pointer_resolve: tr("解析指针"),
+      code_read: tr("读取机器码"), code_patch: tr("修改机器码"), code_restore: tr("恢复机器码"), code_patches: tr("查看机器码补丁"), trace_syscalls: tr("跟踪系统调用"),
+      detach: tr("断开调试器"), terminate: tr("终止进程"), kill: tr("强制结束进程"),
     };
 
     function toolValue(value) {
       if (typeof value === 'string') return value;
-      if (typeof value === 'boolean') return value ? '是' : '否';
+      if (typeof value === 'boolean') return value ? tr("是") : tr("否");
       if (value === null) return 'null';
       if (Array.isArray(value) && value.every(item => ['string', 'number', 'boolean'].includes(typeof item))) return value.map(String).join(' · ');
       try { return JSON.stringify(value, null, 2); } catch (_) { return String(value); }
@@ -8717,7 +8730,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function getToolPresentation(toolName, input) {
       const normalized = String(toolName || '').trim().toLowerCase().replace(/[\\s.-]/g, '');
-      const definition = TOOL_PRESENTATIONS[normalized] || ['generic', toolName || '工具', '⚙'];
+      const definition = TOOL_PRESENTATIONS[normalized] || ['generic', toolName || tr("工具"), '⚙'];
       const kind = definition[0];
       const rawAction = typeof input.action === 'string' ? input.action : '';
       const action = rawAction ? (TOOL_ACTION_LABELS[rawAction.toLowerCase()] || rawAction) : '';
@@ -8765,7 +8778,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return renderChecklistInput(input);
       }
       const presentation = suppliedPresentation || getToolPresentation(toolName, input || {});
-      if (presentation.fields.length === 0) return '<div class="tool-empty">无需参数</div>';
+      if (presentation.fields.length === 0) return trHtml("<div class=\\"tool-empty\\">无需参数</div>");
       const fields = presentation.fields.map(field => {
         if (field.variant === 'list') {
           return '<div class="tool-detail-row"><span>' + escapeHtml(field.label) + '</span><div class="tool-chip-list">' +
@@ -8781,7 +8794,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         '<div class="timeline-meta">input</div>' +
         (presentation.action ? '<span class="tool-action-badge">' + escapeHtml(presentation.action) + '</span>' : '') +
         '<div class="tool-detail-list">' + fields + '</div>' +
-        copyButtonHtml(formatToolInput(toolName, input), '复制参数', 'tool-copy-button') +
+        copyButtonHtml(formatToolInput(toolName, input), tr("复制参数"), 'tool-copy-button') +
         '</section>';
     }
 
@@ -8794,19 +8807,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function getChecklistActionLabel(action) {
       const map = {
-        create: '新建清单',
-        update: '更新清单',
-        check: '标记完成',
-        uncheck: '取消完成',
-        list: '查看清单',
-        clear: '清空清单',
+        create: tr("新建清单"),
+        update: tr("更新清单"),
+        check: tr("标记完成"),
+        uncheck: tr("取消完成"),
+        list: tr("查看清单"),
+        clear: tr("清空清单"),
       };
       return map[action] || String(action || 'checklist');
     }
 
     function renderChecklistItems(items) {
       if (!Array.isArray(items) || items.length === 0) {
-        return '<div class="checklist-empty">暂无任务项</div>';
+        return trHtml("<div class=\\"checklist-empty\\">暂无任务项</div>");
       }
       return '<ul class="checklist-list">' + items.map((item, index) => {
         const checked = !!item.checked;
@@ -8880,17 +8893,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         metaParts.push('<span class="checklist-badge subtle">ID ' + escapeHtml(String(input.checklist_id)) + '</span>');
       }
       if (Number.isInteger(input.item)) {
-        metaParts.push('<span class="checklist-badge subtle">第 ' + escapeHtml(String(input.item)) + ' 项</span>');
+        metaParts.push(trHtml("<span class=\\"checklist-badge subtle\\">第 ") + escapeHtml(String(input.item)) + trHtml(" 项</span>"));
       }
       if (Array.isArray(input.remove_items) && input.remove_items.length > 0) {
-        metaParts.push('<span class="checklist-badge subtle">移除 ' + escapeHtml(input.remove_items.join(', ')) + '</span>');
+        metaParts.push(trHtml("<span class=\\"checklist-badge subtle\\">移除 ") + escapeHtml(input.remove_items.join(', ')) + '</span>');
       }
 
       const panelNeeded = !!input.title || items.length > 0;
       const panel = panelNeeded
         ? renderChecklistPanel({
             title: input.title || 'Checklist',
-            subtitle: action === 'create' ? '即将创建' : getChecklistActionLabel(action),
+            subtitle: action === 'create' ? tr("即将创建") : getChecklistActionLabel(action),
             items,
             done: 0,
             total: items.length,
@@ -8900,12 +8913,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return '<div class="copyable-content checklist-stack">' +
         '<div class="checklist-meta-row">' + metaParts.join('') + '</div>' +
         panel +
-        copyButtonHtml(formatChecklistInput(input), '复制参数', 'tool-copy-button') +
+        copyButtonHtml(formatChecklistInput(input), tr("复制参数"), 'tool-copy-button') +
         '</div>';
     }
 
     function renderResult(text, toolName, isError) {
-      const copyLabel = isError ? '复制错误' : '复制执行结果';
+      const copyLabel = isError ? tr("复制错误") : tr("复制执行结果");
       if ((toolName || '').toLowerCase() === 'checklist') {
         return renderChecklistResult(text, copyLabel);
       }
@@ -8923,7 +8936,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function renderChecklistResult(text, copyLabel) {
       const blocks = parseChecklistResultBlocks(text);
       if (blocks.length === 0) {
-        return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel || '复制执行结果', 'tool-copy-button') + '</div>';
+        return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel || tr("复制执行结果"), 'tool-copy-button') + '</div>';
       }
       const firstBlockIndex = String(text).split('\\n').findIndex(line => /^(\\s*)📋\\s+/.test(line));
       const prefix = firstBlockIndex > 0
@@ -8931,7 +8944,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         : '';
       const panels = blocks.map(block => renderChecklistPanel({
         title: block.title,
-        subtitle: '当前进度',
+        subtitle: tr("当前进度"),
         items: block.items,
         done: block.done,
         total: block.total || block.items.length,
@@ -8942,7 +8955,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         (prefix ? '<span class="checklist-caption">' + escapeHtml(prefix) + '</span>' : '') +
         '</div>' +
         panels +
-        '</div>' + copyButtonHtml(text, copyLabel || '复制执行结果', 'tool-copy-button') + '</div>';
+        '</div>' + copyButtonHtml(text, copyLabel || tr("复制执行结果"), 'tool-copy-button') + '</div>';
     }
 
     function addFileChangePill(payload) {
@@ -9047,25 +9060,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function buildChoiceCardHtml(card) {
       const selectedValues = card.completed ? card.selected : (card.pendingSelected || []);
       const state = card.completed
-        ? (card.cancelled ? '<span class="request-status cancelled">已取消</span>' : '<span class="request-status done">已选择</span>')
-        : '<span class="request-status pending">等待选择</span>';
+        ? (card.cancelled ? trHtml("<span class=\\"request-status cancelled\\">已取消</span>") : trHtml("<span class=\\"request-status done\\">已选择</span>"))
+        : trHtml("<span class=\\"request-status pending\\">等待选择</span>");
       const options = card.options.map(option => {
         const selected = selectedValues.includes(option) ? ' selected' : '';
         const disabled = card.completed ? ' disabled' : '';
         return '<button class="request-option' + selected + '" data-choice-option="' + escapeAttr(option) + '"' + disabled + '>' + escapeHtml(option) + '</button>';
       }).join('');
       const summary = (card.completed ? card.selected.length > 0 : selectedValues.length > 0)
-        ? '<div class="request-summary">已选：' + escapeHtml((card.completed ? card.selected : selectedValues).join(', ')) + '</div>'
+        ? trHtml("<div class=\\"request-summary\\">已选：") + escapeHtml((card.completed ? card.selected : selectedValues).join(', ')) + '</div>'
         : '';
       const actions = card.completed
         ? ''
         : (card.multiple
-          ? '<button class="request-action primary" data-choice-submit' + (selectedValues.length === 0 ? ' disabled' : '') + '>确认选择</button><button class="request-action subtle" data-choice-clear>清空</button><button class="request-action subtle" data-choice-cancel>取消</button>'
-          : '<button class="request-action subtle" data-choice-cancel>取消</button>');
-      const meta = card.multiple ? '<div class="timeline-meta">可多选，选择后点“确认选择”</div>' : '';
+          ? '<button class="request-action primary" data-choice-submit' + (selectedValues.length === 0 ? ' disabled' : '') + trHtml(">确认选择</button><button class=\\"request-action subtle\\" data-choice-clear>清空</button><button class=\\"request-action subtle\\" data-choice-cancel>取消</button>")
+          : trHtml("<button class=\\"request-action subtle\\" data-choice-cancel>取消</button>"));
+      const meta = card.multiple ? trHtml("<div class=\\"timeline-meta\\">可多选，选择后点“确认选择”</div>") : '';
       return '<div class="request-card-header">' +
         '<span class="icon">?</span>' +
-        '<span class="request-title">选择</span>' +
+        trHtml("<span class=\\"request-title\\">选择</span>") +
         state +
         '</div>' +
         '<div class="request-card-body">' +
@@ -9115,23 +9128,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const summary = plan.summary || '';
       const steps = Array.isArray(plan.steps) ? plan.steps : [];
       const statusHtml = card.status === 'pending'
-        ? '<span class="request-status pending">等待确认</span>'
+        ? trHtml("<span class=\\"request-status pending\\">等待确认</span>")
         : card.status === 'executing'
-          ? '<span class="request-status done">执行中</span>'
+          ? trHtml("<span class=\\"request-status done\\">执行中</span>")
           : card.status === 'revising'
-            ? '<span class="request-status done">继续规划</span>'
-            : '<span class="request-status cancelled">已取消</span>';
+            ? trHtml("<span class=\\"request-status done\\">继续规划</span>")
+            : trHtml("<span class=\\"request-status cancelled\\">已取消</span>");
       const stepHtml = steps.length > 0
         ? '<ol class="plan-step-list">' + steps.map((step, index) => buildPlanStepHtml(step, index)).join('') + '</ol>'
         : '<pre class="request-pre">' + escapeHtml(JSON.stringify(plan, null, 2)) + '</pre>';
       const actions = card.status === 'pending'
-        ? '<button class="request-action primary" data-plan-action="execute">执行计划</button>' +
-          '<button class="request-action subtle" data-plan-action="revise">修改计划</button>' +
-          '<button class="request-action subtle" data-plan-action="cancel">取消</button>'
+        ? trHtml("<button class=\\"request-action primary\\" data-plan-action=\\"execute\\">执行计划</button>") +
+          trHtml("<button class=\\"request-action subtle\\" data-plan-action=\\"revise\\">修改计划</button>") +
+          trHtml("<button class=\\"request-action subtle\\" data-plan-action=\\"cancel\\">取消</button>")
         : '';
       return '<div class="request-card-header">' +
         '<span class="icon">✓</span>' +
-        '<span class="request-title">计划 · ' + escapeHtml(title) + '</span>' +
+        trHtml("<span class=\\"request-title\\">计划 · ") + escapeHtml(title) + '</span>' +
         statusHtml +
         '</div>' +
         '<div class="request-card-body">' +
@@ -9240,24 +9253,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function buildPermissionCardHtml(card) {
       const isPeerMessage = card.requestKind === 'peer_message';
       const state = card.allowed === null
-        ? '<span class="request-status pending">等待确认</span>'
-        : (card.allowed ? '<span class="request-status done">已允许</span>' : '<span class="request-status denied">已拒绝</span>');
+        ? trHtml("<span class=\\"request-status pending\\">等待确认</span>")
+        : (card.allowed ? trHtml("<span class=\\"request-status done\\">已允许</span>") : trHtml("<span class=\\"request-status denied\\">已拒绝</span>"));
       const actions = card.allowed === null
-        ? '<button class="request-action primary" data-permission-allow>' + (isPeerMessage ? '接收' : '允许') + '</button>' +
-          '<button class="request-action subtle" data-permission-always-allow>' + (isPeerMessage ? '始终接收此 Session' : '始终允许') + '</button>' +
-          '<button class="request-action subtle" data-permission-deny>拒绝</button>' +
-          (isPeerMessage ? '' : '<button class="request-action subtle" data-permission-deny-feedback>拒绝并反馈</button>')
+        ? '<button class="request-action primary" data-permission-allow>' + (isPeerMessage ? tr("接收") : tr("允许")) + '</button>' +
+          '<button class="request-action subtle" data-permission-always-allow>' + (isPeerMessage ? tr("始终接收此 Session") : tr("始终允许")) + '</button>' +
+          trHtml("<button class=\\"request-action subtle\\" data-permission-deny>拒绝</button>") +
+          (isPeerMessage ? '' : trHtml("<button class=\\"request-action subtle\\" data-permission-deny-feedback>拒绝并反馈</button>"))
         : '';
       const feedbackRow = card.allowed === null && !isPeerMessage
         ? '<div class="permission-feedback-row hidden">' +
-          '<input class="permission-feedback-input" type="text" placeholder="告诉 AI 应该怎么做…" />' +
-          '<button class="request-action primary" data-permission-feedback-send>发送</button>' +
+          trHtml("<input class=\\"permission-feedback-input\\" type=\\"text\\" placeholder=\\"告诉 AI 应该怎么做…\\" />") +
+          trHtml("<button class=\\"request-action primary\\" data-permission-feedback-send>发送</button>") +
           '</div>'
         : '';
       const reason = card.reason ? '<div class="request-reason">' + escapeHtml(card.reason) + '</div>' : '';
       return '<div class="request-card-header">' +
         '<span class="icon">' + (isPeerMessage ? '✉' : '⚡') + '</span>' +
-        '<span class="request-title">' + (isPeerMessage ? '跨 Session 消息' : '工具权限 · ' + escapeHtml(card.toolName)) + '</span>' +
+        '<span class="request-title">' + (isPeerMessage ? tr("跨 Session 消息") : tr("工具权限 · ") + escapeHtml(card.toolName)) + '</span>' +
         state +
         '</div>' +
         '<div class="request-card-body">' +
@@ -9312,7 +9325,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       return '<div class="thinking-card-header">' +
         '<span class="icon">💭</span>' +
-        '<span class="label">思考</span>' +
+        trHtml("<span class=\\"label\\">思考</span>") +
         previewHtml +
         '<span class="' + chevron + '">▾</span>' +
         '</div>' +
@@ -9337,14 +9350,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         updateTurnSummary(activeTurn);
       }
       if (busy && busyLabel) {
-        busyLabel.textContent = retryActivityLabel || 'CrabCode 正在处理';
+        busyLabel.textContent = retryActivityLabel || tr("CrabCode 正在处理");
       }
       if (composerCard) composerCard.classList.toggle('is-steering', busy);
       renderSteeringQueue(pendingSteeringQueue);
       if (stopBtn) stopBtn.hidden = !busy;
       if (sendBtn) {
         sendBtn.innerHTML = SEND_ICON_HTML;
-        sendBtn.setAttribute('aria-label', busy ? (followUpMode === 'queue' ? '加入队列' : '引导当前运行') : '发送');
+        sendBtn.setAttribute('aria-label', busy ? (followUpMode === 'queue' ? tr("加入队列") : tr("引导当前运行")) : tr("发送"));
       }
       updateSendButtonTitle();
       updateComposerPlaceholder();
@@ -9352,7 +9365,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function updateSendButtonTitle() {
       if (!sendBtn) return;
-      const action = isBusy ? (followUpMode === 'queue' ? '加入队列' : '引导当前运行') : '发送';
+      const action = isBusy ? (followUpMode === 'queue' ? tr("加入队列") : tr("引导当前运行")) : tr("发送");
       const shortcut = isBusy || composerSendKey === 'enter' ? 'Enter' : composerModifierLabel();
       sendBtn.title = action + ' (' + shortcut + ')';
       sendBtn.setAttribute('aria-label', action);
@@ -9398,19 +9411,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const menu = document.createElement('div');
       menu.className = 'follow-up-menu';
       menu.setAttribute('role', 'menu');
-      menu.setAttribute('aria-label', '排队消息操作');
-      const edit = followUpButton('编辑消息', 'edit', function() {
+      menu.setAttribute('aria-label', tr("排队消息操作"));
+      const edit = followUpButton(tr("编辑消息"), 'edit', function() {
         closeFollowUpMenu(false);
         vscode.postMessage({ type: 'queuedMessageAction', id: message.id, action: 'edit' });
-      }, '编辑消息');
-      const disableQueue = followUpButton('后续消息默认改为引导，已排队消息保留', 'queue', function() {
+      }, tr("编辑消息"));
+      const disableQueue = followUpButton(tr("后续消息默认改为引导，已排队消息保留"), 'queue', function() {
         closeFollowUpMenu(true);
         followUpMode = 'steer';
         vscode.postMessage({ type: 'setFollowUpMode', mode: 'steer' });
         updateSendButtonTitle();
         updateComposerPlaceholder();
-      }, '关闭排队');
-      disableQueue.setAttribute('aria-label', '关闭排队');
+      }, tr("关闭排队"));
+      disableQueue.setAttribute('aria-label', tr("关闭排队"));
       disableQueue.disabled = followUpMode !== 'queue';
       [edit, disableQueue].forEach(function(button) { button.setAttribute('role', 'menuitem'); menu.appendChild(button); });
       const rect = trigger.getBoundingClientRect();
@@ -9448,22 +9461,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const icon = document.createElement('span');
         icon.className = 'follow-up-icon';
         icon.innerHTML = followUpIcon(message.followUpMode === 'queue' ? 'queue' : 'steer');
-        icon.setAttribute('aria-label', message.followUpFailed ? '未发送' : message.followUpMode === 'queue' ? '排队中' : '待引导');
+        icon.setAttribute('aria-label', message.followUpFailed ? tr("未发送") : message.followUpMode === 'queue' ? tr("排队中") : tr("待引导"));
         const copy = document.createElement('span');
         copy.className = 'follow-up-copy';
-        copy.textContent = (message.followUpFailed ? '未发送 · ' : '') + (String(message.text || '').trim() || (message.images?.length ? '图片消息' : '附件消息'));
+        copy.textContent = (message.followUpFailed ? tr("未发送 · ") : '') + (String(message.text || '').trim() || (message.images?.length ? tr("图片消息") : tr("附件消息")));
         copy.title = message.followUpPrompt || copy.textContent;
         row.append(icon, copy);
         if (message.followUpMode === 'queue' || message.followUpFailed) {
-          const steer = followUpButton('引导当前运行', 'steer', function() {
+          const steer = followUpButton(tr("引导当前运行"), 'steer', function() {
             vscode.postMessage({ type: 'queuedMessageAction', id: message.id, action: 'steer' });
-          }, '引导');
+          }, tr("引导"));
           steer.disabled = !isBusy || message.followUpFailed || Boolean(message.followUpAction);
-          const remove = followUpButton('删除排队消息', 'remove', function() {
+          const remove = followUpButton(tr("删除排队消息"), 'remove', function() {
             vscode.postMessage({ type: 'queuedMessageAction', id: message.id, action: 'remove' });
           });
           remove.disabled = Boolean(message.followUpAction);
-          const more = followUpButton('更多排队操作', 'more', function() { openFollowUpMenu(message, more); });
+          const more = followUpButton(tr("更多排队操作"), 'more', function() { openFollowUpMenu(message, more); });
           more.setAttribute('aria-haspopup', 'menu');
           more.setAttribute('aria-expanded', 'false');
           more.disabled = Boolean(message.followUpAction);
@@ -9471,7 +9484,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         } else {
           const status = document.createElement('span');
           status.className = 'follow-up-status';
-          status.textContent = '引导中';
+          status.textContent = tr("引导中");
           row.appendChild(status);
         }
         steeringQueuePreview.appendChild(row);
@@ -9482,11 +9495,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function updateComposerPlaceholder() {
       if (!input) return;
       if (isBusy) {
-        input.dataset.placeholder = followUpMode === 'queue' ? '输入后续任务，本轮结束后执行…' : '补充或纠正 Agent 的下一步行为…';
+        input.dataset.placeholder = followUpMode === 'queue' ? tr("输入后续任务，本轮结束后执行…") : tr("补充或纠正 Agent 的下一步行为…");
       } else {
         input.dataset.placeholder = currentMode === 'plan'
-          ? '描述目标，CrabCode 会先只读分析并生成计划…'
-          : '输入问题或命令（如 /help）…';
+          ? tr("描述目标，CrabCode 会先只读分析并生成计划…")
+          : tr("输入问题或命令（如 /help）…");
       }
     }
 
@@ -9499,18 +9512,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // Show contextual label based on current activity
       const activeTool = [...toolCards.values()].find(c => c.result === null);
       if (activeTool) {
-        busyLabel.textContent = '正在运行 ' + activeTool.toolName + '…';
+        busyLabel.textContent = tr("正在运行 ") + activeTool.toolName + '…';
       } else if ([...thinkingCards.values()].some(c => !c.collapsed)) {
-        busyLabel.textContent = 'CrabCode 正在思考…';
+        busyLabel.textContent = tr("CrabCode 正在思考…");
       } else {
-        busyLabel.textContent = 'CrabCode 正在处理…';
+        busyLabel.textContent = tr("CrabCode 正在处理…");
       }
     }
 
     function roleLabel(role) {
-      if (role === 'user') return '你';
+      if (role === 'user') return tr("你");
       if (role === 'assistant') return 'CrabCode';
-      if (role === 'system') return '系统';
+      if (role === 'system') return tr("系统");
       return role;
     }
     function escapeHtml(t) {
@@ -9532,8 +9545,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       const percent = Math.max(0, Math.min(100, Number(usage.usedPercent) || 0));
       const details = Array.isArray(usage.details) ? usage.details : [];
-      const title = details[0] || '背景信息窗口：';
-      const usageLine = details[1] || '用量未知';
+      const title = details[0] || tr("背景信息窗口：");
+      const usageLine = details[1] || tr("用量未知");
       const detailLine = details[2] || '';
 
       contextMeter.hidden = false;
@@ -9605,7 +9618,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       currentPendingEditSummary = summary;
       const title = summary.totalFiles + (summary.totalFiles === 1 ? ' File' : ' Files');
-      const toggleTitle = pendingEditsCollapsed ? '展开待审核文件' : '折叠待审核文件';
+      const toggleTitle = pendingEditsCollapsed ? tr("展开待审核文件") : tr("折叠待审核文件");
       const rows = files.map(function(file) {
         const stats = '<span>+' + escapeHtml(String(file.added || 0)) + '</span> ' +
           '<span class="removed">-' + escapeHtml(String(file.removed || 0)) + '</span>';
@@ -9668,14 +9681,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const mime = file.type || guessImageMime(file.name, '');
       if (!mime.startsWith('image/')) return;
       if (file.size > MAX_IMAGE_SIZE) {
-        alert('CrabCode：图片过大（最大 20MB）\\n' + file.name);
+        alert(tr("CrabCode：图片过大（最大 20MB）\\n") + file.name);
         return;
       }
       const reader = new FileReader();
       reader.onload = function(e) {
         const dataUrl = e.target.result;
         const base64 = dataUrl.split(',')[1];
-        pendingImages.push({ key: nextAttachmentKey('image'), name: file.name || '图片', media_type: mime, data: base64, dataUrl: dataUrl });
+        pendingImages.push({ key: nextAttachmentKey('image'), name: file.name || tr("图片"), media_type: mime, data: base64, dataUrl: dataUrl });
         renderAttachmentBar();
       };
       reader.readAsDataURL(file);
@@ -9683,13 +9696,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function addTextFile(file) {
       if (file.size > maxTextFileSizeMb * 1024 * 1024) {
-        alert('CrabCode：文件过大（最大 ' + maxTextFileSizeMb + 'MB）\\n' + file.name);
+        alert(tr("CrabCode：文件过大（最大 ") + maxTextFileSizeMb + 'MB）\\n' + file.name);
         return;
       }
       const reader = new FileReader();
       reader.onload = function() {
         let t = reader.result || '';
-        if (t.length > 200000) t = t.slice(0, 200000) + '\\n…(已截断)';
+        if (t.length > 200000) t = t.slice(0, 200000) + tr("\\n…(已截断)");
         pendingTextFiles.push({ key: nextAttachmentKey('file'), name: file.name, text: t, path: '' });
         renderAttachmentBar();
       };
@@ -9737,18 +9750,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function appendIdeReferenceChip(reference, index, current) {
       const chip = document.createElement('div');
       chip.className = 'ide-reference-chip ' + (current ? 'current' : reference.kind);
-      chip.title = current ? 'IDE 上下文 · ' + reference.path : reference.path;
+      chip.title = current ? tr("IDE 上下文 · ") + reference.path : reference.path;
       const icon = document.createElement('span');
       icon.className = 'ide-reference-icon';
       icon.textContent = current ? '▤' : (reference.kind === 'folder' ? '▰' : '▧');
       const label = document.createElement('span');
       label.className = 'ide-reference-name';
-      label.textContent = current ? '当前文件 · ' + reference.name : reference.name;
+      label.textContent = current ? tr("当前文件 · ") + reference.name : reference.name;
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'remove-btn';
       remove.dataset.removeIdeReference = current ? 'current' : String(index);
-      remove.setAttribute('aria-label', '移除引用 ' + reference.name);
+      remove.setAttribute('aria-label', tr("移除引用 ") + reference.name);
       remove.textContent = '×';
       chip.append(icon, label, remove);
       attachmentBar.appendChild(chip);
@@ -9759,15 +9772,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pendingImages.forEach(function(img, idx) {
         const thumb = document.createElement('div');
         thumb.className = 'attachment-thumb';
-        thumb.innerHTML = '<img data-image-preview src="' + escapeAttr(img.dataUrl) + '" alt="' + escapeAttr(img.name || '待发送图片') + '" role="button" tabindex="0" aria-label="放大查看：' + escapeAttr(img.name || '待发送图片') + '" />' +
-          '<button type="button" class="remove-btn" data-kind="img" data-idx="' + idx + '" title="移除">✕</button>';
+        thumb.innerHTML = '<img data-image-preview src="' + escapeAttr(img.dataUrl) + '" alt="' + escapeAttr(img.name || tr("待发送图片")) + trHtml("\\" role=\\"button\\" tabindex=\\"0\\" aria-label=\\"放大查看：") + escapeAttr(img.name || tr("待发送图片")) + '" />' +
+          '<button type="button" class="remove-btn" data-kind="img" data-idx="' + idx + trHtml("\\" title=\\"移除\\">✕</button>");
         attachmentBar.appendChild(thumb);
       });
       pendingTextFiles.forEach(function(f, idx) {
         const chip = document.createElement('div');
         chip.className = 'text-file-chip';
         chip.innerHTML = '<span class="name" title="' + escapeAttr(f.name) + '">' + escapeHtml(f.name) + '</span>' +
-          '<button type="button" class="remove-btn" data-kind="txt" data-idx="' + idx + '" title="移除">✕</button>';
+          '<button type="button" class="remove-btn" data-kind="txt" data-idx="' + idx + trHtml("\\" title=\\"移除\\">✕</button>");
         attachmentBar.appendChild(chip);
       });
       if (includeIdeContext && currentIdeContext && currentIdeContext.active_file) {
@@ -9812,7 +9825,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         + (includeIdeContext && currentIdeContext?.active_file ? 1 : 0);
       composerCard.classList.toggle('has-attachments', n > 0);
       const sum = document.getElementById('ctx-summary');
-      if (sum) sum.textContent = n ? (n + ' 个附件与引用') : '';
+      if (sum) sum.textContent = n ? (n + tr(" 个附件与引用")) : '';
       if (n > 0 && prevAttachCount === 0) composerCard.classList.add('ctx-open');
       ctxToggle.setAttribute('aria-expanded', composerCard.classList.contains('ctx-open') ? 'true' : 'false');
       prevAttachCount = n;
@@ -9821,7 +9834,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function mergeHostAttachments(msg) {
       (msg.images || []).forEach(function(img) {
         const url = 'data:' + img.media_type + ';base64,' + img.data;
-        pendingImages.push({ key: nextAttachmentKey('image'), name: img.name || '图片', media_type: img.media_type, data: img.data, dataUrl: url });
+        pendingImages.push({ key: nextAttachmentKey('image'), name: img.name || tr("图片"), media_type: img.media_type, data: img.data, dataUrl: url });
       });
       (msg.textSnippets || []).forEach(function(s) {
         const key = s.path ? 'file-path:' + s.path : nextAttachmentKey('file');
@@ -9863,7 +9876,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         currentModelValue = '';
         if (modelBtn) modelBtn.disabled = true;
         if (modelSelectLabel) {
-          modelSelectLabel.textContent = msg.connected ? '（网关未返回可用模型）' : '（正在连接网关…）';
+          modelSelectLabel.textContent = msg.connected ? tr("（网关未返回可用模型）") : tr("（正在连接网关…）");
           modelSelectLabel.title = modelSelectLabel.textContent;
         }
         if (modelSelectWrap) modelSelectWrap.classList.add('is-empty');
@@ -9898,10 +9911,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // ── Slash command popup ───────────────────────────────────────
 
     const slashCommands = (${createSlashCommands.toString()})({
+      t: tr,
       postMessage: function(message) { vscode.postMessage(message); },
       showMessage: function(text) { addLocalSystemMessage(text); },
       get skills() { return slashSkills; },
-      shellCommandHelp: '! <cmd> — 在当前工作区终端运行命令',
+      shellCommandHelp: trHtml("! <cmd> — 在当前工作区终端运行命令"),
     });
     const BUILTIN_COMMANDS = slashCommands.commands;
     const EFFORT_LEVELS = ['auto', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -9925,13 +9939,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // Commands that have sub-items (populated dynamically)
     const SUBCOMMAND_SOURCES = {
-      '/follow-up': function() { return [{ name: 'queue', desc: '排队执行' }, { name: 'steer', desc: '引导当前运行' }]; },
-      '/queue': function() { return [{ name: 'steer', desc: '将排队消息接入当前运行' }]; },
-      '/add': function() { return [{ name: 'model', desc: '添加模型' }, { name: 'group', desc: '添加配置组' }]; },
-      '/del': function() { return [{ name: 'model', desc: '删除模型' }, { name: 'group', desc: '删除配置组' }]; },
+      '/follow-up': function() { return [{ name: 'queue', desc: tr("排队执行") }, { name: 'steer', desc: tr("引导当前运行") }]; },
+      '/queue': function() { return [{ name: 'steer', desc: tr("将排队消息接入当前运行") }]; },
+      '/add': function() { return [{ name: 'model', desc: tr("添加模型") }, { name: 'group', desc: tr("添加配置组") }]; },
+      '/del': function() { return [{ name: 'model', desc: tr("删除模型") }, { name: 'group', desc: tr("删除配置组") }]; },
       '/goal': function() { return ['set', 'edit', 'pause', 'resume', 'complete', 'blocked', 'clear'].map(function(name) { return { name: name, desc: name }; }); },
       '/effort': function() { return EFFORT_LEVELS.map(function(name) { return { name: name, desc: name }; }); },
-      '/ultra': function() { return [{ name: 'true', desc: '开启' }, { name: 'false', desc: '关闭' }]; },
+      '/ultra': function() { return [{ name: 'true', desc: tr("开启") }, { name: 'false', desc: tr("关闭") }]; },
       '/logs': function() { return ['-f', '--follow', '--tail', '--clear', '--stop'].map(function(name) { return { name: name, desc: name }; }); },
       '/model': function() {
         return currentModelList.map(function(m) {
@@ -9940,44 +9954,44 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
       '/tasks': function() {
         return [
-          { name: 'list', desc: '列出后台任务' },
-          { name: 'show', desc: '查看任务详情' },
-          { name: 'output', desc: '查看任务输出' },
-          { name: 'stop', desc: '停止后台任务' },
+          { name: 'list', desc: tr("列出后台任务") },
+          { name: 'show', desc: tr("查看任务详情") },
+          { name: 'output', desc: tr("查看任务输出") },
+          { name: 'stop', desc: tr("停止后台任务") },
         ];
       },
       '/team': function() {
         return [
-          { name: 'list', desc: '列出 Team' },
-          { name: 'create', desc: '创建 Team' },
-          { name: 'status', desc: '查看 Team 状态' },
-          { name: 'messages', desc: '查看 Team 消息' },
-          { name: 'tasks', desc: '查看 Team 任务板' },
-          { name: 'spawn', desc: '添加 teammate' },
-          { name: 'remove', desc: '移除 teammate' },
-          { name: 'message', desc: '发送 Team 消息' },
-          { name: 'broadcast', desc: '广播 Team 消息' },
-          { name: 'mark-read', desc: '标记 Team 消息已读' },
-          { name: 'task-add', desc: '添加 Team 任务' },
-          { name: 'task-claim', desc: '认领 Team 任务' },
-          { name: 'task-complete', desc: '完成 Team 任务' },
-          { name: 'task-fail', desc: '将 Team 任务标记失败' },
-          { name: 'bridge', desc: '设置跨 Team Bridge' },
-          { name: 'bridge-status', desc: '查看跨 Team Bridge' },
-          { name: 'cross-message', desc: '发送跨 Team 消息' },
-          { name: 'shutdown', desc: '关闭 Team' },
+          { name: 'list', desc: tr("列出 Team") },
+          { name: 'create', desc: tr("创建 Team") },
+          { name: 'status', desc: tr("查看 Team 状态") },
+          { name: 'messages', desc: tr("查看 Team 消息") },
+          { name: 'tasks', desc: tr("查看 Team 任务板") },
+          { name: 'spawn', desc: tr("添加 teammate") },
+          { name: 'remove', desc: tr("移除 teammate") },
+          { name: 'message', desc: tr("发送 Team 消息") },
+          { name: 'broadcast', desc: tr("广播 Team 消息") },
+          { name: 'mark-read', desc: tr("标记 Team 消息已读") },
+          { name: 'task-add', desc: tr("添加 Team 任务") },
+          { name: 'task-claim', desc: tr("认领 Team 任务") },
+          { name: 'task-complete', desc: tr("完成 Team 任务") },
+          { name: 'task-fail', desc: tr("将 Team 任务标记失败") },
+          { name: 'bridge', desc: tr("设置跨 Team Bridge") },
+          { name: 'bridge-status', desc: tr("查看跨 Team Bridge") },
+          { name: 'cross-message', desc: tr("发送跨 Team 消息") },
+          { name: 'shutdown', desc: tr("关闭 Team") },
         ];
       },
       '/schedule': function() {
         return [
-          { name: 'list', desc: '列出定时任务' },
-          { name: 'show', desc: '查看定时任务详情' },
-          { name: 'runs', desc: '查看定时任务执行历史' },
-          { name: 'create', desc: '创建定时任务' },
-          { name: 'pause', desc: '暂停定时任务' },
-          { name: 'resume', desc: '恢复定时任务' },
-          { name: 'run', desc: '立即执行定时任务' },
-          { name: 'cancel', desc: '删除定时任务' },
+          { name: 'list', desc: tr("列出定时任务") },
+          { name: 'show', desc: tr("查看定时任务详情") },
+          { name: 'runs', desc: tr("查看定时任务执行历史") },
+          { name: 'create', desc: tr("创建定时任务") },
+          { name: 'pause', desc: tr("暂停定时任务") },
+          { name: 'resume', desc: tr("恢复定时任务") },
+          { name: 'run', desc: tr("立即执行定时任务") },
+          { name: 'cancel', desc: tr("删除定时任务") },
         ];
       },
     };
@@ -10023,7 +10037,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         });
       }
       if (builtins.length > 0) {
-        html += '<div class="slash-popup-section">命令</div>';
+        html += trHtml("<div class=\\"slash-popup-section\\">命令</div>");
         builtins.forEach(function(item, idx) {
           const activeClass = idx === slashActiveIndex ? ' active' : '';
           html += '<div class="slash-item' + activeClass + '" data-index="' + idx + '" role="option">' +
@@ -10126,7 +10140,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           key: image.key,
           kind: 'image',
           name: image.name,
-          detail: '图片 · 已附加',
+          detail: tr("图片 · 已附加"),
           path: '',
           attached: true,
         };
@@ -10135,7 +10149,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           key: file.key,
           kind: 'file',
           name: file.name,
-          detail: file.path ? '文件 · ' + file.path : '文件 · 已附加',
+          detail: file.path ? tr("文件 · ") + file.path : tr("文件 · 已附加"),
           path: file.path || '',
           attached: true,
         };
@@ -10144,7 +10158,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           key: ideReferenceKey(reference),
           kind: reference.kind,
           name: reference.name,
-          detail: (reference.kind === 'folder' ? '文件夹引用 · ' : '文件引用 · ') + (reference.relativePath || reference.path),
+          detail: (reference.kind === 'folder' ? tr("文件夹引用 · ") : tr("文件引用 · ")) + (reference.relativePath || reference.path),
           path: reference.path,
           attached: true,
         };
@@ -10154,7 +10168,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           key: currentIdeContextKey(currentIdeContext),
           kind: 'context',
           name: referenceName(currentIdeContext.active_file),
-          detail: (includeIdeContext ? '当前 IDE 文件 · 已引用 · ' : '当前 IDE 文件 · ') + currentIdeContext.active_file,
+          detail: (includeIdeContext ? tr("当前 IDE 文件 · 已引用 · ") : tr("当前 IDE 文件 · ")) + currentIdeContext.active_file,
           path: currentIdeContext.active_file,
           attached: includeIdeContext,
         });
@@ -10173,7 +10187,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return Object.assign({
           key: 'ide-reference:' + (item.kind || 'file') + ':' + item.path,
           kind: item.kind || 'file',
-          detail: (item.kind === 'folder' ? '工作区文件夹 · ' : '工作区文件 · ') + item.relativePath,
+          detail: (item.kind === 'folder' ? tr("工作区文件夹 · ") : tr("工作区文件 · ")) + item.relativePath,
           attached: false,
         }, item);
       });
@@ -10184,7 +10198,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       mentionItems = Array.isArray(items) ? items : [];
       mentionActiveIndex = mentionItems.length ? 0 : -1;
       if (!mentionItems.length) { closeMentionPopup(); return; }
-      mentionPopup.innerHTML = '<div class="mention-popup-heading">@ 引用 IDE 上下文、图片、文件或文件夹 · Tab / Enter 添加</div>' + mentionItems.map(function(item, index) {
+      mentionPopup.innerHTML = trHtml("<div class=\\"mention-popup-heading\\">@ 引用 IDE 上下文、图片、文件或文件夹 · Tab / Enter 添加</div>") + mentionItems.map(function(item, index) {
         return '<div class="mention-item' + (index === 0 ? ' active' : '') + '" data-index="' + index + '" role="option" aria-selected="' + (index === 0 ? 'true' : 'false') + '">' +
           '<strong>' + escapeHtml(item.name) + '</strong><small>' + escapeHtml(item.detail) + '</small></div>';
       }).join('');
@@ -10234,7 +10248,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       remove.type = 'button';
       remove.tabIndex = -1;
       remove.dataset.removeMention = 'true';
-      remove.setAttribute('aria-label', '移除引用 ' + item.name);
+      remove.setAttribute('aria-label', tr("移除引用 ") + item.name);
       remove.textContent = '×';
       pill.append(marker, label, remove);
       trigger.deleteContents();
@@ -10258,7 +10272,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const caret = selection.getRangeAt(0);
       if (!input.contains(caret.startContainer) || caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
       const textNode = caret.startContainer;
-      const before = textNode.data.slice(0, caret.startOffset).replace(/\u200b/g, '');
+      const before = textNode.data.slice(0, caret.startOffset).replace(/​/g, '');
       const match = before.match(/(^|\\s)@([^\\s@]*)$/);
       if (!match) return null;
       const range = caret.cloneRange();
@@ -10475,7 +10489,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       if ((text === '!' || text.startsWith('! ')) && pendingImages.length === 0 && pendingTextFiles.length === 0) {
         const command = text.slice(1).trim();
-        if (!command) addLocalSystemMessage('用法：! <cmd>');
+        if (!command) addLocalSystemMessage(trHtml("用法：! <cmd>"));
         else vscode.postMessage({ type: 'runShellCommand', command: command });
         clearInput();
         pendingImages.length = 0;
@@ -10548,12 +10562,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       runtimeState = state;
       const disabled = !state.ready || !state.connected || state.pending;
       effortBtn.disabled = !state.connected || state.pending;
-      effortBtn.title = state.ready ? '选择思考强度' : '读取会话设置，点击重试';
+      effortBtn.title = state.ready ? tr("选择思考强度") : tr("读取会话设置，点击重试");
       ultraChip.disabled = disabled;
       ultraMenuItem.disabled = disabled;
       effortBtn.setAttribute('aria-busy', state.pending ? 'true' : 'false');
       const selectedEffort = state.reasoning_effort || 'auto';
-      effortLabel.textContent = '思考 ' + (effortLabels[selectedEffort] || '自动');
+      effortLabel.textContent = tr("思考 ") + (effortLabels[selectedEffort] || tr("自动"));
       const ultra = state.ultra_mode === true;
       ultraChip.hidden = !ultra;
       ultraMenuItem.setAttribute('aria-checked', String(ultra));
@@ -10678,9 +10692,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     let currentPermissionMode = 'default';
     const emptyPermissionSummary = {
-      inheritedLabel: '暂无法读取',
-      inheritedDescription: '当前生效：暂无法读取，请连接支持权限详情的 Gateway',
-      current: '当前生效：暂无法读取', rules: '', details: '',
+      inheritedLabel: tr("暂无法读取"),
+      inheritedDescription: tr("当前生效：暂无法读取，请连接支持权限详情的 Gateway"),
+      current: tr("当前生效：暂无法读取"), rules: '', details: '',
       inheritedDanger: false, effectiveDanger: false
     };
     let currentPermissionSummary = emptyPermissionSummary;
@@ -10689,7 +10703,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (mode) currentPermissionMode = mode;
       const info = currentPermissionSummary;
       const perm = currentPermissionMode;
-      if (permLabel) permLabel.textContent = perm === 'default' ? '默认 · ' + info.inheritedLabel : (perm === 'run_everything' ? '完全访问' : (perm === 'ai_review' ? 'AI 审查' : '每次确认'));
+      if (permLabel) permLabel.textContent = perm === 'default' ? tr("默认 · ") + info.inheritedLabel : (perm === 'run_everything' ? tr("完全访问") : (perm === 'ai_review' ? tr("AI 审查") : tr("每次确认")));
       if (permIcon) permIcon.textContent = perm === 'run_everything' ? '⚡' : (perm === 'ai_review' ? '🤖' : (perm === 'ask' ? '🛡' : '⚙'));
       if (permBtn) {
         permBtn.classList.toggle('perm-danger', perm === 'run_everything' || (perm === 'default' && info.effectiveDanger));
@@ -10894,7 +10908,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       ideCurrentFile.setAttribute('aria-checked', String(hasCurrentFile && includeIdeContext));
       ideCurrentFileName.textContent = hasCurrentFile
         ? referenceName(currentIdeContext.active_file)
-        : '没有打开的文件';
+        : tr("没有打开的文件");
       ideCurrentFileName.title = hasCurrentFile ? currentIdeContext.active_file : '';
     }
 
@@ -11080,13 +11094,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             : null;
           if (button instanceof HTMLElement) {
             button.dataset.copyState = msg.ok ? 'copied' : 'error';
-            button.title = msg.ok ? '已复制' : '复制失败';
+            button.title = msg.ok ? tr("已复制") : tr("复制失败");
             button.setAttribute('aria-label', button.title);
             if (msg.ok) {
               setTimeout(() => {
                 if (button.dataset.copyId === msg.requestId) {
                   button.dataset.copyState = 'idle';
-                  button.title = button.getAttribute('data-copy-label') || '复制';
+                  button.title = button.getAttribute('data-copy-label') || tr("复制");
                   button.setAttribute('aria-label', button.title);
                 }
               }, 1600);
@@ -11096,6 +11110,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         case 'newMessage':
           addMessageEl(msg.message);
+          break;
+        case 'prepareLanguageChange':
+          vscode.setState?.({ ...(vscode.getState?.() || {}), languageDraft: {
+            text: getInputText(), images: pendingImages, files: pendingTextFiles,
+            references: pendingIdeReferences, includeIdeContext, attachmentSequence,
+          } });
+          vscode.postMessage({ type: 'reloadForLanguage' });
           break;
         case 'processDisplayOptions':
           applyProcessDisplayOptions(msg);
@@ -11145,7 +11166,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               const nextText = (textEl.getAttribute('data-raw-text') || '') + String(msg.chunk || '');
               textEl.setAttribute('data-raw-text', nextText);
               textEl.innerHTML = renderAssistantMarkdown(nextText);
-              const fullCopy = el.querySelector('.message-actions [data-copy-label="复制回复"]');
+              const fullCopy = el.querySelector(tr(".message-actions [data-copy-label=\\"复制回复\\"]"));
               if (fullCopy) fullCopy.setAttribute('data-copy-text', nextText);
             } else if (textEl) {
               textEl.textContent += msg.chunk;
@@ -11182,7 +11203,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'restoreFollowUp':
           setInputText([getInputText(), msg.text].filter(Boolean).join('\\n\\n'));
           (msg.images || []).forEach(function(img) {
-            pendingImages.push({ key: nextAttachmentKey('image'), name: '图片', media_type: img.media_type, data: img.data, dataUrl: 'data:' + img.media_type + ';base64,' + img.data });
+            pendingImages.push({ key: nextAttachmentKey('image'), name: tr("图片"), media_type: img.media_type, data: img.data, dataUrl: 'data:' + img.media_type + ';base64,' + img.data });
           });
           renderAttachmentBar();
           setComposerCaretAtEnd();
@@ -11402,6 +11423,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     });
 
+    const languageDraft = vscode.getState?.()?.languageDraft;
+    if (languageDraft) {
+      setInputText(languageDraft.text || '');
+      pendingImages.push(...(languageDraft.images || []));
+      pendingTextFiles.push(...(languageDraft.files || []));
+      pendingIdeReferences.push(...(languageDraft.references || []));
+      includeIdeContext = languageDraft.includeIdeContext !== false;
+      attachmentSequence = languageDraft.attachmentSequence || 0;
+      vscode.setState?.({ ...(vscode.getState?.() || {}), languageDraft: undefined });
+      renderAttachmentBar();
+    }
     renderIdeContextMenu();
     syncComposerChrome();
     updatePanelWidthMode();

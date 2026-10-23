@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr, localized } from "./i18n";
 import {
   AlertTriangle,
   ChevronDown,
@@ -198,20 +200,20 @@ export function classifyProjectFile(file: Pick<WorkspaceFileEntry, "name" | "siz
   const name = file.name.toLowerCase();
   if (IMAGE_EXTENSIONS.has(suffix)) {
     return file.size > MAX_IMAGE_PREVIEW_BYTES
-      ? { kind: "image", language: null, reason: "图片超过 10 MiB 预览限制" }
+      ? { kind: "image", language: null, reason: tr("图片超过 10 MiB 预览限制") }
       : { kind: "image", language: null, reason: null };
   }
   if (MARKDOWN_EXTENSIONS.has(suffix)) {
     return file.size > MAX_TEXT_PREVIEW_BYTES
-      ? { kind: "markdown", language: "markdown", reason: "文件超过 2 MiB 预览限制" }
+      ? { kind: "markdown", language: "markdown", reason: tr("文件超过 2 MiB 预览限制") }
       : { kind: "markdown", language: "markdown", reason: null };
   }
   if (TEXT_EXTENSIONS.has(suffix) || TEXT_FILENAMES.has(name) || name.startsWith(".env")) {
     return file.size > MAX_TEXT_PREVIEW_BYTES
-      ? { kind: "text", language: LANGUAGE_BY_EXTENSION[suffix] ?? null, reason: "文件超过 2 MiB 预览限制" }
+      ? { kind: "text", language: LANGUAGE_BY_EXTENSION[suffix] ?? null, reason: tr("文件超过 2 MiB 预览限制") }
       : { kind: "text", language: LANGUAGE_BY_EXTENSION[suffix] ?? null, reason: null };
   }
-  return { kind: "unsupported", language: null, reason: "此文件类型暂不支持预览" };
+  return { kind: "unsupported", language: null, reason: tr("此文件类型暂不支持预览") };
 }
 
 function fileIcon(file: WorkspaceFileEntry) {
@@ -231,8 +233,8 @@ function markdownCode(children: ReactNode): { language: string; source: string }
   };
 }
 
-const PROJECT_MARKDOWN_COMPONENTS: Components = {
-  img: ({ alt }) => <span className="project-markdown-image-placeholder">{alt ? `[图片：${alt}]` : "[相对图片未加载]"}</span>,
+const PROJECT_MARKDOWN_COMPONENTS: Components = localized({
+  img: ({ alt }) => <span className="project-markdown-image-placeholder">{alt ? tr("[图片：{0}]", { 0: alt }) : tr("[相对图片未加载]")}</span>,
   a: ({ href, children }) => (
     typeof href === "string" && /^(?:https?:|mailto:)/i.test(href)
       ? <a href={href} target="_blank" rel="noreferrer">{children}</a>
@@ -254,7 +256,7 @@ const PROJECT_MARKDOWN_COMPONENTS: Components = {
       </SyntaxHighlighter>
     );
   },
-};
+});
 
 function SourcePreview({ text, language }: { text: string; language: string | null }) {
   if (!language || !HIGHLIGHTED_LANGUAGES.has(language)) return <pre className="project-file-plain">{text}</pre>;
@@ -327,7 +329,7 @@ export function ProjectFilesWorkspace({
   const gitSelected = changes?.selection?.source === "git";
   const allHistory = !gitSelected && changes?.selection?.summaryId === ALL_EDITS;
   const historySummary = useMemo(() => allHistory ? allEditsSummary(changes?.turns ?? []) : reviewTurn?.summary ?? null,
-    [allHistory, changes?.turns, reviewTurn]);
+    [allHistory, changes?.turns, reviewTurn, getLocale()]);
   const reviewSummary = gitSelected ? gitReview.data : historySummary;
   const hasChanges = Boolean(changes);
   const selectedChangePath = changes?.selection?.path
@@ -339,15 +341,15 @@ export function ProjectFilesWorkspace({
     setExplorerView("changes");
   };
   const descriptions = {
-    uncommitted: "工作区相对 HEAD 的全部未提交改动，包含未跟踪文件",
-    unstaged: "工作区相对暂存区的改动，包含未跟踪文件",
-    staged: "暂存区相对 HEAD 的改动",
-    commit: "所选提交相对第一父提交的改动；首次提交显示新增内容",
-    branch: `当前分支相对 ${changes?.selection?.ref ?? gitReview.info?.default_base ?? "所选分支"} 的共同祖先的已提交改动`,
+    uncommitted: tr("工作区相对 HEAD 的全部未提交改动，包含未跟踪文件"),
+    unstaged: tr("工作区相对暂存区的改动，包含未跟踪文件"),
+    staged: tr("暂存区相对 HEAD 的改动"),
+    commit: tr("所选提交相对第一父提交的改动；首次提交显示新增内容"),
+    branch: tr("当前分支相对 {0} 的共同祖先的已提交改动", { 0: changes?.selection?.ref ?? gitReview.info?.default_base ?? tr("所选分支") }),
   };
   const reviewDescription = gitSelected
-    ? `${descriptions[changes.selection!.scope!]}${gitReview.data?.truncated ? ` · 仅显示前 ${gitReview.data.files.length} / ${gitReview.data.total_files} 个文件，行数为已显示文件的小计` : ""}`
-    : allHistory ? "全部会话编辑记录，按编辑顺序分组；行数为各次编辑的累计值" : "当前会话中保存的单次编辑记录";
+    ? `${descriptions[changes.selection!.scope!]}${gitReview.data?.truncated ? tr(" · 仅显示前 {0} / {1} 个文件，行数为已显示文件的小计", { 0: gitReview.data.files.length, 1: gitReview.data.total_files }) : ""}`
+    : allHistory ? tr("全部会话编辑记录，按编辑顺序分组；行数为各次编辑的累计值") : tr("当前会话中保存的单次编辑记录");
 
   const [preview, setPreview] = useState<PreviewState>({
     status: "empty", kind: null, text: "", imageUrl: null, error: null,
@@ -434,7 +436,7 @@ export function ProjectFilesWorkspace({
         if (cancelled) return;
         const detail = reason instanceof Error ? reason.message : String(reason);
         const legacy = /404|not found/i.test(detail)
-          ? "当前 Gateway 不支持文件预览，或文件已不存在"
+          ? tr("当前 Gateway 不支持文件预览，或文件已不存在")
           : detail;
         setPreview({ status: "error", kind: classification.kind, text: "", imageUrl: null, error: legacy });
       });
@@ -494,7 +496,7 @@ export function ProjectFilesWorkspace({
           {state?.loading ? <LoaderCircle className="spin" /> : open ? <ChevronDown /> : <ChevronRight />}
           {open ? <FolderOpen /> : <Folder />}
           <span>{directory.name}</span>
-          {directory.is_symlink && <small>链接</small>}
+          {directory.is_symlink && <small>{tr("链接")}</small>}
         </button>
         {open && !cyclic && (
           <div className="project-tree-children">
@@ -514,11 +516,11 @@ export function ProjectFilesWorkspace({
                   <span className="project-tree-file-spacer" />
                   {fileIcon(file)}
                   <span>{file.name}</span>
-                  {file.is_symlink && <small>链接</small>}
+                  {file.is_symlink && <small>{tr("链接")}</small>}
                 </button>
               ))}
             {state?.listing && state.listing.directories.length === 0 && (state.listing.files ?? []).length === 0 && (
-              <div className="project-tree-empty" style={rowStyle}>空目录</div>
+              <div className="project-tree-empty" style={rowStyle}>{tr("空目录")}</div>
             )}
           </div>
         )}
@@ -528,7 +530,7 @@ export function ProjectFilesWorkspace({
 
   const rootNodes = useMemo(() => directories.map((path) => ({
     name: basename(path), path, hidden: basename(path).startsWith("."), is_symlink: false,
-  })), [rootsKey]);
+  })), [rootsKey, getLocale()]);
   const selectedClassification = selectedFile ? classifyProjectFile(selectedFile) : null;
   const referenced = Boolean(selectedFile && referencedPaths.has(selectedFile.path));
 
@@ -576,25 +578,25 @@ export function ProjectFilesWorkspace({
       ref={workspaceRef}
       className={`project-files-workspace ${reviewActive ? "review-active" : selectedFile ? "has-file" : "empty-preview"} ${treeOpen ? "tree-open" : "tree-collapsed"} ${drawer ? "drawer" : ""} ${embedded ? "embedded" : ""}`}
       style={{ "--project-files-width": `${width}px` } as CSSProperties}
-      aria-label={`${projectName} 文件工作区`}
+      aria-label={tr("{0} 文件工作区", { 0: projectName })}
     >
       {!drawer && !embedded && <div className="project-files-resizer" role="separator" aria-orientation="vertical" onPointerDown={startResize} />}
       <div className="project-file-tabs-bar">
-        <div className="project-file-tabs" role="tablist" aria-label="打开的文件">
+        <div className="project-file-tabs" role="tablist" aria-label={tr("打开的文件")}>
           {changes?.selection && (
             <div className={`project-file-tab project-change-tab ${reviewActive ? "active" : ""}`}>
               <button type="button" role="tab" aria-selected={reviewActive} onClick={changes.onActivate}>
                 <GitCompareArrows />
-                <span>变更</span>
+                <span>{tr("变更")}</span>
                 <small className="project-change-count">{reviewSummary?.files.length ?? 0}</small>
               </button>
-              <button className="project-file-tab-close" type="button" title="关闭变更" aria-label="关闭变更" onClick={changes.onClose}><X /></button>
+              <button className="project-file-tab-close" type="button" title={tr("关闭变更")} aria-label={tr("关闭变更")} onClick={changes.onClose}><X /></button>
             </div>
           )}
           {openFiles.length === 0 && !changes?.selection && (
             <div className="project-file-tab empty active">
               <FolderOpen />
-              <span>浏览文件</span>
+              <span>{tr("浏览文件")}</span>
             </div>
           )}
           {openFiles.map((file) => {
@@ -615,8 +617,8 @@ export function ProjectFilesWorkspace({
                 <button
                   className="project-file-tab-close"
                   type="button"
-                  title={`关闭 ${file.name}`}
-                  aria-label={`关闭 ${file.name}`}
+                  title={tr("关闭 {0}", { 0: file.name })}
+                  aria-label={tr("关闭 {0}", { 0: file.name })}
                   onClick={() => {
                     setTabTooltip(null);
                     onCloseFile(file.path);
@@ -630,8 +632,8 @@ export function ProjectFilesWorkspace({
           <button
             className="project-file-new-tab"
             type="button"
-            title="打开其他文件"
-            aria-label="打开其他文件"
+            title={tr("打开其他文件")}
+            aria-label={tr("打开其他文件")}
             onClick={() => {
               setExplorerView("files");
               if (!treeOpen) onToggleTree();
@@ -642,21 +644,21 @@ export function ProjectFilesWorkspace({
         </div>
         <div className="project-file-tabs-actions">
           {hasChanges && (
-            <button className={`icon-button tiny ${reviewActive ? "active" : ""}`} type="button" title="查看变更" aria-label="查看变更" aria-pressed={reviewActive} onClick={() => openChanges()}>
+            <button className={`icon-button tiny ${reviewActive ? "active" : ""}`} type="button" title={tr("查看变更")} aria-label={tr("查看变更")} aria-pressed={reviewActive} onClick={() => openChanges()}>
               <GitCompareArrows />
             </button>
           )}
           <button
             className={`icon-button tiny ${treeOpen ? "active" : ""}`}
             type="button"
-            title={treeOpen ? "收起文件树" : "展开文件树"}
-            aria-label={treeOpen ? "收起文件树" : "展开文件树"}
+            title={treeOpen ? tr("收起文件树") : tr("展开文件树")}
+            aria-label={treeOpen ? tr("收起文件树") : tr("展开文件树")}
             aria-pressed={treeOpen}
             onClick={onToggleTree}
           >
             {treeOpen ? <FolderOpen /> : <Folder />}
           </button>
-          <button className="icon-button tiny" type="button" title="收起文件查看" aria-label="收起文件查看" onClick={onClose}>
+          <button className="icon-button tiny" type="button" title={tr("收起文件查看")} aria-label={tr("收起文件查看")} onClick={onClose}>
             <PanelRightClose />
           </button>
         </div>
@@ -679,15 +681,15 @@ export function ProjectFilesWorkspace({
           <div className="project-file-preview-title">
             {selectedFile ? fileIcon(selectedFile) : <FolderOpen />}
             <span>
-              <strong>{selectedFile?.name ?? "浏览文件"}</strong>
-              <small title={selectedFile?.path}>{selectedFile?.path ?? "从文件树选择要查看的文件"}</small>
+              <strong>{selectedFile?.name ?? tr("浏览文件")}</strong>
+              <small title={selectedFile?.path}>{selectedFile?.path ?? tr("从文件树选择要查看的文件")}</small>
             </span>
           </div>
           <div className="project-file-preview-actions">
             {selectedClassification?.kind === "markdown" && preview.status === "ready" && (
               <div className="project-file-view-toggle">
-                <button className={!markdownSource ? "active" : ""} type="button" onClick={() => setMarkdownSource(false)}>预览</button>
-                <button className={markdownSource ? "active" : ""} type="button" onClick={() => setMarkdownSource(true)}>源码</button>
+                <button className={!markdownSource ? "active" : ""} type="button" onClick={() => setMarkdownSource(false)}>{tr("预览")}</button>
+                <button className={markdownSource ? "active" : ""} type="button" onClick={() => setMarkdownSource(true)}>{tr("源码")}</button>
               </div>
             )}
             {selectedFile && (
@@ -697,23 +699,23 @@ export function ProjectFilesWorkspace({
                 disabled={referenced}
                 onClick={() => onReference(selectedFile)}
               >
-                <Quote />{referenced ? "已引用" : "引用"}
+                <Quote />{referenced ? tr("已引用") : tr("引用")}
               </button>
             )}
           </div>
         </header>
         <div className="project-file-preview-body">
           {preview.status === "empty" && (
-            <div className="project-file-preview-empty"><FolderOpen /><strong>浏览文件</strong><span>{treeOpen ? "从右侧文件树选择文件" : "使用右上角文件夹按钮打开文件树"}</span></div>
+            <div className="project-file-preview-empty"><FolderOpen /><strong>{tr("浏览文件")}</strong><span>{treeOpen ? tr("从右侧文件树选择文件") : tr("使用右上角文件夹按钮打开文件树")}</span></div>
           )}
           {preview.status === "loading" && (
-            <div className="project-file-preview-empty"><LoaderCircle className="spin" /><strong>正在读取文件</strong></div>
+            <div className="project-file-preview-empty"><LoaderCircle className="spin" /><strong>{tr("正在读取文件")}</strong></div>
           )}
           {preview.status === "error" && (
-            <div className="project-file-preview-empty error"><AlertTriangle /><strong>无法预览</strong><span>{preview.error}</span></div>
+            <div className="project-file-preview-empty error"><AlertTriangle /><strong>{tr("无法预览")}</strong><span>{preview.error}</span></div>
           )}
           {preview.status === "ready" && preview.kind === "image" && preview.imageUrl && (
-            <div className="project-file-image"><img src={preview.imageUrl} alt={selectedFile?.name ?? "文件图片"} /></div>
+            <div className="project-file-image"><img src={preview.imageUrl} alt={selectedFile?.name ?? tr("文件图片")} /></div>
           )}
           {preview.status === "ready" && preview.kind === "markdown" && !markdownSource && (
             <article className="project-file-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={PROJECT_MARKDOWN_COMPONENTS}>{preview.text}</ReactMarkdown></article>
@@ -731,19 +733,19 @@ export function ProjectFilesWorkspace({
       >
         <header>
           {hasChanges ? (
-            <div className="project-explorer-switch" role="group" aria-label="文件导航">
-              <button type="button" className={explorerView === "files" ? "active" : ""} aria-pressed={explorerView === "files"} onClick={() => setExplorerView("files")}>文件</button>
+            <div className="project-explorer-switch" role="group" aria-label={tr("文件导航")}>
+              <button type="button" className={explorerView === "files" ? "active" : ""} aria-pressed={explorerView === "files"} onClick={() => setExplorerView("files")}>{tr("文件")}</button>
               <button type="button" className={explorerView === "changes" ? "active" : ""} aria-pressed={explorerView === "changes"} onClick={() => {
                 if (!reviewActive) openChanges();
                 else setExplorerView("changes");
-              }}>变更 <span>{reviewSummary?.files.length ?? 0}</span></button>
+              }}>{tr("变更 ")}<span>{reviewSummary?.files.length ?? 0}</span></button>
             </div>
-          ) : <strong>文件</strong>}
+          ) : <strong>{tr("文件")}</strong>}
           {explorerView === "files" && <div>
-            <button className="icon-button tiny" type="button" title={showHidden ? "隐藏点文件" : "显示点文件"} onClick={() => setShowHidden((value) => !value)}>
+            <button className="icon-button tiny" type="button" title={showHidden ? tr("隐藏点文件") : tr("显示点文件")} onClick={() => setShowHidden((value) => !value)}>
               {showHidden ? <EyeOff /> : <Eye />}
             </button>
-            <button className="icon-button tiny" type="button" title="刷新文件树" onClick={refresh}><RefreshCw /></button>
+            <button className="icon-button tiny" type="button" title={tr("刷新文件树")} onClick={refresh}><RefreshCw /></button>
           </div>}
         </header>
         {explorerView === "changes" ? (
@@ -756,11 +758,11 @@ export function ProjectFilesWorkspace({
           />
         ) : <><label className="project-file-filter">
           <Search />
-          <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="筛选已加载文件…" />
+          <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={tr("筛选已加载文件…")} />
         </label>
         <div className="project-file-tree">
           {rootNodes.map((root) => renderDirectory(root, 0, new Set()))}
-          {rootNodes.length === 0 && <div className="project-tree-empty">项目没有可浏览的目录</div>}
+          {rootNodes.length === 0 && <div className="project-tree-empty">{tr("项目没有可浏览的目录")}</div>}
         </div></>}
       </section>
     </aside>

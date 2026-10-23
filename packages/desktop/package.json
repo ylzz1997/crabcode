@@ -6,10 +6,12 @@
   "scripts": {
     "computer-use:build": "node ../computer-use/scripts/build.mjs --out src-tauri/resources/computer-use --sync-local-clients",
     "dev": "vite --host 127.0.0.1 --port 1420",
-    "build": "node ../../scripts/audit_tool_cards.mjs && tsc --noEmit && vite build",
+    "build": "node ../../scripts/i18n.mjs && node ../../scripts/audit_tool_cards.mjs && tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run",
+    "i18n:check": "node ../../scripts/i18n.mjs",
+    "i18n:extract": "node ../../scripts/i18n.mjs --extract"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

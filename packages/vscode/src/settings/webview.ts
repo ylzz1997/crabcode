@@ -1,3 +1,5 @@
+import { configurationSourceLabel, promptSectionLabel } from "../../../shared/i18n/metadata.js";
+import { t as tr, localized, setLocale, getLocale } from "../../../shared/i18n/index.js";
 import {
   LOCAL_SETTINGS,
   SECTIONS,
@@ -25,6 +27,7 @@ declare function acquireVsCodeApi(): {
   getState(): { section?: Section } | undefined;
   setState(state: unknown): void;
 };
+setLocale(document.documentElement.lang || "zh-CN");
 const vscode = acquireVsCodeApi();
 const app = document.getElementById("app")!;
 let snapshot: SettingsSnapshot;
@@ -192,15 +195,15 @@ function panelFor(section: Section): HTMLElement {
 }
 const rail = el("aside", "rail");
 const brand = el("div", "brand");
-brand.append(icon("settings"), el("span", "", "CrabCode设置"));
+brand.append(icon("settings"), el("span", "", tr("CrabCode设置")));
 rail.append(brand);
 const searchBox = el("div", "search-box");
-const search = input("", "搜索设置", "search");
-search.placeholder = "搜索设置";
+const search = input("", tr("搜索设置"), "search");
+search.placeholder = tr("搜索设置");
 searchBox.append(icon("search"), search);
 rail.append(searchBox);
 const nav = el("nav", "navigation");
-nav.setAttribute("aria-label", "设置栏目");
+nav.setAttribute("aria-label", tr("设置栏目"));
 rail.append(nav);
 for (const section of SECTIONS) {
   const item = button(section.title, () => navigate(section.id), "nav-item");
@@ -209,7 +212,7 @@ for (const section of SECTIONS) {
   nav.append(item);
 }
 const extensionLink = button(
-  "扩展设置",
+  tr("扩展设置"),
   () => rpc("extension"),
   "extension-link",
 );
@@ -221,11 +224,11 @@ const title = el("h1");
 const subtitle = el("p");
 const headingText = el("div");
 headingText.append(title, subtitle);
-const refresh = button("刷新", async () => {
+const refresh = button(tr("刷新"), async () => {
   if (
     dirty.has(active) &&
     !(await rpc("confirm", {
-      message: "刷新会放弃当前栏目的未保存修改，继续？",
+      message: tr("刷新会放弃当前栏目的未保存修改，继续？"),
     }))
   )
     return;
@@ -255,12 +258,18 @@ app.append(rail, main, status);
 
 function acceptSnapshot(next: SettingsSnapshot): void {
   const changed = snapshot && next.generation !== snapshot.generation;
+  const languageChanged = next.locale && next.locale !== getLocale();
   snapshot = next;
-  context.textContent = `${next.gateway}  ·  ${next.cwd ?? "Gateway 默认目录"}`;
+  if (languageChanged) {
+    setLocale(next.locale!);
+    document.documentElement.lang = getLocale();
+    refreshLanguage();
+  }
+  context.textContent = `${next.gateway}  ·  ${next.cwd ?? tr("Gateway 默认目录")}`;
   context.title = context.textContent;
   if (changed) {
     pending.forEach((request) =>
-      request.reject(new Error("连接或工作区已切换；请重试")),
+      request.reject(new Error(tr("连接或工作区已切换；请重试"))),
     );
     pending.clear();
     for (const key of Object.keys(data)) delete data[key as Resource];
@@ -273,10 +282,41 @@ function acceptSnapshot(next: SettingsSnapshot): void {
     selectedTemplate = "";
     for (const resource of Object.keys(sources))
       delete sources[resource as Resource];
-    notice("已切换连接或工作区，重新读取设置。");
+    notice(tr("已切换连接或工作区，重新读取设置。"));
     renderLocalPages();
     void navigate(active);
   } else syncLocalControls();
+}
+const staleLanguageSections = new Set<Section>();
+function refreshLanguage(): void {
+  brand.querySelector("span")!.textContent = tr("CrabCode设置");
+  document.title = tr("CrabCode设置");
+  search.placeholder = tr("搜索设置");
+  search.setAttribute("aria-label", tr("搜索设置"));
+  nav.setAttribute("aria-label", tr("设置栏目"));
+  for (const section of SECTIONS) {
+    const item = nav.querySelector<HTMLButtonElement>(`[data-section="${section.id}"]`)!;
+    item.replaceChildren(icon(section.icon), document.createTextNode(section.title));
+    staleLanguageSections.add(section.id);
+  }
+  extensionLink.replaceChildren(document.createTextNode(tr("扩展设置")), icon("arrow"));
+  refresh.textContent = tr("刷新");
+  title.textContent = SECTIONS.find(section => section.id === active)!.title;
+  subtitle.textContent = SECTIONS.find(section => section.id === active)!.description;
+  for (const section of pages.keys()) refreshSectionLanguage(section);
+}
+function refreshSectionLanguage(section: Section): void {
+  if (!staleLanguageSections.has(section) || dirty.has(section)) return;
+  staleLanguageSections.delete(section);
+  const resource = resourceFor(section);
+  if (resource === "runtime" && data.runtime) renderRuntime(section as "tools" | "context");
+  else if (resource && data[resource]) renderResource(resource);
+  else if (["general", "models", "tools"].includes(section)) {
+    const page = panelFor(section);
+    page.replaceChildren();
+    localRows(page, section);
+    syncLocalControls();
+  }
 }
 function resourceFor(section: Section): Resource | undefined {
   return section === "context" || section === "tools"
@@ -288,6 +328,7 @@ function resourceFor(section: Section): Resource | undefined {
 async function navigate(section: Section): Promise<void> {
   if (!SECTIONS.some((item) => item.id === section)) section = "general";
   active = section;
+  refreshSectionLanguage(section);
   vscode.setState({ section });
   const definition = SECTIONS.find((item) => item.id === section)!;
   title.textContent = definition.title;
@@ -320,7 +361,7 @@ async function load(resource: Resource, force = false): Promise<void> {
         : "tools"
       : resource,
   );
-  const busy = el("p", "load-state", "正在读取…");
+  const busy = el("p", "load-state", tr("正在读取…"));
   page.append(busy);
   try {
     const result = await rpc("read", {
@@ -337,7 +378,7 @@ async function load(resource: Resource, force = false): Promise<void> {
       const failure = el("div", "load-state error");
       failure.append(
         el("p", "", (error as Error).message),
-        button("重试", () => {
+        button(tr("重试"), () => {
           failure.remove();
           return load(resource, true);
         }),
@@ -362,7 +403,7 @@ async function mutate(
   resource: Resource,
   mutation: Record<string, unknown>,
 ): Promise<any> {
-  notice("正在保存…");
+  notice(tr("正在保存…"));
   const sections: Section[] =
     resource === "runtime" ? ["tools", "context"] : [resource];
   const result = await lockEditor(sections.map(panelFor), () =>
@@ -374,15 +415,16 @@ async function mutate(
   data[resource] = result;
   notice(
     resource === "models"
-      ? "已保存。模型参数在重新选择模型后生效。"
+      ? tr("已保存。模型参数在重新选择模型后生效。")
       : resource === "runtime"
-        ? "已保存。压缩和操作选项从下一轮生效；快照和额外工具在新建或恢复会话后生效。"
-        : "已保存，从下一轮对话生效。",
+        ? tr("已保存。压缩和操作选项从下一轮生效；快照和额外工具在新建或恢复会话后生效。")
+        : tr("已保存，从下一轮对话生效。"),
   );
   return result;
 }
 function sourcePicker(page: HTMLElement, resource: Resource): boolean {
   const state = data[resource];
+  if (state?.editable_sources) state.editable_sources = state.editable_sources.map((source: ModelSettingsSource) => ({ ...source, label: configurationSourceLabel(source) }));
   const writable = (state?.editable_sources ?? []).filter(
     (item: ModelSettingsSource) => item.writable,
   ) as ModelSettingsSource[];
@@ -390,7 +432,7 @@ function sourcePicker(page: HTMLElement, resource: Resource): boolean {
   for (const warning of allWarnings)
     page.append(el("p", "inline-note", warning));
   if (!writable.length) {
-    page.append(el("p", "inline-note", "当前配置层不可写，设置仅供查看。"));
+    page.append(el("p", "inline-note", tr("当前配置层不可写，设置仅供查看。")));
     return false;
   }
   if (!writable.some((item) => item.id === sources[resource]))
@@ -400,7 +442,7 @@ function sourcePicker(page: HTMLElement, resource: Resource): boolean {
   const picker = select(
     writable.map((item) => [item.id, item.label]),
     sources[resource]!,
-    "保存到配置层",
+    tr("保存到配置层"),
   );
   picker.dataset.sourceResource = resource;
   picker.addEventListener("change", () => {
@@ -414,18 +456,18 @@ function sourcePicker(page: HTMLElement, resource: Resource): boolean {
       });
   });
   const bar = el("div", "source-bar");
-  bar.append(el("span", "", "保存到"), picker);
+  bar.append(el("span", "", tr("保存到")), picker);
   page.append(bar);
   return true;
 }
 function localScope(page: HTMLElement): void {
   const picker = select(
     [
-      ["user", "VS Code 用户"],
-      ...(snapshot.hasWorkspace ? [["workspace", "当前工作区"] as const] : []),
+      ["user", tr("VS Code 用户")],
+      ...(snapshot.hasWorkspace ? [["workspace", tr("当前工作区")] as const] : []),
     ],
     scope,
-    "聊天偏好保存范围",
+    tr("聊天偏好保存范围"),
   );
   picker.dataset.localScope = "true";
   picker.addEventListener("change", () => {
@@ -438,7 +480,7 @@ function localScope(page: HTMLElement): void {
     syncLocalControls();
   });
   const bar = el("div", "source-bar");
-  bar.append(el("span", "", "聊天偏好保存到"), picker);
+  bar.append(el("span", "", tr("聊天偏好保存到")), picker);
   page.append(bar);
 }
 function localRows(page: HTMLElement, section: Section): void {
@@ -446,10 +488,10 @@ function localRows(page: HTMLElement, section: Section): void {
   const card = group(
     page,
     section === "tools"
-      ? "VS Code 会话偏好"
+      ? tr("VS Code 会话偏好")
       : section === "models"
-        ? "聊天选择"
-        : "聊天与输入",
+        ? tr("聊天选择")
+        : tr("聊天与输入"),
   );
   for (const spec of LOCAL_SETTINGS.filter(
     (item) => item.section === section,
@@ -507,7 +549,8 @@ function localRows(page: HTMLElement, section: Section): void {
         delete control.dataset.dirty;
         updateDirty(section);
         acceptSnapshot(next);
-        notice("已保存");
+        refreshSectionLanguage(section);
+        notice(tr("已保存"));
       } catch (error) {
         notice((error as Error).message, true);
       } finally {
@@ -515,7 +558,7 @@ function localRows(page: HTMLElement, section: Section): void {
       }
     });
     const reset = button(
-      "恢复继承",
+      tr("恢复继承"),
       async () => {
         const next = await rpc("saveLocal", {
           key: spec.key,
@@ -525,7 +568,7 @@ function localRows(page: HTMLElement, section: Section): void {
         delete control.dataset.dirty;
         updateDirty(section);
         acceptSnapshot(next);
-        notice("已移除所选范围的覆盖");
+        notice(tr("已移除所选范围的覆盖"));
       },
       "text-button",
     );
@@ -569,25 +612,25 @@ function syncLocalControls(): void {
     const origin =
       info?.workspace !== undefined
         ? scope === "user"
-          ? "当前由工作区覆盖"
-          : "生效来源：工作区"
+          ? tr("当前由工作区覆盖")
+          : tr("生效来源：工作区")
         : info?.user !== undefined
-          ? "生效来源：用户"
-          : "使用默认 / 继承配置";
+          ? tr("生效来源：用户")
+          : tr("使用默认 / 继承配置");
     const inherited = inheritedSettingLabel(key);
     const follows = key === "permissionMode" ? info?.value === "default" : info?.value === "";
-    let hint = inherited && follows ? `；当前生效：${inherited}` : "";
+    let hint = inherited && follows ? tr("；当前生效：{0}", { 0: inherited }) : "";
     if (key === "computerUseTargetScope" && follows) {
       const legacy = snapshot.local.computerUseMode?.value;
-      if (legacy) hint = `；当前由旧版覆盖决定：${legacy === "foreground_desktop" ? "整个桌面" : "应用窗口"}`;
+      if (legacy) hint = tr("；当前由旧版覆盖决定：{0}", { 0: legacy === "foreground_desktop" ? tr("整个桌面") : tr("应用窗口") });
     }
     if (key === "computerUseMode" && snapshot.local.computerUseTargetScope?.value) {
-      hint = `；当前由操作目标覆盖决定：${snapshot.local.computerUseTargetScope.value === "desktop" ? "整个桌面" : "应用窗口"}`;
+      hint = tr("；当前由操作目标覆盖决定：{0}", { 0: snapshot.local.computerUseTargetScope.value === "desktop" ? tr("整个桌面") : tr("应用窗口") });
     }
     note.textContent = origin + hint;
     if (key === "permissionMode" && follows) {
       const summary = permissionPolicyText(data.runtime?.permission_policy);
-      note.textContent = `${origin}；${summary.inheritedDescription}。已有会话以聊天菜单中的当前生效规则为准。`;
+      note.textContent = tr("{0}；{1}。已有会话以聊天菜单中的当前生效规则为准。", { 0: origin, 1: summary.inheritedDescription });
       note.title = [summary.rules, summary.details].filter(Boolean).join("\n");
     } else note.title = "";
   }
@@ -597,9 +640,9 @@ function inheritedSettingLabel(key: string): string | undefined {
   const runtime = data.runtime as RuntimeSettingsResponse | undefined;
   if (key === "permissionMode") return permissionModeLabel(runtime?.permission_policy?.configured_mode);
   const labels: Record<string, string> = {
-    app_window: "应用窗口", desktop: "整个桌面",
-    strict_background: "严格后台", allow_foreground: "允许前台",
-    background_app: "后台应用（旧版）", foreground_desktop: "前台桌面（旧版）",
+    app_window: tr("应用窗口"), desktop: tr("整个桌面"),
+    strict_background: tr("严格后台"), allow_foreground: tr("允许前台"),
+    background_app: tr("后台应用（旧版）"), foreground_desktop: tr("前台桌面（旧版）"),
   };
   const fields = {
     computerUseTargetScope: "computer_use_target_scope",
@@ -608,7 +651,7 @@ function inheritedSettingLabel(key: string): string | undefined {
   } as const;
   if (!(key in fields)) return undefined;
   const value = runtime?.[fields[key as keyof typeof fields]];
-  return value ? labels[value] ?? "暂无法读取" : "暂无法读取";
+  return value ? labels[value] ?? tr("暂无法读取") : tr("暂无法读取");
 }
 function updateDirty(section: Section): void {
   if (!panelFor(section).querySelector('[data-dirty="true"], .model-editor'))
@@ -687,7 +730,7 @@ function runtimeControl(
   if (control instanceof HTMLInputElement && control.type === "number") {
     control.min = key === "compact_buffer_tokens" ? "0" : "1";
     control.step = "1";
-    if (nullable) control.placeholder = "自动";
+    if (nullable) control.placeholder = tr("自动");
   }
   control.disabled = !(state.editable_sources ?? []).some(
     (item) => item.writable,
@@ -715,7 +758,7 @@ function runtimeControl(
         !Number.isSafeInteger(value) ||
         Number(value) < (key === "compact_buffer_tokens" ? 0 : 1))
     ) {
-      notice("请输入有效整数；自动阈值可以留空。", true);
+      notice(tr("请输入有效整数；自动阈值可以留空。"), true);
       return;
     }
     control.disabled = true;
@@ -728,7 +771,7 @@ function runtimeControl(
       if (checkbox) (control as HTMLInputElement).checked = Boolean(effective);
       else control.value = effective == null ? "" : String(effective);
       if (effective !== value)
-        notice("已保存，但当前生效值由其他配置层覆盖。请检查保存范围。");
+        notice(tr("已保存，但当前生效值由其他配置层覆盖。请检查保存范围。"));
     } catch (error) {
       notice((error as Error).message, true);
     } finally {
@@ -747,30 +790,30 @@ function renderRuntime(section: "tools" | "context"): void {
   if (section === "context") {
     const card = group(
       page,
-      "自动压缩",
-      "保存后从下一轮对话生效，正在运行的一轮沿用原设置。",
+      tr("自动压缩"),
+      tr("保存后从下一轮对话生效，正在运行的一轮沿用原设置。"),
     );
     runtimeControl(
       card,
       section,
-      "自动压缩",
-      "接近上下文上限时，整理历史内容并继续当前任务。",
+      tr("自动压缩"),
+      tr("接近上下文上限时，整理历史内容并继续当前任务。"),
       "auto_compact_enabled",
       "set_compaction",
     );
     runtimeControl(
       card,
       section,
-      "压缩预留 token",
-      "默认 20,000。实际至少预留模型最大输出额度；设为 0 仍保留输出空间。",
+      tr("压缩预留 token"),
+      tr("默认 20,000。实际至少预留模型最大输出额度；设为 0 仍保留输出空间。"),
       "compact_buffer_tokens",
       "set_compaction",
     );
     runtimeControl(
       card,
       section,
-      "提前触发阈值",
-      "已用 token 超过此值时提前压缩；留空使用自动阈值，设置值不能推迟安全阈值。",
+      tr("提前触发阈值"),
+      tr("已用 token 超过此值时提前压缩；留空使用自动阈值，设置值不能推迟安全阈值。"),
       "max_context_length",
       "set_compaction",
       undefined,
@@ -780,71 +823,71 @@ function renderRuntime(section: "tools" | "context"): void {
       el(
         "p",
         "inline-note",
-        "自动阈值 = 上下文容量 − max（压缩预留 token，模型最大输出 token）",
+        tr("自动阈值 = 上下文容量 − max（压缩预留 token，模型最大输出 token）"),
       ),
     );
     page.append(
-      button("编辑压缩提示词 ↗", () => navigate("prompts"), "text-button"),
+      button(tr("编辑压缩提示词 ↗"), () => navigate("prompts"), "text-button"),
     );
   } else {
     const computer = group(
       page,
-      "Computer Use · Gateway 默认值",
-      "实际可用能力由执行端和操作系统决定；上方 VS Code 覆盖优先于这里的默认值。",
+      tr("Computer Use · Gateway 默认值"),
+      tr("实际可用能力由执行端和操作系统决定；上方 VS Code 覆盖优先于这里的默认值。"),
     );
     runtimeControl(
       computer,
       section,
-      "操作目标",
-      "应用窗口需要执行端支持；整个桌面需要允许前台。",
+      tr("操作目标"),
+      tr("应用窗口需要执行端支持；整个桌面需要允许前台。"),
       "computer_use_target_scope",
       "set_computer_use_options",
       [
-        ["app_window", "应用窗口"],
-        ["desktop", "整个桌面"],
+        ["app_window", tr("应用窗口")],
+        ["desktop", tr("整个桌面")],
       ],
     );
     runtimeControl(
       computer,
       section,
-      "前台权限",
-      "控制是否允许操作切换到前台。",
+      tr("前台权限"),
+      tr("控制是否允许操作切换到前台。"),
       "computer_use_delivery_policy",
       "set_computer_use_options",
       [
-        ["strict_background", "严格后台"],
-        ["allow_foreground", "允许前台"],
+        ["strict_background", tr("严格后台")],
+        ["allow_foreground", tr("允许前台")],
       ],
     );
     const snapshots = group(
       page,
-      "文件快照",
-      "快照设置在新建或恢复会话后生效。",
+      tr("文件快照"),
+      tr("快照设置在新建或恢复会话后生效。"),
     );
     runtimeControl(
       snapshots,
       section,
-      "启用文件快照",
-      "记录文件修改，供回退和变更审查使用。",
+      tr("启用文件快照"),
+      tr("记录文件修改，供回退和变更审查使用。"),
       "snapshot_enabled",
       "set_snapshot",
     );
     runtimeControl(
       snapshots,
       section,
-      "快照最大大小",
-      "允许保存快照的单文件大小上限（MB）。",
+      tr("快照最大大小"),
+      tr("允许保存快照的单文件大小上限（MB）。"),
       "snapshot_max_size_mb",
       "set_snapshot",
     );
     const tools = group(
       page,
-      "额外工具",
-      "添加 Python 导入路径；新建或恢复会话后加载。",
+      tr("额外工具"),
+      tr("添加 Python 导入路径；新建或恢复会话后加载。"),
     );
     for (const tool of runtime.extra_tools ?? []) {
       const remove = button(
-        "移除",
+        tr("移除"),
         async () => {
           const target = [...(runtime.editable_sources ?? [])]
             .reverse()
@@ -853,10 +896,10 @@ function renderRuntime(section: "tools" | "context"): void {
                 item.writable &&
                 runtime.extra_tools_by_source?.[item.id]?.includes(tool),
             );
-          if (!target) throw new Error("工具所在配置层不可写");
+          if (!target) throw new Error(tr("工具所在配置层不可写"));
           if (
             !(await rpc("confirm", {
-              message: `从${target.label}移除额外工具「${tool}」？`,
+              message: tr("从{0}移除额外工具「{1}」？", { 0: target.label, 1: tool }),
             }))
           )
             return;
@@ -872,10 +915,10 @@ function renderRuntime(section: "tools" | "context"): void {
       remove.disabled = !canEdit;
       tools.append(row(tool, "", remove));
     }
-    const toolInput = input("", "额外工具导入路径");
+    const toolInput = input("", tr("额外工具导入路径"));
     toolInput.placeholder = "package.module:Tool";
-    const add = button("添加", async () => {
-      if (!toolInput.value.trim()) throw new Error("请填写工具导入路径");
+    const add = button(tr("添加"), async () => {
+      if (!toolInput.value.trim()) throw new Error(tr("请填写工具导入路径"));
       await mutate("runtime", {
         action: "add_extra_tool",
         tool_path: toolInput.value.trim(),
@@ -884,14 +927,14 @@ function renderRuntime(section: "tools" | "context"): void {
     });
     add.disabled = !canEdit;
     toolInput.disabled = !canEdit;
-    tools.append(row("添加工具", "", actions(toolInput, add)));
+    tools.append(row(tr("添加工具"), "", actions(toolInput, add)));
   }
   syncLocalControls();
 }
 
 const MODEL_FIELDS: Array<
   [string, string, "text" | "number" | "boolean" | "json", string[]?]
-> = [
+> = localized([
     ["provider", "Provider", "text"],
     ["model", "模型 ID", "text"],
     ["base_url", "Base URL", "text"],
@@ -929,7 +972,7 @@ const MODEL_FIELDS: Array<
     ["azure_deployment", "Azure Deployment", "text"],
     ["http_headers", "HTTP Headers", "json"],
     ["extra_body", "Extra Body", "json"],
-  ];
+  ]);
 async function removeModel(
   kind: "model" | "group",
   name: string,
@@ -938,7 +981,7 @@ async function removeModel(
   if (
     dirty.has("models") &&
     !(await rpc("confirm", {
-      message: "删除会刷新模型列表，放弃未保存的模型修改？",
+      message: tr("删除会刷新模型列表，放弃未保存的模型修改？"),
     }))
   )
     return;
@@ -950,10 +993,10 @@ async function removeModel(
       origins.includes(item.path),
   );
   if (!target)
-    throw new Error("此条目不在当前保存层中，请先选择它所在的配置层");
+    throw new Error(tr("此条目不在当前保存层中，请先选择它所在的配置层"));
   if (
     !(await rpc("confirm", {
-      message: `从${target.label}删除${kind === "model" ? "模型" : "配置组"}「${name}」？其他配置层可能仍保留同名配置。`,
+      message: tr("从{0}删除{1}「{2}」？其他配置层可能仍保留同名配置。", { 0: target.label, 1: kind === "model" ? tr("模型") : tr("配置组"), 2: name }),
     }))
   )
     return;
@@ -971,7 +1014,7 @@ async function modelEditor(
 ): Promise<void> {
   if (
     dirty.has("models") &&
-    !(await rpc("confirm", { message: "放弃当前未保存的模型修改？" }))
+    !(await rpc("confirm", { message: tr("放弃当前未保存的模型修改？") }))
   )
     return;
   const page = panelFor("models");
@@ -983,7 +1026,7 @@ async function modelEditor(
     el(
       "h2",
       "",
-      `${name ? "编辑" : "新增"}${kind === "model" ? "模型" : "配置组"}`,
+      `${name ? tr("编辑") : tr("新增")}${kind === "model" ? tr("模型") : tr("配置组")}`,
     ),
   );
   const targetSource = sources.models;
@@ -991,18 +1034,18 @@ async function modelEditor(
     el(
       "p",
       "inline-note",
-      `保存到：${(data.models.editable_sources as ModelSettingsSource[]).find((item) => item.id === targetSource)?.label ?? targetSource}。留空的字段恢复继承；高级参数保留原值。`,
+      tr("保存到：{0}。留空的字段恢复继承；高级参数保留原值。", { 0: (data.models.editable_sources as ModelSettingsSource[]).find((item) => item.id === targetSource)?.label ?? targetSource }),
     ),
   );
-  const nameInput = input(name, "名称");
+  const nameInput = input(name, tr("名称"));
   nameInput.readOnly = Boolean(name);
-  editor.append(row("名称", "", nameInput));
+  editor.append(row(tr("名称"), "", nameInput));
   const fields = new Map<
     string,
     HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
   >();
   const advanced = el("details", "advanced");
-  advanced.append(el("summary", "", "高级参数"));
+  advanced.append(el("summary", "", tr("高级参数")));
   for (const [key, label, type, choices] of MODEL_FIELDS) {
     if (key === "group" && kind === "group") continue;
     const initial = config[key];
@@ -1010,9 +1053,9 @@ async function modelEditor(
       type === "boolean"
         ? select(
           [
-            ["", "继承"],
-            ["true", "开启"],
-            ["false", "关闭"],
+            ["", tr("继承")],
+            ["true", tr("开启")],
+            ["false", tr("关闭")],
           ],
           initial == null ? "" : String(initial),
           label,
@@ -1020,7 +1063,7 @@ async function modelEditor(
         : choices
           ? select(
             [
-              ["", "继承"],
+              ["", tr("继承")],
               ...choices.map((value) => [value, value] as const),
             ],
             String(initial ?? ""),
@@ -1050,9 +1093,9 @@ async function modelEditor(
   editor.append(
     actions(
       button(
-        "保存",
+        tr("保存"),
         async () => {
-          if (!nameInput.value.trim()) throw new Error("请填写名称");
+          if (!nameInput.value.trim()) throw new Error(tr("请填写名称"));
           const patch: Record<string, unknown> = {};
           const removed: string[] = [];
           for (const [key, , type] of MODEL_FIELDS) {
@@ -1075,12 +1118,12 @@ async function modelEditor(
               type === "number" &&
               (!Number.isFinite(parsed) || Number(parsed) < 0)
             )
-              throw new Error(`${key} 需要非负数`);
+              throw new Error(tr("{0} 需要非负数", { 0: key }));
             if (
               type === "json" &&
               (!parsed || Array.isArray(parsed) || typeof parsed !== "object")
             )
-              throw new Error(`${key} 必须是 JSON 对象`);
+              throw new Error(tr("{0} 必须是 JSON 对象", { 0: key }));
             // Only write changed fields: inherited values must not become accidental overrides.
             if (JSON.stringify(parsed) !== JSON.stringify(config[key]))
               patch[key] = withoutRedacted(parsed);
@@ -1100,7 +1143,7 @@ async function modelEditor(
         "button primary",
       ),
       button(
-        "取消",
+        tr("取消"),
         () => {
           dirty.delete("models");
           editor.remove();
@@ -1131,22 +1174,22 @@ function renderModels(): void {
   const state = data.models as ModelSettingsResponse;
   const catalog = group(
     page,
-    "Gateway 模型",
-    "修改已有模型参数后，请在聊天中重新选择该模型。",
+    tr("Gateway 模型"),
+    tr("修改已有模型参数后，请在聊天中重新选择该模型。"),
   );
-  const createModel = button("新增模型", () => modelEditor("model"));
-  const createGroup = button("新增配置组", () => modelEditor("group"));
+  const createModel = button(tr("新增模型"), () => modelEditor("model"));
+  const createGroup = button(tr("新增配置组"), () => modelEditor("group"));
   createModel.disabled = createGroup.disabled = !canEdit;
   catalog.append(actions(createModel, createGroup));
   for (const model of state.models ?? []) {
     const controls = actions(
       button(
-        "编辑",
+        tr("编辑"),
         () => modelEditor("model", model.name, model.configured),
         "text-button",
       ),
       button(
-        "删除",
+        tr("删除"),
         () => removeModel("model", model.name, model.sources ?? []),
         "text-button danger",
       ),
@@ -1156,11 +1199,11 @@ function renderModels(): void {
     });
     catalog.append(
       row(
-        model.name + (model.is_default ? " · 默认" : ""),
+        model.name + (model.is_default ? tr(" · 默认") : ""),
         [
           model.effective?.provider,
           model.effective?.model,
-          model.group ? `配置组：${model.group}` : "",
+          model.group ? tr("配置组：{0}", { 0: model.group }) : "",
         ]
           .filter(Boolean)
           .join(" · "),
@@ -1168,15 +1211,15 @@ function renderModels(): void {
       ),
     );
     const details = el("details", "effective");
-    details.append(el("summary", "", "查看最终生效参数与来源"));
+    details.append(el("summary", "", tr("查看最终生效参数与来源")));
     const table = el("table");
     const head = el("tr");
-    for (const text of ["参数", "生效值", "来源"])
+    for (const text of [tr("参数"), tr("生效值"), tr("来源")])
       head.append(el("th", "", text));
     table.append(head);
     for (const [key, value] of Object.entries(model.effective ?? {})) {
-      const tr = el("tr");
-      tr.append(
+      const tableRow = el("tr");
+      tableRow.append(
         el("td", "", MODEL_FIELDS.find((item) => item[0] === key)?.[1] ?? key),
         el(
           "td",
@@ -1187,14 +1230,14 @@ function renderModels(): void {
           "td",
           "",
           Object.hasOwn(model.configured ?? {}, key)
-            ? "模型配置"
+            ? tr("模型配置")
             : model.group &&
               Object.hasOwn(state.groups?.[model.group] ?? {}, key)
-              ? `继承 ${model.group}`
-              : "默认",
+              ? tr("继承 {0}", { 0: model.group })
+              : tr("默认"),
         ),
       );
-      table.append(tr);
+      table.append(tableRow);
     }
     details.append(
       table,
@@ -1203,14 +1246,14 @@ function renderModels(): void {
     catalog.append(details);
   }
   if (!state.models?.length)
-    catalog.append(el("p", "empty", "还没有模型，添加一个开始使用。"));
+    catalog.append(el("p", "empty", tr("还没有模型，添加一个开始使用。")));
   const defaultModel = select(
     [
-      ["", "不指定"],
+      ["", tr("不指定")],
       ...(state.models ?? []).map((item) => [item.name, item.name] as const),
     ],
     state.default_model ?? "",
-    "Gateway 默认模型",
+    tr("Gateway 默认模型"),
   );
   defaultModel.disabled = !canEdit;
   defaultModel.addEventListener("change", async () => {
@@ -1231,17 +1274,17 @@ function renderModels(): void {
   });
   catalog.append(
     row(
-      "Gateway 默认模型",
-      "用于 Gateway 默认模型配置；上方聊天偏好可单独指定 VS Code 默认选择。",
+      tr("Gateway 默认模型"),
+      tr("用于 Gateway 默认模型配置；上方聊天偏好可单独指定 VS Code 默认选择。"),
       defaultModel,
     ),
   );
-  const groups = group(page, "配置组");
+  const groups = group(page, tr("配置组"));
   for (const [name, config] of Object.entries(state.groups ?? {})) {
     const controls = actions(
-      button("编辑", () => modelEditor("group", name, config), "text-button"),
+      button(tr("编辑"), () => modelEditor("group", name, config), "text-button"),
       button(
-        "删除",
+        tr("删除"),
         () => removeModel("group", name, state.group_sources?.[name] ?? []),
         "text-button danger",
       ),
@@ -1250,11 +1293,11 @@ function renderModels(): void {
       node.disabled = !canEdit;
     });
     groups.append(
-      row(name, `${Object.keys(config).length} 个共享参数`, controls),
+      row(name, tr("{0} 个共享参数", { 0: Object.keys(config).length }), controls),
     );
   }
   if (!Object.keys(state.groups ?? {}).length)
-    groups.append(el("p", "empty", "配置组可以让多个模型共享连接与参数。"));
+    groups.append(el("p", "empty", tr("配置组可以让多个模型共享连接与参数。")));
   syncLocalControls();
 }
 
@@ -1267,16 +1310,16 @@ function renderPrompts(): void {
   const templates = state.templates ?? [];
   const card = group(
     page,
-    "提示词模板",
-    "系统与压缩提示词的空白字段沿用默认内容，保存模板后会自动启用。",
+    tr("提示词模板"),
+    tr("系统与压缩提示词的空白字段沿用默认内容，保存模板后会自动启用。"),
   );
   const activeTemplate = select(
     [
-      ["", "默认模板"],
+      ["", tr("默认模板")],
       ...templates.map((item) => [item.id, item.name] as const),
     ],
     state.active_template_id ?? "",
-    "当前启用模板",
+    tr("当前启用模板"),
   );
   activeTemplate.disabled = !canEdit;
   activeTemplate.addEventListener("change", async () => {
@@ -1293,11 +1336,11 @@ function renderPrompts(): void {
       activeTemplate.disabled = !canEdit;
     }
   });
-  card.append(row("当前启用", "更改从下一轮对话生效。", activeTemplate));
+  card.append(row(tr("当前启用"), tr("更改从下一轮对话生效。"), activeTemplate));
   const edit = async (id: string) => {
     if (
       dirty.has("prompts") &&
-      !(await rpc("confirm", { message: "放弃当前模板的未保存修改？" }))
+      !(await rpc("confirm", { message: tr("放弃当前模板的未保存修改？") }))
     ) {
       picker.value = selectedTemplate;
       return;
@@ -1309,29 +1352,29 @@ function renderPrompts(): void {
   };
   const picker = select(
     [
-      ["", "新建模板"],
+      ["", tr("新建模板")],
       ...templates.map((item) => [item.id, item.name] as const),
     ],
     selectedTemplate,
-    "编辑模板",
+    tr("编辑模板"),
   );
   picker.addEventListener("change", () => {
     void edit(picker.value).catch((error) => notice(error.message, true));
   });
-  card.append(row("编辑模板", "选择已有模板，或从默认内容新建。", picker));
+  card.append(row(tr("编辑模板"), tr("选择已有模板，或从默认内容新建。"), picker));
   const chosen = templates.find((item) => item.id === selectedTemplate);
   const savedDraft = promptDrafts.get(selectedTemplate);
-  const name = input(savedDraft?.name ?? chosen?.name ?? "", "模板名称");
-  name.placeholder = "给模板起个名字";
+  const name = input(savedDraft?.name ?? chosen?.name ?? "", tr("模板名称"));
+  name.placeholder = tr("给模板起个名字");
   name.addEventListener("input", () => dirty.add("prompts"));
   const editor = el("fieldset", "prompt-editor");
   editor.disabled = !canEdit;
-  editor.append(row("模板名称", "", name));
+  editor.append(row(tr("模板名称"), "", name));
   const fields = new Map<string, HTMLTextAreaElement>();
   for (const section of state.sections ?? []) {
     const details = el("details", "prompt-section");
     details.open = section.key === "extra";
-    details.append(el("summary", "", section.label));
+    details.append(el("summary", "", promptSectionLabel(section)));
     if (section.description)
       details.append(el("p", "group-description", section.description));
     const area = el("textarea", "prompt-text");
@@ -1339,16 +1382,16 @@ function renderPrompts(): void {
       savedDraft?.sections[section.key] ??
       chosen?.sections?.[section.key] ??
       "";
-    area.placeholder = section.default_text ?? "留空沿用默认";
+    area.placeholder = section.default_text ?? tr("留空沿用默认");
     area.rows = 9;
-    area.setAttribute("aria-label", section.label);
+    area.setAttribute("aria-label", promptSectionLabel(section));
     area.addEventListener("input", () => dirty.add("prompts"));
     fields.set(section.key, area);
     details.append(area);
     if (section.default_text) {
       const defaults = el("details", "default-prompt");
       defaults.append(
-        el("summary", "", "查看默认内容"),
+        el("summary", "", tr("查看默认内容")),
         el("pre", "", section.default_text),
       );
       details.append(defaults);
@@ -1372,10 +1415,10 @@ function renderPrompts(): void {
   editor.append(
     actions(
       button(
-        "保存并启用",
+        tr("保存并启用"),
         async () => {
           const value = draft();
-          if (!value.name) throw new Error("请填写模板名称");
+          if (!value.name) throw new Error(tr("请填写模板名称"));
           await lockEditor(card, () =>
             mutate("prompts", {
               action: "save_template",
@@ -1391,16 +1434,16 @@ function renderPrompts(): void {
         },
         "button primary",
       ),
-      button("取消修改", () => {
+      button(tr("取消修改"), () => {
         promptDrafts.delete(selectedTemplate);
         dirty.delete("prompts");
         renderPrompts();
       }),
       button(
-        "导出当前",
+        tr("导出当前"),
         async () => {
           const result = await rpc("export", { templates: [draft()] });
-          if (!result.cancelled) notice("模板已导出");
+          if (!result.cancelled) notice(tr("模板已导出"));
         },
         "text-button",
       ),
@@ -1408,11 +1451,11 @@ function renderPrompts(): void {
   );
   card.append(editor);
   const transfer = actions(
-    button("导入模板", async () => {
+    button(tr("导入模板"), async () => {
       if (
         dirty.has("prompts") &&
         !(await rpc("confirm", {
-          message: "导入将刷新模板列表，放弃未保存的修改？",
+          message: tr("导入将刷新模板列表，放弃未保存的修改？"),
         }))
       )
         return;
@@ -1421,15 +1464,15 @@ function renderPrompts(): void {
         promptDrafts.clear();
         dirty.delete("prompts");
         await load("prompts", true);
-        notice(`已导入 ${result.imported} 个模板`);
+        notice(tr("已导入 {0} 个模板", { 0: result.imported }));
       }
     }),
     button(
-      "导出全部",
+      tr("导出全部"),
       async () => {
-        if (!templates.length) throw new Error("还没有可导出的模板");
+        if (!templates.length) throw new Error(tr("还没有可导出的模板"));
         const result = await rpc("export", { templates });
-        if (!result.cancelled) notice("模板已导出");
+        if (!result.cancelled) notice(tr("模板已导出"));
       },
       "text-button",
     ),
@@ -1437,10 +1480,10 @@ function renderPrompts(): void {
   (transfer.firstElementChild as HTMLButtonElement).disabled = !canEdit;
   if (chosen) {
     const remove = button(
-      "删除模板",
+      tr("删除模板"),
       async () => {
         if (
-          !(await rpc("confirm", { message: `删除模板「${chosen.name}」？` }))
+          !(await rpc("confirm", { message: tr("删除模板「{0}」？", { 0: chosen.name }) }))
         )
           return;
         await mutate("prompts", {
@@ -1459,11 +1502,11 @@ function renderPrompts(): void {
   }
   card.append(transfer);
   page.append(
-    button("调整自动压缩阈值 ↗", () => navigate("context"), "text-button"),
+    button(tr("调整自动压缩阈值 ↗"), () => navigate("context"), "text-button"),
   );
-  const user = group(page, "追加到用户输入", "为每次输入附加已启用的提示。");
+  const user = group(page, tr("追加到用户输入"), tr("为每次输入附加已启用的提示。"));
   for (const prompt of state.user_prompts ?? []) {
-    const enabled = input("", "启用用户提示", "checkbox");
+    const enabled = input("", tr("启用用户提示"), "checkbox");
     enabled.className = "switch";
     enabled.checked = prompt.enabled !== false;
     enabled.disabled = !canEdit;
@@ -1483,9 +1526,9 @@ function renderPrompts(): void {
       }
     });
     const remove = button(
-      "删除",
+      tr("删除"),
       async () => {
-        if (!(await rpc("confirm", { message: "删除这条用户提示？" }))) return;
+        if (!(await rpc("confirm", { message: tr("删除这条用户提示？") }))) return;
         await mutate("prompts", {
           action: "delete_user_prompt",
           source: prompt.source,
@@ -1501,14 +1544,14 @@ function renderPrompts(): void {
   const promptInput = el("textarea");
   promptInput.rows = 3;
   promptInput.value = userPromptDraft;
-  promptInput.placeholder = "例如：回答使用中文，代码注释使用英文。";
-  promptInput.setAttribute("aria-label", "新增用户提示");
+  promptInput.placeholder = tr("例如：回答使用中文，代码注释使用英文。");
+  promptInput.setAttribute("aria-label", tr("新增用户提示"));
   promptInput.disabled = !canEdit;
   promptInput.addEventListener("input", () => {
     userPromptDraft = promptInput.value;
   });
-  const add = button("添加提示", async () => {
-    if (!promptInput.value.trim()) throw new Error("请填写提示内容");
+  const add = button(tr("添加提示"), async () => {
+    if (!promptInput.value.trim()) throw new Error(tr("请填写提示内容"));
     await mutate("prompts", {
       action: "add_user_prompt",
       prompt_text: promptInput.value.trim(),
@@ -1517,7 +1560,7 @@ function renderPrompts(): void {
     renderPrompts();
   });
   add.disabled = !canEdit;
-  user.append(row("新增提示", "", actions(promptInput, add)));
+  user.append(row(tr("新增提示"), "", actions(promptInput, add)));
 }
 
 function dateString(date: Date): string {
@@ -1531,29 +1574,29 @@ const usageQuery = {
   scope: "global",
 };
 const number = (value: number | null | undefined) =>
-  value == null ? "未记录" : value.toLocaleString("zh-CN");
+  value == null ? tr("未记录") : value.toLocaleString(getLocale());
 function renderUsage(): void {
   const page = panelFor("usage");
   page.replaceChildren();
   const usage = data.usage as UsageDailyResponse;
   const filters = el("div", "usage-filters");
-  const start = input(usageQuery.start_date, "开始日期", "date");
-  const end = input(usageQuery.end_date, "结束日期", "date");
+  const start = input(usageQuery.start_date, tr("开始日期"), "date");
+  const end = input(usageQuery.end_date, tr("结束日期"), "date");
   start.max = end.max = dateString(new Date());
   const range = select(
     [
-      ["global", "Gateway 全部项目"],
-      ...(snapshot.hasWorkspace ? [["project", "当前项目"] as const] : []),
+      ["global", tr("Gateway 全部项目")],
+      ...(snapshot.hasWorkspace ? [["project", tr("当前项目")] as const] : []),
     ],
     usageQuery.scope,
-    "统计范围",
+    tr("统计范围"),
   );
   filters.append(
     start,
-    el("span", "", "至"),
+    el("span", "", tr("至")),
     end,
     range,
-    button("查询", async () => {
+    button(tr("查询"), async () => {
       const days = (Date.parse(end.value) - Date.parse(start.value)) / 86400000;
       if (
         !Number.isFinite(days) ||
@@ -1561,7 +1604,7 @@ function renderUsage(): void {
         days >= 366 ||
         end.value > dateString(new Date())
       )
-        throw new Error("请选择不晚于今天的 1–366 天日期范围");
+        throw new Error(tr("请选择不晚于今天的 1–366 天日期范围"));
       Object.assign(usageQuery, {
         start_date: start.value,
         end_date: end.value,
@@ -1573,10 +1616,10 @@ function renderUsage(): void {
   page.append(filters);
   const summary = el("div", "usage-summary");
   for (const [label, value] of [
-    ["Token 总量", usage.summary.total_tokens],
-    ["输入 Token", usage.summary.input_tokens],
-    ["输出 Token", usage.summary.output_tokens],
-    ["请求数", usage.summary.request_count],
+    [tr("Token 总量"), usage.summary.total_tokens],
+    [tr("输入 Token"), usage.summary.input_tokens],
+    [tr("输出 Token"), usage.summary.output_tokens],
+    [tr("请求数"), usage.summary.request_count],
   ] as const) {
     const metric = el("div", "metric");
     metric.append(el("span", "", label), el("strong", "", number(value)));
@@ -1592,12 +1635,12 @@ function renderUsage(): void {
       el(
         "p",
         "inline-note",
-        `记录可能不完整：未知 ${usage.summary.unknown_requests}，缺失 ${usage.summary.missing_requests}，部分 ${usage.summary.partial_requests}。未记录的用量不会按 0 推断。`,
+        tr("记录可能不完整：未知 {0}，缺失 {1}，部分 {2}。未记录的用量不会按 0 推断。", { 0: usage.summary.unknown_requests, 1: usage.summary.missing_requests, 2: usage.summary.partial_requests }),
       ),
     );
-  const trend = group(page, "每日用量");
+  const trend = group(page, tr("每日用量"));
   if (!usage.days.length)
-    trend.append(el("p", "empty", "该范围暂无用量记录。"));
+    trend.append(el("p", "empty", tr("该范围暂无用量记录。")));
   const max = Math.max(1, ...usage.days.map((day) => day.total_tokens ?? 0));
   for (const day of usage.days) {
     const meter = el("progress");
@@ -1615,7 +1658,7 @@ function renderUsage(): void {
     );
     trend.append(line);
   }
-  const models = group(page, "按模型统计");
+  const models = group(page, tr("按模型统计"));
   for (const model of usage.models) {
     const detail = el("details", "model-usage");
     detail.append(
@@ -1625,7 +1668,7 @@ function renderUsage(): void {
       el(
         "p",
         "inline-note",
-        `${model.provider} / ${model.model_id} · ${number(model.recorded_request_count)} 次已记录请求`,
+        tr("{0} / {1} · {2} 次已记录请求", { 0: model.provider, 1: model.model_id, 2: number(model.recorded_request_count) }),
       ),
     );
     for (const point of model.points)
@@ -1638,17 +1681,17 @@ function renderUsage(): void {
       );
     models.append(detail);
   }
-  if (!usage.models.length) models.append(el("p", "empty", "暂无模型用量。"));
+  if (!usage.models.length) models.append(el("p", "empty", tr("暂无模型用量。")));
   page.append(
     el(
       "p",
       "inline-note",
-      `统计时区：${usage.timezone} · 数据来自当前 Gateway，不代表账号账单。`,
+      tr("统计时区：{0} · 数据来自当前 Gateway，不代表账号账单。", { 0: usage.timezone }),
     ),
   );
 }
 
-const SEARCH_ITEMS: Array<[Section, string, string, string]> = [
+const SEARCH_ITEMS: Array<[Section, string, string, string]> = localized([
   ...LOCAL_SETTINGS.map(
     (item) =>
       [item.section, item.title, item.description, item.key] as [
@@ -1672,7 +1715,7 @@ const SEARCH_ITEMS: Array<[Section, string, string, string]> = [
     "",
   ],
   ["usage", "Token 用量", "使用情况 日期 模型 统计", ""],
-];
+]);
 search.addEventListener("input", () => {
   const query = search.value.trim().toLocaleLowerCase();
   searchResults.replaceChildren();
@@ -1707,7 +1750,7 @@ search.addEventListener("input", () => {
     searchResults.append(result);
   }
   if (!searchResults.childElementCount)
-    searchResults.append(el("p", "empty", "没有找到匹配的设置。"));
+    searchResults.append(el("p", "empty", tr("没有找到匹配的设置。")));
 });
 window.addEventListener(
   "message",
@@ -1725,7 +1768,7 @@ window.addEventListener(
     if (!request) return;
     pending.delete(event.id);
     if (snapshot && event.generation !== snapshot.generation)
-      request.reject(new Error("设置上下文已变化，请重试"));
+      request.reject(new Error(tr("设置上下文已变化，请重试")));
     else if (event.error) request.reject(new Error(event.error));
     else request.resolve(event.data);
   },

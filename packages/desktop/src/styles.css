@@ -17601,3 +17601,19 @@ html[data-theme="light"] .project-file-code .token.class-name {
 .process-summary:hover { color: var(--text); }
 .process-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .process-error-count { color: var(--red); }
+
+/* Translated labels can be longer than their Chinese source. */
+.settings-nav > button {
+  height: auto;
+  min-height: 38px;
+  padding-block: 8px;
+}
+.settings-nav > button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.settings-language-select {
+  width: 210px;
+  max-width: 45%;
+  flex-shrink: 0;
+}

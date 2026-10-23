@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 export interface UserAttachmentChip {
   kind: "file" | "folder" | "document" | "ide";
   label: string;
@@ -30,10 +31,10 @@ function readAttr(source: string, name: string): string | undefined {
 function fileChip(attrs: string): UserAttachmentChip {
   const filePath = readAttr(attrs, "path");
   if (filePath) {
-    return { kind: "file", label: attachmentName(filePath), detail: "仅路径", title: filePath };
+    return { kind: "file", label: attachmentName(filePath), detail: tr("仅路径"), title: filePath };
   }
   const name = readAttr(attrs, "name");
-  return { kind: "file", label: name || "文件", title: name };
+  return { kind: "file", label: name || tr("文件"), title: name };
 }
 
 function ideChips(body: string): UserAttachmentChip[] {
@@ -47,7 +48,7 @@ function ideChips(body: string): UserAttachmentChip[] {
       chips.push({
         kind: "ide",
         label: attachmentName(payload.current_file.path),
-        detail: "当前文件",
+        detail: tr("当前文件"),
         title: payload.current_file.path,
       });
     }
@@ -57,13 +58,13 @@ function ideChips(body: string): UserAttachmentChip[] {
       chips.push({
         kind: folder ? "folder" : "file",
         label: attachmentName(reference.path),
-        ...(folder ? {} : { detail: "仅路径" }),
+        ...(folder ? {} : { detail: tr("仅路径") }),
         title: reference.path,
       });
     }
-    return chips.length ? chips : [{ kind: "ide", label: "IDE 上下文" }];
+    return chips.length ? chips : [{ kind: "ide", label: tr("IDE 上下文") }];
   } catch {
-    return [{ kind: "ide", label: "IDE 上下文" }];
+    return [{ kind: "ide", label: tr("IDE 上下文") }];
   }
 }
 
@@ -85,7 +86,7 @@ export function presentUserMessage(source: string): PresentedUserMessage {
       const location = (docLocation ?? "").trim();
       attachments.push({
         kind: "document",
-        label: (docName ?? "").trim() || "文档引用",
+        label: (docName ?? "").trim() || tr("文档引用"),
         ...(location ? { detail: location } : {}),
       });
       return "";

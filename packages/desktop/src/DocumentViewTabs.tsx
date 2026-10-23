@@ -1,3 +1,4 @@
+import { t as tr, localized } from "./i18n";
 import { useEffect, useState } from "react";
 import { BookOpen, Check, EllipsisVertical, FileText, Folder, GitCompareArrows } from "lucide-react";
 import { ReviewMenu } from "./ReviewMenu";
@@ -6,11 +7,11 @@ import { SlidingTabIndicator } from "./SlidingTabIndicator";
 type WorkspaceView = "document" | "blog" | "files" | "changes";
 type SecondaryView = Exclude<WorkspaceView, "document">;
 
-const SECONDARY_VIEWS = [
+const SECONDARY_VIEWS = localized([
   { value: "blog", label: "Blog", icon: BookOpen },
   { value: "files", label: "文件", icon: Folder },
   { value: "changes", label: "变更", icon: GitCompareArrows },
-] as const;
+] as const);
 
 export function DocumentViewTabs({ activeView, filesAvailable, changeCount, onViewChange }: {
   activeView: WorkspaceView;
@@ -33,19 +34,18 @@ export function DocumentViewTabs({ activeView, filesAvailable, changeCount, onVi
   };
 
   return <div className="document-view-tabs">
-    <div className="document-view-tablist" role="tablist" aria-label="文档视图">
+    <div className="document-view-tablist" role="tablist" aria-label={tr("文档视图")}>
       <SlidingTabIndicator activeKey={`${activeView}:${secondaryView}:${changeCount}`} className="document-view-indicator" />
       <button type="button" role="tab" aria-selected={activeView === "document"}
         className={activeView === "document" ? "active" : ""} onClick={() => onViewChange("document")}>
-        <FileText />文档
-      </button>
+        <FileText />{tr("文档")}</button>
       <button type="button" role="tab" aria-selected={activeView !== "document"}
         className={activeView !== "document" ? "active" : ""} onClick={() => choose(secondaryView)}>
         <span key={secondaryView} className="document-view-tab-label"><SecondaryIcon />{selected.label}</span>
         {secondaryView === "changes" && changeCount > 0 && <small className="document-change-count">{changeCount}</small>}
       </button>
     </div>
-    <ReviewMenu label={null} ariaLabel="切换工作区视图" width={160} animated
+    <ReviewMenu label={null} ariaLabel={tr("切换工作区视图")} width={160} animated
       triggerIcon={<EllipsisVertical aria-hidden="true" />} triggerClassName="document-view-menu-trigger">
       {(close) => SECONDARY_VIEWS.filter((item) => filesAvailable || item.value === "blog").map(({ value, label, icon: Icon }) => (
         <button key={value} type="button" className="document-view-menu-item" data-menu-option

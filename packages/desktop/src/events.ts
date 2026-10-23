@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { fileEditSummaryItem, summarizeFileEdits } from "./fileEditSummary";
 import type { ChatItem, GatewayEvent, ImageAttachment, SessionViewState } from "./types";
 import { presentUserMessage } from "./userPromptDisplay";
@@ -167,7 +168,7 @@ function historyItems(messages: Array<Record<string, unknown>>, cwd: string): Ch
         items.push({
           id: `${baseId}:thinking-${index}`,
           kind: "thinking",
-          title: "思考过程",
+          title: tr("思考过程"),
           text: block.thinking,
           status: "complete",
           collapsed: true,
@@ -289,7 +290,7 @@ function appendThinking(items: ChatItem[], text: string, now: number): ChatItem[
     {
       id: randomUuid(),
       kind: "thinking",
-      title: "思考过程",
+      title: tr("思考过程"),
       text,
       status: "running",
       collapsed: false,
@@ -418,7 +419,7 @@ export function applyGatewayEvent(
       return {
         ...state, busy: true, operationId: event.operation_id ?? state.operationId,
         runStartedAt: now,
-        currentStep: { kind: "response", label: "执行排队消息", startedAt: now },
+        currentStep: { kind: "response", label: tr("执行排队消息"), startedAt: now },
         pendingFollowUps: pending.filter((_, itemIndex) => itemIndex !== index),
         items: [...closeTurn(completeRunning(state.items, now), state.runStartedAt, now, state.operationId, state.cwd), userItem],
       };
@@ -448,7 +449,7 @@ export function applyGatewayEvent(
         runStartedAt: state.runStartedAt ?? now,
         currentStep: state.currentStep?.kind === "response"
           ? state.currentStep
-          : { kind: "response", label: "生成回复", startedAt: now },
+          : { kind: "response", label: tr("生成回复"), startedAt: now },
         items: appendStream(
           state.currentStep?.kind === "response" ? state.items : completeRunning(state.items, now),
           event.text ?? "",
@@ -463,7 +464,7 @@ export function applyGatewayEvent(
         runStartedAt: state.runStartedAt ?? now,
         currentStep: state.currentStep?.kind === "thinking"
           ? state.currentStep
-          : { kind: "thinking", label: "思考中", startedAt: now },
+          : { kind: "thinking", label: tr("思考中"), startedAt: now },
         items: appendThinking(
           state.currentStep?.kind === "thinking" ? state.items : completeRunning(state.items, now),
           event.text ?? "",
@@ -490,7 +491,7 @@ export function applyGatewayEvent(
         error: null,
         busy: true,
         runStartedAt: state.runStartedAt ?? now,
-        currentStep: { kind: "tool", label: event.tool_name ?? "执行工具", startedAt: now },
+        currentStep: { kind: "tool", label: event.tool_name ?? tr("执行工具"), startedAt: now },
         items: [
           ...completeRunning(state.items, now),
           {
@@ -542,7 +543,7 @@ export function applyGatewayEvent(
           ];
       return {
         ...state,
-        currentStep: { kind: "response", label: "整理结果", startedAt: now },
+        currentStep: { kind: "response", label: tr("整理结果"), startedAt: now },
         items,
       };
     }
@@ -551,13 +552,13 @@ export function applyGatewayEvent(
         ...state,
         busy: true,
         runStartedAt: state.runStartedAt ?? now,
-        currentStep: { kind: "permission", label: "等待权限确认", startedAt: now },
+        currentStep: { kind: "permission", label: tr("等待权限确认"), startedAt: now },
         items: [
           ...state.items,
           {
             id: event.tool_use_id ?? randomUuid(),
             kind: "permission",
-            title: `允许 ${event.tool_name ?? "工具"}？`,
+            title: tr("允许 {0}？", { 0: event.tool_name ?? tr("工具") }),
             text: event.reason,
             detail: event.tool_input,
             tool_use_id: event.tool_use_id,
@@ -570,7 +571,7 @@ export function applyGatewayEvent(
     case "permission_response":
       return {
         ...state,
-        currentStep: { kind: "response", label: "继续执行", startedAt: now },
+        currentStep: { kind: "response", label: tr("继续执行"), startedAt: now },
         items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
           ...completeItem(item, now),
           status: event.allowed ? "allowed" : "denied",
@@ -581,13 +582,13 @@ export function applyGatewayEvent(
         ...state,
         busy: true,
         runStartedAt: state.runStartedAt ?? now,
-        currentStep: { kind: "choice", label: "等待选择", startedAt: now },
+        currentStep: { kind: "choice", label: tr("等待选择"), startedAt: now },
         items: [
           ...state.items,
           {
             id: event.tool_use_id ?? randomUuid(),
             kind: "choice",
-            title: event.question ?? "请选择",
+            title: event.question ?? tr("请选择"),
             tool_use_id: event.tool_use_id,
             options: event.options ?? [],
             multiple: Boolean(event.multiple),
@@ -600,7 +601,7 @@ export function applyGatewayEvent(
     case "choice_response":
       return {
         ...state,
-        currentStep: { kind: "response", label: "继续执行", startedAt: now },
+        currentStep: { kind: "response", label: tr("继续执行"), startedAt: now },
         items: updateByToolId(state.items, event.tool_use_id ?? "", (item) => ({
           ...completeItem(item, now),
           selected: event.selected ?? [],
@@ -618,7 +619,7 @@ export function applyGatewayEvent(
           {
             id: randomUuid(),
             kind: "plan",
-            title: "实施计划",
+            title: tr("实施计划"),
             detail: event.plan ?? {},
             status: "pending",
           },
@@ -656,7 +657,7 @@ export function applyGatewayEvent(
       const nextItem = {
         id,
         kind: "document_job" as const,
-        title: event.action === "translate" ? "翻译文档" : "生成 Blog",
+        title: event.action === "translate" ? tr("翻译文档") : tr("生成 Blog"),
         text: event.message,
         action: event.action,
         locale: event.locale ?? previous?.locale,
@@ -749,7 +750,7 @@ export function applyGatewayEvent(
           ? state.items.map((item) => item.id === documentItemId
             ? {
                 ...item,
-                text: event.message ?? "文档操作未能开始",
+                text: event.message ?? tr("文档操作未能开始"),
                 status: "failed" as const,
                 completedAt: now,
               }

@@ -654,3 +654,12 @@ body.vscode-high-contrast .nav-item.active,
 body.vscode-high-contrast-light .nav-item.active {
   outline: 1px solid var(--accent);
 }
+
+/* Keep longer localized titles inside the navigation rail. */
+.brand {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.nav-item {
+  overflow-wrap: anywhere;
+}

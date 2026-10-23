@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr } from "./i18n";
 import { randomBytes } from "crypto";
 import * as os from "os";
 import * as vscode from "vscode";
@@ -78,7 +80,7 @@ export class CrabCodeSettingsPanel {
     }
     const panel = vscode.window.createWebviewPanel(
       "crabcode.settings",
-      "CrabCode设置",
+      tr("CrabCode设置"),
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -109,7 +111,7 @@ export class CrabCodeSettingsPanel {
     const css = panel.webview.asWebviewUri(
       vscode.Uri.joinPath(extensionUri, "dist", "settings.css"),
     );
-    panel.webview.html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${css}"><title>CrabCode设置</title></head><body><div id="app"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
+    panel.webview.html = `<!DOCTYPE html><html lang="${getLocale()}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${css}"><title>${tr("CrabCode设置")}</title></head><body><div id="app"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
     panel.webview.onDidReceiveMessage(
       (message: SettingsRequest) => {
         if (message?.type !== "request" || !Number.isSafeInteger(message.id))
@@ -180,7 +182,7 @@ export class CrabCodeSettingsPanel {
         workspace: inspected?.workspaceValue,
       };
     }
-    let gateway = "连接地址无效，请检查扩展设置";
+    let gateway = tr("连接地址无效，请检查扩展设置");
     try {
       gateway = new URL(config.get("serverUrl", "ws://localhost:4096/ws")).host;
     } catch {
@@ -188,6 +190,7 @@ export class CrabCodeSettingsPanel {
     }
     return {
       generation: this.generation,
+      locale: getLocale(),
       cwd: folder?.uri.fsPath,
       gateway,
       hasWorkspace: Boolean(folder || vscode.workspace.workspaceFile),
@@ -198,6 +201,7 @@ export class CrabCodeSettingsPanel {
 
   private publishSnapshot(): void {
     if (this.disposed) return;
+    this.panel.title = tr("CrabCode设置");
     void this.panel.webview.postMessage({
       type: "snapshot",
       data: this.snapshot(),
@@ -211,7 +215,7 @@ export class CrabCodeSettingsPanel {
       this.snapshot();
       generation = this.generation;
       if (message.action !== "initialize" && message.generation !== generation)
-        throw new Error("连接或工作区已切换，请刷新后重试");
+        throw new Error(tr("连接或工作区已切换，请刷新后重试"));
       const data = await this.dispatch(message);
       if (generation !== this.generation || this.disposed) return;
       await this.panel.webview.postMessage({
@@ -243,10 +247,10 @@ export class CrabCodeSettingsPanel {
     if (message.action === "confirm")
       return (
         (await vscode.window.showWarningMessage(
-          String(message.message ?? "确认操作？"),
+          String(message.message ?? tr("确认操作？")),
           { modal: true },
-          "确认",
-        )) === "确认"
+          tr("确认"),
+        )) === tr("确认")
       );
     if (message.action === "saveLocal") {
       const value =
@@ -256,9 +260,9 @@ export class CrabCodeSettingsPanel {
           : message.value;
       validateLocalSetting(message.key ?? "", value);
       if (message.scope !== "user" && message.scope !== "workspace")
-        throw new Error("请选择有效的保存范围");
+        throw new Error(tr("请选择有效的保存范围"));
       if (message.scope === "workspace" && !this.snapshot().hasWorkspace)
-        throw new Error("请先打开工作区");
+        throw new Error(tr("请先打开工作区"));
       await vscode.workspace
         .getConfiguration("crabcode")
         .update(
@@ -275,7 +279,7 @@ export class CrabCodeSettingsPanel {
         JSON.stringify({ templates: message.templates }),
       );
       const uri = await vscode.window.showSaveDialog({
-        title: "导出提示词模板",
+        title: tr("导出提示词模板"),
         defaultUri: vscode.Uri.joinPath(
           vscode.workspace.workspaceFolders?.[0]?.uri ??
             vscode.Uri.file(os.homedir()),
@@ -299,13 +303,13 @@ export class CrabCodeSettingsPanel {
     if (message.action === "import") {
       this.validateSource(message.source);
       const uris = await vscode.window.showOpenDialog({
-        title: "导入提示词模板",
+        title: tr("导入提示词模板"),
         canSelectMany: false,
         filters: { JSON: ["json"] },
       });
       if (!uris?.length) return { cancelled: true };
       if (message.generation !== this.generation)
-        throw new Error("连接或工作区已切换，请重新导入");
+        throw new Error(tr("连接或工作区已切换，请重新导入"));
       const templates = parsePromptTemplateFile(
         Buffer.from(await vscode.workspace.fs.readFile(uris[0])).toString(
           "utf8",
@@ -315,7 +319,7 @@ export class CrabCodeSettingsPanel {
       try {
         for (const template of templates) {
           if (message.generation !== this.generation)
-            throw new Error("连接或工作区已切换");
+            throw new Error(tr("连接或工作区已切换"));
           await this.request("prompts", {
             action: "save_template",
             source: message.source,
@@ -327,26 +331,26 @@ export class CrabCodeSettingsPanel {
         }
       } catch (error) {
         throw new Error(
-          `已导入 ${imported} 个模板；${error instanceof Error ? error.message : String(error)}`,
+          tr("已导入 {0} 个模板；{1}", { 0: imported, 1: error instanceof Error ? error.message : String(error) }),
         );
       }
       return { imported };
     }
     const resource = message.resource;
     if (!resource || !Object.hasOwn(ENDPOINTS, resource))
-      throw new Error("未知的设置栏目");
+      throw new Error(tr("未知的设置栏目"));
     if (message.action === "read")
       return this.request(resource, undefined, message.query);
     if (message.action === "mutate") {
       const mutation = message.mutation;
       if (!mutation || !ACTIONS[resource]?.includes(String(mutation.action)))
-        throw new Error("无效的设置操作");
+        throw new Error(tr("无效的设置操作"));
       this.validateSource(mutation.source);
       const result = await this.request(resource, mutation);
       if (resource === "models") this.onModelsChanged?.();
       return result;
     }
-    throw new Error("未知的设置请求");
+    throw new Error(tr("未知的设置请求"));
   }
 
   private validateSource(source: unknown): void {
@@ -355,7 +359,7 @@ export class CrabCodeSettingsPanel {
         String(source),
       )
     )
-      throw new Error("请选择有效的配置层");
+      throw new Error(tr("请选择有效的配置层"));
   }
 
   private async request(
@@ -378,7 +382,7 @@ export class CrabCodeSettingsPanel {
     )
       url.searchParams.set("cwd", cwd);
     if (resource === "usage") {
-      if (query?.scope === "project" && !cwd) throw new Error("请先打开项目");
+      if (query?.scope === "project" && !cwd) throw new Error(tr("请先打开项目"));
       for (const key of ["start_date", "end_date", "timezone"])
         if (query?.[key]) url.searchParams.set(key, query[key]);
     }
@@ -409,13 +413,13 @@ export class CrabCodeSettingsPanel {
           /* Keep status when the server sends a non-JSON error. */
         }
         if (response.status === 404 && !mutation)
-          detail = "当前 Gateway 不支持此设置接口，请升级 Gateway 后重试。";
+          detail = tr("当前 Gateway 不支持此设置接口，请升级 Gateway 后重试。");
         throw new Error(detail);
       }
       return await response.json();
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError")
-        throw new Error("请求已取消或超时，请检查连接后重试");
+        throw new Error(tr("请求已取消或超时，请检查连接后重试"));
       throw error;
     } finally {
       clearTimeout(timer);

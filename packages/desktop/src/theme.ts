@@ -1,3 +1,4 @@
+import { t as tr, localized } from "./i18n";
 import type {
   DesktopSettings,
   ThemePreset,
@@ -115,7 +116,7 @@ function profile(
 export const DEFAULT_LIGHT_THEME: ThemeProfile = profile("#e75f4b", "#f5f7f6", "#172421");
 export const DEFAULT_DARK_THEME: ThemeProfile = profile("#ff765f", "#0d1517", "#edf4ef");
 
-export const BUILTIN_THEMES: readonly ThemePreset[] = [
+export const BUILTIN_THEMES: readonly ThemePreset[] = localized([
   {
     id: DEFAULT_THEME_ID,
     name: "Crab 默认",
@@ -169,7 +170,7 @@ export const BUILTIN_THEMES: readonly ThemePreset[] = [
       accent_soft: "#123f48",
     }),
   },
-];
+]);
 
 function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -179,7 +180,7 @@ function object(value: unknown): Record<string, unknown> | null {
 
 function exactKeys(value: Record<string, unknown>, allowed: Set<string>, label: string): void {
   const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) throw new Error(`${label} 包含不支持的字段：${unexpected}`);
+  if (unexpected) throw new Error(tr("{0} 包含不支持的字段：{1}", { 0: label, 1: unexpected }));
 }
 
 export function isThemeColor(value: unknown): value is string {
@@ -193,46 +194,46 @@ function requiredString(
   pattern?: RegExp,
 ): string {
   if (typeof value !== "string" || value.trim() === "" || value.length > maximum || (pattern && !pattern.test(value))) {
-    throw new Error(`${label} 无效`);
+    throw new Error(tr("{0} 无效", { 0: label }));
   }
   return value.trim();
 }
 
 function numberInRange(value: unknown, label: string, minimum: number, maximum: number): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
-    throw new Error(`${label} 必须在 ${minimum}–${maximum} 之间`);
+    throw new Error(tr("{0} 必须在 {1}–{2} 之间", { 0: label, 1: minimum, 2: maximum }));
   }
   return value;
 }
 
 function integerInRange(value: unknown, label: string, minimum: number, maximum: number): number {
   const number = numberInRange(value, label, minimum, maximum);
-  if (!Number.isInteger(number)) throw new Error(`${label} 必须是整数`);
+  if (!Number.isInteger(number)) throw new Error(tr("{0} 必须是整数", { 0: label }));
   return number;
 }
 
 function enumValue<T extends string>(value: unknown, values: readonly T[], label: string): T {
-  if (typeof value !== "string" || !values.includes(value as T)) throw new Error(`${label} 无效`);
+  if (typeof value !== "string" || !values.includes(value as T)) throw new Error(tr("{0} 无效", { 0: label }));
   return value as T;
 }
 
 function parseProfile(value: unknown, label: string): ThemeProfile {
   const source = object(value);
-  if (!source) throw new Error(`${label} 必须是对象`);
+  if (!source) throw new Error(tr("{0} 必须是对象", { 0: label }));
   exactKeys(source, PROFILE_KEYS, label);
   const overridesSource = object(source.token_overrides);
-  if (!overridesSource) throw new Error(`${label}.token_overrides 必须是对象`);
+  if (!overridesSource) throw new Error(tr("{0}.token_overrides 必须是对象", { 0: label }));
   const allowedTokenKeys = new Set<string>(THEME_SEMANTIC_COLOR_KEYS);
   exactKeys(overridesSource, allowedTokenKeys, `${label}.token_overrides`);
   const tokenOverrides: Partial<ThemeSemanticColors> = {};
   for (const [key, color] of Object.entries(overridesSource)) {
-    if (!isThemeColor(color)) throw new Error(`${label}.token_overrides.${key} 必须是十六进制颜色`);
+    if (!isThemeColor(color)) throw new Error(tr("{0}.token_overrides.{1} 必须是十六进制颜色", { 0: label, 1: key }));
     tokenOverrides[key as keyof ThemeSemanticColors] = color.toLowerCase();
   }
-  if (!isThemeColor(source.accent_color)) throw new Error(`${label}.accent_color 无效`);
-  if (!isThemeColor(source.background_color)) throw new Error(`${label}.background_color 无效`);
-  if (!isThemeColor(source.foreground_color)) throw new Error(`${label}.foreground_color 无效`);
-  if (typeof source.translucent_sidebar !== "boolean") throw new Error(`${label}.translucent_sidebar 必须是布尔值`);
+  if (!isThemeColor(source.accent_color)) throw new Error(tr("{0}.accent_color 无效", { 0: label }));
+  if (!isThemeColor(source.background_color)) throw new Error(tr("{0}.background_color 无效", { 0: label }));
+  if (!isThemeColor(source.foreground_color)) throw new Error(tr("{0}.foreground_color 无效", { 0: label }));
+  if (typeof source.translucent_sidebar !== "boolean") throw new Error(tr("{0}.translucent_sidebar 必须是布尔值", { 0: label }));
   return {
     accent_color: source.accent_color.toLowerCase(),
     background_color: source.background_color.toLowerCase(),
@@ -262,9 +263,9 @@ export function isSafeImageDataUrl(value: unknown, maximumBytes = MAX_EMBEDDED_I
 
 function parseVisual(value: unknown, label: string): ThemeVisualAsset {
   const source = object(value);
-  if (!source) throw new Error(`${label} 必须是对象`);
+  if (!source) throw new Error(tr("{0} 必须是对象", { 0: label }));
   exactKeys(source, VISUAL_KEYS, label);
-  if (!isSafeImageDataUrl(source.data_url)) throw new Error(`${label}.data_url 不是受支持的图片或超过 8 MiB`);
+  if (!isSafeImageDataUrl(source.data_url)) throw new Error(tr("{0}.data_url 不是受支持的图片或超过 8 MiB", { 0: label }));
   return {
     data_url: source.data_url,
     opacity: numberInRange(source.opacity, `${label}.opacity`, 0, 1),
@@ -276,7 +277,7 @@ function parseVisual(value: unknown, label: string): ThemeVisualAsset {
 function parseVisuals(value: unknown): ThemeVisuals | undefined {
   if (value === undefined) return undefined;
   const source = object(value);
-  if (!source) throw new Error("visuals 必须是对象");
+  if (!source) throw new Error(tr("visuals 必须是对象"));
   const allowedSlots = new Set<string>(THEME_VISUAL_SLOTS);
   exactKeys(source, allowedSlots, "visuals");
   const visuals: ThemeVisuals = {};
@@ -289,15 +290,15 @@ function parseVisuals(value: unknown): ThemeVisuals | undefined {
 function parsePreview(value: unknown): ThemePreset["preview"] {
   if (value === undefined) return undefined;
   const source = object(value);
-  if (!source) throw new Error("preview 必须是对象");
+  if (!source) throw new Error(tr("preview 必须是对象"));
   exactKeys(source, new Set(["light", "dark"]), "preview");
   const preview: NonNullable<ThemePreset["preview"]> = {};
   if (source.light !== undefined) {
-    if (!isSafeImageDataUrl(source.light, 2 * 1024 * 1024)) throw new Error("preview.light 无效或超过 2 MiB");
+    if (!isSafeImageDataUrl(source.light, 2 * 1024 * 1024)) throw new Error(tr("preview.light 无效或超过 2 MiB"));
     preview.light = source.light;
   }
   if (source.dark !== undefined) {
-    if (!isSafeImageDataUrl(source.dark, 2 * 1024 * 1024)) throw new Error("preview.dark 无效或超过 2 MiB");
+    if (!isSafeImageDataUrl(source.dark, 2 * 1024 * 1024)) throw new Error(tr("preview.dark 无效或超过 2 MiB"));
     preview.dark = source.dark;
   }
   return Object.keys(preview).length ? preview : undefined;
@@ -305,16 +306,16 @@ function parsePreview(value: unknown): ThemePreset["preview"] {
 
 export function parseThemePreset(value: unknown, options: { allowBuiltinId?: boolean } = {}): ThemePreset {
   const source = object(value);
-  if (!source) throw new Error("theme 必须是对象");
+  if (!source) throw new Error(tr("theme 必须是对象"));
   exactKeys(source, PRESET_KEYS, "theme");
   const id = requiredString(source.id, "theme.id", 64, /^[a-z0-9][a-z0-9._-]*$/);
-  if (!options.allowBuiltinId && id.startsWith("builtin.")) throw new Error("导入主题不能使用 builtin.* ID");
+  if (!options.allowBuiltinId && id.startsWith("builtin.")) throw new Error(tr("导入主题不能使用 builtin.* ID"));
   const preset: ThemePreset = {
     id,
     name: requiredString(source.name, "theme.name", 80),
     author: requiredString(source.author, "theme.author", 80),
     version: requiredString(source.version, "theme.version", 32, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
-    description: typeof source.description === "string" && source.description.length <= 240 ? source.description.trim() : (() => { throw new Error("theme.description 无效"); })(),
+    description: typeof source.description === "string" && source.description.length <= 240 ? source.description.trim() : (() => { throw new Error(tr("theme.description 无效")); })(),
     minimum_app_version: requiredString(source.minimum_app_version, "theme.minimum_app_version", 32, /^\d+\.\d+\.\d+$/),
     light: parseProfile(source.light, "theme.light"),
     dark: parseProfile(source.dark, "theme.dark"),
@@ -327,7 +328,7 @@ export function parseThemePreset(value: unknown, options: { allowBuiltinId?: boo
     ...Object.values(preset.visuals ?? {}).map((visual) => visual.data_url),
   ].filter((item): item is string => typeof item === "string")
     .reduce((total, item) => total + dataUrlBytes(item), 0);
-  if (embeddedBytes > MAX_EMBEDDED_THEME_BYTES) throw new Error("主题内嵌图片总计不能超过 20 MiB");
+  if (embeddedBytes > MAX_EMBEDDED_THEME_BYTES) throw new Error(tr("主题内嵌图片总计不能超过 20 MiB"));
   return preset;
 }
 
@@ -468,10 +469,10 @@ export function themeProfilesEqual(left: ThemeProfile, right: ThemeProfile): boo
 export function legacyThemePreset(light: ThemeProfile, dark: ThemeProfile): ThemePreset {
   return {
     id: "custom.migrated",
-    name: "迁移的外观",
+    name: tr("迁移的外观"),
     author: "Crab Desktop",
     version: "1.0.0",
-    description: "从 Crab Desktop schema v3 的外观设置自动迁移。",
+    description: tr("从 Crab Desktop schema v3 的外观设置自动迁移。"),
     minimum_app_version: "0.1.4",
     light,
     dark,
@@ -491,10 +492,10 @@ export function duplicateTheme(
   const copy: ThemePreset = {
     ...cloneThemePreset(source),
     id: customId(),
-    name: `${source.name} 副本`,
-    author: "本地用户",
+    name: tr("{0} 副本", { 0: source.name }),
+    author: tr("本地用户"),
     version: "1.0.0",
-    description: `基于 ${source.name} 创建的本地预设。`,
+    description: tr("基于 {0} 创建的本地预设。", { 0: source.name }),
     minimum_app_version: "0.1.4",
   };
   return {

@@ -1,4 +1,4 @@
-// Duplicated in the desktop app and the VS Code extension. Keep both copies identical.
+import { t as tr } from "./i18n";
 export interface PortablePromptTemplate {
   id?: string;
   name: string;
@@ -32,16 +32,16 @@ export function serializePromptTemplates(templates: PortablePromptTemplate[]): s
 
 export function parsePromptTemplateFile(text: string): PortablePromptTemplate[] {
   const source = text.replace(/^\uFEFF/, "");
-  if (source.length > TEXT_LIMIT) throw new Error("JSON 文件过大");
+  if (source.length > TEXT_LIMIT) throw new Error(tr("JSON 文件过大"));
   let parsed: unknown;
   try {
     parsed = JSON.parse(source);
   } catch {
-    throw new Error("不是有效的 JSON");
+    throw new Error(tr("不是有效的 JSON"));
   }
   const items = unwrapPromptTemplates(parsed);
-  if (items.length === 0) throw new Error("JSON 里没有提示词模版");
-  if (items.length > FILE_LIMIT) throw new Error("提示词模版数量已达上限");
+  if (items.length === 0) throw new Error(tr("JSON 里没有提示词模版"));
+  if (items.length > FILE_LIMIT) throw new Error(tr("提示词模版数量已达上限"));
   const names = new Set<string>();
   const ids = new Set<string>();
   return items.map((item, index) => normalizePromptTemplate(item, index, names, ids));
@@ -63,13 +63,13 @@ function portableTemplate(template: PortablePromptTemplate): PortablePromptTempl
 function unwrapPromptTemplates(parsed: unknown): unknown[] {
   if (Array.isArray(parsed)) return parsed;
   if (!parsed || typeof parsed !== "object") {
-    throw new Error("JSON 需要是模版对象、模版数组，或包含 templates 的对象");
+    throw new Error(tr("JSON 需要是模版对象、模版数组，或包含 templates 的对象"));
   }
   const record = parsed as Record<string, unknown>;
   if (Array.isArray(record.templates)) return record.templates;
   if (Array.isArray(record.prompt_templates)) return record.prompt_templates;
   if ("name" in record || "sections" in record) return [parsed];
-  throw new Error("JSON 需要是模版对象、模版数组，或包含 templates 的对象");
+  throw new Error(tr("JSON 需要是模版对象、模版数组，或包含 templates 的对象"));
 }
 
 function normalizePromptTemplate(
@@ -79,32 +79,32 @@ function normalizePromptTemplate(
   ids: Set<string>,
 ): PortablePromptTemplate {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
-    throw new Error(`第 ${index + 1} 个模版不是对象`);
+    throw new Error(tr("第 {0} 个模版不是对象", { 0: index + 1 }));
   }
   const record = item as Record<string, unknown>;
   const name = typeof record.name === "string" ? record.name.trim() : "";
-  if (!name) throw new Error(`第 ${index + 1} 个模版缺少名称`);
-  if (name === "默认") throw new Error("模版名称不能是「默认」");
-  if (name.length > NAME_LIMIT) throw new Error(`模版「${name.slice(0, 20)}」的名称过长`);
-  if (names.has(name)) throw new Error(`模版「${name}」在文件里重复`);
+  if (!name) throw new Error(tr("第 {0} 个模版缺少名称", { 0: index + 1 }));
+  if (name === "默认") throw new Error(tr("模版名称不能是「默认」"));
+  if (name.length > NAME_LIMIT) throw new Error(tr("模版「{0}」的名称过长", { 0: name.slice(0, 20) }));
+  if (names.has(name)) throw new Error(tr("模版「{0}」在文件里重复", { 0: name }));
   names.add(name);
   let id: string | undefined;
   if (record.id != null && record.id !== "") {
-    if (typeof record.id !== "string") throw new Error(`模版「${name}」的 id 无效`);
+    if (typeof record.id !== "string") throw new Error(tr("模版「{0}」的 id 无效", { 0: name }));
     id = record.id.trim();
-    if (!id || id.length > NAME_LIMIT || ids.has(id)) throw new Error(`模版「${name}」的 id 无效`);
+    if (!id || id.length > NAME_LIMIT || ids.has(id)) throw new Error(tr("模版「{0}」的 id 无效", { 0: name }));
     ids.add(id);
   }
   const sections: Record<string, string> = {};
   if (record.sections != null && (typeof record.sections !== "object" || Array.isArray(record.sections))) {
-    throw new Error(`模版「${name}」的 sections 必须是对象`);
+    throw new Error(tr("模版「{0}」的 sections 必须是对象", { 0: name }));
   }
   if (record.sections && typeof record.sections === "object") {
     for (const [key, value] of Object.entries(record.sections)) {
       if (typeof value !== "string") continue;
       const text = value.trim();
       if (!text) continue;
-      if (text.length > SECTION_LIMIT) throw new Error(`模版「${name}」的 ${key} 过长`);
+      if (text.length > SECTION_LIMIT) throw new Error(tr("模版「{0}」的 {1} 过长", { 0: name, 1: key }));
       sections[key] = text;
     }
   }

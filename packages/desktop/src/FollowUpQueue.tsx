@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { CornerDownRight, ListEnd, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -60,19 +61,19 @@ export function FollowUpQueue({ messages, canSteer, queueEnabled, onAction, onDi
 
   const visible = messages.filter((message) => message.status !== "editing");
   if (!visible.length) return null;
-  return <div className="follow-up-queue" ref={rootRef} aria-label="后续消息队列" aria-live="polite">
+  return <div className="follow-up-queue" ref={rootRef} aria-label={tr("后续消息队列")} aria-live="polite">
     {visible.map((message) => <div className="follow-up-card" key={message.item.id} aria-busy={Boolean(message.action)}>
-      <ListEnd className="follow-up-icon" aria-label={message.status === "cancelled" ? "未发送" : "排队中"} />
+      <ListEnd className="follow-up-icon" aria-label={message.status === "cancelled" ? tr("未发送") : tr("排队中")} />
       <span className="follow-up-text" title={message.text}>
-        {message.status === "cancelled" && <span className="follow-up-status">未发送 · </span>}
-        {message.item.text || (message.images.length ? "图片消息" : "附件消息")}
+        {message.status === "cancelled" && <span className="follow-up-status">{tr("未发送 · ")}</span>}
+        {message.item.text || (message.images.length ? tr("图片消息") : tr("附件消息"))}
       </span>
-      <button type="button" className="follow-up-steer" title="引导当前运行" aria-label="引导当前运行"
+      <button type="button" className="follow-up-steer" title={tr("引导当前运行")} aria-label={tr("引导当前运行")}
         disabled={!canSteer || message.status !== "pending" || Boolean(message.action)}
-        onClick={() => onAction(message.item.id, "steer")}><CornerDownRight />引导</button>
-      <button type="button" aria-label="删除排队消息" title="删除消息" disabled={Boolean(message.action)}
+        onClick={() => onAction(message.item.id, "steer")}><CornerDownRight />{tr("引导")}</button>
+      <button type="button" aria-label={tr("删除排队消息")} title={tr("删除消息")} disabled={Boolean(message.action)}
         onClick={() => onAction(message.item.id, "remove")}><Trash2 /></button>
-      <button type="button" aria-label="更多排队操作" title="更多" aria-haspopup="menu"
+      <button type="button" aria-label={tr("更多排队操作")} title={tr("更多")} aria-haspopup="menu"
         aria-expanded={menuId === message.item.id} disabled={Boolean(message.action)}
         onClick={(event) => {
           triggerRef.current = event.currentTarget;
@@ -80,13 +81,13 @@ export function FollowUpQueue({ messages, canSteer, queueEnabled, onAction, onDi
           setMenuPosition({ top: Math.min(rect.bottom + 4, window.innerHeight - 104), left: Math.max(8, rect.right - 152) });
           setMenuId((current) => current === message.item.id ? null : message.item.id);
         }}><MoreHorizontal /></button>
-      {menuId === message.item.id && createPortal(<div className="follow-up-menu" ref={menuRef} style={menuPosition} role="menu" aria-label="排队消息操作">
+      {menuId === message.item.id && createPortal(<div className="follow-up-menu" ref={menuRef} style={menuPosition} role="menu" aria-label={tr("排队消息操作")}>
         <button type="button" role="menuitem" onClick={() => {
           setMenuId(null);
           onAction(message.item.id, "edit");
-        }}><Pencil />编辑消息</button>
-        <button type="button" role="menuitem" disabled={!queueEnabled} title="后续消息默认改为引导，已排队消息保留"
-          onClick={() => { setMenuId(null); onDisableQueue(); }}><ListEnd />关闭排队</button>
+        }}><Pencil />{tr("编辑消息")}</button>
+        <button type="button" role="menuitem" disabled={!queueEnabled} title={tr("后续消息默认改为引导，已排队消息保留")}
+          onClick={() => { setMenuId(null); onDisableQueue(); }}><ListEnd />{tr("关闭排队")}</button>
       </div>, document.body)}
     </div>)}
   </div>;

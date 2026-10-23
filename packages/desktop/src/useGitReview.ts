@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { useCallback, useEffect, useState } from "react";
 import type { GatewayApi } from "./gateway";
 import type { ChangeReviewSelection } from "./ChangeReview";
@@ -25,7 +26,7 @@ export function useGitReview(api: GatewayApi, path: string, selection: ChangeRev
       } catch (reason) {
         if (controller.signal.aborted) return;
         const message = reason instanceof Error ? reason.message : String(reason);
-        setRepository({ path, info: null, error: /404|^Not Found$/i.test(message) ? "当前 Gateway 尚不支持 Git 查看，请更新并重启 Gateway" : message, loading: false });
+        setRepository({ path, info: null, error: /404|^Not Found$/i.test(message) ? tr("当前 Gateway 尚不支持 Git 查看，请更新并重启 Gateway") : message, loading: false });
       }
     })();
     return () => controller.abort();
@@ -55,10 +56,10 @@ export function useGitReview(api: GatewayApi, path: string, selection: ChangeRev
   return {
     info,
     infoLoading: repository.path !== path || repository.loading,
-    unavailable: repository.error ?? info?.reason ?? (repository.loading ? "正在检测 Git…" : "当前目录没有 Git 仓库"),
+    unavailable: repository.error ?? info?.reason ?? (repository.loading ? tr("正在检测 Git…") : tr("当前目录没有 Git 仓库")),
     data: info?.available && result.key === key ? result.data : null,
     loading: Boolean(scope && (repository.path !== path || repository.loading || (info?.available && (result.key !== key || result.loading)))),
-    error: scope ? repository.error ?? (info && !info.available ? info.reason ?? "当前目录没有 Git 仓库" : result.key === key ? result.error : null) : null,
+    error: scope ? repository.error ?? (info && !info.available ? info.reason ?? tr("当前目录没有 Git 仓库") : result.key === key ? result.error : null) : null,
     refresh,
   };
 }

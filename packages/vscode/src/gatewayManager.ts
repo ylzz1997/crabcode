@@ -3,6 +3,7 @@
  * and start/stop the gateway process.
  */
 
+import { t as tr, localized } from "./i18n";
 import { existsSync } from "fs";
 import * as http from "http";
 import * as https from "https";
@@ -58,7 +59,7 @@ export const GATEWAY_INSTALL_FEATURES: ReadonlyArray<{
   label: string;
   description: string;
   detail: string;
-}> = [
+}> = localized([
   {
     id: "search",
     label: "Search",
@@ -71,7 +72,7 @@ export const GATEWAY_INSTALL_FEATURES: ReadonlyArray<{
     description: "DAP 与进程调试",
     detail: "增加 Debugger 套件；实际能力取决于本机调试器、权限与平台。",
   },
-];
+]);
 
 function normalizeGatewayInstallFeatures(selection: GatewayInstallSelection): GatewayInstallFeature[] {
   const legacyFeatures: Record<GatewayInstallSuite, readonly GatewayInstallFeature[]> = {
@@ -219,7 +220,7 @@ function probeGatewayHealth(
         bodyBytes += chunk.length;
         if (bodyBytes > HEALTH_BODY_LIMIT_BYTES) {
           req.destroy();
-          finish({ reachable: true, error: "健康响应过大" });
+          finish({ reachable: true, error: tr("健康响应过大") });
           return;
         }
         chunks.push(chunk);
@@ -229,14 +230,14 @@ function probeGatewayHealth(
         if (settled) return;
         const statusCode = res.statusCode ?? 0;
         if (statusCode < 200 || statusCode >= 300) {
-          finish({ reachable: true, error: `/health 返回 HTTP ${statusCode}` });
+          finish({ reachable: true, error: tr("/health 返回 HTTP {0}", { 0: statusCode }) });
           return;
         }
 
         try {
           const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
           if (payload.status !== "ok" || typeof payload.version !== "string") {
-            finish({ reachable: true, error: "/health 响应不是有效的 CrabCode gateway" });
+            finish({ reachable: true, error: tr("/health 响应不是有效的 CrabCode gateway") });
             return;
           }
           finish({
@@ -256,7 +257,7 @@ function probeGatewayHealth(
             },
           });
         } catch {
-          finish({ reachable: true, error: "/health 返回了无效 JSON" });
+          finish({ reachable: true, error: tr("/health 返回了无效 JSON") });
         }
       });
     });
@@ -268,7 +269,7 @@ function probeGatewayHealth(
     });
     req.setTimeout(timeoutMs, () => {
       req.destroy();
-      finish({ reachable: socketConnected, error: "/health 请求超时" });
+      finish({ reachable: socketConnected, error: tr("/health 请求超时") });
     });
     req.on("error", (err) => {
       finish({ reachable: socketConnected, error: err.message });
@@ -278,20 +279,20 @@ function probeGatewayHealth(
 
 function protocolCompatibility(support: ProtocolSupport): { compatible: boolean; reason?: string } {
   if (support.protocolVersion === null) {
-    return { compatible: false, reason: "gateway 未声明协议版本" };
+    return { compatible: false, reason: tr("gateway 未声明协议版本") };
   }
 
   const gatewayMin = support.minProtocolVersion ?? support.protocolVersion;
   const gatewayMax = support.maxProtocolVersion ?? support.protocolVersion;
   if (gatewayMin > gatewayMax) {
-    return { compatible: false, reason: `gateway 声明了无效协议范围 ${gatewayMin}-${gatewayMax}` };
+    return { compatible: false, reason: tr("gateway 声明了无效协议范围 {0}-{1}", { 0: gatewayMin, 1: gatewayMax }) };
   }
   if (gatewayMax < MIN_GATEWAY_PROTOCOL || gatewayMin > MAX_GATEWAY_PROTOCOL) {
     return {
       compatible: false,
       reason:
-        `gateway 协议范围 ${gatewayMin}-${gatewayMax} 与插件支持范围 ` +
-        `${MIN_GATEWAY_PROTOCOL}-${MAX_GATEWAY_PROTOCOL} 不相交`,
+        tr("gateway 协议范围 {0}-{1} 与插件支持范围 ", { 0: gatewayMin, 1: gatewayMax }) +
+        tr("{0}-{1} 不相交", { 0: MIN_GATEWAY_PROTOCOL, 1: MAX_GATEWAY_PROTOCOL }),
     };
   }
   return { compatible: true };
@@ -317,7 +318,7 @@ export async function detectPython(
     const v = await checkPython(userPath);
     if (v) return userPath;
     vscode.window.showWarningMessage(
-      `CrabCode：配置的 pythonPath「${userPath}」无效或版本低于 3.10，将尝试自动检测。`,
+      tr("CrabCode：配置的 pythonPath「{0}」无效或版本低于 3.10，将尝试自动检测。", { 0: userPath }),
     );
   }
 
@@ -506,7 +507,7 @@ async function getInstalledGatewayInfo(
     return {
       version: typeof payload.version === "string" && payload.version
         ? payload.version
-        : "未知",
+        : tr("未知"),
       protocolVersion: Number.isInteger(payload.protocol_version)
         ? payload.protocol_version as number
         : null,
@@ -531,7 +532,7 @@ async function installGateway(
 ): Promise<boolean> {
   const packageSpec = gatewayPackageSpec(version, selection);
   outputChannel.show(true);
-  outputChannel.appendLine(`[CrabCode] 正在安装 ${packageSpec} ...`);
+  outputChannel.appendLine(tr("[CrabCode] 正在安装 {0} ...", { 0: packageSpec }));
 
   return new Promise((resolve) => {
     const proc = spawn(python, ["-m", "pip", "install", "--upgrade", packageSpec], {
@@ -551,14 +552,14 @@ async function installGateway(
       const ok = code === 0;
       outputChannel.appendLine(
         ok
-          ? `[CrabCode] ${packageSpec} 安装完成`
-          : `[CrabCode] ${packageSpec} 安装失败（退出码 ${code}）`,
+          ? tr("[CrabCode] {0} 安装完成", { 0: packageSpec })
+          : tr("[CrabCode] {0} 安装失败（退出码 {1}）", { 0: packageSpec, 1: code }),
       );
       resolve(ok);
     });
 
     proc.on("error", (err) => {
-      outputChannel.appendLine(`[CrabCode] 安装进程出错: ${err.message}`);
+      outputChannel.appendLine(tr("[CrabCode] 安装进程出错: {0}", { 0: err.message }));
       resolve(false);
     });
   });
@@ -573,18 +574,18 @@ export async function chooseAndInstallGatewaySuite(
   const serverUrl = config.get<string>("serverUrl", "ws://localhost:4096/ws");
   const target = parseGatewayTarget(serverUrl);
   if (!target) {
-    vscode.window.showErrorMessage("CrabCode：serverUrl 必须是有效的 ws:// 或 wss:// 地址。");
+    vscode.window.showErrorMessage(tr("CrabCode：serverUrl 必须是有效的 ws:// 或 wss:// 地址。"));
     return false;
   }
   if (!target.isLocal) {
     vscode.window.showWarningMessage(
-      "CrabCode：当前配置的是远程 Gateway。请在远程主机上安装可选套件，本机不会代为修改。",
+      tr("CrabCode：当前配置的是远程 Gateway。请在远程主机上安装可选套件，本机不会代为修改。"),
     );
     return false;
   }
   if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(expectedVersion)) {
     vscode.window.showErrorMessage(
-      `CrabCode：扩展版本“${expectedVersion}”无效，无法确定匹配的套件版本。`,
+      tr("CrabCode：扩展版本“{0}”无效，无法确定匹配的套件版本。", { 0: expectedVersion }),
     );
     return false;
   }
@@ -597,8 +598,8 @@ export async function chooseAndInstallGatewaySuite(
       feature: feature.id,
     })),
     {
-      title: "安装 CrabCode 套件",
-      placeHolder: "勾选要安装的可选能力；基础 Gateway 始终安装",
+      title: tr("安装 CrabCode 套件"),
+      placeHolder: tr("勾选要安装的可选能力；基础 Gateway 始终安装"),
       ignoreFocusOut: true,
       canPickMany: true,
     },
@@ -607,12 +608,12 @@ export async function chooseAndInstallGatewaySuite(
   const features = selected.map((item) => item.feature);
   const selectedLabel = selected.length > 0
     ? `Gateway + ${selected.map((item) => item.label).join(" + ")}`
-    : "基础 Gateway";
+    : tr("基础 Gateway");
 
   const python = await detectPython(config);
   if (!python) {
     vscode.window.showErrorMessage(
-      "CrabCode：未找到 Python >= 3.10，请安装 Python 或在设置中指定 crabcode.pythonPath。",
+      tr("CrabCode：未找到 Python >= 3.10，请安装 Python 或在设置中指定 crabcode.pythonPath。"),
     );
     return false;
   }
@@ -621,21 +622,21 @@ export async function chooseAndInstallGatewaySuite(
   const ok = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `CrabCode：正在安装 ${selectedLabel}`,
+      title: tr("CrabCode：正在安装 {0}", { 0: selectedLabel }),
       cancellable: false,
     },
     () => installGateway(python, expectedVersion, outputChannel, features),
   );
   if (!ok) {
     vscode.window.showErrorMessage(
-      `CrabCode：安装 ${packageSpec} 失败，请检查输出面板或手动执行 ` +
+      tr("CrabCode：安装 {0} 失败，请检查输出面板或手动执行 ", { 0: packageSpec }) +
       `python -m pip install --upgrade "${packageSpec}"`,
     );
     return false;
   }
 
   vscode.window.showInformationMessage(
-    `CrabCode：${selectedLabel} 已安装。新会话可使用新增依赖；如 Gateway 已运行，可按需重启。`,
+    tr("CrabCode：{0} 已安装。新会话可使用新增依赖；如 Gateway 已运行，可按需重启。", { 0: selectedLabel }),
   );
   return true;
 }
@@ -670,23 +671,23 @@ export class GatewayProcess implements vscode.Disposable {
       const compatibility = protocolCompatibility(existing.health);
       if (compatibility.compatible) {
         outputChannel.appendLine(
-          `[CrabCode] 网关已在 ${target.host}:${target.port} 上运行 ` +
-          `(CrabCode ${existing.health.version}, 协议 ${existing.health.protocolVersion})`,
+          tr("[CrabCode] 网关已在 {0}:{1} 上运行 ", { 0: target.host, 1: target.port }) +
+          tr("(CrabCode {0}, 协议 {1})", { 0: existing.health.version, 1: existing.health.protocolVersion }),
         );
         this._running = true;
         return true;
       }
-      outputChannel.appendLine(`[CrabCode] 已运行的网关不兼容：${compatibility.reason}`);
+      outputChannel.appendLine(tr("[CrabCode] 已运行的网关不兼容：{0}", { 0: compatibility.reason }));
       return false;
     }
     if (existing.reachable) {
-      outputChannel.appendLine(`[CrabCode] ${existing.error ?? "健康检查失败"}`);
+      outputChannel.appendLine(`[CrabCode] ${existing.error ?? tr("健康检查失败")}`);
       return false;
     }
 
-    outputChannel.appendLine(`[CrabCode] 正在启动网关 (${target.host}:${target.port}) ...`);
+    outputChannel.appendLine(tr("[CrabCode] 正在启动网关 ({0}:{1}) ...", { 0: target.host, 1: target.port }));
     if (launchOptions?.usingWorkspaceSources) {
-      outputChannel.appendLine(`[CrabCode] 使用当前工作区源码启动网关`);
+      outputChannel.appendLine(tr("[CrabCode] 使用当前工作区源码启动网关"));
     }
 
     const child = spawn(
@@ -711,7 +712,7 @@ export class GatewayProcess implements vscode.Disposable {
     child.stderr?.on("data", (d: Buffer) => outputChannel.append(d.toString()));
 
     child.on("close", (code) => {
-      outputChannel.appendLine(`[CrabCode] 网关进程已退出（码 ${code}）`);
+      outputChannel.appendLine(tr("[CrabCode] 网关进程已退出（码 {0}）", { 0: code }));
       if (this.proc === child) {
         this._running = false;
         this.proc = null;
@@ -719,7 +720,7 @@ export class GatewayProcess implements vscode.Disposable {
     });
 
     child.on("error", (err) => {
-      outputChannel.appendLine(`[CrabCode] 网关进程出错: ${err.message}`);
+      outputChannel.appendLine(tr("[CrabCode] 网关进程出错: {0}", { 0: err.message }));
       if (this.proc === child) {
         this._running = false;
         this.proc = null;
@@ -733,20 +734,20 @@ export class GatewayProcess implements vscode.Disposable {
       if (probe.health) {
         const compatibility = protocolCompatibility(probe.health);
         if (!compatibility.compatible) {
-          outputChannel.appendLine(`[CrabCode] 启动后的网关不兼容：${compatibility.reason}`);
+          outputChannel.appendLine(tr("[CrabCode] 启动后的网关不兼容：{0}", { 0: compatibility.reason }));
           this.stop();
           return false;
         }
         this._running = true;
         outputChannel.appendLine(
-          `[CrabCode] 网关已就绪 (${target.host}:${target.port}, ` +
-          `CrabCode ${probe.health.version}, 协议 ${probe.health.protocolVersion})`,
+          tr("[CrabCode] 网关已就绪 ({0}:{1}, ", { 0: target.host, 1: target.port }) +
+          tr("CrabCode {0}, 协议 {1})", { 0: probe.health.version, 1: probe.health.protocolVersion }),
         );
         return true;
       }
     }
 
-    outputChannel.appendLine(`[CrabCode] 网关启动超时`);
+    outputChannel.appendLine(tr("[CrabCode] 网关启动超时"));
     this.stop();
     return false;
   }
@@ -793,7 +794,7 @@ async function installExpectedGateway(
   const ok = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `CrabCode：正在安装 ${packageSpec}`,
+      title: tr("CrabCode：正在安装 {0}", { 0: packageSpec }),
       cancellable: false,
     },
     () => installGateway(python, expectedVersion, outputChannel),
@@ -801,7 +802,7 @@ async function installExpectedGateway(
 
   if (!ok) {
     vscode.window.showErrorMessage(
-      `CrabCode：安装 ${packageSpec} 失败，请检查输出面板或手动执行 ` +
+      tr("CrabCode：安装 {0} 失败，请检查输出面板或手动执行 ", { 0: packageSpec }) +
       `python -m pip install --upgrade "${packageSpec}"`,
     );
   }
@@ -813,20 +814,20 @@ async function confirmGatewayUpgrade(
   protocolVersion: number | null,
   expectedVersion: string,
 ): Promise<boolean> {
-  const protocolLabel = protocolVersion === null ? "未声明" : String(protocolVersion);
+  const protocolLabel = protocolVersion === null ? tr("未声明") : String(protocolVersion);
   const action = await vscode.window.showWarningMessage(
-    "CrabCode：本地 gateway 与当前 VS Code 扩展不兼容。",
+    tr("CrabCode：本地 gateway 与当前 VS Code 扩展不兼容。"),
     {
       modal: true,
       detail:
-        `当前 gateway：${currentVersion}（协议 ${protocolLabel}）\n` +
-        `插件支持协议：${MIN_GATEWAY_PROTOCOL}-${MAX_GATEWAY_PROTOCOL}\n` +
-        `是否安装匹配的 CrabCode ${expectedVersion}？`,
+        tr("当前 gateway：{0}（协议 {1}）\n", { 0: currentVersion, 1: protocolLabel }) +
+        tr("插件支持协议：{0}-{1}\n", { 0: MIN_GATEWAY_PROTOCOL, 1: MAX_GATEWAY_PROTOCOL }) +
+        tr("是否安装匹配的 CrabCode {0}？", { 0: expectedVersion }),
     },
-    `升级到 ${expectedVersion}`,
-    "取消",
+    tr("升级到 {0}", { 0: expectedVersion }),
+    tr("取消"),
   );
-  return action === `升级到 ${expectedVersion}`;
+  return action === tr("升级到 {0}", { 0: expectedVersion });
 }
 
 async function handleRunningIncompatibleGateway(
@@ -841,13 +842,13 @@ async function handleRunningIncompatibleGateway(
 ): Promise<GatewayEnsureResult> {
   const compatibility = protocolCompatibility(health);
   const detail =
-    `CrabCode ${health.version}（协议 ${health.protocolVersion ?? "未声明"}）：` +
-    `${compatibility.reason ?? "不兼容"}`;
+    tr("CrabCode {0}（协议 {1}）：", { 0: health.version, 1: health.protocolVersion ?? tr("未声明") }) +
+    `${compatibility.reason ?? tr("不兼容")}`;
   outputChannel.appendLine(`[CrabCode] ${detail}`);
 
   if (!target.isLocal) {
     vscode.window.showWarningMessage(
-      `CrabCode：远程 gateway 不兼容。${detail}。请在远程服务器升级到兼容版本。`,
+      tr("CrabCode：远程 gateway 不兼容。{0}。请在远程服务器升级到兼容版本。", { 0: detail }),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
@@ -863,7 +864,7 @@ async function handleRunningIncompatibleGateway(
   const python = await detectPython(config);
   if (!python) {
     vscode.window.showErrorMessage(
-      "CrabCode：未找到 Python >= 3.10，无法安装匹配的本地 gateway。",
+      tr("CrabCode：未找到 Python >= 3.10，无法安装匹配的本地 gateway。"),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
@@ -878,8 +879,8 @@ async function handleRunningIncompatibleGateway(
   if (!gatewayProc.ownsProcess) {
     vscode.window.showWarningMessage(
       launchOptions.usingWorkspaceSources
-        ? "CrabCode：当前 gateway 不是由扩展启动。请先停止旧进程，再执行“CrabCode：连接网关”。"
-        : `CrabCode ${expectedVersion} 已安装，但当前 gateway 不是由扩展启动。请重启 gateway 后重新连接。`,
+        ? tr("CrabCode：当前 gateway 不是由扩展启动。请先停止旧进程，再执行“CrabCode：连接网关”。")
+        : tr("CrabCode {0} 已安装，但当前 gateway 不是由扩展启动。请重启 gateway 后重新连接。", { 0: expectedVersion }),
     );
     return { python, gatewayReady: false, startedByUs: false };
   }
@@ -913,13 +914,13 @@ export async function ensureGateway(
   const target = parseGatewayTarget(serverUrl);
   if (!target) {
     vscode.window.showErrorMessage(
-      "CrabCode：serverUrl 必须是有效的 ws:// 或 wss:// 地址。",
+      tr("CrabCode：serverUrl 必须是有效的 ws:// 或 wss:// 地址。"),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
   if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(expectedVersion)) {
     vscode.window.showErrorMessage(
-      `CrabCode：扩展版本“${expectedVersion}”无效，无法确定匹配的 gateway 版本。`,
+      tr("CrabCode：扩展版本“{0}”无效，无法确定匹配的 gateway 版本。", { 0: expectedVersion }),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
@@ -933,8 +934,8 @@ export async function ensureGateway(
     const compatibility = protocolCompatibility(existing.health);
     if (compatibility.compatible) {
       outputChannel.appendLine(
-        `[CrabCode] 网关已就绪 (${displayHealthUrl(target)}, ` +
-        `CrabCode ${existing.health.version}, 协议 ${existing.health.protocolVersion})`,
+        tr("[CrabCode] 网关已就绪 ({0}, ", { 0: displayHealthUrl(target) }) +
+        tr("CrabCode {0}, 协议 {1})", { 0: existing.health.version, 1: existing.health.protocolVersion }),
       );
       return { python: "", gatewayReady: true, startedByUs: gatewayProc.ownsProcess };
     }
@@ -952,8 +953,8 @@ export async function ensureGateway(
 
   if (existing.reachable) {
     const message =
-      `CrabCode：${displayHealthUrl(target)} 可访问，但不是有效的兼容 gateway` +
-      `（${existing.error ?? "健康检查失败"}）。`;
+      tr("CrabCode：{0} 可访问，但不是有效的兼容 gateway", { 0: displayHealthUrl(target) }) +
+      `（${existing.error ?? tr("健康检查失败")}）。`;
     outputChannel.appendLine(`[CrabCode] ${message}`);
     vscode.window.showWarningMessage(message);
     return { python: "", gatewayReady: false, startedByUs: false };
@@ -962,8 +963,8 @@ export async function ensureGateway(
   if (!target.isLocal) {
     const reason = existing.error ? `：${existing.error}` : "";
     vscode.window.showWarningMessage(
-      `CrabCode：无法访问远程 gateway ${displayHealthUrl(target)}${reason}。` +
-      "扩展不会在本机自动安装远程 gateway。",
+      tr("CrabCode：无法访问远程 gateway {0}{1}。", { 0: displayHealthUrl(target), 1: reason }) +
+      tr("扩展不会在本机自动安装远程 gateway。"),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
@@ -972,24 +973,24 @@ export async function ensureGateway(
   const python = await detectPython(config);
   if (!python) {
     vscode.window.showErrorMessage(
-      "CrabCode：未找到 Python >= 3.10，请安装 Python 或在设置中指定 crabcode.pythonPath。",
+      tr("CrabCode：未找到 Python >= 3.10，请安装 Python 或在设置中指定 crabcode.pythonPath。"),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
 
   if (launchOptions.usingWorkspaceSources) {
-    outputChannel.appendLine(`[CrabCode] 检测到当前工作区源码，跳过已安装包检查`);
+    outputChannel.appendLine(tr("[CrabCode] 检测到当前工作区源码，跳过已安装包检查"));
   } else {
     const installed = await getInstalledGatewayInfo(python, launchOptions);
     if (!installed) {
       const autoInstall = config.get<boolean>("gatewayAutoInstall", true);
       if (!autoInstall) {
         const action = await vscode.window.showErrorMessage(
-          `CrabCode：未安装 ${GATEWAY_PKG}，是否安装匹配版本 ${expectedVersion}？`,
-          `安装 ${expectedVersion}`,
-          "取消",
+          tr("CrabCode：未安装 {0}，是否安装匹配版本 {1}？", { 0: GATEWAY_PKG, 1: expectedVersion }),
+          tr("安装 {0}", { 0: expectedVersion }),
+          tr("取消"),
         );
-        if (action !== `安装 ${expectedVersion}`) {
+        if (action !== tr("安装 {0}", { 0: expectedVersion })) {
           return { python, gatewayReady: false, startedByUs: false };
         }
       }
@@ -1000,7 +1001,7 @@ export async function ensureGateway(
       const compatibility = protocolCompatibility(installed);
       if (!compatibility.compatible) {
         outputChannel.appendLine(
-          `[CrabCode] 已安装 gateway ${installed.version} 不兼容：${compatibility.reason}`,
+          tr("[CrabCode] 已安装 gateway {0} 不兼容：{1}", { 0: installed.version, 1: compatibility.reason }),
         );
         if (!await confirmGatewayUpgrade(
           installed.version,
@@ -1019,7 +1020,7 @@ export async function ensureGateway(
   const started = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "CrabCode：正在启动网关",
+      title: tr("CrabCode：正在启动网关"),
       cancellable: false,
     },
     () => gatewayProc.start(python, target, password, outputChannel, launchOptions),
@@ -1027,7 +1028,7 @@ export async function ensureGateway(
 
   if (!started) {
     vscode.window.showErrorMessage(
-      `CrabCode：网关启动失败，请检查输出面板或手动运行 python -m crabcode_cli gateway`,
+      tr("CrabCode：网关启动失败，请检查输出面板或手动运行 python -m crabcode_cli gateway"),
     );
   }
 

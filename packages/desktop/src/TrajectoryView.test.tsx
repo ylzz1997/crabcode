@@ -49,14 +49,14 @@ describe("trajectory projection", () => {
     expect(container.querySelectorAll(".trajectory-record")).toHaveLength(4);
 
     const calls = Array.from(container.querySelectorAll<HTMLButtonElement>(".trajectory-toolbar-actions button"))
-      .find((button) => button.textContent?.includes("Calls"))!;
+      .find((button) => button.textContent?.includes("调用"))!;
     act(() => calls.click());
     expect(container.querySelectorAll(".trajectory-record")).toHaveLength(3);
 
     const first = container.querySelector<HTMLButtonElement>(".trajectory-record-summary")!;
     act(() => first.click());
     expect(first.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelector(".trajectory-record-details")?.textContent).toContain("Turn / Step");
+    expect(container.querySelector(".trajectory-record-details")?.textContent).toContain("轮次 / 步骤");
 
     act(() => calls.click());
     const toolSummary = Array.from(container.querySelectorAll<HTMLButtonElement>(".trajectory-record-summary"))

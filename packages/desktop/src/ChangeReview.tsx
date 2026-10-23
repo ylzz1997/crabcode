@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr } from "./i18n";
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileCode, Folder, LoaderCircle, Search } from "lucide-react";
 import { diffRows } from "./diffRows";
@@ -79,12 +81,12 @@ function buildTree(files: FileEditRecord[]): TreeNode[] {
 function DiffBody({ file }: { file: FileEditRecord }) {
   const rows = diffRows(file.diff);
   if (!rows.length) {
-    return <p className="change-review-missing">{file.note ?? "这次改动没有保存完整 diff，只能看到行数。"}</p>;
+    return <p className="change-review-missing">{file.note ?? tr("这次改动没有保存完整 diff，只能看到行数。")}</p>;
   }
   return (
     <div className="change-review-code">
       {rows.map((row, index) => row.kind === "gap" ? (
-        <div className="change-review-gap" key={`gap-${index}`}>{row.gap} 行未修改</div>
+        <div className="change-review-gap" key={`gap-${index}`}>{row.gap}{tr(" 行未修改")}</div>
       ) : (
         <div className={`change-review-line ${row.kind}`} key={`${row.kind}-${index}`}>
           <span className="change-review-number">{row.newNumber ?? row.oldNumber ?? ""}</span>
@@ -181,26 +183,24 @@ export function ChangeReview({ summary, path, showAll, toolbar, history, loading
     </article>
   ));
   return (
-    <section className="project-file-preview change-review-diff" aria-label="差异">
+    <section className="project-file-preview change-review-diff" aria-label={tr("差异")}>
       <div className="change-review-toolbar">
         {toolbar}
         {summary && !loading && !error && <>
           <ChangeReviewStats added={summary.added} removed={summary.removed} />
-          <button type="button" className={`change-review-all ${showAll && !path ? "active" : ""}`} aria-pressed={showAll && !path} onClick={onShowAll}>
-            全部 {files.length} 个文件
-          </button>
+          <button type="button" className={`change-review-all ${showAll && !path ? "active" : ""}`} aria-pressed={showAll && !path} onClick={onShowAll}>{tr("全部 ")}{files.length}{tr(" 个文件")}</button>
         </>}
       </div>
       {description && <div className="change-review-description">{description}</div>}
       <div className="change-review-scroll">
-        {loading ? <p className="change-review-status" role="status"><LoaderCircle className="spin" />正在读取变更…</p>
+        {loading ? <p className="change-review-status" role="status"><LoaderCircle className="spin" />{tr("正在读取变更…")}</p>
           : error ? <p className="change-review-missing" role="alert">{error}</p>
           : history ? history.map((turn, index) => visible(turn.summary.files).length > 0 && (
             <section className="change-review-history-group" key={turn.id}>
-              <h3>第 {index + 1} 次编辑</h3>{articles(visible(turn.summary.files))}
+              <h3>{tr("第 ")}{index + 1}{tr(" 次编辑")}</h3>{articles(visible(turn.summary.files))}
             </section>
           )) : articles(visible(files))}
-        {!loading && !error && !files.length && <p className="change-review-missing">这个范围没有文件变更。</p>}
+        {!loading && !error && !files.length && <p className="change-review-missing">{tr("这个范围没有文件变更。")}</p>}
       </div>
     </section>
   );
@@ -217,21 +217,20 @@ export function ChangeReviewFiles({ files, selectedPath, onSelectFile, onShowAll
   const visibleFiles = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return needle ? files.filter((file) => file.path.toLocaleLowerCase().includes(needle)) : files;
-  }, [files, query]);
-  const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles]);
+  }, [files, query, getLocale()]);
+  const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles, getLocale()]);
   return (
-    <div className="change-review-tree" aria-label="变更文件">
+    <div className="change-review-tree" aria-label={tr("变更文件")}>
       <label className="change-review-search">
         <Search />
         <input
           value={query}
-          placeholder="筛选文件..."
-          aria-label="筛选文件"
+          placeholder={tr("筛选文件...")}
+          aria-label={tr("筛选文件")}
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
-      <button type="button" className={`change-review-tree-all ${selectedPath === null ? "selected" : ""}`} onClick={onShowAll}>
-        全部变更 <span>{files.length}</span>
+      <button type="button" className={`change-review-tree-all ${selectedPath === null ? "selected" : ""}`} onClick={onShowAll}>{tr("全部变更 ")}<span>{files.length}</span>
       </button>
       {visibleFiles.length ? (
         <TreeFiles
@@ -246,7 +245,7 @@ export function ChangeReviewFiles({ files, selectedPath, onSelectFile, onShowAll
           })}
           onSelect={onSelectFile}
         />
-      ) : <p className="change-review-missing">没有匹配的文件</p>}
+      ) : <p className="change-review-missing">{tr("没有匹配的文件")}</p>}
     </div>
   );
 }

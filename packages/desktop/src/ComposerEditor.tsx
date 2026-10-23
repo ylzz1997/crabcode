@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr, localized } from "./i18n";
 import { createSlashCommands } from "../../shared/slashCommands.js";
 import { FileText, Folder, Image as ImageIcon, Quote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
@@ -26,14 +28,14 @@ type SlashCompletion = {
   items: ComposerCommandOption[];
 };
 
-const BUILTIN_COMMANDS = createSlashCommands({ postMessage() {}, showMessage() {} }).commands
-  .map(({ name, desc }) => ({ name, description: desc }));
+const BUILTIN_COMMANDS = localized(createSlashCommands({ postMessage() {}, showMessage() {} }).commands
+  .map(({ name, desc }) => ({ name, description: desc })));
 
 function subcommands(items: Array<[string, string]>): ComposerCommandOption[] {
   return items.map(([name, description]) => ({ name, description, kind: "subcommand" }));
 }
 
-const STATIC_SUBCOMMANDS: Record<string, ComposerCommandOption[]> = {
+const STATIC_SUBCOMMANDS: Record<string, ComposerCommandOption[]> = localized({
   "/follow-up": subcommands([["queue", "排队执行"], ["steer", "引导当前运行"]]),
   "/queue": subcommands([["steer", "将排队消息接入当前运行"]]),
   "/add": subcommands([["model", "添加模型"], ["group", "添加配置组"]]),
@@ -59,7 +61,7 @@ const STATIC_SUBCOMMANDS: Record<string, ComposerCommandOption[]> = {
     ["create", "创建定时任务"], ["pause", "暂停定时任务"], ["resume", "恢复定时任务"],
     ["run", "立即执行定时任务"], ["cancel", "删除定时任务"],
   ]),
-};
+});
 
 export function createComposerCommandOptions(
   models: Array<{ name: string; description?: string }>,
@@ -104,7 +106,7 @@ export function resolveComposerCommandCompletion(
       command.name.slice(1).toLocaleLowerCase().startsWith(query)
       || command.description.toLocaleLowerCase().includes(query)
     ));
-    return items.length > 0 ? { title: "快捷命令", query, parent: null, items } : null;
+    return items.length > 0 ? { title: tr("快捷命令"), query, parent: null, items } : null;
   }
   const commandName = text.slice(0, spaceIndex).toLocaleLowerCase();
   const parent = commands.find((command) => command.name.toLocaleLowerCase() === commandName);
@@ -133,7 +135,7 @@ function isMention(node: Node | null): node is HTMLElement {
 function nodeText(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? "").replace(/\u200b/g, "");
   if (!(node instanceof HTMLElement)) return "";
-  if (node.classList.contains("composer-inline-mention")) return `@${node.dataset.mentionLabel ?? "引用"}`;
+  if (node.classList.contains("composer-inline-mention")) return `@${node.dataset.mentionLabel ?? tr("引用")}`;
   if (node.tagName === "BR") return "\n";
   const text = Array.from(node.childNodes).map(nodeText).join("");
   return (node.tagName === "DIV" || node.tagName === "P") ? `${text}\n` : text;
@@ -216,7 +218,7 @@ function createMention(option: ComposerReferenceOption): HTMLElement {
   remove.type = "button";
   remove.tabIndex = -1;
   remove.dataset.removeMention = "true";
-  remove.setAttribute("aria-label", `移除引用 ${option.label}`);
+  remove.setAttribute("aria-label", tr("移除引用 {0}", { 0: option.label }));
   remove.textContent = "×";
   pill.append(remove);
   return pill;
@@ -267,7 +269,7 @@ export function ComposerEditor({
     return references.filter((reference) => (
       `${reference.label} ${reference.detail}`.toLocaleLowerCase().includes(query)
     ));
-  }, [mentionQuery, references]);
+  }, [mentionQuery, references, getLocale()]);
 
   const emitChange = useCallback((): string => {
     const root = rootRef.current;
@@ -531,7 +533,7 @@ export function ComposerEditor({
         className="composer-editor-input"
         contentEditable
         role="textbox"
-        aria-label="任务输入"
+        aria-label={tr("任务输入")}
         aria-multiline="true"
         data-placeholder={placeholder}
         suppressContentEditableWarning
@@ -601,10 +603,10 @@ export function ComposerEditor({
         <div
           className="composer-mention-menu"
           role="listbox"
-          aria-label="选择引用"
+          aria-label={tr("选择引用")}
           style={{ left: menuPosition.left, top: menuPosition.top }}
         >
-          <div className="composer-mention-heading"><span>@ 引用</span><small>↑↓ 选择 · Enter 添加</small></div>
+          <div className="composer-mention-heading"><span>{tr("@ 引用")}</span><small>{tr("↑↓ 选择 · Enter 添加")}</small></div>
           {filteredReferences.length > 0 ? filteredReferences.map((reference, index) => (
             <button
               key={reference.key}
@@ -622,16 +624,16 @@ export function ComposerEditor({
             </button>
           )) : (
             <div className="composer-mention-empty">
-              {references.length > 0 ? "没有匹配的引用" : "先通过左下角 + 添加图片、文件或文件夹"}
+              {references.length > 0 ? tr("没有匹配的引用") : tr("先通过左下角 + 添加图片、文件或文件夹")}
             </div>
           )}
         </div>
       )}
       {slashCompletion !== null && (
-        <div ref={commandMenuRef} className="composer-command-menu" role="listbox" aria-label="快捷命令">
+        <div ref={commandMenuRef} className="composer-command-menu" role="listbox" aria-label={tr("快捷命令")}>
           <div className="composer-command-heading">
             <span>{slashCompletion.title}</span>
-            <small>↑↓ 选择 · Tab / Enter 补全</small>
+            <small>{tr("↑↓ 选择 · Tab / Enter 补全")}</small>
           </div>
           {slashCompletion.items.map((command, index) => (
             <button

@@ -34,6 +34,7 @@ import {
   shouldUseWideProjectFilesLayout,
 } from "./App";
 import type { GatewayApi } from "./gateway";
+import { setLocale } from "./i18n";
 import { favoriteEntries, resolveFavoriteEntries } from "./favorites";
 import { computerUseDisplayResult } from "./toolPresentation";
 import type { BackgroundTaskInfo, ChatItem, ConnectionPreset, GatewayViewState, ScheduleJobInfo, SessionInfo, SessionStatus, SessionViewState } from "./types";
@@ -55,6 +56,18 @@ describe("session sidebar while metadata is pending", () => {
       items: [{ id: `${id}-user`, kind: "user", text: `Task ${id}`, startedAt }],
     };
   }
+
+  it("derives titles from user text across language changes without storing translated placeholders", () => {
+    const session = { ...waitingSession("first"), title: "" };
+    try {
+      for (const locale of ["en", "ja", "de"] as const) {
+        setLocale(locale);
+        const list = mergeProjectSessions([], { "local:first": session }, "local", session.cwd);
+        expect(list[0].title).toBe("Task first");
+        expect(session.title).toBe("");
+      }
+    } finally { setLocale("zh-CN"); }
+  });
 
   it("keeps the first waiting conversation when a second one opens and starts streaming", () => {
     const first = waitingSession("first");
@@ -1019,7 +1032,7 @@ describe("automation deck tabs", () => {
     act(() => root.render(<Harness />));
     expect(container.textContent).toContain("启动一个流程");
     const monitorTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-      .find((button) => button.textContent?.includes("Monitor"))!;
+      .find((button) => button.textContent?.includes("监控"))!;
     act(() => monitorTab.click());
 
     expect(monitorTab.getAttribute("aria-selected")).toBe("true");

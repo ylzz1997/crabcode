@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSlashCommands } from "../packages/shared/slashCommands.js";
+import { createI18n } from "../packages/shared/i18n/runtime.js";
 import { createTurnProcessPolicy } from "../packages/shared/turnProcess.js";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -34,7 +35,7 @@ const normalize = (value) => value.trim().toLowerCase().replace(/[\s.-]/g, "");
 const desktopSource = readFileSync(join(repositoryRoot, "packages/desktop/src/toolPresentation.ts"), "utf8");
 const desktopNames = registryNames(
   desktopSource,
-  /const DEFINITIONS:[^=]+\s= \{([\s\S]*?)\r?\n\};\r?\n\r?\nconst FIELD_LABELS/,
+  /const DEFINITIONS:[^=]+\s= (?:localized\()?\{([\s\S]*?)\r?\n\}\)?;\r?\n\r?\nconst FIELD_LABELS/,
   "Desktop",
 );
 
@@ -54,13 +55,13 @@ for (const [label, names] of [["Desktop", desktopNames], ["VS Code", vscodeNames
 // TypeScript does not parse JavaScript embedded in the generated Webview HTML.
 // Evaluate the template with a harmless nonce, then syntax-check its script.
 const functionStart = chatPanel.indexOf("  private getHtmlForWebview(");
-const literalStart = chatPanel.indexOf("`<!DOCTYPE html>", functionStart);
+const literalStart = chatPanel.indexOf("`${trHtml(`<!DOCTYPE html>", functionStart);
 const literalEnd = chatPanel.indexOf("</html>`;", literalStart) + "</html>`".length;
 if (functionStart < 0 || literalStart < 0 || literalEnd < "</html>`".length) {
   throw new Error("VS Code Webview template was not found");
 }
 const templateLiteral = chatPanel.slice(literalStart, literalEnd);
-const html = Function("nonce", "createSlashCommands", "createTurnProcessPolicy", `return ${templateLiteral}`)("audit-nonce", createSlashCommands, createTurnProcessPolicy);
+const html = Function("nonce", "createSlashCommands", "createTurnProcessPolicy", "trHtml", "getLocale", "webviewLocaleData", "createI18n", `return ${templateLiteral}`)("audit-nonce", createSlashCommands, createTurnProcessPolicy, value => value, () => "zh-CN", () => JSON.stringify({ locale: "zh-CN", dictionaries: {} }), createI18n);
 const webviewScript = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)?.[1];
 if (!webviewScript) throw new Error("VS Code Webview script was not found");
 Function(webviewScript);

@@ -22,7 +22,7 @@ function loadMethod(name) {
   const script = ts.transpileModule(`class Harness { ${method.getText(source)} }; globalThis.Harness = Harness;`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const sandbox = { getNonce: () => "test-nonce", createSlashCommands, createTurnProcessPolicy };
+  const sandbox = { ...require("./helpers/i18n.cjs"), getNonce: () => "test-nonce", createSlashCommands, createTurnProcessPolicy };
   vm.runInNewContext(script, sandbox);
   return sandbox.Harness.prototype[name];
 }
@@ -43,7 +43,7 @@ function webviewFunction(name) {
 }
 
 test("single and multiple image captions render below their images and escape HTML", () => {
-  const sandbox = {
+  const sandbox = { ...require("./helpers/i18n.cjs"),
     getToolPresentation: () => ({ kind: "image", glyph: "▧", label: "发送图片", summary: "" }),
     renderToolInput: () => "",
     renderResult: () => "",

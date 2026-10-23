@@ -9,7 +9,7 @@ const filename = path.join(__dirname, "../src/chatPanel.ts");
 const source = ts.createSourceFile(filename, fs.readFileSync(filename, "utf8"), ts.ScriptTarget.Latest, true);
 const names = new Set(["contextEstimateNote", "buildContextUsageStatus", "buildCacheUsageDetail", "formatPercent", "formatTokenCount"]);
 const functions = source.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
-const sandbox = {};
+const sandbox = { ...require("./helpers/i18n.cjs") };
 vm.runInNewContext(ts.transpileModule(functions.map(node => node.getText(source)).join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText, sandbox);

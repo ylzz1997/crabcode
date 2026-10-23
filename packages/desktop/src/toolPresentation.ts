@@ -1,3 +1,4 @@
+import { t as tr, localized } from "./i18n";
 export type ToolKind =
   | "file"
   | "terminal"
@@ -46,7 +47,7 @@ export interface ChecklistResult {
 
 type ToolDefinition = Pick<ToolPresentation, "kind" | "label" | "glyph">;
 
-const DEFINITIONS: Record<string, ToolDefinition> = {
+const DEFINITIONS: Record<string, ToolDefinition> = localized({
   toolsearch: { kind: "search", label: "加载工具", glyph: "S" },
   read: { kind: "file", label: "读取文件", glyph: "R" },
   fileread: { kind: "file", label: "读取文件", glyph: "R" },
@@ -103,9 +104,9 @@ const DEFINITIONS: Record<string, ToolDefinition> = {
   scheduleresume: { kind: "schedule", label: "恢复定时任务", glyph: "◷" },
   schedulerun: { kind: "schedule", label: "立即运行任务", glyph: "◷" },
   skill: { kind: "skill", label: "加载 Skill", glyph: "◇" },
-};
+});
 
-const FIELD_LABELS: Record<string, string> = {
+const FIELD_LABELS: Record<string, string> = localized({
   action: "操作",
   file_path: "文件",
   path: "路径",
@@ -248,7 +249,7 @@ const FIELD_LABELS: Record<string, string> = {
   skill_name: "Skill",
   user_input: "用户要求",
   title: "标题",
-};
+});
 
 const FIELD_ORDER: Partial<Record<ToolKind, string[]>> = {
   file: ["affected_paths", "file_path", "path", "target_file", "offset", "limit", "replace_all", "old_string", "new_string", "patch", "content"],
@@ -270,7 +271,7 @@ const FIELD_ORDER: Partial<Record<ToolKind, string[]>> = {
   skill: ["skill_name", "skill", "name", "user_input", "path", "args"],
 };
 
-const ACTION_LABELS: Record<string, string> = {
+const ACTION_LABELS: Record<string, string> = localized({
   create: "创建",
   update: "更新",
   delete: "删除",
@@ -338,7 +339,7 @@ const ACTION_LABELS: Record<string, string> = {
   detach: "断开调试器",
   terminate: "终止进程",
   kill: "强制结束进程",
-};
+});
 
 function normalizedName(toolName: string): string {
   return toolName.trim().toLowerCase().replace(/[\s.-]/g, "");
@@ -346,7 +347,7 @@ function normalizedName(toolName: string): string {
 
 function displayValue(value: unknown): string {
   if (typeof value === "string") return value;
-  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "boolean") return value ? tr("是") : tr("否");
   if (value === null) return "null";
   if (Array.isArray(value)) {
     return value.every((item) => ["string", "number", "boolean"].includes(typeof item))
@@ -403,7 +404,7 @@ function summaryFor(kind: ToolKind, input: Record<string, unknown>, action: stri
 export function getToolPresentation(toolName: string, input: Record<string, unknown> = {}): ToolPresentation {
   const definition = DEFINITIONS[normalizedName(toolName)] ?? {
     kind: "generic" as const,
-    label: toolName || "工具",
+    label: toolName || tr("工具"),
     glyph: "⚙",
   };
   const rawAction = typeof input.action === "string" ? input.action : null;
@@ -438,9 +439,9 @@ export function computerUseDisplayResult(toolName: string, value: unknown): stri
   if (typeof ax.tree !== "string") return null;
   const summary = typeof result.summary === "string" ? result.summary
     : typeof result.error === "string" ? result.error : "";
-  const count = typeof ax.element_count === "number" ? ` · ${ax.element_count} 个元素` : "";
-  const truncated = ax.truncated === true ? " · 内容已截断" : "";
-  return `${summary ? `${summary}\n\n` : ""}AX Tree · 紧凑文本树${count}${truncated}\n${ax.tree || "未返回可用的界面元素"}`;
+  const count = typeof ax.element_count === "number" ? tr(" · {0} 个元素", { 0: ax.element_count }) : "";
+  const truncated = ax.truncated === true ? tr(" · 内容已截断") : "";
+  return tr("{0}AX Tree · 紧凑文本树{1}{2}\n{3}", { 0: summary ? `${summary}\n\n` : "", 1: count, 2: truncated, 3: ax.tree || tr("未返回可用的界面元素") });
 }
 
 export function parseChecklistResult(value: unknown): ChecklistResult[] {

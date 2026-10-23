@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { useState } from "react";
 import { ChevronDown, FileDiff, RotateCcw } from "lucide-react";
 import { readFileEditSummary } from "./fileEditSummary";
@@ -43,23 +44,21 @@ export function FileEditSummaryCard({ item, onUndo, onOpenReview }: {
   };
 
   return (
-    <article className="file-edit-summary" aria-label={item.title ?? `已编辑 ${summary.files.length} 个文件`}>
+    <article className="file-edit-summary" aria-label={item.title ?? tr("已编辑 {0} 个文件", { 0: summary.files.length })}>
       <header className="file-edit-summary-header">
         <span className="file-edit-summary-icon" aria-hidden="true"><FileDiff /></span>
         <span className="file-edit-summary-title">
-          <strong>已编辑 {summary.files.length} 个文件</strong>
+          <strong>{tr("已编辑 ")}{summary.files.length}{tr(" 个文件")}</strong>
           <StatPair added={summary.added} removed={summary.removed} />
         </span>
         <span className="file-edit-summary-actions">
           {onUndo && (
             <button type="button" className="file-edit-summary-undo" disabled={undoBusy} onClick={undo}>
-              {undoBusy ? "正在撤销" : "撤销"}
+              {undoBusy ? tr("正在撤销") : tr("撤销")}
               <RotateCcw />
             </button>
           )}
-          <button type="button" className="file-edit-summary-review" onClick={() => onOpenReview?.({ path: null, all: true })}>
-            查看变更
-          </button>
+          <button type="button" className="file-edit-summary-review" onClick={() => onOpenReview?.({ path: null, all: true })}>{tr("查看变更")}</button>
         </span>
       </header>
       {undoError && <p className="file-edit-summary-error">{undoError}</p>}
@@ -77,9 +76,7 @@ export function FileEditSummaryCard({ item, onUndo, onOpenReview }: {
         ))}
       </div>
       {hiddenCount > 0 && (
-        <button type="button" className="file-edit-summary-more" onClick={() => setNamesExpanded(true)}>
-          再显示 {hiddenCount} 个文件
-          <ChevronDown />
+        <button type="button" className="file-edit-summary-more" onClick={() => setNamesExpanded(true)}>{tr("再显示 ")}{hiddenCount}{tr(" 个文件")}<ChevronDown />
         </button>
       )}
     </article>

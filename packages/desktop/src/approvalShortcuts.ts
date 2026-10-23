@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import type { ApprovalShortcutPreferences, ChatItem, SessionViewState } from "./types";
 
 export const APPROVE_SHORTCUT = "Ctrl+Alt+Shift+F9";
@@ -113,7 +114,7 @@ export function bindApprovalShortcuts(
       }
       if (!disposed) { armed = true; onError(null); }
     } catch (error) {
-      if (!disposed) onError(`权限快捷键注册失败，可在设置 → 常规 → 权限快捷键中更换按键：${error instanceof Error ? error.message : String(error)}`);
+      if (!disposed) onError(tr("权限快捷键注册失败，可在设置 → 常规 → 权限快捷键中更换按键：{0}", { 0: error instanceof Error ? error.message : String(error) }));
     } finally {
       if (disposed || registered.length !== bindings.length) await unregister();
     }

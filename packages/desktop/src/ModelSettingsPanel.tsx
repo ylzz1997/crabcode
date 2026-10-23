@@ -1,3 +1,6 @@
+import { configurationSourceLabel } from "./i18n";
+import { getLocale } from "./i18n";
+import { t as tr, localized } from "./i18n";
 import {
   AlertTriangle,
   Bot,
@@ -52,7 +55,7 @@ const FORMAT_OPTIONS: Array<{ value: string; label: string }> = [
 
 const FORMAT_LABELS = new Map(FORMAT_OPTIONS.map((option) => [option.value, option.label]));
 
-const DETAIL_FIELDS: Array<{ key: string; label: string }> = [
+const DETAIL_FIELDS: Array<{ key: string; label: string }> = localized([
   { key: "provider", label: "Provider" },
   { key: "model", label: "模型 ID" },
   { key: "base_url", label: "Base URL" },
@@ -70,14 +73,14 @@ const DETAIL_FIELDS: Array<{ key: string; label: string }> = [
   { key: "request_max_retries", label: "请求建立重试" },
   { key: "max_retries", label: "流中断重连" },
   { key: "unbounded_connection_retries", label: "连接失败持续重连" },
-];
+]);
 
 const EDIT_FIELDS: Array<{
   key: string;
   label: string;
   type?: "number" | "boolean" | "select" | "json";
   options?: Array<string | { value: string; label: string }>;
-}> = [
+}> = localized([
   { key: "provider", label: "Provider" },
   { key: "model", label: "模型 ID" },
   { key: "base_url", label: "Base URL" },
@@ -108,7 +111,7 @@ const EDIT_FIELDS: Array<{
   { key: "azure_deployment", label: "Azure Deployment" },
   { key: "http_headers", label: "HTTP Headers（JSON）", type: "json" },
   { key: "extra_body", label: "Extra Body（JSON）", type: "json" },
-];
+]);
 
 type EditorTarget = {
   kind: "model" | "group";
@@ -125,11 +128,11 @@ type DeleteTarget = {
 };
 
 function editableSources(data: ModelSettingsResponse | null): ModelSettingsSource[] {
-  return data?.editable_sources ?? [];
+  return (data?.editable_sources ?? []).map(source => ({ ...source, label: configurationSourceLabel(source) }));
 }
 
 function valueText(value: unknown): string {
-  if (typeof value === "boolean") return value ? "开启" : "关闭";
+  if (typeof value === "boolean") return value ? tr("开启") : tr("关闭");
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
@@ -163,7 +166,7 @@ function groupSummary(config: Record<string, unknown>): string {
     .map(valueText);
   if (values.length > 0) return values.join(" · ");
   const fieldCount = Object.keys(config).length;
-  return fieldCount > 0 ? `共享 ${fieldCount} 个字段` : "没有共享字段";
+  return fieldCount > 0 ? tr("共享 {0} 个字段", { 0: fieldCount }) : tr("没有共享字段");
 }
 
 export function groupModelSettings(
@@ -178,11 +181,11 @@ export function groupModelSettings(
     groups.get(model.group)!.push(model);
   });
 
-  const needle = query.trim().toLocaleLowerCase("zh-CN");
+  const needle = query.trim().toLocaleLowerCase(getLocale());
   return Array.from(groups, ([name, models]) => {
     const config = name ? data.groups[name] ?? {} : {};
-    const groupMatches = !needle || (name ?? "未分组").toLocaleLowerCase("zh-CN").includes(needle)
-      || JSON.stringify(config).toLocaleLowerCase("zh-CN").includes(needle);
+    const groupMatches = !needle || (name ?? tr("未分组")).toLocaleLowerCase(getLocale()).includes(needle)
+      || JSON.stringify(config).toLocaleLowerCase(getLocale()).includes(needle);
     return {
       name,
       config,
@@ -190,14 +193,14 @@ export function groupModelSettings(
         ? models
         : models.filter((model) => (
           `${model.name} ${JSON.stringify(model.configured)} ${JSON.stringify(model.effective)}`
-            .toLocaleLowerCase("zh-CN")
+            .toLocaleLowerCase(getLocale())
             .includes(needle)
         )),
     };
   }).filter((group) => {
     if (!needle) return group.models.length > 0 || group.name !== null;
-    const groupMatches = (group.name ?? "未分组").toLocaleLowerCase("zh-CN").includes(needle)
-      || JSON.stringify(group.config).toLocaleLowerCase("zh-CN").includes(needle);
+    const groupMatches = (group.name ?? tr("未分组")).toLocaleLowerCase(getLocale()).includes(needle)
+      || JSON.stringify(group.config).toLocaleLowerCase(getLocale()).includes(needle);
     return groupMatches || group.models.length > 0;
   });
 }
@@ -222,7 +225,7 @@ function DetailOrigin({ model, groupConfig }: {
             <span>{label}</span>
             <strong title={displayValue}>{shownValue}</strong>
             <small className={configured ? "override" : inherited ? "inherited" : "default"}>
-              {configured ? "模型覆盖" : inherited ? `继承 ${model.group}` : hasEffectiveValue ? "默认值" : "未配置"}
+              {configured ? tr("模型覆盖") : inherited ? tr("继承 {0}", { 0: model.group }) : hasEffectiveValue ? tr("默认值") : tr("未配置")}
             </small>
           </div>
         );
@@ -276,7 +279,7 @@ function ModelSettingsEditor({
     event.preventDefault();
     const trimmedName = name.trim();
     if (!trimmedName) {
-      setError("名称不能为空");
+      setError(tr("名称不能为空"));
       return;
     }
     const config: Record<string, unknown> = {};
@@ -304,12 +307,12 @@ function ModelSettingsEditor({
         }
         if (field.type === "number") {
           const parsed = Number(raw);
-          if (!Number.isFinite(parsed)) throw new Error(`${field.label}必须是数字`);
+          if (!Number.isFinite(parsed)) throw new Error(tr("{0}必须是数字", { 0: field.label }));
           config[field.key] = parsed;
         } else if (field.type === "json") {
           const parsed = JSON.parse(raw);
           if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error(`${field.label}必须是 JSON 对象`);
+            throw new Error(tr("{0}必须是 JSON 对象", { 0: field.label }));
           }
           config[field.key] = parsed;
         } else {
@@ -345,24 +348,24 @@ function ModelSettingsEditor({
     <div className="model-editor-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !saving) onClose();
     }}>
-      <form className="model-editor" role="dialog" aria-modal="true" aria-label={target.kind === "model" ? "模型编辑器" : "配置组编辑器"} onSubmit={submit}>
+      <form className="model-editor" role="dialog" aria-modal="true" aria-label={target.kind === "model" ? tr("模型编辑器") : tr("配置组编辑器")} onSubmit={submit}>
         <header>
           <div>
-            <strong>{target.originalName ? "编辑" : "新增"}{target.kind === "model" ? "模型" : "配置组"}</strong>
-            <small>写入 {sourceLabel}</small>
+            <strong>{target.originalName ? tr("编辑") : tr("新增")}{target.kind === "model" ? tr("模型") : tr("配置组")}</strong>
+            <small>{tr("写入 ")}{sourceLabel}</small>
           </div>
-          <button className="icon-button small" type="button" aria-label="关闭编辑器" title="关闭" onClick={onClose} disabled={saving}><X /></button>
+          <button className="icon-button small" type="button" aria-label={tr("关闭编辑器")} title={tr("关闭")} onClick={onClose} disabled={saving}><X /></button>
         </header>
         <div className="model-editor-body">
           <label className="model-editor-field model-editor-name">
-            <span>名称</span>
+            <span>{tr("名称")}</span>
             <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
           </label>
           {target.kind === "model" && (
             <label className="model-editor-field">
-              <span>配置组</span>
+              <span>{tr("配置组")}</span>
               <select value={group} onChange={(event) => setGroup(event.target.value)}>
-                <option value="">不使用配置组</option>
+                <option value="">{tr("不使用配置组")}</option>
                 {groupNames.map((groupName) => <option value={groupName} key={groupName}>{groupName}</option>)}
               </select>
             </label>
@@ -384,7 +387,7 @@ function ModelSettingsEditor({
                   <label className="model-editor-field" key={field.key}>
                     <span>{field.label}</span>
                     <select value={typeof value === "string" ? value : ""} onChange={(event) => setValue(field.key, event.target.value)}>
-                      <option value="">未设置</option>
+                      <option value="">{tr("未设置")}</option>
                       {field.options?.map((option) => (
                         <option value={optionValue(option)} key={optionValue(option)}>{optionLabel(option)}</option>
                       ))}
@@ -410,10 +413,10 @@ function ModelSettingsEditor({
           {error && <div className="settings-inline-note model-settings-error"><AlertTriangle />{error}</div>}
         </div>
         <footer>
-          <button className="settings-command" type="button" onClick={onClose} disabled={saving}>取消</button>
+          <button className="settings-command" type="button" onClick={onClose} disabled={saving}>{tr("取消")}</button>
           <button className="settings-command primary" type="submit" disabled={saving}>
             {saving ? <LoaderCircle className="spin" /> : <Save />}
-            <span>{saving ? "保存中" : "保存"}</span>
+            <span>{saving ? tr("保存中") : tr("保存")}</span>
           </button>
         </footer>
       </form>
@@ -461,7 +464,7 @@ export function ModelSettingsPanel({
       const result = await onTest(selectedName);
       if (generation === testGeneration.current) setTestResult({
         ok: result.ok,
-        message: result.message + (result.ok && result.elapsed_ms !== undefined ? `（${(result.elapsed_ms / 1000).toFixed(1)} 秒）` : ""),
+        message: result.message + (result.ok && result.elapsed_ms !== undefined ? tr("（{0} 秒）", { 0: (result.elapsed_ms / 1000).toFixed(1) }) : ""),
       });
     } catch (reason) {
       if (generation === testGeneration.current) setTestResult({ ok: false, message: reason instanceof Error ? reason.message : String(reason) });
@@ -469,7 +472,7 @@ export function ModelSettingsPanel({
       if (generation === testGeneration.current) setTestBusy(false);
     }
   };
-  const grouped = useMemo(() => data ? groupModelSettings(data, query) : [], [data, query]);
+  const grouped = useMemo(() => data ? groupModelSettings(data, query) : [], [data, query, getLocale()]);
   const visibleModels = grouped.flatMap((group) => group.models);
   const sourceOptions = editableSources(data);
   const canEdit = onlineGateway(gateway)
@@ -573,12 +576,12 @@ export function ModelSettingsPanel({
     <section className="settings-section model-settings-section" aria-labelledby="model-settings-title">
       <div className="settings-section-heading">
         <div>
-          <h2 id="model-settings-title">模型目录</h2>
-          <p>查看并编辑当前 Gateway 的命名模型、配置组与默认模型。</p>
+          <h2 id="model-settings-title">{tr("模型目录")}</h2>
+          <p>{tr("查看并编辑当前 Gateway 的命名模型、配置组与默认模型。")}</p>
         </div>
         <div className="model-settings-heading-actions">
-          {canEdit && <button className="settings-command" type="button" disabled={mutationBusy || !data} onClick={() => setEditor({ kind: "group", name: "", config: {} })}><Plus /><span>新增配置组</span></button>}
-          {canEdit && <button className="settings-command" type="button" disabled={mutationBusy || !data} onClick={() => setEditor({ kind: "model", name: "", config: {} })}><Plus /><span>新增模型</span></button>}
+          {canEdit && <button className="settings-command" type="button" disabled={mutationBusy || !data} onClick={() => setEditor({ kind: "group", name: "", config: {} })}><Plus /><span>{tr("新增配置组")}</span></button>}
+          {canEdit && <button className="settings-command" type="button" disabled={mutationBusy || !data} onClick={() => setEditor({ kind: "model", name: "", config: {} })}><Plus /><span>{tr("新增模型")}</span></button>}
           <button
             className="settings-command model-refresh-command"
             type="button"
@@ -586,32 +589,32 @@ export function ModelSettingsPanel({
             onClick={onRefresh}
           >
             <RefreshCw className={loading ? "spin" : ""} />
-            <span>{loading ? "读取中" : "刷新"}</span>
+            <span>{loading ? tr("读取中") : tr("刷新")}</span>
           </button>
         </div>
       </div>
 
       <div className="model-context-bar">
         <span><Server />Gateway</span>
-        <strong>{activeConnection?.name ?? "未选择"}</strong>
+        <strong>{activeConnection?.name ?? tr("未选择")}</strong>
         <span className="model-context-divider" />
-        <span>项目</span>
-        <strong title={activeProject?.path}>{activeProject?.name ?? "Gateway 默认目录"}</strong>
+        <span>{tr("项目")}</span>
+        <strong title={activeProject?.path}>{activeProject?.name ?? tr("Gateway 默认目录")}</strong>
         {canEdit && sourceOptions.length > 0 && (
           <label className="model-source-picker">
-            <span>写入层</span>
-            <select aria-label="保存到配置层" value={source} onChange={(event) => setSource(event.target.value as ModelSettingsSource["id"])}>
+            <span>{tr("写入层")}</span>
+            <select aria-label={tr("保存到配置层")} value={source} onChange={(event) => setSource(event.target.value as ModelSettingsSource["id"])}>
               {sourceOptions.filter((item) => item.writable).map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}
             </select>
           </label>
         )}
         {data?.default_model && (
-          <><span className="model-context-divider" /><span>默认模型</span><strong>{data.default_model}</strong></>
+          <><span className="model-context-divider" /><span>{tr("默认模型")}</span><strong>{data.default_model}</strong></>
         )}
       </div>
 
       {!online && (
-        <div className="settings-inline-note"><AlertTriangle />连接 Gateway 后才能读取模型配置。</div>
+        <div className="settings-inline-note"><AlertTriangle />{tr("连接 Gateway 后才能读取模型配置。")}</div>
       )}
       {error && (
         <div className="settings-inline-note model-settings-error"><AlertTriangle />{error}</div>
@@ -624,15 +627,15 @@ export function ModelSettingsPanel({
       ))}
 
       {online && loading && !data && (
-        <div className="model-settings-loading"><LoaderCircle className="spin" />正在读取模型配置</div>
+        <div className="model-settings-loading"><LoaderCircle className="spin" />{tr("正在读取模型配置")}</div>
       )}
 
       {online && !loading && !error && data && data.models.length === 0 && (
         <div className="model-settings-empty">
           <Bot />
-          <strong>还没有命名模型</strong>
-          <span>在当前 Gateway 的配置层中添加第一个模型。</span>
-          {canEdit && <button className="settings-command primary" type="button" onClick={() => setEditor({ kind: "model", name: "", config: {} })}><Plus /><span>新增模型</span></button>}
+          <strong>{tr("还没有命名模型")}</strong>
+          <span>{tr("在当前 Gateway 的配置层中添加第一个模型。")}</span>
+          {canEdit && <button className="settings-command primary" type="button" onClick={() => setEditor({ kind: "model", name: "", config: {} })}><Plus /><span>{tr("新增模型")}</span></button>}
         </div>
       )}
 
@@ -641,16 +644,16 @@ export function ModelSettingsPanel({
           <label className="model-settings-search">
             <Search />
             <input
-              aria-label="搜索模型配置"
+              aria-label={tr("搜索模型配置")}
               value={query}
-              placeholder="搜索模型、Provider 或配置组"
+              placeholder={tr("搜索模型、Provider 或配置组")}
               onChange={(event) => setQuery(event.target.value)}
             />
             <span>{visibleModels.length}/{data.models.length}</span>
           </label>
 
           <div className="model-settings-browser">
-            <div className="model-settings-groups" aria-label="模型列表">
+            <div className="model-settings-groups" aria-label={tr("模型列表")}>
               {grouped.map((group) => (
                 <section
                   className={`model-settings-group ${isGroupCollapsed(group.name) ? "is-collapsed" : ""}`}
@@ -668,7 +671,7 @@ export function ModelSettingsPanel({
                       >
                         <span className="model-group-icon"><Layers3 /></span>
                         <span>
-                          <strong>{group.name ?? "未分组"}</strong>
+                          <strong>{group.name ?? tr("未分组")}</strong>
                           <small title={groupSummary(group.config)}>{groupSummary(group.config)}</small>
                         </span>
                         <em>{group.models.length}</em>
@@ -676,8 +679,8 @@ export function ModelSettingsPanel({
                       </button>
                       {canEdit && group.name !== null && (
                         <span className="model-group-actions">
-                          <button className="icon-button small" type="button" aria-label={`编辑配置组 ${group.name}`} title="编辑配置组" disabled={mutationBusy} onClick={() => setEditor({ kind: "group", name: group.name!, originalName: group.name!, config: group.config, source: sourceForGroup(group.name!) })}><Pencil /></button>
-                          <button className="icon-button small danger-icon-button" type="button" aria-label={`删除配置组 ${group.name}`} title="删除配置组" disabled={mutationBusy} onClick={() => setDeleteTarget({ kind: "group", name: group.name!, source: sourceForGroup(group.name!) })}><Trash2 /></button>
+                          <button className="icon-button small" type="button" aria-label={tr("编辑配置组 {0}", { 0: group.name })} title={tr("编辑配置组")} disabled={mutationBusy} onClick={() => setEditor({ kind: "group", name: group.name!, originalName: group.name!, config: group.config, source: sourceForGroup(group.name!) })}><Pencil /></button>
+                          <button className="icon-button small danger-icon-button" type="button" aria-label={tr("删除配置组 {0}", { 0: group.name })} title={tr("删除配置组")} disabled={mutationBusy} onClick={() => setDeleteTarget({ kind: "group", name: group.name!, source: sourceForGroup(group.name!) })}><Trash2 /></button>
                         </span>
                       )}
                     </div>
@@ -687,20 +690,20 @@ export function ModelSettingsPanel({
                       className={selected?.name === model.name ? "active" : ""}
                       type="button"
                       key={model.name}
-                      aria-label={`查看模型 ${model.name}`}
+                      aria-label={tr("查看模型 {0}", { 0: model.name })}
                       onClick={() => setSelectedName(model.name)}
                     >
                       <span>
                         <strong>{model.name}</strong>
                         <small title={modelSummary(model)}>{modelSummary(model)}</small>
                       </span>
-                      {model.is_default && <em><Check />默认</em>}
+                      {model.is_default && <em><Check />{tr("默认")}</em>}
                       <ChevronRight />
                     </button>
                   ))}
                 </section>
               ))}
-              {grouped.length === 0 && <div className="settings-list-empty">没有匹配的模型</div>}
+              {grouped.length === 0 && <div className="settings-list-empty">{tr("没有匹配的模型")}</div>}
             </div>
 
             <div className="model-settings-detail">
@@ -712,60 +715,60 @@ export function ModelSettingsPanel({
                       <strong>{selected.name}</strong>
                       <small>{modelSummary(selected)}</small>
                     </span>
-                    {selected.is_default && <em><Check />默认模型</em>}
+                    {selected.is_default && <em><Check />{tr("默认模型")}</em>}
                     {canEdit && <span className="model-detail-actions">
-                      <button className="icon-button small" type="button" aria-label={`编辑模型 ${selected.name}`} title="编辑模型" disabled={mutationBusy} onClick={() => setEditor({ kind: "model", name: selected.name, originalName: selected.name, config: selected.configured, source: sourceForModel(selected) })}><Pencil /></button>
-                      <button className="icon-button small danger-icon-button" type="button" aria-label={`删除模型 ${selected.name}`} title="删除模型" disabled={mutationBusy} onClick={() => setDeleteTarget({ kind: "model", name: selected.name, source: sourceForModel(selected) })}><Trash2 /></button>
+                      <button className="icon-button small" type="button" aria-label={tr("编辑模型 {0}", { 0: selected.name })} title={tr("编辑模型")} disabled={mutationBusy} onClick={() => setEditor({ kind: "model", name: selected.name, originalName: selected.name, config: selected.configured, source: sourceForModel(selected) })}><Pencil /></button>
+                      <button className="icon-button small danger-icon-button" type="button" aria-label={tr("删除模型 {0}", { 0: selected.name })} title={tr("删除模型")} disabled={mutationBusy} onClick={() => setDeleteTarget({ kind: "model", name: selected.name, source: sourceForModel(selected) })}><Trash2 /></button>
                     </span>}
                   </header>
 
                   <div className="model-detail-commands">
-                    <button className="settings-command" type="button" disabled={!online || !onTest || testBusy || mutationBusy || loading} onClick={() => void testModel()} title="使用已保存配置发送简短请求，可能产生少量模型费用">
-                      {testBusy ? <LoaderCircle className="spin" /> : <Bot />}<span>{testBusy ? "测试中…" : "测试模型"}</span>
+                    <button className="settings-command" type="button" disabled={!online || !onTest || testBusy || mutationBusy || loading} onClick={() => void testModel()} title={tr("使用已保存配置发送简短请求，可能产生少量模型费用")}>
+                      {testBusy ? <LoaderCircle className="spin" /> : <Bot />}<span>{testBusy ? tr("测试中…") : tr("测试模型")}</span>
                     </button>
                     {canEdit && (selected.is_default
-                      ? <button className="settings-command" type="button" disabled={mutationBusy} onClick={() => void setDefaultModel(null)}><X /><span>取消默认模型</span></button>
-                      : <button className="settings-command" type="button" disabled={mutationBusy} onClick={() => void setDefaultModel(selected.name)}><Check /><span>设为默认模型</span></button>)}
+                      ? <button className="settings-command" type="button" disabled={mutationBusy} onClick={() => void setDefaultModel(null)}><X /><span>{tr("取消默认模型")}</span></button>
+                      : <button className="settings-command" type="button" disabled={mutationBusy} onClick={() => void setDefaultModel(selected.name)}><Check /><span>{tr("设为默认模型")}</span></button>)}
                   </div>
                   {testResult && <div role="status" className={`settings-inline-note ${testResult.ok ? "model-test-success" : "model-settings-error"}`}>
                     {testResult.ok ? <Check /> : <AlertTriangle />}{testResult.message}
                   </div>}
 
                   <div className="model-detail-meta">
-                    <div><span>配置组</span><strong>{selected.group ?? "未分组"}</strong></div>
+                    <div><span>{tr("配置组")}</span><strong>{selected.group ?? tr("未分组")}</strong></div>
                     <div>
-                      <span>显式覆盖</span>
-                      <strong>{selected.overridden_fields.length ? selected.overridden_fields.join(", ") : "无"}</strong>
+                      <span>{tr("显式覆盖")}</span>
+                      <strong>{selected.overridden_fields.length ? selected.overridden_fields.join(", ") : tr("无")}</strong>
                     </div>
                   </div>
 
                   <DetailOrigin model={selected} groupConfig={selectedGroup} />
 
                   <details className="model-config-json">
-                    <summary>配置文件中的原始字段</summary>
+                    <summary>{tr("配置文件中的原始字段")}</summary>
                     <pre>{JSON.stringify(selected.configured, null, 2)}</pre>
                   </details>
                   <details className="model-config-json">
-                    <summary>最终生效配置</summary>
+                    <summary>{tr("最终生效配置")}</summary>
                     <pre>{JSON.stringify(selected.effective, null, 2)}</pre>
                   </details>
 
                   {selected.sources.length > 0 && (
                     <div className="model-detail-sources">
-                      <span>配置来源</span>
+                      <span>{tr("配置来源")}</span>
                       {selected.sources.map((source) => <code title={source} key={source}>{compactPath(source)}</code>)}
                     </div>
                   )}
                 </>
               ) : (
-                <div className="settings-list-empty">选择一个模型查看详情</div>
+                <div className="settings-list-empty">{tr("选择一个模型查看详情")}</div>
               )}
             </div>
           </div>
 
           {data.sources.length > 0 && (
             <div className="model-settings-sources">
-              <span>已读取 {data.sources.length} 个配置层</span>
+              <span>{tr("已读取 ")}{data.sources.length}{tr(" 个配置层")}</span>
               <code title={data.cwd}>{data.cwd}</code>
             </div>
           )}
@@ -787,22 +790,22 @@ export function ModelSettingsPanel({
         <div className="model-editor-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !mutationBusy) setDeleteTarget(null);
         }}>
-          <section className="model-editor model-delete-dialog" role="dialog" aria-modal="true" aria-label={`删除${deleteTarget.kind === "model" ? "模型" : "配置组"}`} onKeyDown={(event) => {
+          <section className="model-editor model-delete-dialog" role="dialog" aria-modal="true" aria-label={tr("删除{0}", { 0: deleteTarget.kind === "model" ? tr("模型") : tr("配置组") })} onKeyDown={(event) => {
             if (event.key === "Escape" && !mutationBusy) setDeleteTarget(null);
           }}>
             <header>
               <div>
-                <strong>删除{deleteTarget.kind === "model" ? "模型" : "配置组"}“{deleteTarget.name}”？</strong>
-                <small>从{sourceOptions.find((item) => item.id === deleteTarget.source)?.label ?? deleteTarget.source}移除</small>
+                <strong>{tr("删除")}{deleteTarget.kind === "model" ? tr("模型") : tr("配置组")}“{deleteTarget.name}”？</strong>
+                <small>{tr("从")}{sourceOptions.find((item) => item.id === deleteTarget.source)?.label ?? deleteTarget.source}{tr("移除")}</small>
               </div>
-              <button className="icon-button small" type="button" aria-label="关闭删除确认" title="关闭" disabled={mutationBusy} onClick={() => setDeleteTarget(null)}><X /></button>
+              <button className="icon-button small" type="button" aria-label={tr("关闭删除确认")} title={tr("关闭")} disabled={mutationBusy} onClick={() => setDeleteTarget(null)}><X /></button>
             </header>
             {mutationError && <div className="settings-inline-note model-settings-error" role="alert"><AlertTriangle />{mutationError}</div>}
             <footer>
-              <button className="settings-command" type="button" autoFocus disabled={mutationBusy} onClick={() => setDeleteTarget(null)}>取消</button>
+              <button className="settings-command" type="button" autoFocus disabled={mutationBusy} onClick={() => setDeleteTarget(null)}>{tr("取消")}</button>
               <button className="settings-command danger" type="button" disabled={mutationBusy} onClick={() => void removeEntry()}>
                 {mutationBusy ? <LoaderCircle className="spin" /> : <Trash2 />}
-                <span>{mutationBusy ? "删除中" : "确认删除"}</span>
+                <span>{mutationBusy ? tr("删除中") : tr("确认删除")}</span>
               </button>
             </footer>
           </section>

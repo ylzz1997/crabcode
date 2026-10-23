@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { applyLanguage, useLocale, setLocale, languages } from "./i18n";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -197,6 +198,37 @@ describe("SettingsView", () => {
     onMutateRuntimeSettings: vi.fn().mockResolvedValue(undefined),
     onNewProject: vi.fn(),
     onEditProject: vi.fn(),
+  });
+
+  it("switches all ten languages without remounting unsaved settings", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const handlers = callbacks();
+    function Harness() {
+      useLocale();
+      const [preferences, setPreferences] = useState(settings);
+      return <SettingsView {...handlers} settings={preferences} gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]} activeProject={settings.connections[0].projects[0]}
+        activeSection="general" onSectionChange={vi.fn()} onConversationChange={changes => {
+          setPreferences(current => ({ ...current, ...changes }));
+          applyLanguage(changes.language);
+        }} />;
+    }
+    try {
+      await act(async () => root.render(<Harness />));
+      const python = container.querySelector<HTMLInputElement>('input[aria-label="Python 路径"]')!;
+      act(() => changeInput(python, "/draft/中文 python"));
+      const headings = ["常规", "一般", "General", "一般", "일반", "Allgemein", "Général", "General", "Geral", "Общие"];
+      for (const [index, [language]] of languages.entries()) {
+        const select = container.querySelector<HTMLSelectElement>(".settings-language-select")!;
+        expect(select.options).toHaveLength(11);
+        await act(async () => { select.value = language; select.dispatchEvent(new Event("change", { bubbles: true })); });
+        expect(document.documentElement.lang).toBe(language);
+        expect(container.querySelector(".settings-page-header h1")?.textContent).toBe(headings[index]);
+        expect(python.isConnected).toBe(true);
+        expect(python.value).toBe("/draft/中文 python");
+        expect(select.options[1].textContent).toBe("简体中文");
+      }
+    } finally { act(() => setLocale("zh-CN")); }
   });
 
   it("filters the navigation and opens the first matching section", () => {

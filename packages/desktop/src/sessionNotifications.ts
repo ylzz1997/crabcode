@@ -1,3 +1,4 @@
+import { t as tr, localized } from "./i18n";
 import { isDesktopShell } from "./native";
 
 export type SessionNotifyPhase = "start" | "complete" | "interaction";
@@ -49,14 +50,14 @@ export function sessionNotificationName(liveTitle: string, listedTitle = "", pre
   if (live && live !== "新会话") return live;
   const text = preview.trim();
   if (text) return text.length > 200 ? text.slice(0, 200) : text;
-  return "未命名会话";
+  return tr("未命名会话");
 }
 
-const INTERACTION_LABEL: Record<SessionInteractionKind, string> = {
+const INTERACTION_LABEL: Record<SessionInteractionKind, string> = localized({
   permission: "需要确认权限",
   choice: "需要你的选择",
   plan: "需要确认计划",
-};
+});
 
 function clipNotificationText(value: string): string {
   return value.length > 120 ? `${value.slice(0, 119)}…` : value;
@@ -88,15 +89,15 @@ export function sessionNotificationCopy(
   detail = "",
   interaction?: SessionInteractionKind,
 ): { title: string; body: string } {
-  const session = clipNotificationText(title.trim() || "未命名会话");
+  const session = clipNotificationText(title.trim() || tr("未命名会话"));
   if (phase === "interaction") {
     const prompt = detail.trim();
     return {
-      title: `${interaction ? INTERACTION_LABEL[interaction] : "需要你的操作"} · ${session}`,
+      title: `${interaction ? INTERACTION_LABEL[interaction] : tr("需要你的操作")} · ${session}`,
       body: prompt ? clipNotificationText(prompt) : session,
     };
   }
-  const label = phase === "start" ? "会话开始执行" : "会话执行完毕";
+  const label = phase === "start" ? tr("会话开始执行") : tr("会话执行完毕");
   return {
     title: `${label} · ${session}`,
     body: session,

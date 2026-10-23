@@ -8,6 +8,7 @@ export interface SlashCommandDefinition {
   badge: string;
 }
 export function createSlashCommands(context: {
+  t?: (source: string, values?: Record<string | number, unknown>) => string;
   postMessage: (message: SlashCommandAction) => void;
   showMessage: (text: string) => void;
   shellCommandHelp?: string;

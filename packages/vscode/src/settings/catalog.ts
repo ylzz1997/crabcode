@@ -1,4 +1,5 @@
-export const SECTIONS = [
+import { t as tr, localized, languages } from "../../../shared/i18n/index.js";
+export const SECTIONS = localized([
   {
     id: "general",
     title: "常规",
@@ -35,7 +36,7 @@ export const SECTIONS = [
     icon: "chart",
     description: "查看当前 Gateway 记录的 Token 用量",
   },
-] as const;
+] as const);
 export type Section = (typeof SECTIONS)[number]["id"];
 export type LocalScope = "user" | "workspace" | "folder";
 export interface LocalDefinition {
@@ -49,7 +50,15 @@ export interface LocalDefinition {
   max?: number;
   array?: boolean;
 }
-export const LOCAL_SETTINGS: LocalDefinition[] = [
+export const LOCAL_SETTINGS: LocalDefinition[] = localized([
+  {
+    key: "language",
+    section: "general",
+    title: "界面语言",
+    description: "更改后立即生效，不影响聊天内容或模型回复。",
+    default: "auto",
+    options: [["auto", "跟随系统"], ...languages],
+  },
   {
     key: "autoCollapseProcess",
     section: "general",
@@ -167,19 +176,19 @@ export const LOCAL_SETTINGS: LocalDefinition[] = [
       ["foreground_desktop", "前台桌面（旧版）"],
     ],
   },
-];
+]);
 export const EXTENSION_SETTINGS_QUERY =
   "@ext:crabcode.crabcode @tag:crabcodeExtension";
 export function validateLocalSetting(key: string, value: unknown): void {
   const spec = LOCAL_SETTINGS.find((item) => item.key === key);
-  if (!spec) throw new Error("未知的 CrabCode 设置");
+  if (!spec) throw new Error(tr("未知的 CrabCode 设置"));
   if (value === undefined) return;
   if (typeof spec.default === "boolean") {
-    if (typeof value !== "boolean") throw new Error("设置值必须是开关");
+    if (typeof value !== "boolean") throw new Error(tr("设置值必须是开关"));
     return;
   }
   if (spec.options && !spec.options.some((option) => option[0] === value))
-    throw new Error("无效的设置选项");
+    throw new Error(tr("无效的设置选项"));
   if (
     spec.min !== undefined &&
     (typeof value !== "number" ||
@@ -187,18 +196,18 @@ export function validateLocalSetting(key: string, value: unknown): void {
       value < spec.min ||
       value > spec.max!)
   )
-    throw new Error(`请输入 ${spec.min}–${spec.max} 之间的整数`);
+    throw new Error(tr("请输入 {0}–{1} 之间的整数", { 0: spec.min, 1: spec.max }));
   if (
     spec.array &&
     (!Array.isArray(value) ||
       !value.every((item) => typeof item === "string" && item.trim()))
   )
-    throw new Error("模型列表需要非空的模型名称");
+    throw new Error(tr("模型列表需要非空的模型名称"));
   if (
     !spec.options &&
     !spec.array &&
     spec.min === undefined &&
     typeof value !== "string"
   )
-    throw new Error("设置值必须是文本");
+    throw new Error(tr("设置值必须是文本"));
 }

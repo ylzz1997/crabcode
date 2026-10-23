@@ -1,3 +1,4 @@
+import { t as tr, normalizeLanguage } from "./i18n";
 import { normalizeVmConfig } from "./virtualMachine";
 import { DEFAULT_APPROVAL_SHORTCUTS, normalizeApprovalShortcuts } from "./approvalShortcuts";
 import { invoke } from "@tauri-apps/api/core";
@@ -89,14 +90,15 @@ function normalizeGatewayInstallFeatures(selection: GatewayInstallSelection): Ga
   };
   const requested = typeof selection === "string" ? legacyFeatures[selection] : selection;
   const supported: readonly GatewayInstallFeature[] = GATEWAY_INSTALL_FEATURES;
-  if (!requested) throw new Error("未知的 CrabCode 套件");
+  if (!requested) throw new Error(tr("未知的 CrabCode 套件"));
   for (const feature of requested) {
-    if (!supported.includes(feature)) throw new Error(`未知的 CrabCode 可选能力：${feature}`);
+    if (!supported.includes(feature)) throw new Error(tr("未知的 CrabCode 可选能力：{0}", { 0: feature }));
   }
   return supported.filter((feature) => requested.includes(feature));
 }
 
 const DEFAULT_SETTINGS: DesktopSettings = {
+  language: "auto",
   schema_version: 4,
   active_connection_id: "local",
   connection_order: ["local"],
@@ -330,6 +332,7 @@ export function normalizeSettings(raw: DesktopSettings): DesktopSettings {
   const normalized = {
     ...raw,
     schema_version: 4,
+    language: normalizeLanguage(raw.language),
     theme_mode: themeMode,
     active_theme_id: activeThemeId,
     custom_theme_presets: customThemes,
@@ -495,18 +498,18 @@ export async function authenticateConnection(
     });
   }
   const infoResponse = await fetch(new URL("auth/info", normalizeBaseUrl(baseUrl)));
-  if (!infoResponse.ok) throw new Error(`认证信息请求失败 (${infoResponse.status})`);
+  if (!infoResponse.ok) throw new Error(tr("认证信息请求失败 ({0})", { 0: infoResponse.status }));
   const info = await infoResponse.json() as { mode: string; methods: string[] };
   if (info.mode === "none") return { access_token: null, expires_in: 0, mode: "none" };
-  if (!credentialRef) throw new Error("此 Gateway 需要密码");
+  if (!credentialRef) throw new Error(tr("此 Gateway 需要密码"));
   const password = sessionStorage.getItem(`crabcode.credential.${credentialRef}`);
-  if (!password) throw new Error("当前浏览器标签页没有保存密码，请重新编辑连接");
+  if (!password) throw new Error(tr("当前浏览器标签页没有保存密码，请重新编辑连接"));
   const response = await fetch(new URL("auth/token", normalizeBaseUrl(baseUrl)), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ grant_type: "password", password }),
   });
-  if (!response.ok) throw new Error(`Gateway 拒绝了密码 (${response.status})`);
+  if (!response.ok) throw new Error(tr("Gateway 拒绝了密码 ({0})", { 0: response.status }));
   const token = await response.json() as { access_token: string; expires_in: number };
   return { ...token, mode: info.mode };
 }
@@ -524,7 +527,7 @@ export async function ensureLocalGateway(
       started_by_desktop: false,
       python: null,
       version: null,
-      message: "浏览器版不会自动启动 Gateway",
+      message: tr("浏览器版不会自动启动 Gateway"),
     };
   }
   const operationId = randomUuid();
@@ -566,7 +569,7 @@ export async function installGatewaySuite(
   selection: GatewayInstallSelection,
   onProgress?: (progress: GatewaySuiteInstallProgress) => void,
 ): Promise<GatewaySuiteInstallResult> {
-  if (!isDesktopShell()) throw new Error("CrabCode 套件只能由桌面应用安装");
+  if (!isDesktopShell()) throw new Error(tr("CrabCode 套件只能由桌面应用安装"));
   const features = normalizeGatewayInstallFeatures(selection);
   const operationId = randomUuid();
   const unlisten = onProgress
@@ -591,7 +594,7 @@ export async function installSystemTool(
   tool: SystemTool,
   onProgress?: (progress: SystemToolInstallProgress) => void,
 ): Promise<SystemToolInstallResult> {
-  if (!isDesktopShell()) throw new Error("系统工具只能由桌面应用安装");
+  if (!isDesktopShell()) throw new Error(tr("系统工具只能由桌面应用安装"));
   const operationId = randomUuid();
   const unlisten = onProgress
     ? await listen<SystemToolInstallProgress>("system-tool-install-progress", (event) => {
@@ -625,14 +628,14 @@ export interface LumeInstallProgress {
 }
 
 export async function getLumeInstallStatus(): Promise<LumeInstallStatus> {
-  if (!isDesktopShell()) throw new Error("Lume 状态只能在桌面应用中读取");
+  if (!isDesktopShell()) throw new Error(tr("Lume 状态只能在桌面应用中读取"));
   return invoke<LumeInstallStatus>("lume_install_status");
 }
 
 export async function installLume(
   onProgress?: (progress: LumeInstallProgress) => void,
 ): Promise<LumeInstallStatus> {
-  if (!isDesktopShell()) throw new Error("Lume 只能由桌面应用安装");
+  if (!isDesktopShell()) throw new Error(tr("Lume 只能由桌面应用安装"));
   const operationId = randomUuid();
   const unlisten = onProgress
     ? await listen<LumeInstallProgress>("lume-install-progress", (event) => {
@@ -651,7 +654,7 @@ export async function installDocumentEngine(
   bundle: string | null = null,
   onProgress?: (progress: DocumentEngineInstallProgress) => void,
 ): Promise<Record<string, unknown>> {
-  if (!isDesktopShell()) throw new Error("高精度 PDF 引擎只能由桌面应用安装");
+  if (!isDesktopShell()) throw new Error(tr("高精度 PDF 引擎只能由桌面应用安装"));
   const operationId = randomUuid();
   const unlisten = onProgress
     ? await listen<DocumentEngineInstallProgress>("document-engine-install-progress", (event) => {
@@ -679,19 +682,19 @@ export interface DocumentEngineInstallProgress {
 export async function getDocumentEngineStatus(
   pythonPath: string | null,
 ): Promise<DocumentPreciseEngineStatus> {
-  if (!isDesktopShell()) throw new Error("高精度 PDF 引擎状态只能在桌面应用中读取");
+  if (!isDesktopShell()) throw new Error(tr("高精度 PDF 引擎状态只能在桌面应用中读取"));
   return invoke<DocumentPreciseEngineStatus>("document_engine_status", { pythonPath });
 }
 
 export async function removeDocumentEngine(pythonPath: string | null): Promise<Record<string, unknown>> {
-  if (!isDesktopShell()) throw new Error("高精度 PDF 引擎只能由桌面应用删除");
+  if (!isDesktopShell()) throw new Error(tr("高精度 PDF 引擎只能由桌面应用删除"));
   return invoke<Record<string, unknown>>("remove_document_engine", { pythonPath });
 }
 
 export function normalizeBaseUrl(raw: string): string {
   const url = new URL(raw.trim());
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Gateway 地址必须使用 http:// 或 https://");
+    throw new Error(tr("Gateway 地址必须使用 http:// 或 https://"));
   }
   url.search = "";
   url.hash = "";

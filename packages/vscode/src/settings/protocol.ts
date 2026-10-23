@@ -7,6 +7,7 @@ export interface LocalValue {
   folder?: unknown;
 }
 export interface SettingsSnapshot {
+  locale?: import("../../../shared/i18n/index.js").Locale;
   generation: number;
   cwd?: string;
   gateway: string;

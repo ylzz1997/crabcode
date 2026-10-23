@@ -5,6 +5,15 @@ extension connects to a CrabCode Gateway, providing streaming chat, code-aware
 actions, session management, permission prompts, file-change review, and
 checkpoint recovery without leaving the editor.
 
+## Display language
+
+CrabCode supports Simplified Chinese, Traditional Chinese, English, Japanese, Korean,
+German, French, Spanish, Brazilian Portuguese, and Russian. It follows VS Code's
+display language by default. Choose **CrabCode Settings → General → Display language**
+or set `crabcode.language` to override the product UI. Changes preserve the current
+session and unsent composer text/attachments. Native commands and extension settings
+follow VS Code's own display language. Translation catalogs are included in the extension.
+
 ## Requirements
 
 - Visual Studio Code 1.85.0 or later.

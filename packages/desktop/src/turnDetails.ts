@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr } from "./i18n";
 import type { ChatItem } from "./types";
 
 export interface TurnDetails {
@@ -50,23 +52,23 @@ export function withClientTurnDetails(items: ChatItem[], sessionId: string, busy
 }
 
 export function turnDetailRows(details: TurnDetails): [string, string][] {
-  const count = (value: number | null | undefined) => value == null ? "未记录" : `${value.toLocaleString("zh-CN")} 次`;
+  const count = (value: number | null | undefined) => value == null ? tr("未记录") : tr("{0} 次", { 0: value.toLocaleString(getLocale()) });
   const time = (value: string | null | undefined) => value && Number.isFinite(Date.parse(value))
-    ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "未记录";
-  const reasons: Record<string, string> = { end_turn: "正常结束", stop: "正常结束", interrupted: "已中断", max_turns_reached: "达到轮数上限", empty_response: "空回复", mode_switch_requested: "切换模式" };
+    ? new Date(value).toLocaleString(getLocale(), { hour12: false }) : tr("未记录");
+  const reasons: Record<string, string> = { end_turn: tr("正常结束"), stop: tr("正常结束"), interrupted: tr("已中断"), max_turns_reached: tr("达到轮数上限"), empty_response: tr("空回复"), mode_switch_requested: tr("切换模式") };
   const usage = details.usage ?? {};
-  const token = (value: unknown) => typeof value === "number" ? value.toLocaleString("zh-CN") : "未记录";
+  const token = (value: unknown) => typeof value === "number" ? value.toLocaleString(getLocale()) : tr("未记录");
   return [
-    ["启动时间", time(details.started_at)], ["结束时间", time(details.ended_at)],
-    ["耗时", details.duration_ms == null ? "未记录" : `${(details.duration_ms / 1000).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 秒`],
-    ["工具调用次数", count(details.tool_call_count)], ["思考次数", count(details.thinking_count)],
-    ["模型请求次数", count(details.request_count)], ["重试次数", count(details.retry_count)],
-    ["压缩次数", count(details.compact_count)],
-    ["模型", [details.provider, details.model].filter(Boolean).join(" / ") || "未记录"],
-    ["结束原因", details.reason ? reasons[details.reason] ?? details.reason : "未记录"],
-    ["输入 tokens", token(usage.total_input_tokens ?? usage.input_tokens)],
-    ["输出 tokens", token(usage.output_tokens)],
-    ["缓存读取 tokens", token(usage.cache_read_tokens)],
-    ["缓存写入 tokens", token(usage.cache_write_tokens)],
+    [tr("启动时间"), time(details.started_at)], [tr("结束时间"), time(details.ended_at)],
+    [tr("耗时"), details.duration_ms == null ? tr("未记录") : tr("{0} 秒", { 0: (details.duration_ms / 1000).toLocaleString(getLocale(), { maximumFractionDigits: 2 }) })],
+    [tr("工具调用次数"), count(details.tool_call_count)], [tr("思考次数"), count(details.thinking_count)],
+    [tr("模型请求次数"), count(details.request_count)], [tr("重试次数"), count(details.retry_count)],
+    [tr("压缩次数"), count(details.compact_count)],
+    [tr("模型"), [details.provider, details.model].filter(Boolean).join(" / ") || tr("未记录")],
+    [tr("结束原因"), details.reason ? reasons[details.reason] ?? details.reason : tr("未记录")],
+    [tr("输入 tokens"), token(usage.total_input_tokens ?? usage.input_tokens)],
+    [tr("输出 tokens"), token(usage.output_tokens)],
+    [tr("缓存读取 tokens"), token(usage.cache_read_tokens)],
+    [tr("缓存写入 tokens"), token(usage.cache_write_tokens)],
   ];
 }

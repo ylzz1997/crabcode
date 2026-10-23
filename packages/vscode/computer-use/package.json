@@ -1,20 +1,36 @@
 {
   "name": "crabcode-computer-use",
   "displayName": "CrabCode Computer Use",
-  "description": "Local Computer Use companion for CrabCode in local and remote workspaces",
+  "description": "%description%",
   "publisher": "crabcode",
   "version": "0.1.6",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/ylzz1997/crabcode.git", "directory": "packages/vscode/computer-use" },
-  "engines": { "vscode": "^1.85.0" },
-  "extensionKind": ["ui"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ylzz1997/crabcode.git",
+    "directory": "packages/vscode/computer-use"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
   "main": "./dist/extension.js",
-  "activationEvents": ["onCommand:crabcode.computerUse.configureLocal", "onCommand:crabcode.computerUse.disposeLocal", "onCommand:crabcode.computerUse.local"],
+  "activationEvents": [
+    "onCommand:crabcode.computerUse.configureLocal",
+    "onCommand:crabcode.computerUse.disposeLocal",
+    "onCommand:crabcode.computerUse.local"
+  ],
   "scripts": {
-    "build": "node esbuild.cjs",
+    "build": "node ../../../scripts/i18n.mjs && node esbuild.cjs",
     "computer-use:build": "node ../../computer-use/scripts/build.mjs --out resources/computer-use --sync-local-clients",
     "vscode:prepublish": "npm run build"
   },
-  "dependencies": { "ws": "^8.18.0" },
-  "devDependencies": { "esbuild": "^0.25.0" }
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
 }

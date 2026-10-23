@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { useCallback, useRef, useState } from "react";
 import { getLumeInstallStatus, installLume, type LumeInstallProgress, type LumeInstallStatus } from "./native";
 
@@ -30,10 +31,10 @@ export function useLumeInstaller(onInstalled?: () => void) {
     installing.current = true;
     generation.current++;
     setChecking(false); setBusy(true); setError(null);
-    setProgress({ operationId: "pending", stage: "preparing", detail: "正在准备安装 Lume", percent: 3 });
+    setProgress({ operationId: "pending", stage: "preparing", detail: tr("正在准备安装 Lume"), percent: 3 });
     try {
       const result = await installLume(next => setProgress({ ...next, percent: Math.max(0, Math.min(100, next.percent)) }));
-      if (!result.available) throw new Error(result.reason || "Lume 安装后验证失败");
+      if (!result.available) throw new Error(result.reason || tr("Lume 安装后验证失败"));
       setStatus(result);
       onInstalled?.();
     } catch (reason) {

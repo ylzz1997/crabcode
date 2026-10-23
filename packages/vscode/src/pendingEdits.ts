@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import * as path from "path";
 import * as vscode from "vscode";
 import { Buffer } from "buffer";
@@ -523,7 +524,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     this.syncVirtualDocuments(change);
     this.updatePresentation();
     await this.revealChange(change);
-    vscode.window.setStatusBarMessage(`CrabCode：待确认 ${change.shortPath}`, 3000);
+    vscode.window.setStatusBarMessage(tr("CrabCode：待确认 {0}", { 0: change.shortPath }), 3000);
   }
 
   private resolveToolFilePaths(toolName: string, input: Record<string, unknown>): string[] {
@@ -596,7 +597,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         description: change.action === "create" ? "new file" : change.action === "delete" ? "deleted file" : `${formatStats(change.stats)}`,
         changeId: change.id,
       })),
-      { title: "CrabCode：选择要查看的文件 diff" },
+      { title: tr("CrabCode：选择要查看的文件 diff") },
     );
     if (picked) {
       await this.reviewFile(picked.changeId);
@@ -608,7 +609,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     if (!change) {
       return;
     }
-    if (!(await this.confirmIfDrifted(change, "撤销"))) {
+    if (!(await this.confirmIfDrifted(change, tr("撤销")))) {
       return;
     }
 
@@ -623,7 +624,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     if (update) {
       this.updatePresentation();
     }
-    vscode.window.setStatusBarMessage(`CrabCode：已撤销 ${change.shortPath}`, 3000);
+    vscode.window.setStatusBarMessage(tr("CrabCode：已撤销 {0}", { 0: change.shortPath }), 3000);
   }
 
   private keepFile(changeId: string, update = true): void {
@@ -635,7 +636,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     if (update) {
       this.updatePresentation();
     }
-    vscode.window.setStatusBarMessage(`CrabCode：已保留 ${change.shortPath}`, 3000);
+    vscode.window.setStatusBarMessage(tr("CrabCode：已保留 {0}", { 0: change.shortPath }), 3000);
   }
 
   private async reviewFile(changeId: string): Promise<void> {
@@ -742,11 +743,11 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     const change = this.changes.get(changeId);
     const hunk = change?.hunks.find((candidate) => candidate.id === hunkId);
     if (!change) {
-      vscode.window.showWarningMessage("CrabCode：这个待确认修改已不存在或已处理。");
+      vscode.window.showWarningMessage(tr("CrabCode：这个待确认修改已不存在或已处理。"));
       return;
     }
     if (!hunk) {
-      vscode.window.showWarningMessage(`CrabCode：${change.shortPath} 的这个 block 已不存在或已处理。`);
+      vscode.window.showWarningMessage(tr("CrabCode：{0} 的这个 block 已不存在或已处理。", { 0: change.shortPath }));
       return;
     }
 
@@ -764,10 +765,10 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         this.recomputeChange(change);
         this.updatePresentation();
         await this.revealChange(change, true);
-        vscode.window.setStatusBarMessage(`CrabCode：已撤销 ${change.shortPath} 的 block`, 3000);
+        vscode.window.setStatusBarMessage(tr("CrabCode：已撤销 {0} 的 block", { 0: change.shortPath }), 3000);
         return;
       }
-      vscode.window.showWarningMessage(`CrabCode：无法撤销，文件不存在：${change.shortPath}`);
+      vscode.window.showWarningMessage(tr("CrabCode：无法撤销，文件不存在：{0}", { 0: change.shortPath }));
       return;
     }
 
@@ -776,7 +777,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     const start = findHunkStart(lines, hunk);
     if (start < 0) {
       vscode.window.showWarningMessage(
-        `CrabCode：${change.shortPath} 已被继续修改，无法精确撤销这个 block。`,
+        tr("CrabCode：{0} 已被继续修改，无法精确撤销这个 block。", { 0: change.shortPath }),
       );
       return;
     }
@@ -789,18 +790,18 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     this.recomputeChange(change);
     this.updatePresentation();
     await this.revealChange(change, true);
-    vscode.window.setStatusBarMessage(`CrabCode：已撤销 ${change.shortPath} 的 block`, 3000);
+    vscode.window.setStatusBarMessage(tr("CrabCode：已撤销 {0} 的 block", { 0: change.shortPath }), 3000);
   }
 
   private async keepHunk(changeId: string, hunkId: string): Promise<void> {
     const change = this.changes.get(changeId);
     const hunk = change?.hunks.find((candidate) => candidate.id === hunkId);
     if (!change) {
-      vscode.window.showWarningMessage("CrabCode：这个待确认修改已不存在或已处理。");
+      vscode.window.showWarningMessage(tr("CrabCode：这个待确认修改已不存在或已处理。"));
       return;
     }
     if (!hunk) {
-      vscode.window.showWarningMessage(`CrabCode：${change.shortPath} 的这个 block 已不存在或已处理。`);
+      vscode.window.showWarningMessage(tr("CrabCode：{0} 的这个 block 已不存在或已处理。", { 0: change.shortPath }));
       return;
     }
 
@@ -815,7 +816,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     }
     this.recomputeChange(change);
     this.updatePresentation();
-    vscode.window.setStatusBarMessage(`CrabCode：已保留 ${change.shortPath} 的 block`, 3000);
+    vscode.window.setStatusBarMessage(tr("CrabCode：已保留 {0} 的 block", { 0: change.shortPath }), 3000);
   }
 
   private async confirmIfDrifted(change: PendingChange, verb: string): Promise<boolean> {
@@ -825,12 +826,12 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       return true;
     }
     const choice = await vscode.window.showWarningMessage(
-      `CrabCode：${change.shortPath} 在生成后又被修改过，仍然${verb}会覆盖这些改动。`,
+      tr("CrabCode：{0} 在生成后又被修改过，仍然{1}会覆盖这些改动。", { 0: change.shortPath, 1: verb }),
       { modal: true },
-      `仍然${verb}`,
-      "取消",
+      tr("仍然{0}", { 0: verb }),
+      tr("取消"),
     );
-    return choice === `仍然${verb}`;
+    return choice === tr("仍然{0}", { 0: verb });
   }
 
   private recomputeChange(change: PendingChange): void {

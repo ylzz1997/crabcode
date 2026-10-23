@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import desktopPackage from "../package.json";
 import {
@@ -47,7 +48,7 @@ function object(value: unknown): Record<string, unknown> | null {
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const allowedSet = new Set(allowed);
   const unexpected = Object.keys(value).find((key) => !allowedSet.has(key));
-  if (unexpected) throw new Error(`${label} 包含不支持的字段：${unexpected}`);
+  if (unexpected) throw new Error(tr("{0} 包含不支持的字段：{1}", { 0: label, 1: unexpected }));
 }
 
 export function compareVersions(left: string, right: string): number {
@@ -56,7 +57,7 @@ export function compareVersions(left: string, right: string): number {
 
 function ensureCompatible(theme: ThemePreset): void {
   if (compareVersions(theme.minimum_app_version, desktopPackage.version) > 0) {
-    throw new Error(`此主题需要 Crab Desktop ${theme.minimum_app_version} 或更高版本；当前版本是 ${desktopPackage.version}`);
+    throw new Error(tr("此主题需要 Crab Desktop {0} 或更高版本；当前版本是 {1}", { 0: theme.minimum_app_version, 1: desktopPackage.version }));
   }
 }
 
@@ -67,19 +68,19 @@ export function serializeThemeDocument(theme: ThemePreset): string {
 }
 
 export function parseThemeDocument(text: string): ThemePreset {
-  if (new TextEncoder().encode(text).byteLength > MAX_THEME_BYTES) throw new Error("主题文件不能超过 256 KiB");
+  if (new TextEncoder().encode(text).byteLength > MAX_THEME_BYTES) throw new Error(tr("主题文件不能超过 256 KiB"));
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error("主题文件不是有效的 JSON");
+    throw new Error(tr("主题文件不是有效的 JSON"));
   }
   const document = object(parsed);
-  if (!document) throw new Error("主题文件根节点必须是对象");
-  exactKeys(document, ["schema", "theme"], "主题文件");
-  if (document.schema !== THEME_DOCUMENT_SCHEMA) throw new Error(`不支持的主题格式：${String(document.schema)}`);
+  if (!document) throw new Error(tr("主题文件根节点必须是对象"));
+  exactKeys(document, ["schema", "theme"], tr("主题文件"));
+  if (document.schema !== THEME_DOCUMENT_SCHEMA) throw new Error(tr("不支持的主题格式：{0}", { 0: String(document.schema) }));
   const theme = parseThemePreset(document.theme);
-  if (theme.preview || theme.visuals) throw new Error(".crabtheme.json 不能携带图片；请使用 .crabskin");
+  if (theme.preview || theme.visuals) throw new Error(tr(".crabtheme.json 不能携带图片；请使用 .crabskin"));
   ensureCompatible(theme);
   return theme;
 }
@@ -107,9 +108,9 @@ function readU32(data: Uint8Array, offset: number): number {
 
 /** Inspect the central directory before decompression to reject oversized or unsafe archives. */
 function inspectZip(data: Uint8Array): string[] {
-  if (data.byteLength > MAX_SKIN_ARCHIVE_BYTES) throw new Error("皮肤包不能超过 12 MiB");
+  if (data.byteLength > MAX_SKIN_ARCHIVE_BYTES) throw new Error(tr("皮肤包不能超过 12 MiB"));
   const minimumEocd = 22;
-  if (data.byteLength < minimumEocd) throw new Error("皮肤包不是有效的 ZIP 文件");
+  if (data.byteLength < minimumEocd) throw new Error(tr("皮肤包不是有效的 ZIP 文件"));
   let eocd = -1;
   for (let offset = data.length - minimumEocd; offset >= Math.max(0, data.length - 65_557); offset -= 1) {
     if (readU32(data, offset) === 0x06054b50) {
@@ -117,36 +118,36 @@ function inspectZip(data: Uint8Array): string[] {
       break;
     }
   }
-  if (eocd < 0) throw new Error("皮肤包不是有效的 ZIP 文件");
+  if (eocd < 0) throw new Error(tr("皮肤包不是有效的 ZIP 文件"));
   const entries = readU16(data, eocd + 10);
   const centralSize = readU32(data, eocd + 12);
   const centralOffset = readU32(data, eocd + 16);
-  if (entries < 1 || entries > MAX_SKIN_FILES) throw new Error(`皮肤包文件数必须在 1–${MAX_SKIN_FILES} 之间`);
-  if (centralOffset + centralSize > eocd || centralOffset >= data.length) throw new Error("皮肤包中央目录无效");
+  if (entries < 1 || entries > MAX_SKIN_FILES) throw new Error(tr("皮肤包文件数必须在 1–{0} 之间", { 0: MAX_SKIN_FILES }));
+  if (centralOffset + centralSize > eocd || centralOffset >= data.length) throw new Error(tr("皮肤包中央目录无效"));
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const names: string[] = [];
   let total = 0;
   let cursor = centralOffset;
   for (let index = 0; index < entries; index += 1) {
-    if (cursor + 46 > data.length || readU32(data, cursor) !== 0x02014b50) throw new Error("皮肤包中央目录损坏");
+    if (cursor + 46 > data.length || readU32(data, cursor) !== 0x02014b50) throw new Error(tr("皮肤包中央目录损坏"));
     const unpacked = readU32(data, cursor + 24);
     const nameLength = readU16(data, cursor + 28);
     const extraLength = readU16(data, cursor + 30);
     const commentLength = readU16(data, cursor + 32);
-    if (unpacked > MAX_SKIN_FILE_BYTES) throw new Error("皮肤包中存在超过 8 MiB 的文件");
+    if (unpacked > MAX_SKIN_FILE_BYTES) throw new Error(tr("皮肤包中存在超过 8 MiB 的文件"));
     total += unpacked;
-    if (total > MAX_SKIN_UNPACKED_BYTES) throw new Error("皮肤包解压后不能超过 20 MiB");
+    if (total > MAX_SKIN_UNPACKED_BYTES) throw new Error(tr("皮肤包解压后不能超过 20 MiB"));
     const nameStart = cursor + 46;
     const nameEnd = nameStart + nameLength;
-    if (nameEnd > data.length) throw new Error("皮肤包文件名损坏");
+    if (nameEnd > data.length) throw new Error(tr("皮肤包文件名损坏"));
     let name: string;
     try {
       name = decoder.decode(data.subarray(nameStart, nameEnd));
     } catch {
-      throw new Error("皮肤包文件名必须是 UTF-8");
+      throw new Error(tr("皮肤包文件名必须是 UTF-8"));
     }
-    if (!safeArchivePath(name)) throw new Error(`皮肤包包含不安全路径：${name}`);
-    if (names.includes(name)) throw new Error(`皮肤包包含重复文件：${name}`);
+    if (!safeArchivePath(name)) throw new Error(tr("皮肤包包含不安全路径：{0}", { 0: name }));
+    if (names.includes(name)) throw new Error(tr("皮肤包包含重复文件：{0}", { 0: name }));
     names.push(name);
     cursor = nameEnd + extraLength + commentLength;
   }
@@ -179,42 +180,42 @@ function base64ToBytes(value: string): Uint8Array {
 
 function imageDataUrl(bytes: Uint8Array, label: string): string {
   const mime = imageMime(bytes);
-  if (!mime) throw new Error(`${label} 不是受支持的 PNG、JPEG、WebP 或 GIF 图片`);
+  if (!mime) throw new Error(tr("{0} 不是受支持的 PNG、JPEG、WebP 或 GIF 图片", { 0: label }));
   return `data:${mime};base64,${bytesToBase64(bytes)}`;
 }
 
 function readAsset(files: Record<string, Uint8Array>, path: unknown, label: string, used: Set<string>): string {
-  if (typeof path !== "string" || !safeArchivePath(path) || path === "manifest.json") throw new Error(`${label} 路径无效`);
+  if (typeof path !== "string" || !safeArchivePath(path) || path === "manifest.json") throw new Error(tr("{0} 路径无效", { 0: label }));
   const bytes = files[path];
-  if (!bytes) throw new Error(`${label} 引用的文件不存在：${path}`);
+  if (!bytes) throw new Error(tr("{0} 引用的文件不存在：{1}", { 0: label, 1: path }));
   used.add(path);
   return imageDataUrl(bytes, label);
 }
 
 function manifestThemeToPreset(value: unknown, files: Record<string, Uint8Array>, used: Set<string>): ThemePreset {
   const source = object(value);
-  if (!source) throw new Error("manifest.theme 必须是对象");
+  if (!source) throw new Error(tr("manifest.theme 必须是对象"));
   const portable = { ...source };
   if (source.preview !== undefined) {
     const previewSource = object(source.preview);
-    if (!previewSource) throw new Error("manifest.theme.preview 必须是对象");
+    if (!previewSource) throw new Error(tr("manifest.theme.preview 必须是对象"));
     exactKeys(previewSource, ["light", "dark"], "manifest.theme.preview");
     portable.preview = {
-      ...(previewSource.light === undefined ? {} : { light: readAsset(files, previewSource.light, "浅色预览", used) }),
-      ...(previewSource.dark === undefined ? {} : { dark: readAsset(files, previewSource.dark, "深色预览", used) }),
+      ...(previewSource.light === undefined ? {} : { light: readAsset(files, previewSource.light, tr("浅色预览"), used) }),
+      ...(previewSource.dark === undefined ? {} : { dark: readAsset(files, previewSource.dark, tr("深色预览"), used) }),
     };
   }
   if (source.visuals !== undefined) {
     const visualsSource = object(source.visuals);
-    if (!visualsSource) throw new Error("manifest.theme.visuals 必须是对象");
+    if (!visualsSource) throw new Error(tr("manifest.theme.visuals 必须是对象"));
     exactKeys(visualsSource, [...THEME_VISUAL_SLOTS], "manifest.theme.visuals");
     const visuals: Record<string, ThemeVisualAsset> = {};
     for (const [slot, rawVisual] of Object.entries(visualsSource)) {
       const visual = object(rawVisual);
-      if (!visual) throw new Error(`manifest.theme.visuals.${slot} 必须是对象`);
+      if (!visual) throw new Error(tr("manifest.theme.visuals.{0} 必须是对象", { 0: slot }));
       exactKeys(visual, ["asset", "opacity", "fit", "position"], `manifest.theme.visuals.${slot}`);
       visuals[slot] = {
-        data_url: readAsset(files, visual.asset, `装饰资源 ${slot}`, used),
+        data_url: readAsset(files, visual.asset, tr("装饰资源 {0}", { 0: slot }), used),
         opacity: visual.opacity as number,
         fit: visual.fit as ThemeVisualFit,
         position: visual.position as ThemeVisualPosition,
@@ -227,42 +228,42 @@ function manifestThemeToPreset(value: unknown, files: Record<string, Uint8Array>
 
 export function parseSkinPackage(data: Uint8Array): ThemePreset {
   const names = inspectZip(data);
-  if (!names.includes("manifest.json")) throw new Error("皮肤包缺少 manifest.json");
+  if (!names.includes("manifest.json")) throw new Error(tr("皮肤包缺少 manifest.json"));
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(data);
   } catch {
-    throw new Error("皮肤包解压失败");
+    throw new Error(tr("皮肤包解压失败"));
   }
   let unpackedBytes = 0;
   for (const [name, bytes] of Object.entries(files)) {
-    if (!names.includes(name) || bytes.byteLength > MAX_SKIN_FILE_BYTES) throw new Error(`皮肤包文件异常：${name}`);
+    if (!names.includes(name) || bytes.byteLength > MAX_SKIN_FILE_BYTES) throw new Error(tr("皮肤包文件异常：{0}", { 0: name }));
     unpackedBytes += bytes.byteLength;
-    if (unpackedBytes > MAX_SKIN_UNPACKED_BYTES) throw new Error("皮肤包解压后不能超过 20 MiB");
+    if (unpackedBytes > MAX_SKIN_UNPACKED_BYTES) throw new Error(tr("皮肤包解压后不能超过 20 MiB"));
   }
   const manifestBytes = files["manifest.json"];
-  if (!manifestBytes || manifestBytes.byteLength > MAX_THEME_BYTES) throw new Error("manifest.json 缺失或过大");
+  if (!manifestBytes || manifestBytes.byteLength > MAX_THEME_BYTES) throw new Error(tr("manifest.json 缺失或过大"));
   let parsed: unknown;
   try {
     parsed = JSON.parse(strFromU8(manifestBytes));
   } catch {
-    throw new Error("manifest.json 不是有效的 JSON");
+    throw new Error(tr("manifest.json 不是有效的 JSON"));
   }
   const manifest = object(parsed);
-  if (!manifest) throw new Error("manifest.json 根节点必须是对象");
+  if (!manifest) throw new Error(tr("manifest.json 根节点必须是对象"));
   exactKeys(manifest, ["schema", "theme"], "manifest.json");
-  if (manifest.schema !== SKIN_DOCUMENT_SCHEMA) throw new Error(`不支持的皮肤格式：${String(manifest.schema)}`);
+  if (manifest.schema !== SKIN_DOCUMENT_SCHEMA) throw new Error(tr("不支持的皮肤格式：{0}", { 0: String(manifest.schema) }));
   const used = new Set(["manifest.json"]);
   const theme = manifestThemeToPreset(manifest.theme, files, used);
   const unused = names.find((name) => !used.has(name));
-  if (unused) throw new Error(`皮肤包包含未声明文件：${unused}`);
+  if (unused) throw new Error(tr("皮肤包包含未声明文件：{0}", { 0: unused }));
   ensureCompatible(theme);
   return theme;
 }
 
 function dataUrlParts(dataUrl: string): { mime: string; bytes: Uint8Array } {
   const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/]+=*)$/i.exec(dataUrl);
-  if (!match) throw new Error("皮肤包含无效的内嵌图片");
+  if (!match) throw new Error(tr("皮肤包含无效的内嵌图片"));
   return { mime: match[1].toLowerCase(), bytes: base64ToBytes(match[2]) };
 }
 
@@ -272,7 +273,7 @@ function extensionForMime(mime: string): string {
 }
 
 export function serializeSkinPackage(theme: ThemePreset): Uint8Array {
-  if (!theme.visuals && !theme.preview) throw new Error("当前预设不包含皮肤图片资源");
+  if (!theme.visuals && !theme.preview) throw new Error(tr("当前预设不包含皮肤图片资源"));
   const files: Record<string, Uint8Array> = {};
   const { preview, visuals, ...portable } = theme;
   if (portable.id.startsWith("builtin.")) portable.id = `exported.${portable.id.slice("builtin.".length)}`;
@@ -307,7 +308,7 @@ export function serializeSkinPackage(theme: ThemePreset): Uint8Array {
   const manifest: SkinManifest = { schema: SKIN_DOCUMENT_SCHEMA, theme: manifestTheme };
   files["manifest.json"] = strToU8(`${JSON.stringify(manifest, null, 2)}\n`);
   const zipped = zipSync(files, { level: 6 });
-  if (zipped.byteLength > MAX_SKIN_ARCHIVE_BYTES) throw new Error("导出的皮肤包超过 12 MiB");
+  if (zipped.byteLength > MAX_SKIN_ARCHIVE_BYTES) throw new Error(tr("导出的皮肤包超过 12 MiB"));
   return zipped;
 }
 

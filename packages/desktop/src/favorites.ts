@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import type {
   ConnectionPreset,
   FavoriteEntry,
@@ -255,7 +256,7 @@ export function favoriteFolderOptions(
   entries: FavoriteEntry[],
   movingEntryId?: string,
 ): FavoriteFolderOption[] {
-  const options: FavoriteFolderOption[] = [{ id: null, name: "收藏根目录", depth: 0 }];
+  const options: FavoriteFolderOption[] = [{ id: null, name: tr("收藏根目录"), depth: 0 }];
   const moving = movingEntryId ? findFavoriteEntry(entries, movingEntryId) : null;
   const visit = (items: FavoriteEntry[], depth: number) => {
     items.forEach((entry) => {

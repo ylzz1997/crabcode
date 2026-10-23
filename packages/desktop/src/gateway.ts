@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { authenticateConnection, normalizeBaseUrl } from "./native";
 import { randomUuid } from "./uuid";
 import type {
@@ -667,7 +668,7 @@ export class SessionChannel {
           if (!initialCommandError && event.session_id && event.session_id !== this.sessionId) return;
           this.options.onEvent(event);
         } catch {
-          this.options.onState(false, "Gateway 返回了无效事件");
+          this.options.onState(false, tr("Gateway 返回了无效事件"));
         }
       });
       socket.addEventListener("close", (event) => {
@@ -676,7 +677,7 @@ export class SessionChannel {
         if (this.disposed) return;
         this.options.onState(
           false,
-          event.code === 1008 ? "Gateway 认证已失效，正在重新认证" : "Gateway 连接中断，正在重连（不是模型连接错误）",
+          event.code === 1008 ? tr("Gateway 认证已失效，正在重新认证") : tr("Gateway 连接中断，正在重连（不是模型连接错误）"),
         );
         if (event.code === 1008) {
           void this.api.refreshAuthentication()
@@ -691,7 +692,7 @@ export class SessionChannel {
       });
       socket.addEventListener("error", () => {
         if (this.disposed || this.socket !== socket) return;
-        this.options.onState(false, "WebSocket 连接失败");
+        this.options.onState(false, tr("WebSocket 连接失败"));
       });
     } catch (error) {
       if (this.disposed) return;
@@ -904,7 +905,7 @@ export class SessionChannel {
 
   private sendRaw(value: Record<string, unknown>): void {
     if (this.socket?.readyState !== WebSocket.OPEN) {
-      throw new Error("会话连接尚未就绪");
+      throw new Error(tr("会话连接尚未就绪"));
     }
     this.socket.send(JSON.stringify(value));
   }

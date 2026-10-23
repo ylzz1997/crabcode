@@ -1,3 +1,4 @@
+import { t as tr, getLocale } from "./i18n";
 import * as vscode from 'vscode';
 import { randomUUID } from 'node:crypto';
 import type { ComputerUseBinding, ComputerUseHostOptions } from '../../computer-use/client/vscodeHost.js';
@@ -39,14 +40,14 @@ export class ComputerUseController implements vscode.Disposable {
         gatewayUrl = localUrl.toString();
       }
       if (this.disposed || revision !== this.revision) return;
-      const options: ComputerUseHostOptions = { gatewayUrl, password: config.get<string>('password', ''), hostId: this.hostId, enabled };
+      const options: ComputerUseHostOptions = { gatewayUrl, password: config.get<string>('password', ''), hostId: this.hostId, enabled, language: getLocale() };
       const binding = await vscode.commands.executeCommand<ComputerUseBinding>('crabcode.computerUse.configureLocal', options);
       if (!this.disposed && revision === this.revision && binding) this.connection.setComputerUseBinding(binding);
     } catch (error) {
       if (this.disposed || revision !== this.revision) return;
       this.connection.setComputerUseBinding({ hostId: this.hostId, enabled: false });
       this.output.appendLine(`Computer Use: ${error instanceof Error ? error.message : String(error)}`);
-      if (enabled) void vscode.window.showErrorMessage('请在本机安装或更新 CrabCode Computer Use 配套扩展，然后重新检测。Computer Use 操作的是本机桌面。');
+      if (enabled) void vscode.window.showErrorMessage(tr("请在本机安装或更新 CrabCode Computer Use 配套扩展，然后重新检测。Computer Use 操作的是本机桌面。"));
     }
   }
 
@@ -55,7 +56,7 @@ export class ComputerUseController implements vscode.Disposable {
       await vscode.commands.executeCommand('crabcode.computerUse.local');
     } catch (error) {
       this.output.appendLine(`Computer Use: ${error instanceof Error ? error.message : String(error)}`);
-      void vscode.window.showErrorMessage('请在本机安装或更新 CrabCode Computer Use 配套扩展，然后重试。');
+      void vscode.window.showErrorMessage(tr("请在本机安装或更新 CrabCode Computer Use 配套扩展，然后重试。"));
     }
   }
 

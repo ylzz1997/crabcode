@@ -16,6 +16,7 @@ function loadDetection(probe, platform = "win32") {
     process: { platform, env: {} },
     URL,
     require(name) {
+      if (name === "./i18n") return require("./helpers/i18n.cjs");
       if (name === "vscode") return {
         extensions: { getExtension: () => undefined },
         window: { showWarningMessage() {} },
@@ -43,6 +44,7 @@ function loadGatewayManager() {
     process: { platform: "linux", env: {} },
     URL,
     require(name) {
+      if (name === "./i18n") return require("./helpers/i18n.cjs");
       if (name === "vscode") return {
         extensions: { getExtension: () => undefined },
         window: { showWarningMessage() {} },

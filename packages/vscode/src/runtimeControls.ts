@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import type { Memento } from "vscode";
 import type { SessionRuntimeStatus } from "./client/types";
 
@@ -53,7 +54,7 @@ export class RuntimeControls {
       } catch (error) {
         const state = this.states.get(key);
         if (state) this.states.set(key, { ...state, permission_policy: null });
-        this.reportError(sessionId, `会话设置失败：${error instanceof Error ? error.message : String(error)}`);
+        this.reportError(sessionId, tr("会话设置失败：{0}", { 0: error instanceof Error ? error.message : String(error) }));
       }
     });
     this.queues.set(key, operation);
@@ -98,7 +99,7 @@ export class RuntimeControls {
       return this.run(sessionId, (key) => this.clearEffort(sessionId, key));
     }
     if (!REASONING_EFFORTS.includes(effort as ReasoningEffort)) {
-      this.reportError(sessionId, "无效的思考强度。");
+      this.reportError(sessionId, tr("无效的思考强度。"));
       return Promise.resolve();
     }
     return this.run(sessionId, (key) => this.apply(sessionId, key, { reasoning_effort: effort as ReasoningEffort }));
@@ -151,7 +152,7 @@ export class RuntimeControls {
     const endpoint = preference.reasoning_effort ? "/config/reasoning-effort" : "/config/ultra-mode";
     const result = normalizeRuntimePreferences(await this.request(endpoint, sessionId, preference));
     const field = preference.reasoning_effort ? "reasoning_effort" : "ultra_mode";
-    if (result[field] === undefined) throw new Error("网关未确认设置，请重试。");
+    if (result[field] === undefined) throw new Error(tr("网关未确认设置，请重试。"));
     this.states.set(key, { ...this.states.get(key), ...result, ready: true, pending: true });
     // Only persist settings that the gateway actually accepted.
     await this.storage?.update(key, { ...normalizeRuntimePreferences(this.storage.get(key)), ...result });

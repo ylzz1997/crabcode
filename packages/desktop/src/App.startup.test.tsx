@@ -1,3 +1,4 @@
+import { setLocale } from "./i18n";
 /* @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -22,6 +23,8 @@ describe("application startup feedback", () => {
   let container: HTMLDivElement;
   let root: Root;
   beforeEach(() => {
+    setLocale("zh-CN");
+    vi.spyOn(navigator, "languages", "get").mockReturnValue(["zh-CN"]);
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.clearAllMocks();
     vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
@@ -33,6 +36,7 @@ describe("application startup feedback", () => {
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("renders before configuration loads and lets users open settings while installation is pending", async () => {

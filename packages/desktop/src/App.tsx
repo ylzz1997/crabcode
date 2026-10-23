@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr, html as trHtml, localized, applyLanguage, useLocale } from "./i18n";
 import { createSlashCommands, type SlashCommandAction } from "../../shared/slashCommands.js";
 import { executeAdditionalDesktopAction, followDesktopLog } from "./desktopSlashCommands";
 import type { SessionLaunchOverrides } from "./gateway";
@@ -390,8 +392,8 @@ function DocumentReferenceAttachment({
         onBlurCapture={() => setTooltipPosition(null)}
       >
         <Quote />
-        <span><strong>文档引用</strong><small>{formatDocumentReferenceLocation(reference)}</small></span>
-        <button type="button" title="移除文档引用" onClick={onRemove}><X /></button>
+        <span><strong>{tr("文档引用")}</strong><small>{formatDocumentReferenceLocation(reference)}</small></span>
+        <button type="button" title={tr("移除文档引用")} onClick={onRemove}><X /></button>
       </div>
       {tooltipPosition && preview && createPortal(
         <div
@@ -434,7 +436,7 @@ function pendingUserMessage(
     ...files.map((file) => ({
       kind: "file" as const,
       label: file.name,
-      ...(file.mode === "path" ? { detail: "仅路径" } : {}),
+      ...(file.mode === "path" ? { detail: tr("仅路径") } : {}),
       title: file.path ?? file.name,
     })),
     ...folders.map((folder) => ({
@@ -487,15 +489,15 @@ function FileAttachment({ file, onRemove }: { file: PendingFile; onRemove: () =>
         onBlurCapture={() => setTooltipPosition(null)}
       >
         <FileText />
-        <span><strong>{file.name}</strong><small>{file.mode === "path" ? "仅路径" : formatFileSize(file.size ?? 0)}</small></span>
-        <button type="button" title="移除文件" onClick={onRemove}><X /></button>
+        <span><strong>{file.name}</strong><small>{file.mode === "path" ? tr("仅路径") : formatFileSize(file.size ?? 0)}</small></span>
+        <button type="button" title={tr("移除文件")} onClick={onRemove}><X /></button>
       </div>
       {tooltipPosition && createPortal(
         <div className="document-reference-preview-tooltip file-preview-tooltip" role="tooltip" style={tooltipPosition}>
           <strong>{file.name}</strong>
           <small>{file.mode === "path"
-            ? "仅发送路径，不上传文件内容"
-            : `${formatFileSize(file.size ?? 0)} · ${lineCount} 行${file.mediaType ? ` · ${file.mediaType}` : ""}`}</small>
+            ? tr("仅发送路径，不上传文件内容")
+            : tr("{0} · {1} 行{2}", { 0: formatFileSize(file.size ?? 0), 1: lineCount, 2: file.mediaType ? ` · ${file.mediaType}` : "" })}</small>
           {preview && <p className={file.mode === "path" ? "file-path-preview" : ""}>{preview}</p>}
         </div>,
         document.body,
@@ -624,7 +626,7 @@ export function defaultProjectDirectory(home: string, name: string): string {
     .trim()
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
     .replace(/[. ]+$/, "")
-    .trim() || "新项目";
+    .trim() || tr("新项目");
   const separator = home.includes("\\") && !home.includes("/") ? "\\" : "/";
   return `${home.replace(/[\\/]+$/, "")}${separator}${directoryName}`;
 }
@@ -643,9 +645,9 @@ export function resolveDefaultProjectId(
 }
 
 function projectDirectoryTitle(project: ProjectPreset): string {
-  if (project.directories.length === 0) return "需要设置项目主目录";
+  if (project.directories.length === 0) return tr("需要设置项目主目录");
   if (project.directories.length === 1) return project.directories[0];
-  return `${project.directories[0]} 等 ${project.directories.length} 个目录`;
+  return tr("{0} 等 {1} 个目录", { 0: project.directories[0], 1: project.directories.length });
 }
 
 function firstUserText(items: ChatItem[]): string {
@@ -677,8 +679,8 @@ export function mergeProjectSessions(
       provider: existing?.provider || session.status?.provider || "",
       created_at: existing?.created_at || new Date(session.items[0].startedAt ?? Date.now()).toISOString(),
       title: existing?.title?.trim()
-        || (session.title !== "新会话" ? session.title : userPreview.slice(0, 200))
-        || "未命名会话",
+        || (session.title && session.title !== "新会话" ? session.title : userPreview.slice(0, 200))
+        || tr("未命名会话"),
       cwd: session.cwd,
       tokens_used: existing?.tokens_used ?? session.status?.context_used_tokens ?? 0,
       preview: existing?.preview || userPreview.slice(0, 100),
@@ -697,7 +699,7 @@ function formatDate(value: string): string {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(getLocale(), {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -706,10 +708,10 @@ function formatDate(value: string): string {
 }
 
 function formatDateTime(value: string | null): string {
-  if (!value) return "未安排";
+  if (!value) return tr("未安排");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(getLocale(), {
     month: "numeric",
     day: "numeric",
     weekday: "short",
@@ -723,22 +725,22 @@ function formatElapsed(ms: number): string {
   const seconds = totalSeconds % 60;
   const minutes = Math.floor(totalSeconds / 60) % 60;
   const hours = Math.floor(totalSeconds / 3600);
-  if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
-  if (minutes > 0) return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
-  return `${seconds}秒`;
+  if (hours > 0) return tr("{0}小时{1}分", { 0: hours, 1: String(minutes).padStart(2, "0") });
+  if (minutes > 0) return tr("{0}分{1}秒", { 0: minutes, 1: String(seconds).padStart(2, "0") });
+  return tr("{0}秒", { 0: seconds });
 }
 
 export function formatTurnDuration(ms: number, format: TurnDurationFormat): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  if (format === "seconds") return `${totalSeconds}秒`;
+  if (format === "seconds") return tr("{0}秒", { 0: totalSeconds });
 
   const seconds = totalSeconds % 60;
   const minutes = Math.floor(totalSeconds / 60) % 60;
   const hours = Math.floor(totalSeconds / 3600);
   return [
-    hours > 0 ? `${hours}时` : "",
-    minutes > 0 ? `${minutes}分` : "",
-    `${seconds}秒`,
+    hours > 0 ? tr("{0}时", { 0: hours }) : "",
+    minutes > 0 ? tr("{0}分", { 0: minutes }) : "",
+    tr("{0}秒", { 0: seconds }),
   ].filter(Boolean).join("");
 }
 
@@ -776,11 +778,11 @@ function normalizePermissionMode(value: string | undefined): PermissionMode {
 }
 
 function scheduleSummary(job: ScheduleJobInfo): string {
-  if (job.running) return "正在执行";
-  if (job.status === "completed") return "已完成";
-  if (job.status === "error") return "运行异常";
-  if (!job.enabled || job.status === "paused") return "已暂停";
-  return `下次运行 ${formatDateTime(job.next_run)}`;
+  if (job.running) return tr("正在执行");
+  if (job.status === "completed") return tr("已完成");
+  if (job.status === "error") return tr("运行异常");
+  if (!job.enabled || job.status === "paused") return tr("已暂停");
+  return tr("下次运行 {0}", { 0: formatDateTime(job.next_run) });
 }
 
 function textFromUnknown(value: unknown): string {
@@ -812,12 +814,12 @@ function diffLines(diff: string) {
 function readImage(file: File): Promise<PendingImage> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("无法读取图片"));
+    reader.onerror = () => reject(reader.error ?? new Error(tr("无法读取图片")));
     reader.onload = () => {
       const dataUrl = String(reader.result ?? "");
       const separator = dataUrl.indexOf(",");
       if (separator < 0) {
-        reject(new Error("图片格式无效"));
+        reject(new Error(tr("图片格式无效")));
         return;
       }
       resolve({
@@ -833,6 +835,7 @@ function readImage(file: File): Promise<PendingImage> {
 }
 
 function App() {
+  useLocale();
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [gateways, setGateways] = useState<GatewayMap>({});
   const [gatewayStartups, setGatewayStartups] = useState<Record<string, GatewayStartupState>>({});
@@ -915,7 +918,7 @@ function App() {
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [approvalShortcutError, setApprovalShortcutError] = useState<string | null>(null);
   const [computerUseBaseId] = useState(computerUseHostId);
-  const computerVm = useMemo(() => settings?.computer_use_environment === "local_vm" ? normalizeVmConfig(settings.computer_use_vm) : null, [settings?.computer_use_environment, settings?.computer_use_vm]);
+  const computerVm = useMemo(() => settings?.computer_use_environment === "local_vm" ? normalizeVmConfig(settings.computer_use_vm) : null, [settings?.computer_use_environment, settings?.computer_use_vm, getLocale()]);
   const computerUseId = computerVm ? vmHostId(computerUseBaseId, computerVm) : computerUseBaseId;
   const [computerUseState, setComputerUseState] = useState<ComputerUseState>(() => initialComputerUseState(computerUseId, false));
   const apiRef = useRef(new Map<string, GatewayApi>());
@@ -954,7 +957,7 @@ function App() {
     return settings.connections.find((item) => item.id === settings.active_connection_id)
       ?? settings.connections[0]
       ?? null;
-  }, [settings]);
+  }, [settings, getLocale()]);
   const connectionGateway = activeConnection ? gateways[activeConnection.id] : null;
   const activeProject = activeConnection?.projects.find(
     (item) => item.id === activeConnection.last_project_id,
@@ -970,7 +973,7 @@ function App() {
   );
   const activeGateway = useMemo(() => connectionGateway
     ? { ...connectionGateway, models: projectModels.models }
-    : null, [connectionGateway, projectModels.models]);
+    : null, [connectionGateway, projectModels.models, getLocale()]);
   useEffect(() => {
     setProjectFilesOpen(false);
     setProjectFileTreeOpen(false);
@@ -992,7 +995,7 @@ function App() {
     // awaiting acknowledgement. Hidden sessions restore only when reopened.
     setComposer((current) => [current, ...recalled.map((entry) => entry.text)].filter(Boolean).join("\n\n"));
     setPendingImages((current) => [...current, ...recalled.flatMap((entry) => entry.images.map((image, index) => ({
-      ...image, id: randomUuid(), name: `图片 ${index + 1}`,
+      ...image, id: randomUuid(), name: tr("图片 {0}", { 0: index + 1 }),
       dataUrl: `data:${image.media_type};base64,${image.data}`,
     })))]);
     setSessions((current) => !current[activeSessionKey] ? current : ({
@@ -1003,7 +1006,7 @@ function App() {
     }));
     document.querySelector<HTMLElement>(".composer-editor-input")?.focus();
   }, [activeSession?.pendingFollowUps, activeSessionKey]);
-  const pendingApproval = useMemo(() => uniquePendingApproval(sessions), [sessions]);
+  const pendingApproval = useMemo(() => uniquePendingApproval(sessions), [sessions, getLocale()]);
   const approvalShortcuts = settings?.approval_shortcuts ?? DEFAULT_APPROVAL_SHORTCUTS;
   approvalShortcutTargetRef.current = approvalShortcuts.enabled && !settingsOpen ? pendingApproval : null;
   const hasPendingApproval = pendingApproval !== null;
@@ -1073,7 +1076,7 @@ function App() {
     activeConnection && activeProject
       ? mergeProjectSessions(activeList, sessions, activeConnection.id, activeProject.path)
       : activeList
-  ), [activeList, sessions, activeConnection?.id, activeProject?.path]);
+  ), [activeList, sessions, activeConnection?.id, activeProject?.path, getLocale()]);
   const activeSessionInfo = activeSession
     ? displayList.find((item) => item.session_id === activeSession.id)
     : undefined;
@@ -1166,7 +1169,7 @@ function App() {
     const key = `${connectionId}\u0000${cwd ?? ""}`;
     const api = apiRef.current.get(connectionId);
     if (!api) {
-      setModelSettingsState({ key, data: null, loading: false, error: "Gateway 尚未连接" });
+      setModelSettingsState({ key, data: null, loading: false, error: tr("Gateway 尚未连接") });
       return;
     }
     setModelSettingsState((current) => ({
@@ -1199,7 +1202,7 @@ function App() {
     runtimeSettingsRevisionRef.current.set(key, revision);
     const api = apiRef.current.get(connectionId);
     if (!api) {
-      setRuntimeSettingsState({ key, data: null, loading: false, error: "Gateway 尚未连接" });
+      setRuntimeSettingsState({ key, data: null, loading: false, error: tr("Gateway 尚未连接") });
       return;
     }
     setRuntimeSettingsState((current) => ({
@@ -1232,7 +1235,7 @@ function App() {
     mutation: RuntimeSettingsMutation,
   ) => {
     const api = apiRef.current.get(connectionId);
-    if (!api) throw new Error("Gateway 尚未连接");
+    if (!api) throw new Error(tr("Gateway 尚未连接"));
     const cwd = mutation.cwd ?? "";
     const key = `${connectionId}\u0000${cwd}`;
     runtimeSettingsRevisionRef.current.set(key, (runtimeSettingsRevisionRef.current.get(key) ?? 0) + 1);
@@ -1249,7 +1252,7 @@ function App() {
     promptSettingsRevisionRef.current.set(key, revision);
     const api = apiRef.current.get(connectionId);
     if (!api) {
-      setPromptSettingsState({ key, data: null, loading: false, error: "Gateway 尚未连接" });
+      setPromptSettingsState({ key, data: null, loading: false, error: tr("Gateway 尚未连接") });
       return;
     }
     setPromptSettingsState((current) => ({
@@ -1282,7 +1285,7 @@ function App() {
     mutation: PromptSettingsMutation,
   ) => {
     const api = apiRef.current.get(connectionId);
-    if (!api) throw new Error("Gateway 尚未连接");
+    if (!api) throw new Error(tr("Gateway 尚未连接"));
     const cwd = mutation.cwd ?? "";
     const key = `${connectionId}\u0000${cwd}`;
     promptSettingsRevisionRef.current.set(key, (promptSettingsRevisionRef.current.get(key) ?? 0) + 1);
@@ -1298,7 +1301,7 @@ function App() {
     mutation: ModelSettingsMutation,
   ) => {
     const api = apiRef.current.get(connectionId);
-    if (!api) throw new Error("Gateway 尚未连接");
+    if (!api) throw new Error(tr("Gateway 尚未连接"));
     const key = `${connectionId}\u0000${mutation.cwd ?? ""}`;
     setModelSettingsState((current) => ({
       key,
@@ -1609,14 +1612,14 @@ function App() {
     confirm = false,
   ) => {
     if (deletingSessionIdsRef.current.has(target.key)) return;
-    if (confirm && !window.confirm("删除这个会话？")) return;
+    if (confirm && !window.confirm(tr("删除这个会话？"))) return;
     deletingSessionIdsRef.current.add(target.key);
     setDeletingSessionIds((current) => new Set(current).add(target.key));
 
     const archiveRequest = target.sessionId.startsWith("new-")
       ? Promise.resolve()
       : apiRef.current.get(target.connectionId)?.archive(target.sessionId)
-      ?? Promise.reject(new Error("Gateway 尚未连接"));
+      ?? Promise.reject(new Error(tr("Gateway 尚未连接")));
 
     // Remove local state before waiting for resource teardown on the gateway.
     removeSessionState(target);
@@ -1676,7 +1679,7 @@ function App() {
     setWorkspaceView("chat");
     const api = apiRef.current.get(connection.id);
     if (!api) {
-      setGlobalError("Gateway 尚未连接");
+      setGlobalError(tr("Gateway 尚未连接"));
       return;
     }
     const inheritedPreferences = info ? undefined : connection.last_session_preferences;
@@ -1699,7 +1702,8 @@ function App() {
     const initial: SessionViewState = {
       id: info?.session_id ?? key.split(":").slice(1).join(":"),
       cwd: project.path,
-      title: info ? (info.title || "未命名会话") : "新会话",
+      // Keep absent titles empty; UI fallback labels must follow later language changes.
+      title: info?.title || "",
       items: [],
       loading: Boolean(info),
       busy: false,
@@ -1719,7 +1723,7 @@ function App() {
           ? {
             ...previous,
             cwd: project.path,
-            title: info ? (info.title || "未命名会话") : previous.title,
+            title: info ? info.title || "" : previous.title,
             loading: Boolean(info) && previous.items.length === 0,
             connected: false,
             error: null,
@@ -1863,7 +1867,7 @@ function App() {
               ?.session_preferences?.[id],
             models,
           ) : undefined).catch(error => {
-            if (isCurrentChannel()) setGlobalError(`加载会话模型列表失败：${String(error)}`);
+            if (isCurrentChannel()) setGlobalError(tr("加载会话模型列表失败：{0}", { 0: String(error) }));
           });
         }
       },
@@ -1908,7 +1912,7 @@ function App() {
     ) return;
     const api = apiRef.current.get(activeConnection.id);
     if (!api) {
-      setGlobalError("Gateway 尚未连接");
+      setGlobalError(tr("Gateway 尚未连接"));
       return;
     }
     const messageUuid = item.id.replace(/:part-\d+$/, "");
@@ -1927,7 +1931,7 @@ function App() {
     if (!activeConnection || !activeProject || info.session_id.startsWith("new-")) return;
     const api = apiRef.current.get(activeConnection.id);
     if (!api) {
-      setGlobalError("Gateway 尚未连接");
+      setGlobalError(tr("Gateway 尚未连接"));
       return;
     }
     const key = sessionKey(activeConnection.id, info.session_id);
@@ -1963,17 +1967,17 @@ function App() {
     };
     setGatewayStartups((current) => ({
       ...current,
-      [connection.id]: updateGatewayStartup(undefined, "connecting", "正在连接 Gateway…"),
+      [connection.id]: updateGatewayStartup(undefined, "connecting", tr("正在连接 Gateway…")),
     }));
     setGateways((current) => ({
       ...current,
       [connection.id]: { ...(current[connection.id] ?? EMPTY_GATEWAY), status: "connecting", error: null },
     }));
     try {
-      progress("connection_info", `Gateway 服务地址：${gatewayLogAddress(connection.base_url)}`);
+      progress("connection_info", tr("Gateway 服务地址：{0}", { 0: gatewayLogAddress(connection.base_url) }));
       progress("connection_info", isLoopbackUrl(connection.base_url)
-        ? "连接方式：本地 Gateway"
-        : "连接方式：远程 Gateway（以下运行环境由远程服务报告）");
+        ? tr("连接方式：本地 Gateway")
+        : tr("连接方式：远程 Gateway（以下运行环境由远程服务报告）"));
       if (isLoopbackUrl(connection.base_url)) {
         const local = await ensureLocalGateway(
           connection.id,
@@ -1984,19 +1988,19 @@ function App() {
         );
         if (!isCurrentAttempt()) return;
         progress("connection_info", local.started_by_desktop
-          ? "本地 Gateway 由 Crab Desktop 启动并管理"
-          : local.ready ? "连接已运行的 Gateway 服务" : "浏览器模式：本地 Gateway 需要由外部启动");
-        if (local.version) progress("connection_info", `Gateway 健康检查报告版本：${local.version}`);
+          ? tr("本地 Gateway 由 Crab Desktop 启动并管理")
+          : local.ready ? tr("连接已运行的 Gateway 服务") : tr("浏览器模式：本地 Gateway 需要由外部启动"));
+        if (local.version) progress("connection_info", tr("Gateway 健康检查报告版本：{0}", { 0: local.version }));
       }
-      progress("authenticating", "正在验证 Gateway 连接");
+      progress("authenticating", tr("正在验证 Gateway 连接"));
       const api = new GatewayApi(connection);
       apiRef.current.set(connection.id, api);
       await api.authenticate();
       if (!isCurrentAttempt()) return;
-      progress("loading_workspace", "正在加载工作区和模型");
+      progress("loading_workspace", tr("正在加载工作区和模型"));
       const workspace = await api.workspaceInfo().catch((error) => {
         const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`加载工作区失败：${detail}`);
+        throw new Error(tr("加载工作区失败：{0}", { 0: detail }));
       });
       if (!isCurrentAttempt()) return;
       for (const detail of gatewayEnvironmentLog(workspace)) progress("environment", detail);
@@ -2012,12 +2016,12 @@ function App() {
           last_session_id: null,
           favorite_session_ids: [],
         }];
-      progress("loading_sessions", "正在加载会话列表");
+      progress("loading_sessions", tr("正在加载会话列表"));
       const sessionEntries = await Promise.all(
         projects.map(async (project) => [project.path, await api.sessions(project.path)] as const),
       );
       if (!isCurrentAttempt()) return;
-      progress("online", "Gateway 已连接，工作区就绪");
+      progress("online", tr("Gateway 已连接，工作区就绪"));
       setGateways((current) => ({
         ...current,
         [connection.id]: {
@@ -2044,7 +2048,7 @@ function App() {
       if (!isCurrentAttempt()) return;
       const detail = error instanceof Error ? error.message : String(error);
       const message = isLoopbackUrl(connection.base_url) && !isDesktopShell()
-        ? `浏览器版不会自动启动本地 Gateway。请先运行 crabcode gateway。${detail}`
+        ? tr("浏览器版不会自动启动本地 Gateway。请先运行 crabcode gateway。{0}", { 0: detail })
         : detail;
       progress("error", message);
       setGateways((current) => ({
@@ -2061,6 +2065,7 @@ function App() {
   useEffect(() => {
     void loadSettings()
       .then((loaded) => {
+        applyLanguage(loaded.language);
         setSettings(loaded);
         if (isDesktopShell()) void setDockIcon(loaded.dock_icon).catch(() => undefined);
       })
@@ -2072,6 +2077,14 @@ function App() {
       computerUseChannelRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!settings) return;
+    applyLanguage(settings.language);
+    const update = () => applyLanguage(settings.language);
+    window.addEventListener("languagechange", update);
+    return () => window.removeEventListener("languagechange", update);
+  }, [settings?.language]);
 
   useEffect(() => {
     computerUseChannelRef.current?.dispose();
@@ -2380,7 +2393,7 @@ function App() {
     if (!settings) return;
     const connection = settings.connections.find((item) => item.id === id);
     if (!connection || id === "local") return;
-    if (!window.confirm(`删除 Gateway 连接“${connection.name}”？本地项目文件不会被删除。`)) return;
+    if (!window.confirm(tr("删除 Gateway 连接“{0}”？本地项目文件不会被删除。", { 0: connection.name }))) return;
 
     try {
       if (connection.credential_ref) await deleteCredential(connection.credential_ref);
@@ -2449,7 +2462,7 @@ function App() {
   const removeProject = (removing: ProjectPreset): boolean => {
     if (!activeConnection) return false;
     if (removing.id === defaultProjectId) {
-      setGlobalError("默认项目不能删除");
+      setGlobalError(tr("默认项目不能删除"));
       return false;
     }
     if (removing.id === activeProject?.id) {
@@ -2475,7 +2488,7 @@ function App() {
       const images: PendingImage[] = [];
       for (const file of files) {
         if (file.size > 20 * 1024 * 1024) {
-          setGlobalError(`${file.name} 超过 20MB`);
+          setGlobalError(tr("{0} 超过 20MB", { 0: file.name }));
           continue;
         }
         images.push(await readImage(file));
@@ -2493,7 +2506,7 @@ function App() {
       const maxBytes = maxSizeMb * 1024 * 1024;
       for (const file of files) {
         if (file.size > maxBytes) {
-          setGlobalError(`${file.name} 超过 ${maxSizeMb}MB`);
+          setGlobalError(tr("{0} 超过 {1}MB", { 0: file.name, 1: maxSizeMb }));
           continue;
         }
         attachments.push({
@@ -2534,6 +2547,7 @@ function App() {
     }
     const fileContext = serializePendingFiles(pendingFiles);
     const folderContext = pendingFolders.map((path) => `<folder>\n${path}\n</folder>`).join("\n");
+    // Protocol labels are parsed by both clients; keep this envelope independent of UI language.
     const documentContext = pendingDocumentReferences.map((reference) => (
       `<document-reference>\n文档：${reference.document_name}\n位置：${formatDocumentReferenceLocation(reference)}\n\n${reference.text}\n</document-reference>`
     )).join("\n\n");
@@ -2566,7 +2580,7 @@ function App() {
               runStartedAt: current[activeSessionKey].runStartedAt ?? now,
               currentStep: current[activeSessionKey].currentStep ?? {
                 kind: "response",
-                label: "接收引导",
+                label: tr("接收引导"),
                 startedAt: now,
               },
               items: [
@@ -2590,7 +2604,7 @@ function App() {
             runStartedAt: current[activeSessionKey].runStartedAt ?? now,
             currentStep: current[activeSessionKey].currentStep ?? {
               kind: "response",
-              label: "发送任务",
+              label: tr("发送任务"),
               startedAt: now,
             },
             operationId,
@@ -2641,7 +2655,7 @@ function App() {
   const resolvePermission = (item: ChatItem, allowed: boolean, always = false) => {
     if (!activeChannel || !activeSessionKey || !item.tool_use_id) return;
     let feedback: string | undefined;
-    if (!allowed) feedback = window.prompt("拒绝原因（可选）") ?? undefined;
+    if (!allowed) feedback = window.prompt(tr("拒绝原因（可选）")) ?? undefined;
     try {
       activeChannel.permission(item.tool_use_id, allowed, always, feedback, item.agent_id);
       const response: GatewayEvent = {
@@ -2666,12 +2680,12 @@ function App() {
   const undoLatestFileEdits = async () => {
     if (!activeConnection || !activeSession || !activeSessionKey || activeSession.busy) return;
     const api = apiRef.current.get(activeConnection.id);
-    if (!api) throw new Error("Gateway 尚未连接");
+    if (!api) throw new Error(tr("Gateway 尚未连接"));
     const checkpoints = await api.checkpoints(activeSession.id);
     const latest = checkpoints[0];
-    if (!latest) throw new Error("还没有检查点，无法撤销这些文件改动。");
-    if (!latest.snapshot_id) throw new Error("最近的检查点没有文件快照，无法撤销这些文件改动。");
-    if (!window.confirm("撤销最近一次检查点？文件和会话都会回退。")) return;
+    if (!latest) throw new Error(tr("还没有检查点，无法撤销这些文件改动。"));
+    if (!latest.snapshot_id) throw new Error(tr("最近的检查点没有文件快照，无法撤销这些文件改动。"));
+    if (!window.confirm(tr("撤销最近一次检查点？文件和会话都会回退。"))) return;
     await api.undo(activeSession.id);
     channelRef.current.get(activeSessionKey)?.dispose();
     channelRef.current.delete(activeSessionKey);
@@ -2905,7 +2919,7 @@ function App() {
 
   function commandSessionId(): string {
     const sessionId = activeChannel?.sessionId;
-    if (!sessionId) throw new Error("会话尚未就绪，请稍后重试");
+    if (!sessionId) throw new Error(tr("会话尚未就绪，请稍后重试"));
     return sessionId;
   }
 
@@ -2932,13 +2946,14 @@ function App() {
     try {
       let parsedAction: SlashCommandAction | undefined;
       const parsed = createSlashCommands({
+        t: tr,
         postMessage: action => { parsedAction = action; },
-        showMessage: message => appendCommandCard(command, command === "/help" ? "快捷命令" : "命令提示", message),
+        showMessage: message => appendCommandCard(command, command === "/help" ? tr("快捷命令") : tr("命令提示"), message),
         skills: activePluginData.skills,
       });
       parsed.handlers[command](args);
       if (!parsedAction) return true;
-      if (!api) throw new Error("Gateway 尚未连接");
+      if (!api) throw new Error(tr("Gateway 尚未连接"));
       const action = parsedAction as SlashCommandAction;
       if (await executeAdditionalDesktopAction(action, {
         api, sessionId: commandSessionId(),
@@ -2949,38 +2964,38 @@ function App() {
           if (message.type === "fetchFollowUpMode" || message.type === "setFollowUpMode") {
             const mode = message.type === "setFollowUpMode" ? message.mode as "queue" | "steer" : settings?.follow_up_mode ?? "queue";
             if (message.type === "setFollowUpMode") commitSettings(current => ({ ...current, follow_up_mode: mode }));
-            appendCommandMessage(`当前跟进方式：${mode}`);
+            appendCommandMessage(tr("当前跟进方式：{0}", { 0: mode }));
             return true;
           }
           if (message.type === "fetchQueue") {
-            appendCommandCard(command, "排队消息", queue.length ? queue.map((entry, index) => `${index + 1}. ${entry.text}`).join("\n") : "暂无排队消息");
+            appendCommandCard(command, tr("排队消息"), queue.length ? queue.map((entry, index) => `${index + 1}. ${entry.text}`).join("\n") : tr("暂无排队消息"));
             return true;
           }
           if (message.type === "steerQueue") {
             const index = Number(message.index) - 1;
-            if (!queue[index]) throw new Error("排队消息不存在，请用 /queue 查看序号");
-            if (!activeSession?.busy || !activeSession.operationId || !activeSession.connected) throw new Error("当前没有可引导的运行任务");
+            if (!queue[index]) throw new Error(tr("排队消息不存在，请用 /queue 查看序号"));
+            if (!activeSession?.busy || !activeSession.operationId || !activeSession.connected) throw new Error(tr("当前没有可引导的运行任务"));
             queuedMessageAction(queue[index].item.id, "steer");
             return true;
           }
           if (message.type === "openModelSettings") {
             setSettingsSection("models");
             setSettingsOpen(true);
-            appendCommandMessage(`已打开模型设置，请选择${message.kind === "group" ? "配置组" : "模型"}并${message.action === "add" ? "添加" : "删除"}`);
+            appendCommandMessage(tr("已打开模型设置，请选择{0}并{1}", { 0: message.kind === "group" ? tr("配置组") : tr("模型"), 1: message.action === "add" ? tr("添加") : tr("删除") }));
             return true;
           }
           if (message.type === "fetchSessions") {
             const list = Object.values(activeGateway?.sessionsByProject ?? {}).flat();
-            appendCommandCard(command, "会话列表", list.length ? list.slice(0, 30).map(info => `${info.title || "未命名会话"} (${info.session_id.slice(0, 8)})`).join("\n") : "暂无会话");
+            appendCommandCard(command, tr("会话列表"), list.length ? list.slice(0, 30).map(info => `${info.title || tr("未命名会话")} (${info.session_id.slice(0, 8)})`).join("\n") : tr("暂无会话"));
             return true;
           }
           if (message.type === "newSession") {
-            if (!activeConnection || !activeProject) throw new Error("当前没有可用项目");
+            if (!activeConnection || !activeProject) throw new Error(tr("当前没有可用项目"));
             openSession(activeConnection, activeProject, undefined, message.options as SessionLaunchOverrides);
             return true;
           }
           if (message.type === "resumeSession") {
-            if (!activeConnection || !activeProject) throw new Error("当前没有可用项目");
+            if (!activeConnection || !activeProject) throw new Error(tr("当前没有可用项目"));
             const selector = String(message.sessionId);
             const visible = resolveVisibleSession(selector);
             const info = visible?.session ?? await api.request<SessionInfo>(`/session/resolve?${new URLSearchParams({ selector, cwd: activeProject.path })}`);
@@ -2996,12 +3011,12 @@ function App() {
             return true;
           }
           if (message.type === "forkSession") {
-            if (!activeConnection || !activeProject) throw new Error("当前没有可用项目");
+            if (!activeConnection || !activeProject) throw new Error(tr("当前没有可用项目"));
             let messageUuid = typeof message.messageUuid === "string" ? message.messageUuid : null;
             if (messageUuid) {
               const ids = [...new Set(activeSession?.items.filter(item => item.kind === "assistant").map(item => item.id.replace(/:part-\d+$/, "")))];
               const matches = ids.filter(id => id === messageUuid || id.startsWith(messageUuid!));
-              if (matches.length !== 1) throw new Error("找不到回复，或短 UUID 不唯一");
+              if (matches.length !== 1) throw new Error(tr("找不到回复，或短 UUID 不唯一"));
               messageUuid = matches[0];
             }
             const forked = messageUuid ? await api.forkSession(commandSessionId(), messageUuid) : await api.forkSessionFromLatestReply(commandSessionId());
@@ -3015,8 +3030,8 @@ function App() {
               try {
                 const path = /^(?:[A-Za-z]:[\\/]|[\\/]|~)/.test(rawPath) ? rawPath : `${activeProject?.path ?? activeSession?.cwd}/${rawPath}`;
                 const blob = await api.workspaceFile(path);
-                if (!blob.type.startsWith("image/")) throw new Error("不是支持的图片格式");
-                if (blob.size > 20 * 1024 * 1024) throw new Error("图片超过 20MB");
+                if (!blob.type.startsWith("image/")) throw new Error(tr("不是支持的图片格式"));
+                if (blob.size > 20 * 1024 * 1024) throw new Error(tr("图片超过 20MB"));
                 const image = await readImage(new File([blob], rawPath.split(/[\\/]/).pop() || "image", { type: blob.type }));
                 setPendingImages(current => [...current, image]);
               } catch (error) { errors.push(`${rawPath}：${error instanceof Error ? error.message : String(error)}`); }
@@ -3032,12 +3047,12 @@ function App() {
             let path = typeof message.path === "string" ? message.path : undefined;
             if (path && !/^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/])/.test(path)) path = `${activeProject?.path ?? activeSession?.cwd}/${path}`;
             const saved = await saveSessionExport(filename, bytes, path);
-            if (saved) appendCommandMessage(`会话已导出到 ${saved}`);
+            if (saved) appendCommandMessage(tr("会话已导出到 {0}", { 0: saved }));
             else {
               const url = URL.createObjectURL(new Blob([bytes], { type: format === "json" ? "application/json" : "text/markdown" }));
               const link = document.createElement("a"); link.href = url; link.download = filename; link.click();
               window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-              appendCommandMessage("会话导出已开始下载");
+              appendCommandMessage(tr("会话导出已开始下载"));
             }
             return true;
           }
@@ -3048,11 +3063,11 @@ function App() {
             if (message.type === "followLogs") {
               const controller = new AbortController();
               logFollowControllers.current.set(key, controller);
-              appendCommandMessage(`开始跟踪日志 ${message.name}，/logs --stop 停止`);
-              void followDesktopLog(api, commandSessionId(), String(message.name), controller.signal, body => appendCommandCard(command, `日志：${message.name}`, body))
+              appendCommandMessage(tr("开始跟踪日志 {0}，/logs --stop 停止", { 0: message.name }));
+              void followDesktopLog(api, commandSessionId(), String(message.name), controller.signal, body => appendCommandCard(command, tr("日志：{0}", { 0: message.name }), body))
                 .catch(error => { if (!controller.signal.aborted) appendCommandMessage(String(error), true); })
                 .finally(() => { if (logFollowControllers.current.get(key) === controller) logFollowControllers.current.delete(key); });
-            } else appendCommandMessage("已停止日志跟踪");
+            } else appendCommandMessage(tr("已停止日志跟踪"));
             return true;
           }
           if (message.type === "pruneSessions") {
@@ -3061,7 +3076,7 @@ function App() {
             const confirmed = await new Promise<boolean>(resolve => setPruneConfirmation({ days, deleteFiles, resolve }));
             if (confirmed) {
               const result = await api.request("/session/prune", { method: "POST", body: JSON.stringify({ days, delete_files: deleteFiles }) });
-              appendCommandCard(command, "清理会话", textFromUnknown(result));
+              appendCommandCard(command, tr("清理会话"), textFromUnknown(result));
               await Promise.all(activeConnection!.projects.map(project => refreshProjectSessions(activeConnection!.id, project.path)));
             }
             return true;
@@ -3075,40 +3090,40 @@ function App() {
         },
       })) return true;
       if (command === "/plan" || command === "/agent") {
-        if (args) throw new Error(`用法：${command}`);
+        if (args) throw new Error(tr("用法：{0}", { 0: command }));
         selectMode(command === "/plan" ? "plan" : "agent");
-        appendCommandMessage(command === "/plan" ? "已切换到 Plan 模式" : "已切换到 Agent 模式");
+        appendCommandMessage(command === "/plan" ? tr("已切换到 Plan 模式") : tr("已切换到 Agent 模式"));
         return true;
       }
       if (command === "/status") {
-        if (args) throw new Error("用法：/status");
+        if (args) throw new Error(tr("用法：/status"));
         const status = activeSession?.status;
-        if (!status) throw new Error("会话状态尚未就绪");
-        appendCommandCard(command, "会话状态", [
-          `模型 ${status.model_profile || status.model || "默认"}`,
-          `模式 ${status.mode === "plan" ? "Plan" : "Agent"}`,
-          `推理 ${status.reasoning_effort || "自动"}`,
-          `Ultra ${status.ultra_mode ? "开启" : "关闭"}`,
-          `上下文 ${status.context_used_percent.toFixed(1)}%`,
+        if (!status) throw new Error(tr("会话状态尚未就绪"));
+        appendCommandCard(command, tr("会话状态"), [
+          tr("模型 {0}", { 0: status.model_profile || status.model || tr("默认") }),
+          tr("模式 {0}", { 0: status.mode === "plan" ? "Plan" : "Agent" }),
+          tr("推理 {0}", { 0: status.reasoning_effort || tr("自动") }),
+          `Ultra ${status.ultra_mode ? tr("开启") : tr("关闭")}`,
+          tr("上下文 {0}%", { 0: status.context_used_percent.toFixed(1) }),
         ].join("\n"));
         return true;
       }
       if (command === "/effort") {
         if (!args) {
-          appendCommandCard(command, "推理强度", `当前推理强度：${activeSession?.status?.reasoning_effort || "自动"}`);
+          appendCommandCard(command, tr("推理强度"), tr("当前推理强度：{0}", { 0: activeSession?.status?.reasoning_effort || tr("自动") }));
           return true;
         }
         const allowed = ["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
-        if (!allowed.includes(args)) throw new Error("用法：/effort <auto|none|minimal|low|medium|high|xhigh|max>");
+        if (!allowed.includes(args)) throw new Error(trHtml("用法：/effort <auto|none|minimal|low|medium|high|xhigh|max>"));
         selectReasoningEffort(args as ReasoningEffort | "auto");
-        appendCommandMessage(`推理强度已切换为 ${args === "auto" ? "自动" : args}`);
+        appendCommandMessage(tr("推理强度已切换为 {0}", { 0: args === "auto" ? tr("自动") : args }));
         return true;
       }
       if (command === "/ultra") {
-        if (args && args !== "true" && args !== "false") throw new Error("用法：/ultra [true|false]");
+        if (args && args !== "true" && args !== "false") throw new Error(tr("用法：/ultra [true|false]"));
         const enabled = args ? args === "true" : !activeSession?.status?.ultra_mode;
         selectUltraMode(enabled);
-        appendCommandMessage(`Ultra 模式已${enabled ? "开启" : "关闭"}`);
+        appendCommandMessage(tr("Ultra 模式已{0}", { 0: enabled ? tr("开启") : tr("关闭") }));
         return true;
       }
       if (command === "/model") {
@@ -3116,95 +3131,95 @@ function App() {
           const grouped = groupGatewayModels(activeGateway?.models ?? []);
           const models = grouped.length > 0
             ? grouped.map(({ group, models: entries }) => `${group}: ${entries.map((model) => model.name).join("、")}`).join("\n")
-            : "暂无可用模型";
-          appendCommandMessage(`当前模型：${activeModel || activeSession?.status?.model || "默认"}\n可用模型：\n${models}`);
+            : tr("暂无可用模型");
+          appendCommandMessage(tr("当前模型：{0}\n可用模型：\n{1}", { 0: activeModel || activeSession?.status?.model || tr("默认"), 1: models }));
           return true;
         }
         const model = activeGateway?.models.find((item) => item.name.toLocaleLowerCase() === args.toLocaleLowerCase());
-        if (!model) throw new Error(`找不到模型：${args}`);
+        if (!model) throw new Error(tr("找不到模型：{0}", { 0: args }));
         selectModel(model.name);
-        appendCommandMessage(`模型已切换为 ${model.name}`);
+        appendCommandMessage(tr("模型已切换为 {0}", { 0: model.name }));
         return true;
       }
       if (command === "/compact") {
         const result = await api.compactSession(commandSessionId(), args);
-        appendCommandMessage(result.status === "ok" ? "对话上下文已压缩" : "当前无需压缩");
+        appendCommandMessage(result.status === "ok" ? tr("对话上下文已压缩") : tr("当前无需压缩"));
         return true;
       }
       if (command === "/clear") {
-        if (args) throw new Error("用法：/clear");
+        if (args) throw new Error(tr("用法：/clear"));
         const result = await api.clearSession(commandSessionId());
         if (activeSessionKey) {
           setSessions((current) => current[activeSessionKey]
             ? { ...current, [activeSessionKey]: { ...current[activeSessionKey], items: [] } }
             : current);
         }
-        appendCommandMessage(`已清除 ${result.messages_cleared} 条历史消息`);
+        appendCommandMessage(tr("已清除 {0} 条历史消息", { 0: result.messages_cleared }));
         return true;
       }
       if (command === "/sessions") {
-        if (args) throw new Error("用法：/sessions");
+        if (args) throw new Error(tr("用法：/sessions"));
         const list = Object.values(activeGateway?.sessionsByProject ?? {}).flat();
-        appendCommandCard(command, "会话列表", list.length
-          ? list.slice(0, 30).map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join("\n")
-          : "暂无会话");
+        appendCommandCard(command, tr("会话列表"), list.length
+          ? list.slice(0, 30).map((session) => `${session.title || tr("未命名会话")} (${session.session_id.slice(0, 8)})`).join("\n")
+          : tr("暂无会话"));
         return true;
       }
       if (command === "/recent") {
         const limit = args ? Number.parseInt(args, 10) : 10;
-        if (!Number.isFinite(limit) || limit < 1) throw new Error("用法：/recent [数量]");
+        if (!Number.isFinite(limit) || limit < 1) throw new Error(tr("用法：/recent [数量]"));
         const list = (await api.recentSessions()).slice(0, limit);
-        appendCommandCard(command, "最近会话", list.length
-          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join("\n")
-          : "暂无最近会话");
+        appendCommandCard(command, tr("最近会话"), list.length
+          ? list.map((session) => `${session.title || tr("未命名会话")} (${session.session_id.slice(0, 8)})`).join("\n")
+          : tr("暂无最近会话"));
         return true;
       }
       if (command === "/search") {
-        if (!args) throw new Error("用法：/search <关键词>");
+        if (!args) throw new Error(tr("用法：/search <关键词>"));
         const list = await api.searchSessions(args);
-        appendCommandCard(command, "会话搜索", list.length
-          ? list.map((session) => `${session.title || "未命名会话"} (${session.session_id.slice(0, 8)})`).join("\n")
-          : `没有找到与“${args}”匹配的会话`);
+        appendCommandCard(command, tr("会话搜索"), list.length
+          ? list.map((session) => `${session.title || tr("未命名会话")} (${session.session_id.slice(0, 8)})`).join("\n")
+          : tr("没有找到与“{0}”匹配的会话", { 0: args }));
         return true;
       }
       if (command === "/archive") {
-        if (!args) throw new Error("用法：/archive <session-id>");
+        if (!args) throw new Error(trHtml("用法：/archive <session-id>"));
         await api.archive(args);
         if (activeConnection) {
           await Promise.all(activeConnection.projects.map((project) => refreshProjectSessions(activeConnection.id, project.path)));
         }
-        appendCommandMessage(`会话 ${args} 已归档`);
+        appendCommandMessage(tr("会话 {0} 已归档", { 0: args }));
         return true;
       }
       if (command === "/stats") {
-        if (args) throw new Error("用法：/stats");
-        appendCommandCard(command, "使用统计", textFromUnknown(await api.sessionStats()));
+        if (args) throw new Error(tr("用法：/stats"));
+        appendCommandCard(command, tr("使用统计"), textFromUnknown(await api.sessionStats()));
         return true;
       }
       if (command === "/checkpoint") {
         const result = await api.createCheckpoint(commandSessionId(), args);
         const snapshotNote = result.snapshot_included === false
-          ? "（仅保存对话，文件快照已跳过）"
+          ? tr("（仅保存对话，文件快照已跳过）")
           : "";
-        appendCommandMessage(`已创建检查点 ${result.checkpoint_id.slice(0, 8)}${args ? `（${args}）` : ""}${snapshotNote}`);
+        appendCommandMessage(tr("已创建检查点 {0}{1}{2}", { 0: result.checkpoint_id.slice(0, 8), 1: args ? `（${args}）` : "", 2: snapshotNote }));
         return true;
       }
       if (command === "/checkpoints") {
-        if (args) throw new Error("用法：/checkpoints");
+        if (args) throw new Error(tr("用法：/checkpoints"));
         setCheckpointModal(true);
         return true;
       }
       if (command === "/rollback" || command === "/revert") {
-        if (!args) throw new Error(`用法：${command} <checkpoint-id>`);
+        if (!args) throw new Error((trHtml("用法：") + (command) + trHtml(" <checkpoint-id>")));
         if (command === "/rollback") await api.rollback(commandSessionId(), args);
         else await api.revert(commandSessionId(), args);
-        appendCommandMessage(`已${command === "/rollback" ? "回滚会话" : "还原文件和会话"}到检查点 ${args}`);
+        appendCommandMessage(tr("已{0}到检查点 {1}", { 0: command === "/rollback" ? tr("回滚会话") : tr("还原文件和会话"), 1: args }));
         return true;
       }
       if (command === "/undo") {
-        if (args) throw new Error("用法：/undo");
+        if (args) throw new Error(tr("用法：/undo"));
         await api.undo(commandSessionId());
-        appendCommandMessage("已撤销到最近的检查点");
+        appendCommandMessage(tr("已撤销到最近的检查点"));
         return true;
       }
       if (command === "/tasks") {
@@ -3216,27 +3231,27 @@ function App() {
           return true;
         }
         const selector = tokens.shift();
-        if (!selector) throw new Error("用法：/tasks [list|show|output|stop] <task-id>");
+        if (!selector) throw new Error(trHtml("用法：/tasks [list|show|output|stop] <task-id>"));
         if (action === "show") {
           const task = await api.backgroundTask(selector);
-          appendCommandCard(command, "后台任务详情", [
-            `任务：${task.description || task.task_id}`,
-            `状态：${task.status}`,
-            `类型：${task.task_type}`,
+          appendCommandCard(command, tr("后台任务详情"), [
+            tr("任务：{0}", { 0: task.description || task.task_id }),
+            tr("状态：{0}", { 0: task.status }),
+            tr("类型：{0}", { 0: task.task_type }),
             `ID：${task.task_id}`,
           ].join("\n"));
         } else if (action === "output") {
           const lines = tokens[0] ? Number.parseInt(tokens[0], 10) : 200;
-          if (!Number.isFinite(lines) || lines < 1) throw new Error("用法：/tasks output <task-id> [lines]");
+          if (!Number.isFinite(lines) || lines < 1) throw new Error(trHtml("用法：/tasks output <task-id> [lines]"));
           const output = await api.backgroundTaskOutput(selector, lines);
-          appendCommandCard(command, "后台任务输出", output.lines.length ? output.lines.join("\n") : "该任务暂无输出");
+          appendCommandCard(command, tr("后台任务输出"), output.lines.length ? output.lines.join("\n") : tr("该任务暂无输出"));
         } else if (action === "stop") {
-          if (tokens.length) throw new Error("用法：/tasks stop <task-id>");
+          if (tokens.length) throw new Error(trHtml("用法：/tasks stop <task-id>"));
           await api.stopBackgroundTask(selector);
-          appendCommandMessage(`后台任务 ${selector} 已停止`);
+          appendCommandMessage(tr("后台任务 {0} 已停止", { 0: selector }));
           if (activeConnection) await refreshMonitors(activeConnection.id);
         } else {
-          throw new Error("用法：/tasks [list|show|output|stop] <task-id>");
+          throw new Error(trHtml("用法：/tasks [list|show|output|stop] <task-id>"));
         }
         return true;
       }
@@ -3263,7 +3278,7 @@ function App() {
   const activeSessionFavorite = Boolean(activeSession && favoriteSessionIds.has(activeSession.id));
   const favoriteItems = useMemo(
     () => resolveFavoriteEntries(activeConnection, activeGateway),
-    [activeConnection, activeGateway],
+    [activeConnection, activeGateway, getLocale()],
   );
   const favoriteItemCount = countFavoriteItems(activeFavoriteEntries);
   const activeJobs = activeConnection ? scheduleJobs[activeConnection.id] ?? [] : [];
@@ -3286,7 +3301,7 @@ function App() {
     documentMode,
     settings?.document_agent_collapsed === true,
   );
-  const reviewTurns = useMemo(() => changeReviewTurns(activeSession?.items ?? []), [activeSession?.items]);
+  const reviewTurns = useMemo(() => changeReviewTurns(activeSession?.items ?? []), [activeSession?.items, getLocale()]);
   const openChangeReview = changeReview && (changeReview.source === "git" || changeReview.summaryId === ALL_EDITS
     || reviewTurns.some((turn) => turn.id === changeReview.summaryId))
     ? changeReview
@@ -3329,19 +3344,19 @@ function App() {
   };
   const referencedProjectFilePaths = useMemo(() => new Set(
     pendingFiles.flatMap((file) => file.mode === "path" && file.path ? [file.path] : []),
-  ), [pendingFiles]);
+  ), [pendingFiles, getLocale()]);
   const composerReferences = useMemo<ComposerReferenceOption[]>(() => [
     ...pendingImages.map((image) => ({
       key: `image:${image.id}`,
       kind: "image" as const,
       label: image.name,
-      detail: "图片",
+      detail: tr("图片"),
     })),
     ...pendingFiles.map((file) => ({
       key: `file:${file.id}`,
       kind: "file" as const,
       label: file.name,
-      detail: file.mode === "path" ? `路径 · ${file.path}` : `文件 · ${formatFileSize(file.size ?? 0)}`,
+      detail: file.mode === "path" ? tr("路径 · {0}", { 0: file.path }) : tr("文件 · {0}", { 0: formatFileSize(file.size ?? 0) }),
     })),
     ...pendingFolders.map((path) => ({
       key: `folder:${path}`,
@@ -3353,14 +3368,14 @@ function App() {
       key: `document:${reference.id}`,
       kind: "document" as const,
       label: reference.document_name,
-      detail: `文档引用 · ${formatDocumentReferenceLocation(reference)}`,
+      detail: tr("文档引用 · {0}", { 0: formatDocumentReferenceLocation(reference) }),
     })),
-  ], [pendingDocumentReferences, pendingFiles, pendingFolders, pendingImages]);
+  ], [pendingDocumentReferences, pendingFiles, pendingFolders, pendingImages, getLocale()]);
   const composerCommands = useMemo(() => createComposerCommandOptions(
     activeGateway?.models ?? [],
     activePluginData.skills,
     DESKTOP_COMMAND_NAMES,
-  ), [activeGateway?.models, activePluginData.skills]);
+  ), [activeGateway?.models, activePluginData.skills, getLocale()]);
 
   useEffect(() => {
     setChangeReview(null);
@@ -3499,14 +3514,14 @@ function App() {
     },
   ): boolean => {
     if (!activeChannel) {
-      setGlobalError("Agent 会话尚未就绪，请稍后重试");
+      setGlobalError(tr("Agent 会话尚未就绪，请稍后重试"));
       return false;
     }
     try {
       const operationId = activeChannel.documentAction(action, options);
       if (activeSessionKey) {
         const startedAt = Date.now();
-        const title = action === "translate" ? "翻译文档" : "生成 Blog";
+        const title = action === "translate" ? tr("翻译文档") : tr("生成 Blog");
         setSessions((current) => current[activeSessionKey]
           ? {
             ...current,
@@ -3523,7 +3538,7 @@ function App() {
                   id: `${operationId}:document-job`,
                   kind: "document_job" as const,
                   title,
-                  text: "正在准备文档内容",
+                  text: tr("正在准备文档内容"),
                   action,
                   locale: options.locale,
                   language: options.language,
@@ -3550,7 +3565,7 @@ function App() {
     return (
       <div className="app-shell">
         <div className="boot">
-          {globalError ? <><AlertTriangle />无法加载桌面配置</> : <><LoaderCircle className="spin" />正在加载 Crab Desktop</>}
+          {globalError ? <><AlertTriangle />{tr("无法加载桌面配置")}</> : <><LoaderCircle className="spin" />{tr("正在加载 Crab Desktop")}</>}
         </div>
         <StatusBar loading={!globalError} error={globalError} onRetry={globalError ? () => window.location.reload() : undefined} />
       </div>
@@ -3660,14 +3675,14 @@ function App() {
             setGatewaySuiteProgress({
               operationId: "pending",
               stage: "preparing",
-              detail: "正在准备安装 CrabCode 套件",
+              detail: tr("正在准备安装 CrabCode 套件"),
             });
             try {
               const result = await installGatewaySuite(pythonPath, features, setGatewaySuiteProgress);
               const restartNote = result.features.includes("browser")
-                ? "。请重启本地 Gateway，Browser 才会出现"
+                ? tr("。请重启本地 Gateway，Browser 才会出现")
                 : "";
-              setGatewaySuiteSuccess(`${result.packageSpec} 已安装到 ${result.python}${restartNote}`);
+              setGatewaySuiteSuccess(tr("{0} 已安装到 {1}{2}", { 0: result.packageSpec, 1: result.python, 2: restartNote }));
             } catch (reason) {
               setGatewaySuiteError(reason instanceof Error ? reason.message : String(reason));
               throw reason;
@@ -3687,11 +3702,11 @@ function App() {
             setSystemToolProgress({
               operationId: "pending",
               stage: "preparing",
-              detail: `正在准备检测系统工具 ${tool}`,
+              detail: tr("正在准备检测系统工具 {0}", { 0: tool }),
             });
             try {
               const result = await installSystemTool(pythonPath, tool, setSystemToolProgress);
-              setSystemToolSuccess(`${result.version} 已可用 · ${result.python}`);
+              setSystemToolSuccess(tr("{0} 已可用 · {1}", { 0: result.version, 1: result.python }));
             } catch (reason) {
               setSystemToolError(reason instanceof Error ? reason.message : String(reason));
               throw reason;
@@ -3756,12 +3771,12 @@ function App() {
             if (activeConnection) void refreshModelSettings(activeConnection.id, activeProject?.path);
           }}
           onMutateModelSettings={(mutation) => {
-            if (!activeConnection) return Promise.reject(new Error("未选择 Gateway"));
+            if (!activeConnection) return Promise.reject(new Error(tr("未选择 Gateway")));
             return mutateModelSettings(activeConnection.id, mutation);
           }}
           onTestModel={(name) => {
             const api = activeConnection ? apiRef.current.get(activeConnection.id) : null;
-            if (!api) return Promise.reject(new Error("Gateway 尚未连接"));
+            if (!api) return Promise.reject(new Error(tr("Gateway 尚未连接")));
             return api.testModel(name, activeProject?.path);
           }}
           runtimeSettings={activeRuntimeSettingsState?.data ?? null}
@@ -3771,7 +3786,7 @@ function App() {
             if (activeConnection) void refreshRuntimeSettings(activeConnection.id, activeProject?.path);
           }}
           onMutateRuntimeSettings={(mutation) => {
-            if (!activeConnection) return Promise.reject(new Error("未选择 Gateway"));
+            if (!activeConnection) return Promise.reject(new Error(tr("未选择 Gateway")));
             return mutateRuntimeSettings(activeConnection.id, mutation);
           }}
           promptSettings={activePromptSettingsState?.data ?? null}
@@ -3781,7 +3796,7 @@ function App() {
             if (activeConnection) void refreshPromptSettings(activeConnection.id, activeProject?.path);
           }}
           onMutatePromptSettings={(mutation) => {
-            if (!activeConnection) return Promise.reject(new Error("未选择 Gateway"));
+            if (!activeConnection) return Promise.reject(new Error(tr("未选择 Gateway")));
             return mutatePromptSettings(activeConnection.id, mutation);
           }}
           onNewProject={beginNewProject}
@@ -3806,7 +3821,7 @@ function App() {
             setDocumentEngineProgress({
               operationId: "pending",
               stage: "preparing",
-              detail: "正在准备安装高精度 PDF 引擎",
+              detail: tr("正在准备安装高精度 PDF 引擎"),
               percent: 3,
             });
             try {
@@ -3883,15 +3898,15 @@ function App() {
           <header className="gateway-tabs">
             <button
               className="icon-button sidebar-toggle"
-              title={sidebarOpen ? "隐藏侧栏" : "显示侧栏"}
+              title={sidebarOpen ? tr("隐藏侧栏") : tr("显示侧栏")}
               onClick={() => setSidebarOpen((value) => !value)}
             >
               {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
             </button>
-            <div className="top-brand" aria-label="Crab Desktop 工作台">
+            <div className="top-brand" aria-label={tr("Crab Desktop 工作台")}>
               <span className={`top-brand-mark ${activeGateway?.status === "online" ? "online" : ""}`}><Code2 /></span>
               <span className="top-brand-name">Crab Desktop</span>
-              <span className="top-brand-mode">WORKBENCH</span>
+              <span className="top-brand-mode">{tr("工作台")}</span>
             </div>
             <div className="tab-strip">
               {settings.connection_order.map((id) => {
@@ -3911,7 +3926,7 @@ function App() {
                     className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
                     onClick={() => switchConnection(id)}
                     onDoubleClick={() => {
-                      const name = window.prompt("连接名称", connection.name)?.trim();
+                      const name = window.prompt(tr("连接名称"), connection.name)?.trim();
                       if (name) updateConnection(id, (current) => ({ ...current, name }));
                     }}
                     title={`${connection.name}\n${connection.base_url}`}
@@ -3924,7 +3939,7 @@ function App() {
                 );
               })}
             </div>
-            <button className="icon-button" title="连接 Gateway" onClick={() => setConnectionModal("new")}>
+            <button className="icon-button" title={tr("连接 Gateway")} onClick={() => setConnectionModal("new")}>
               <Plus />
             </button>
           </header>
@@ -3941,20 +3956,20 @@ function App() {
                   <div className="workspace-brand-lockup" title={activeProject?.path ?? activeConnection?.base_url}>
                     <span className="workspace-brand-copy">
                       <strong>Crab Desktop</strong>
-                      <small>{activeProject?.name ?? "工作区"}</small>
+                      <small>{activeProject?.name ?? tr("工作区")}</small>
                     </span>
                   </div>
                   <div className="workspace-brand-actions">
                     <button
                       className="icon-button small"
-                      title="已安排"
+                      title={tr("已安排")}
                       onClick={() => setWorkspaceView("scheduled")}
                     >
                       <Clock />
                     </button>
                     <button
                       className="icon-button small"
-                      title="重新连接"
+                      title={tr("重新连接")}
                       disabled={activeGateway?.status === "connecting"}
                       onClick={() => {
                         if (!activeConnection) return;
@@ -3974,28 +3989,28 @@ function App() {
                   </button>
                 )}
 
-                <nav className="workspace-nav" aria-label="工作区">
+                <nav className="workspace-nav" aria-label={tr("工作区")}>
                   <button
                     className={`workspace-nav-item ${workspaceView === "chat" ? "active" : ""}`}
                     disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
                     onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
                   >
                     <MessageSquarePlus />
-                    <span>新会话</span>
+                    <span>{tr("新会话")}</span>
                   </button>
                   <button
                     className={`workspace-nav-item ${workspaceView === "scheduled" ? "active" : ""}`}
                     onClick={() => setWorkspaceView("scheduled")}
                   >
                     <Clock />
-                    <span>已安排</span>
+                    <span>{tr("已安排")}</span>
                   </button>
                   <button
                     className={`workspace-nav-item ${workspaceView === "plugins" ? "active" : ""}`}
                     onClick={() => setWorkspaceView("plugins")}
                   >
                     <Puzzle />
-                    <span>插件</span>
+                    <span>{tr("插件")}</span>
                   </button>
                   <button
                     className={`workspace-nav-item ${workspaceView === "favorites" ? "active" : ""}`}
@@ -4003,7 +4018,7 @@ function App() {
                     onClick={() => setWorkspaceView("favorites")}
                   >
                     <Star />
-                    <span>收藏</span>
+                    <span>{tr("收藏")}</span>
                     {favoriteItemCount > 0 && <span className="workspace-nav-count">{favoriteItemCount}</span>}
                   </button>
                 </nav>
@@ -4015,12 +4030,12 @@ function App() {
                       aria-expanded={!projectsCollapsed}
                       onClick={() => setProjectsCollapsed((value) => !value)}
                     >
-                      <span>项目</span>
+                      <span>{tr("项目")}</span>
                     </button>
                     <span className="section-label-actions">
                       <button
                         className="icon-button tiny"
-                        title="添加项目"
+                        title={tr("添加项目")}
                         disabled={activeGateway?.status !== "online"}
                         onClick={beginNewProject}
                       >
@@ -4028,7 +4043,7 @@ function App() {
                       </button>
                       <button
                         className="icon-button tiny section-collapse"
-                        title={projectsCollapsed ? "展开项目" : "折叠项目"}
+                        title={projectsCollapsed ? tr("展开项目") : tr("折叠项目")}
                         aria-expanded={!projectsCollapsed}
                         onClick={() => setProjectsCollapsed((value) => !value)}
                       >
@@ -4091,15 +4106,15 @@ function App() {
                       aria-expanded={!sessionsCollapsed}
                       onClick={() => setSessionsCollapsed((value) => !value)}
                     >
-                      <span>会话</span>
+                      <span>{tr("会话")}</span>
                     </button>
                     <span className="section-label-actions">
                       <span className="section-count">{filteredSessions.length}</span>
                       <button
                         className="icon-button tiny"
                         type="button"
-                        title="新建会话"
-                        aria-label="新建会话"
+                        title={tr("新建会话")}
+                        aria-label={tr("新建会话")}
                         disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
                         onClick={() => {
                           if (!activeConnection || !activeProject) return;
@@ -4111,7 +4126,7 @@ function App() {
                       </button>
                       <button
                         className="icon-button tiny section-collapse"
-                        title={sessionsCollapsed ? "展开会话" : "折叠会话"}
+                        title={sessionsCollapsed ? tr("展开会话") : tr("折叠会话")}
                         aria-expanded={!sessionsCollapsed}
                         onClick={() => setSessionsCollapsed((value) => !value)}
                       >
@@ -4127,7 +4142,7 @@ function App() {
                     <div className="section-content-inner">
                       <label className="session-search">
                         <Search />
-                        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索会话" />
+                        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={tr("搜索会话")} />
                       </label>
                       <div className="session-list">
                         {filteredSessions.map((info) => {
@@ -4149,7 +4164,7 @@ function App() {
                               >
                                 <span className="session-title-row">
                                   {favorite && <Star className="session-favorite" fill="currentColor" />}
-                                  <span className="session-title">{info.title || "未命名会话"}</span>
+                                  <span className="session-title">{info.title || tr("未命名会话")}</span>
                                   {view?.busy && <LoaderCircle className="spin" />}
                                   {pending && <ShieldAlert className="pending-icon" />}
                                 </span>
@@ -4178,7 +4193,7 @@ function App() {
                           );
                         })}
                         {activeGateway?.status === "online" && filteredSessions.length === 0 && (
-                          <div className="empty-sidebar">暂无会话</div>
+                          <div className="empty-sidebar">{tr("暂无会话")}</div>
                         )}
                       </div>
                     </div>
@@ -4188,7 +4203,7 @@ function App() {
                 <div className="workspace-settings-footer">
                   <button className="workspace-settings-button" type="button" onClick={openSettings}>
                     <Settings />
-                    <span>设置</span>
+                    <span>{tr("设置")}</span>
                   </button>
                 </div>
               </div>
@@ -4234,7 +4249,7 @@ function App() {
                   ))}
                   onTranslateSelection={(text, locale) => {
                     if (!activeChannel || !activeSession?.connected) {
-                      setGlobalError("Agent 会话尚未就绪，请稍后重试");
+                      setGlobalError(tr("Agent 会话尚未就绪，请稍后重试"));
                       return null;
                     }
                     try {
@@ -4346,14 +4361,14 @@ function App() {
                     <div className="conversation-title">
                       <h1 className={activeSession.loading ? "session-loading-title" : undefined}>
                         {activeSession.loading && <LoaderCircle className="spin" />}
-                        {activeSession.loading ? "正在加载会话" : activeSession.title}
+                        {activeSession.loading ? tr("正在加载会话") : activeSession.title || tr("新会话")}
                       </h1>
                       <span>{activeSession.cwd}</span>
                       {activeForkOrigin && (
-                        <small className="conversation-origin">来自“{activeForkOrigin}” · 分叉</small>
+                        <small className="conversation-origin">{tr("来自“")}{activeForkOrigin}{tr("” · 分叉")}</small>
                       )}
                     </div>
-                    <div className="conversation-view-tabs" role="tablist" aria-label="会话视图">
+                    <div className="conversation-view-tabs" role="tablist" aria-label={tr("会话视图")}>
                       <SlidingTabIndicator activeKey={activeConversationView} className="conversation-view-indicator" />
                       <button
                         type="button"
@@ -4361,22 +4376,22 @@ function App() {
                         aria-selected={activeConversationView === "chat"}
                         className={activeConversationView === "chat" ? "active" : ""}
                         onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "chat" }))}
-                      >对话</button>
+                      >{tr("对话")}</button>
                       <button
                         type="button"
                         role="tab"
                         aria-selected={activeConversationView === "trajectory"}
                         className={activeConversationView === "trajectory" ? "active" : ""}
                         onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "trajectory" }))}
-                      >轨迹</button>
+                      >{tr("轨迹")}</button>
                     </div>
                     <div className="conversation-actions">
-                      <div className="conversation-font-size" aria-label="Agent 字号">
+                      <div className="conversation-font-size" aria-label={tr("Agent 字号")}>
                         <button
                           className="icon-button tiny"
                           type="button"
-                          title="缩小 Agent 字号"
-                          aria-label="缩小 Agent 字号"
+                          title={tr("缩小 Agent 字号")}
+                          aria-label={tr("缩小 Agent 字号")}
                           disabled={settings.ui_font_size <= 11}
                           onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size - 1 }))}
                         ><ZoomOut /></button>
@@ -4384,15 +4399,15 @@ function App() {
                         <button
                           className="icon-button tiny"
                           type="button"
-                          title="放大 Agent 字号"
-                          aria-label="放大 Agent 字号"
+                          title={tr("放大 Agent 字号")}
+                          aria-label={tr("放大 Agent 字号")}
                           disabled={settings.ui_font_size >= 18}
                           onClick={() => commitSettings((current) => ({ ...current, ui_font_size: current.ui_font_size + 1 }))}
                         ><ZoomIn /></button>
                       </div>
                       <ConversationActionsMenu
                         key={activeSessionKey}
-                        sessionTitle={activeSession.title}
+                        sessionTitle={activeSession.title || tr("新会话")}
                         favorite={activeSessionFavorite}
                         favoriteDisabled={activeSession.id.startsWith("new-")}
                         onCheckpoint={() => setCheckpointModal(true)}
@@ -4402,8 +4417,8 @@ function App() {
                         <button
                           className="icon-button"
                           type="button"
-                          title="收起 Agent"
-                          aria-label="收起 Agent"
+                          title={tr("收起 Agent")}
+                          aria-label={tr("收起 Agent")}
                           onClick={() => updateDocumentAgentCollapsed(true)}
                         >
                           <PanelRightClose />
@@ -4413,8 +4428,8 @@ function App() {
                         <button
                           className={`icon-button ${projectFilesVisible ? "active" : ""}`}
                           type="button"
-                          title={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
-                          aria-label={projectFilesVisible ? "关闭文件查看" : "浏览文件"}
+                          title={projectFilesVisible ? tr("关闭文件查看") : tr("浏览文件")}
+                          aria-label={projectFilesVisible ? tr("关闭文件查看") : tr("浏览文件")}
                           aria-pressed={projectFilesVisible}
                           onClick={() => setProjectFilesOpen((value) => !value)}
                         >
@@ -4427,8 +4442,8 @@ function App() {
                     <div className="messages">
                       <div className="conversation-empty session-loading-state" role="status" aria-live="polite">
                         <LoaderCircle className="spin" />
-                        <h2>正在加载会话</h2>
-                        <p>正在恢复历史消息和会话状态…</p>
+                        <h2>{tr("正在加载会话")}</h2>
+                        <p>{tr("正在恢复历史消息和会话状态…")}</p>
                       </div>
                     </div>
                   ) : activeConversationView === "trajectory" ? (
@@ -4437,7 +4452,7 @@ function App() {
                     {activeSession.items.length === 0 && (
                       <div className="conversation-empty">
                         <Bot />
-                        <h2>在 {activeProject?.name ?? "项目"} 中构建什么？</h2>
+                        <h2>{tr("在 ")}{activeProject?.name ?? tr("项目")}{tr(" 中构建什么？")}</h2>
                       </div>
                     )}
                     <ConversationTurns
@@ -4507,10 +4522,10 @@ function App() {
                       {!activeSession.loading && !activeSession.connected && (
                         <span
                           className="danger connection-state"
-                          title={activeSession.error || "会话连接已断开，Crab Desktop 正在重连"}
+                          title={activeSession.error || tr("会话连接已断开，Crab Desktop 正在重连")}
                         >
                           <WifiOff />
-                          {activeSession.error || "连接中断，正在重连"}
+                          {activeSession.error || tr("连接中断，正在重连")}
                         </span>
                       )}
                     </div>
@@ -4522,7 +4537,7 @@ function App() {
                               <PreviewableImage src={image.dataUrl} alt={image.name} />
                               <button
                                 className="icon-button tiny"
-                                title="移除图片"
+                                title={tr("移除图片")}
                                 onClick={() => setPendingImages((current) => current.filter((item) => item.id !== image.id))}
                               ><X /></button>
                             </div>
@@ -4540,7 +4555,7 @@ function App() {
                               <span>{basename(path)}</span>
                               <button
                                 type="button"
-                                title="移除文件夹引用"
+                                title={tr("移除文件夹引用")}
                                 onClick={() => setPendingFolders((current) => current.filter((item) => item !== path))}
                               ><X /></button>
                             </div>
@@ -4563,7 +4578,7 @@ function App() {
                         onChange={setComposer}
                         onImages={(files) => void addImages(files)}
                         onSubmit={(opposite) => void sendMessage(opposite)}
-                        placeholder={activeSession.loading ? "会话加载完成后即可输入" : activeSession.busy ? (settings.follow_up_mode === "steer" ? "输入内容以引导当前任务" : "输入后续任务，本轮结束后执行") : "输入任务"}
+                        placeholder={activeSession.loading ? tr("会话加载完成后即可输入") : activeSession.busy ? (settings.follow_up_mode === "steer" ? tr("输入内容以引导当前任务") : tr("输入后续任务，本轮结束后执行")) : tr("输入任务")}
                       />
                       <div className="composer-toolbar">
                         <div className="toolbar-left">
@@ -4583,14 +4598,12 @@ function App() {
                           <ModelPicker
                             models={activeGateway?.models ?? []}
                             value={activeModel}
-                            fallback={activeSession.status?.model || "默认模型"}
+                            fallback={activeSession.status?.model || tr("默认模型")}
                             disabled={activeSession.loading || !activeSession.connected || projectModels.loading}
                             onChange={selectModel}
                           />
                           {projectModels.error && <button type="button" title={projectModels.error}
-                            onClick={() => setModelCatalogRevision(current => current + 1)}>
-                            模型列表加载失败，点击重试
-                          </button>}
+                            onClick={() => setModelCatalogRevision(current => current + 1)}>{tr("模型列表加载失败，点击重试")}</button>}
                           <ReasoningEffortPicker
                             value={activeSession.status?.reasoning_effort}
                             disabled={activeSession.loading || !activeSession.connected}
@@ -4607,20 +4620,20 @@ function App() {
                             <button
                               type="button"
                               className="composer-mode-chip plan"
-                              title="关闭计划模式"
+                              title={tr("关闭计划模式")}
                               onClick={() => selectMode("agent")}
                             >
-                              <ListTodo /><span>计划模式</span><X />
+                              <ListTodo /><span>{tr("计划模式")}</span><X />
                             </button>
                           )}
                           {activeSession.status?.ultra_mode && (
                             <button
                               type="button"
                               className="composer-mode-chip ultra"
-                              title="关闭 Ultra 模式"
+                              title={tr("关闭 Ultra 模式")}
                               onClick={() => selectUltraMode(false)}
                             >
-                              <Sparkles /><span>Ultra 模式</span><X />
+                              <Sparkles /><span>{tr("Ultra 模式")}</span><X />
                             </button>
                           )}
                         </div>
@@ -4629,7 +4642,7 @@ function App() {
                           {activeSession.busy ? (
                             <button
                               className="round-action stop"
-                              title="中断任务"
+                              title={tr("中断任务")}
                               onClick={() => activeChannel?.interrupt(activeSession.operationId)}
                             >
                               <Square />
@@ -4637,7 +4650,7 @@ function App() {
                           ) : null}
                           <button
                             className="round-action send"
-                            title={activeSession.busy ? (settings.follow_up_mode === "steer" ? "引导当前运行 (Enter)" : "加入队列 (Enter)") : settings.composer_send_key === "mod_enter" ? `发送 (${composerModifierLabel()})` : "发送 (Enter)"}
+                            title={activeSession.busy ? (settings.follow_up_mode === "steer" ? tr("引导当前运行 (Enter)") : tr("加入队列 (Enter)")) : settings.composer_send_key === "mod_enter" ? tr("发送 ({0})", { 0: composerModifierLabel() }) : tr("发送 (Enter)")}
                             disabled={(
                               !composer.trim()
                               && pendingImages.length === 0
@@ -4659,15 +4672,15 @@ function App() {
                 <button
                   className="project-files-floating-toggle"
                   type="button"
-                  title="浏览文件"
+                  title={tr("浏览文件")}
                   onClick={() => setProjectFilesOpen(true)}
-                ><PanelRightOpen /><span>文件</span></button>
+                ><PanelRightOpen /><span>{tr("文件")}</span></button>
               )}
               {projectFilesDrawerVisible && (
                 <button
                   className="project-files-drawer-backdrop"
                   type="button"
-                  aria-label="关闭文件工作区"
+                  aria-label={tr("关闭文件工作区")}
                   onClick={() => setProjectFilesOpen(false)}
                 />
               )}
@@ -4696,13 +4709,13 @@ function App() {
         }}
         onComputerUseRefresh={() => computerUseChannelRef.current?.refresh()}
         activity={gatewaySuiteBusy
-          ? gatewaySuiteProgress?.detail ?? "正在安装 CrabCode 套件…"
+          ? gatewaySuiteProgress?.detail ?? tr("正在安装 CrabCode 套件…")
           : systemToolBusy
-            ? systemToolProgress?.detail ?? `正在安装系统工具 ${systemToolBusy}…`
+            ? systemToolProgress?.detail ?? tr("正在安装系统工具 {0}…", { 0: systemToolBusy })
             : documentEngineBusy
-              ? documentEngineProgress?.detail ?? (documentEngineBusy === "install" ? "正在安装高精度 PDF 引擎…" : "正在移除高精度 PDF 引擎…")
+              ? documentEngineProgress?.detail ?? (documentEngineBusy === "install" ? tr("正在安装高精度 PDF 引擎…") : tr("正在移除高精度 PDF 引擎…"))
               : lumeInstaller.busy
-                ? lumeInstaller.progress?.detail ?? "正在安装 Lume…"
+                ? lumeInstaller.progress?.detail ?? tr("正在安装 Lume…")
                 : null}
         onConnections={() => setConnectionModal(activeConnection?.id ?? "new")}
         onRetry={activeConnection ? () => void connectGateway(activeConnection, settings.python_path) : undefined}
@@ -4720,7 +4733,7 @@ function App() {
           }}
           onSave={async (connection, password) => {
             if (isInsecureRemoteUrl(connection.base_url) && !connection.allow_insecure_remote) {
-              throw new Error("远程 HTTP 会明文传输密码，请确认不安全连接后再保存");
+              throw new Error(tr("远程 HTTP 会明文传输密码，请确认不安全连接后再保存"));
             }
             connection.base_url = normalizeBaseUrl(connection.base_url).replace(/\/$/, "");
             if (password) {
@@ -4831,8 +4844,8 @@ function App() {
           api={apiRef.current.get(activeConnection.id)!}
           home={activeProject?.path || activeGateway.workspace.home}
           roots={activeGateway.workspace.browse_roots}
-          title={referencePathModal === "file" ? "引用文件路径" : "引用文件或文件夹"}
-          selectLabel="引用此文件夹"
+          title={referencePathModal === "file" ? tr("引用文件路径") : tr("引用文件或文件夹")}
+          selectLabel={tr("引用此文件夹")}
           allowFiles
           allowDirectorySelection={referencePathModal === "all"}
           onClose={() => setReferencePathModal(null)}
@@ -4886,11 +4899,11 @@ function App() {
       )}
 
       {pruneConfirmation && (
-        <Modal title="清理过期会话" onClose={() => { pruneConfirmation.resolve(false); setPruneConfirmation(null); }}>
-          <p>将{pruneConfirmation.deleteFiles ? "永久删除" : "归档"} {pruneConfirmation.days} 天前的会话{pruneConfirmation.deleteFiles ? "及其文件" : ""}。</p>
+        <Modal title={tr("清理过期会话")} onClose={() => { pruneConfirmation.resolve(false); setPruneConfirmation(null); }}>
+          <p>{tr("将")}{pruneConfirmation.deleteFiles ? tr("永久删除") : tr("归档")} {pruneConfirmation.days}{tr(" 天前的会话")}{pruneConfirmation.deleteFiles ? tr("及其文件") : ""}。</p>
           <div className="modal-actions">
-            <button className="secondary-button" onClick={() => { pruneConfirmation.resolve(false); setPruneConfirmation(null); }}>取消</button>
-            <button className="primary-button" onClick={() => { pruneConfirmation.resolve(true); setPruneConfirmation(null); }}>确认清理</button>
+            <button className="secondary-button" onClick={() => { pruneConfirmation.resolve(false); setPruneConfirmation(null); }}>{tr("取消")}</button>
+            <button className="primary-button" onClick={() => { pruneConfirmation.resolve(true); setPruneConfirmation(null); }}>{tr("确认清理")}</button>
           </div>
         </Modal>
       )}
@@ -5016,34 +5029,34 @@ export function ScheduledTasksView({
   const monitorProjectCount = new Set(monitorContexts.map(({ task, project }) => project?.id ?? task.cwd ?? task.session_id)).size;
   const summaryCards = tab === "schedule"
     ? [
-      { label: "正在执行", value: String(runningCount), icon: Activity, tone: "coral" },
-      { label: "暂停待命", value: String(pausedCount), icon: Timer, tone: "amber" },
-      { label: "最近触发", value: nextRun ? formatDateTime(nextRun) : "尚未安排", icon: Gauge, tone: "cyan" },
+      { label: tr("正在执行"), value: String(runningCount), icon: Activity, tone: "coral" },
+      { label: tr("暂停待命"), value: String(pausedCount), icon: Timer, tone: "amber" },
+      { label: tr("最近触发"), value: nextRun ? formatDateTime(nextRun) : tr("尚未安排"), icon: Gauge, tone: "cyan" },
     ] as const
     : [
-      { label: "运行中 Monitor", value: String(monitorContexts.length), icon: Activity, tone: "coral" },
-      { label: "活跃会话", value: String(monitorSessionCount), icon: History, tone: "cyan" },
-      { label: "涉及项目", value: String(monitorProjectCount), icon: Folder, tone: "amber" },
+      { label: tr("运行中 Monitor"), value: String(monitorContexts.length), icon: Activity, tone: "coral" },
+      { label: tr("活跃会话"), value: String(monitorSessionCount), icon: History, tone: "cyan" },
+      { label: tr("涉及项目"), value: String(monitorProjectCount), icon: Folder, tone: "amber" },
     ] as const;
   const suggestions = [
     {
-      title: "晨间代码巡检",
-      meta: "工作日 · 08:30",
-      description: "扫描工作区变更、测试结果与待处理分支，生成一页晨间信号",
+      title: tr("晨间代码巡检"),
+      meta: tr("工作日 · 08:30"),
+      description: tr("扫描工作区变更、测试结果与待处理分支，生成一页晨间信号"),
       icon: Code2,
       tone: "coral",
     },
     {
-      title: "版本周报",
-      meta: "周五 · 16:00",
-      description: "汇总本周提交、合并请求和发布风险，输出可交付的状态摘要",
+      title: tr("版本周报"),
+      meta: tr("周五 · 16:00"),
+      description: tr("汇总本周提交、合并请求和发布风险，输出可交付的状态摘要"),
       icon: GitBranch,
       tone: "cyan",
     },
     {
-      title: "依赖脉冲",
-      meta: "工作日 · 09:00",
-      description: "检查依赖更新与安全告警，只把需要决策的变化推到会话中",
+      title: tr("依赖脉冲"),
+      meta: tr("工作日 · 09:00"),
+      description: tr("检查依赖更新与安全告警，只把需要决策的变化推到会话中"),
       icon: Zap,
       tone: "amber",
     },
@@ -5051,20 +5064,20 @@ export function ScheduledTasksView({
 
   return (
     <section className="workspace-page scheduled-page">
-      <div className="page-kicker"><Workflow /><span>CRAB DESKTOP AUTOMATION DECK</span><i /></div>
+      <div className="page-kicker"><Workflow /><span>{tr("自动化工作台")}</span><i /></div>
       <header className="page-header plugins-header automation-header">
-        <div className="plugin-tabs automation-tabs" role="tablist" aria-label="自动化类型">
-          <button type="button" role="tab" aria-selected={tab === "schedule"} className={tab === "schedule" ? "active" : ""} onClick={() => onTabChange("schedule")}><Workflow />Schedule</button>
-          <button type="button" role="tab" aria-selected={tab === "monitor"} className={tab === "monitor" ? "active" : ""} onClick={() => onTabChange("monitor")}><Activity />Monitor</button>
+        <div className="plugin-tabs automation-tabs" role="tablist" aria-label={tr("自动化类型")}>
+          <button type="button" role="tab" aria-selected={tab === "schedule"} className={tab === "schedule" ? "active" : ""} onClick={() => onTabChange("schedule")}><Workflow />{tr("定时任务")}</button>
+          <button type="button" role="tab" aria-selected={tab === "monitor"} className={tab === "monitor" ? "active" : ""} onClick={() => onTabChange("monitor")}><Activity />{tr("监控")}</button>
         </div>
-        <span className="capability-context automation-context"><CircleDotDashed />{connected ? "自动化已连接" : "等待 Gateway"}</span>
-        <button className="icon-button page-refresh" title={tab === "schedule" ? "刷新已安排任务" : "刷新 Monitor"} onClick={onRefresh} disabled={loading || !connected}>
+        <span className="capability-context automation-context"><CircleDotDashed />{connected ? tr("自动化已连接") : tr("等待 Gateway")}</span>
+        <button className="icon-button page-refresh" title={tab === "schedule" ? tr("刷新已安排任务") : tr("刷新 Monitor")} onClick={onRefresh} disabled={loading || !connected}>
           <RefreshCw className={loading ? "spin" : ""} />
         </button>
       </header>
       <div className="page-intro automation-intro">
-        <h1>自动化甲板</h1>
-        <p>{tab === "schedule" ? "让 Crab Desktop 按计划运行检查、整理和交付流程" : "查看所有项目中正在执行的 Monitor 及其会话归属"}</p>
+        <h1>{tr("自动化甲板")}</h1>
+        <p>{tab === "schedule" ? tr("让 Crab Desktop 按计划运行检查、整理和交付流程") : tr("查看所有项目中正在执行的 Monitor 及其会话归属")}</p>
       </div>
       <div className="automation-summary">
         {summaryCards.map(({ label, value, icon: Icon, tone }) => (
@@ -5076,21 +5089,21 @@ export function ScheduledTasksView({
       </div>
       <label className="page-search">
         <Search />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tab === "schedule" ? "检索流程、触发器或工作区" : "检索 Monitor、会话或项目"} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tab === "schedule" ? tr("检索流程、触发器或工作区") : tr("检索 Monitor、会话或项目")} />
       </label>
-      {!connected && <PageNotice icon={<WifiOff />} text={tab === "schedule" ? "Gateway 尚未连接，无法读取已安排任务" : "Gateway 尚未连接，无法读取 Monitor"} />}
+      {!connected && <PageNotice icon={<WifiOff />} text={tab === "schedule" ? tr("Gateway 尚未连接，无法读取已安排任务") : tr("Gateway 尚未连接，无法读取 Monitor")} />}
       {error && <PageNotice icon={<AlertTriangle />} text={error} error />}
       {tab === "monitor" ? (
         <div className="page-section monitor-section">
-          <div className="page-section-heading"><h2>运行中的 Monitor</h2><span>{filteredMonitors.length} 个任务</span></div>
+          <div className="page-section-heading"><h2>{tr("运行中的 Monitor")}</h2><span>{filteredMonitors.length}{tr(" 个任务")}</span></div>
           {filteredMonitors.length > 0 ? (
             <div className="monitor-list">
               {filteredMonitors.map(({ task, project, session }) => {
                 const startedAt = task.started_at ? new Date(task.started_at).getTime() : Number.NaN;
-                const elapsed = Number.isNaN(startedAt) ? "刚刚启动" : `已运行 ${formatElapsed(Date.now() - startedAt)}`;
-                const source = task.source === "websocket" ? "WebSocket" : "命令";
-                const projectName = project?.name || basename(task.cwd || "") || "未知项目";
-                const sessionTitle = session?.title || `会话 ${task.session_id.slice(0, 8)}`;
+                const elapsed = Number.isNaN(startedAt) ? tr("刚刚启动") : tr("已运行 {0}", { 0: formatElapsed(Date.now() - startedAt) });
+                const source = task.source === "websocket" ? "WebSocket" : tr("命令");
+                const projectName = project?.name || basename(task.cwd || "") || tr("未知项目");
+                const sessionTitle = session?.title || tr("会话 {0}", { 0: task.session_id.slice(0, 8) });
                 return (
                   <article className="monitor-item" key={`${task.session_id}:${task.task_id}`}>
                     <div className="monitor-icon"><Activity /></div>
@@ -5105,30 +5118,30 @@ export function ScheduledTasksView({
                         <span title={task.session_id}><History />{sessionTitle}</span>
                       </div>
                       <div className="scheduled-meta">
-                        <small className="schedule-status live"><span />执行中</small>
+                        <small className="schedule-status live"><span />{tr("执行中")}</small>
                         <small>{elapsed}</small>
                       </div>
                     </div>
                     {project && session && (
-                      <button className="icon-button monitor-open" type="button" title="打开所属会话" aria-label={`打开会话 ${sessionTitle}`} onClick={() => onOpenSession(project, session)}><ArrowUpRight /></button>
+                      <button className="icon-button monitor-open" type="button" title={tr("打开所属会话")} aria-label={tr("打开会话 {0}", { 0: sessionTitle })} onClick={() => onOpenSession(project, session)}><ArrowUpRight /></button>
                     )}
                   </article>
                 );
               })}
             </div>
           ) : loading ? (
-            <div className="page-loading"><LoaderCircle className="spin" />正在读取 Monitor</div>
+            <div className="page-loading"><LoaderCircle className="spin" />{tr("正在读取 Monitor")}</div>
           ) : (
             <div className="monitor-empty">
               <span><Activity /></span>
-              <strong>{query.trim() ? "没有匹配的 Monitor" : "当前没有运行中的 Monitor"}</strong>
-              <small>{query.trim() ? "试试搜索任务描述、会话标题或项目名" : "会话启动命令或 WebSocket 监控后，会自动出现在这里"}</small>
+              <strong>{query.trim() ? tr("没有匹配的 Monitor") : tr("当前没有运行中的 Monitor")}</strong>
+              <small>{query.trim() ? tr("试试搜索任务描述、会话标题或项目名") : tr("会话启动命令或 WebSocket 监控后，会自动出现在这里")}</small>
             </div>
           )}
         </div>
       ) : jobs.length > 0 ? (
         <div className="page-section">
-          <div className="page-section-heading"><h2>运行队列</h2><span>{filteredJobs.length} 个流程</span></div>
+          <div className="page-section-heading"><h2>{tr("运行队列")}</h2><span>{filteredJobs.length}{tr(" 个流程")}</span></div>
           <div className="scheduled-list">
             {filteredJobs.map((job) => {
               const action = actionState?.id === job.id ? actionState.action : null;
@@ -5137,7 +5150,7 @@ export function ScheduledTasksView({
               const retryable = job.status === "error";
               const terminal = job.status === "completed";
               const statusTone = job.running ? "live" : paused ? "paused" : job.status === "error" ? "error" : job.status === "completed" ? "complete" : "live";
-              const statusText = job.running ? "执行中" : paused ? "待命" : job.status === "error" ? "运行异常" : job.status === "completed" ? "已完成" : "等待触发";
+              const statusText = job.running ? tr("执行中") : paused ? tr("待命") : job.status === "error" ? tr("运行异常") : job.status === "completed" ? tr("已完成") : tr("等待触发");
               return (
                 <article className="scheduled-item" key={job.id}>
                   <div className={`scheduled-icon ${statusTone}`}><Workflow /></div>
@@ -5149,36 +5162,36 @@ export function ScheduledTasksView({
                     <p>{job.description || job.prompt}</p>
                     <div className="scheduled-meta">
                       <small className={`schedule-status ${statusTone}`}><span />{statusText}</small>
-                      <small>{scheduleSummary(job)}{job.run_count > 0 ? ` · 已运行 ${job.run_count} 次` : ""}</small>
+                      <small>{scheduleSummary(job)}{job.run_count > 0 ? tr(" · 已运行 {0} 次", { 0: job.run_count }) : ""}</small>
                       {job.cwd && <small className="schedule-scope" title={job.cwd}><Folder />{basename(job.cwd)}</small>}
                     </div>
                   </div>
                   <div className="scheduled-actions">
-                    <button className="icon-button tiny" title={paused ? "恢复任务" : "暂停任务"} disabled={busy || terminal} onClick={() => onAction(paused ? "resume" : "pause", job)}>
+                    <button className="icon-button tiny" title={paused ? tr("恢复任务") : tr("暂停任务")} disabled={busy || terminal} onClick={() => onAction(paused ? "resume" : "pause", job)}>
                       {action === "pause" || action === "resume" ? <LoaderCircle className="spin" /> : paused ? <Play /> : <Pause />}
                     </button>
-                    <button className="icon-button tiny" title={retryable ? "重新运行" : "立即运行"} disabled={busy || paused || terminal} onClick={() => onAction("trigger", job)}>
+                    <button className="icon-button tiny" title={retryable ? tr("重新运行") : tr("立即运行")} disabled={busy || paused || terminal} onClick={() => onAction("trigger", job)}>
                       {action === "trigger" || job.running ? <LoaderCircle className="spin" /> : <Play />}
                     </button>
-                    <button className="icon-button tiny danger-button" title="永久删除任务" disabled={action !== null} onClick={() => onAction("cancel", job)}>
+                    <button className="icon-button tiny danger-button" title={tr("永久删除任务")} disabled={action !== null} onClick={() => onAction("cancel", job)}>
                       {action === "cancel" ? <LoaderCircle className="spin" /> : <Trash2 />}
                     </button>
                   </div>
                 </article>
               );
             })}
-            {filteredJobs.length === 0 && <div className="page-empty">没有匹配的已安排任务</div>}
+            {filteredJobs.length === 0 && <div className="page-empty">{tr("没有匹配的已安排任务")}</div>}
           </div>
         </div>
       ) : (
         <div className="page-section">
-          <div className="page-section-heading"><h2>启动一个流程</h2><span>从工作区信号开始</span></div>
+          <div className="page-section-heading"><h2>{tr("启动一个流程")}</h2><span>{tr("从工作区信号开始")}</span></div>
           <div className="suggestion-list">
             {suggestions.map(({ title, meta, description, icon: Icon, tone }) => (
               <button
                 className="suggestion-item"
                 key={title}
-                onClick={() => onNew(`请创建“${title}”已安排任务：${description}。${meta}。`)}
+                onClick={() => onNew(tr("请创建“{0}”已安排任务：{1}。{2}。", { 0: title, 1: description, 2: meta }))}
                 disabled={!connected}
               >
                 <span className={`suggestion-icon ${tone}`}><Icon /></span>
@@ -5186,7 +5199,7 @@ export function ScheduledTasksView({
               </button>
             ))}
           </div>
-          <button className="page-command" onClick={() => onNew()} disabled={!connected}><MessageSquarePlus />新建任务</button>
+          <button className="page-command" onClick={() => onNew()} disabled={!connected}><MessageSquarePlus />{tr("新建任务")}</button>
         </div>
       )}
     </section>
@@ -5246,8 +5259,8 @@ export function FavoritesView({
   const locationSelect = (entryId: string) => (
     <select
       className="favorite-location-select"
-      aria-label="移动到收藏文件夹"
-      title="移动到收藏文件夹"
+      aria-label={tr("移动到收藏文件夹")}
+      title={tr("移动到收藏文件夹")}
       value={favoriteParentId(entries, entryId) ?? ""}
       onChange={(event) => onMove(entryId, event.target.value || null)}
     >
@@ -5279,29 +5292,29 @@ export function FavoritesView({
               <ChevronDown className={isCollapsed ? "collapsed" : ""} />
               {isCollapsed ? <Folder /> : <FolderOpen />}
               <strong>{item.entry.name}</strong>
-              <small>{countFavoriteItems(item.entry.children)} 项</small>
+              <small>{countFavoriteItems(item.entry.children)}{tr(" 项")}</small>
             </button>
             <div className="favorite-folder-actions">
               {locationSelect(item.entry.id)}
               <button
                 className="icon-button tiny"
                 type="button"
-                title="新建子文件夹"
-                aria-label={`在 ${item.entry.name} 中新建文件夹`}
+                title={tr("新建子文件夹")}
+                aria-label={tr("在 {0} 中新建文件夹", { 0: item.entry.name })}
                 onClick={() => setFolderEditor({ parentId: item.entry.id, name: "" })}
               ><FolderPlus /></button>
               <button
                 className="icon-button tiny"
                 type="button"
-                title="重命名文件夹"
-                aria-label={`重命名文件夹 ${item.entry.name}`}
+                title={tr("重命名文件夹")}
+                aria-label={tr("重命名文件夹 {0}", { 0: item.entry.name })}
                 onClick={() => setFolderEditor({ folderId: item.entry.id, parentId: null, name: item.entry.name })}
               ><Pencil /></button>
               <button
                 className="icon-button tiny danger-button"
                 type="button"
-                title="删除文件夹"
-                aria-label={`删除文件夹 ${item.entry.name}`}
+                title={tr("删除文件夹")}
+                aria-label={tr("删除文件夹 {0}", { 0: item.entry.name })}
                 onClick={() => setFolderDeleteTarget(item.entry)}
               ><Trash2 /></button>
             </div>
@@ -5319,7 +5332,7 @@ export function FavoritesView({
             <span className="favorite-session-copy">
               <strong>{item.project.name}</strong>
               <span>{projectDirectoryTitle(item.project)}</span>
-              <small><Star fill="currentColor" />收藏项目</small>
+              <small><Star fill="currentColor" />{tr("收藏项目")}</small>
             </span>
             <ChevronRight />
           </button>
@@ -5328,8 +5341,8 @@ export function FavoritesView({
             <button
               className="icon-button"
               type="button"
-              title="取消收藏项目"
-              aria-label={`取消收藏项目 ${item.project.name}`}
+              title={tr("取消收藏项目")}
+              aria-label={tr("取消收藏项目 {0}", { 0: item.project.name })}
               onClick={() => onRemove(item.entry.id)}
             ><Star fill="currentColor" /></button>
           </div>
@@ -5342,7 +5355,7 @@ export function FavoritesView({
         <button className="favorite-session-main" type="button" onClick={() => onOpenSession(item.project, item.session)}>
           <span className="favorite-session-icon"><Star fill="currentColor" /></span>
           <span className="favorite-session-copy">
-            <strong>{item.session.title || "未命名会话"}</strong>
+            <strong>{item.session.title || tr("未命名会话")}</strong>
             <span>{item.session.preview || formatDate(item.session.created_at)}</span>
             <small title={item.project.path}><Folder />{item.project.name}<i>{item.project.path}</i></small>
           </span>
@@ -5353,8 +5366,8 @@ export function FavoritesView({
           <button
             className="icon-button"
             type="button"
-            title="取消收藏会话"
-            aria-label={`取消收藏 ${item.session.title || "未命名会话"}`}
+            title={tr("取消收藏会话")}
+            aria-label={tr("取消收藏 {0}", { 0: item.session.title || tr("未命名会话") })}
             onClick={() => onRemove(item.entry.id)}
           ><Star fill="currentColor" /></button>
         </div>
@@ -5364,34 +5377,34 @@ export function FavoritesView({
 
   return (
     <section className="workspace-page favorites-page">
-      <div className="page-kicker"><Star /><span>CRAB DESKTOP FAVORITES</span><i /></div>
+      <div className="page-kicker"><Star /><span>{tr("收藏")}</span><i /></div>
       <header className="page-header favorites-header">
         <div>
-          <h1>收藏</h1>
-          <p>用分级文件夹整理重要项目和会话</p>
+          <h1>{tr("收藏")}</h1>
+          <p>{tr("用分级文件夹整理重要项目和会话")}</p>
         </div>
         <button
           className="page-command favorites-new-folder"
           type="button"
           onClick={() => setFolderEditor({ parentId: null, name: "" })}
-        ><FolderPlus />新建文件夹</button>
+        ><FolderPlus />{tr("新建文件夹")}</button>
       </header>
       <label className="page-search">
         <Search />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="检索收藏、项目或文件夹" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr("检索收藏、项目或文件夹")} />
       </label>
-      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取收藏内容" />}
+      {!connected && <PageNotice icon={<WifiOff />} text={tr("Gateway 尚未连接，无法读取收藏内容")} />}
       <div className="page-section favorites-section">
-        <div className="page-section-heading"><h2>全部收藏</h2><span>{countFavoriteItems(entries)} 项</span></div>
+        <div className="page-section-heading"><h2>{tr("全部收藏")}</h2><span>{countFavoriteItems(entries)}{tr(" 项")}</span></div>
         <div className="favorite-session-list favorite-tree">
           {renderItems(filtered)}
           {connected && filtered.length === 0 && (
-            <div className="page-empty">{needle ? "没有匹配的收藏" : "暂无收藏项目或会话"}</div>
+            <div className="page-empty">{needle ? tr("没有匹配的收藏") : tr("暂无收藏项目或会话")}</div>
           )}
         </div>
       </div>
       {folderEditor && (
-        <Modal title={folderEditor.folderId ? "重命名收藏文件夹" : "新建收藏文件夹"} onClose={() => setFolderEditor(null)}>
+        <Modal title={folderEditor.folderId ? tr("重命名收藏文件夹") : tr("新建收藏文件夹")} onClose={() => setFolderEditor(null)}>
           <form
             className="form-grid favorite-folder-form"
             onSubmit={(event) => {
@@ -5404,18 +5417,18 @@ export function FavoritesView({
             }}
           >
             <label>
-              <span>文件夹名称</span>
+              <span>{tr("文件夹名称")}</span>
               <input
                 autoFocus
                 value={folderEditor.name}
                 onChange={(event) => setFolderEditor({ ...folderEditor, name: event.target.value })}
-                placeholder="例如：客户项目"
+                placeholder={tr("例如：客户项目")}
               />
             </label>
             <div className="modal-actions">
-              <button type="button" onClick={() => setFolderEditor(null)}>取消</button>
+              <button type="button" onClick={() => setFolderEditor(null)}>{tr("取消")}</button>
               <button className="primary" type="submit" disabled={!folderEditor.name.trim()}>
-                {folderEditor.folderId ? <Pencil /> : <FolderPlus />}{folderEditor.folderId ? "保存" : "创建"}
+                {folderEditor.folderId ? <Pencil /> : <FolderPlus />}{folderEditor.folderId ? tr("保存") : tr("创建")}
               </button>
             </div>
           </form>
@@ -5445,12 +5458,12 @@ export function FavoriteFolderDeleteModal({ folder, hasParent, onClose, onChoose
   const itemCount = countFavoriteItems(folder.children);
   const empty = folder.children.length === 0;
   return (
-    <Modal title="删除收藏文件夹" onClose={onClose}>
+    <Modal title={tr("删除收藏文件夹")} onClose={onClose}>
       <div className="confirm-dialog-copy favorite-folder-delete-copy">
         <FolderOpen />
         <div>
-          <strong>删除“{folder.name}”？</strong>
-          <p>{empty ? "这个文件夹是空的。" : `其中有 ${itemCount} 项收藏及可能的子文件夹，请选择如何处理。`}</p>
+          <strong>{tr("删除“")}{folder.name}”？</strong>
+          <p>{empty ? tr("这个文件夹是空的。") : tr("其中有 {0} 项收藏及可能的子文件夹，请选择如何处理。", { 0: itemCount })}</p>
         </div>
       </div>
       {!empty && (
@@ -5458,33 +5471,32 @@ export function FavoriteFolderDeleteModal({ folder, hasParent, onClose, onChoose
           <button type="button" className="recommended" onClick={() => onChoose("promote")}>
             <FolderInput />
             <span>
-              <strong>{hasParent ? "移到上一级并删除文件夹" : "移到收藏根目录并删除文件夹"}</strong>
-              <small>保留文件夹内的项目、会话和子文件夹</small>
+              <strong>{hasParent ? tr("移到上一级并删除文件夹") : tr("移到收藏根目录并删除文件夹")}</strong>
+              <small>{tr("保留文件夹内的项目、会话和子文件夹")}</small>
             </span>
           </button>
           {hasParent && (
             <button type="button" onClick={() => onChoose("root")}>
               <FolderOpen />
               <span>
-                <strong>全部移到收藏根目录</strong>
-                <small>跳过上一级，直接放到收藏列表顶层</small>
+                <strong>{tr("全部移到收藏根目录")}</strong>
+                <small>{tr("跳过上一级，直接放到收藏列表顶层")}</small>
               </span>
             </button>
           )}
           <button type="button" className="danger" onClick={() => onChoose("recursive")}>
             <Trash2 />
             <span>
-              <strong>递归删除全部收藏</strong>
-              <small>文件夹、子文件夹及其中收藏都会移除</small>
+              <strong>{tr("递归删除全部收藏")}</strong>
+              <small>{tr("文件夹、子文件夹及其中收藏都会移除")}</small>
             </span>
           </button>
         </div>
       )}
       <div className="modal-actions favorite-folder-delete-actions">
-        <button type="button" onClick={onClose}>取消</button>
+        <button type="button" onClick={onClose}>{tr("取消")}</button>
         {empty && <button className="confirm-danger" type="button" onClick={() => onChoose("recursive")}>
-          <Trash2 />删除空文件夹
-        </button>}
+          <Trash2 />{tr("删除空文件夹")}</button>}
       </div>
     </Modal>
   );
@@ -5515,27 +5527,27 @@ function PluginsView({
   const executeCount = tools.length - readOnlyCount;
   const capabilityStats = tab === "skills"
     ? [
-      { label: "已加载技能", value: data.skills.length, icon: Boxes, tone: "coral" },
-      { label: "工作流入口", value: data.skills.length > 0 ? "READY" : "EMPTY", icon: Workflow, tone: "cyan" },
+      { label: tr("已加载技能"), value: data.skills.length, icon: Boxes, tone: "coral" },
+      { label: tr("工作流入口"), value: data.skills.length > 0 ? "READY" : "EMPTY", icon: Workflow, tone: "cyan" },
     ] as const
     : [
-      { label: "可用工具", value: tools.length, icon: Wrench, tone: "cyan" },
-      { label: "只读 / 执行", value: `${readOnlyCount} / ${executeCount}`, icon: ShieldCheck, tone: "amber" },
+      { label: tr("可用工具"), value: tools.length, icon: Wrench, tone: "cyan" },
+      { label: tr("只读 / 执行"), value: `${readOnlyCount} / ${executeCount}`, icon: ShieldCheck, tone: "amber" },
     ] as const;
   return (
     <section className="workspace-page plugins-page">
-      <div className="page-kicker"><Boxes /><span>CRAB DESKTOP CAPABILITY BAY</span><i /></div>
+      <div className="page-kicker"><Boxes /><span>{tr("能力")}</span><i /></div>
       <header className="page-header plugins-header">
-        <div className="plugin-tabs" role="tablist" aria-label="插件类型">
-          <button role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}><Puzzle />Skills</button>
-          <button role="tab" aria-selected={tab === "tools"} className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}><Wrench />Tools</button>
+        <div className="plugin-tabs" role="tablist" aria-label={tr("插件类型")}>
+          <button role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}><Puzzle />{tr("技能")}</button>
+          <button role="tab" aria-selected={tab === "tools"} className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}><Wrench />{tr("工具")}</button>
         </div>
-        <span className="capability-context"><CircleDotDashed />{connected ? "工作区已连接" : "等待 Gateway"}</span>
-        <button className="icon-button page-refresh" title="刷新能力舱" onClick={onRefresh} disabled={loading || !connected}><RefreshCw className={loading ? "spin" : ""} /></button>
+        <span className="capability-context"><CircleDotDashed />{connected ? tr("工作区已连接") : tr("等待 Gateway")}</span>
+        <button className="icon-button page-refresh" title={tr("刷新能力舱")} onClick={onRefresh} disabled={loading || !connected}><RefreshCw className={loading ? "spin" : ""} /></button>
       </header>
       <div className="page-intro">
-        <h1>{tab === "skills" ? "Skills 能力舱" : "Tools 能力舱"}</h1>
-        <p>{tab === "skills" ? "把团队工作流接入 Crab Desktop，按需装载专用能力" : "只展示当前工作区真正可用的执行接口"}</p>
+        <h1>{tab === "skills" ? tr("Skills 能力舱") : tr("Tools 能力舱")}</h1>
+        <p>{tab === "skills" ? tr("把团队工作流接入 Crab Desktop，按需装载专用能力") : tr("只展示当前工作区真正可用的执行接口")}</p>
       </div>
       <div className="capability-summary">
         {capabilityStats.map(({ label, value, icon: Icon, tone }) => (
@@ -5543,26 +5555,26 @@ function PluginsView({
             <Icon /><span><small>{label}</small><strong>{value}</strong></span>
           </div>
         ))}
-        <div className="capability-note"><Terminal /><span>能力由当前 Gateway 提供</span><ArrowUpRight /></div>
+        <div className="capability-note"><Terminal /><span>{tr("能力由当前 Gateway 提供")}</span><ArrowUpRight /></div>
       </div>
       <label className="page-search">
         <Search />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`检索 ${tab === "skills" ? "skill" : "tool"} 名称或描述`} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr("检索 {0} 名称或描述", { 0: tab === "skills" ? "skill" : "tool" })} />
       </label>
-      {!connected && <PageNotice icon={<WifiOff />} text="Gateway 尚未连接，无法读取插件" />}
+      {!connected && <PageNotice icon={<WifiOff />} text={tr("Gateway 尚未连接，无法读取插件")} />}
       {error && <PageNotice icon={<AlertTriangle />} text={error} error />}
       <div className="page-section plugin-section">
-        <div className="page-section-heading"><h2>已挂载能力</h2><span>{filtered.length} 项可用</span></div>
+        <div className="page-section-heading"><h2>{tr("已挂载能力")}</h2><span>{filtered.length}{tr(" 项可用")}</span></div>
         {loading && filtered.length === 0 ? <div className="page-loading"><LoaderCircle className="spin" /></div> : (
           <div className="plugin-grid">
             {filtered.map((item) => (
               <article className="plugin-item" key={item.name}>
                 <div className={`plugin-icon ${tab === "skills" ? "skill" : "tool"}`}>{tab === "skills" ? <Puzzle /> : <Wrench />}</div>
-                <div className="plugin-copy"><div className="plugin-title-row"><strong>{item.name}</strong><span className="plugin-availability"><span />AVAILABLE</span></div><p>{item.description || "暂无描述"}</p><small>{tab === "skills" ? "WORKFLOW SKILL" : ("is_read_only" in item && item.is_read_only ? "READ ONLY TOOL" : "EXECUTION TOOL")}{"is_loaded" in item && item.is_loaded != null ? (item.is_loaded ? " · LOADED" : " · ON DEMAND") : ""}</small></div>
-                <Check className="plugin-check" aria-label="可用" />
+                <div className="plugin-copy"><div className="plugin-title-row"><strong>{item.name}</strong><span className="plugin-availability"><span />{tr("可用")}</span></div><p>{item.description || tr("暂无描述")}</p><small>{tab === "skills" ? "WORKFLOW SKILL" : ("is_read_only" in item && item.is_read_only ? "READ ONLY TOOL" : "EXECUTION TOOL")}{"is_loaded" in item && item.is_loaded != null ? (item.is_loaded ? " · LOADED" : " · ON DEMAND") : ""}</small></div>
+                <Check className="plugin-check" aria-label={tr("可用")} />
               </article>
             ))}
-            {filtered.length === 0 && !loading && <div className="page-empty">暂无可用{tab === "skills" ? "技能" : "工具"}</div>}
+            {filtered.length === 0 && !loading && <div className="page-empty">{tr("暂无可用")}{tab === "skills" ? tr("技能") : tr("工具")}</div>}
           </div>
         )}
       </div>
@@ -5580,7 +5592,7 @@ const PERMISSION_OPTIONS: Array<{
   description: string;
   icon: typeof ShieldCheck;
   tone: string;
-}> = [
+}> = localized([
     {
       value: "default",
       label: "工作区默认规则",
@@ -5609,12 +5621,12 @@ const PERMISSION_OPTIONS: Array<{
       icon: Zap,
       tone: "danger",
     },
-  ];
+  ]);
 
 const REASONING_EFFORT_OPTIONS: Array<{
   value: ReasoningEffort | "auto";
   label: string;
-}> = [
+}> = localized([
     { value: "auto", label: "自动" },
     { value: "none", label: "关闭" },
     { value: "minimal", label: "最低" },
@@ -5623,7 +5635,7 @@ const REASONING_EFFORT_OPTIONS: Array<{
     { value: "high", label: "高" },
     { value: "xhigh", label: "极高" },
     { value: "max", label: "最大" },
-  ];
+  ]);
 
 function useDismissMenu(open: boolean, close: () => void, ref: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
@@ -5660,7 +5672,7 @@ export function ConversationActionsMenu({
   const [position, setPosition] = useState({ top: 8, left: 8 });
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const title = sessionTitle || "未命名会话";
+  const title = sessionTitle || tr("未命名会话");
 
   const placeMenu = useCallback(() => {
     const trigger = triggerRef.current;
@@ -5717,8 +5729,8 @@ export function ConversationActionsMenu({
         ref={triggerRef}
         className="icon-button conversation-menu-trigger"
         type="button"
-        title="更多会话操作"
-        aria-label="更多会话操作"
+        title={tr("更多会话操作")}
+        aria-label={tr("更多会话操作")}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => {
@@ -5733,13 +5745,13 @@ export function ConversationActionsMenu({
           ref={menuRef}
           className="session-action-menu conversation-action-menu"
           role="menu"
-          aria-label={`${title} 更多操作`}
+          aria-label={tr("{0} 更多操作", { 0: title })}
           style={position}
         >
           <div className="session-action-buttons conversation-action-buttons">
             <button type="button" role="menuitem" onClick={() => choose(onCheckpoint)}>
               <History />
-              <span>检查点</span>
+              <span>{tr("检查点")}</span>
             </button>
             <button
               className={favorite ? "favorite-active" : ""}
@@ -5750,7 +5762,7 @@ export function ConversationActionsMenu({
               onClick={() => choose(onToggleFavorite)}
             >
               <Star fill={favorite ? "currentColor" : "none"} />
-              <span>{favorite ? "取消收藏会话" : "收藏会话"}</span>
+              <span>{favorite ? tr("取消收藏会话") : tr("收藏会话")}</span>
             </button>
           </div>
         </div>,
@@ -5839,8 +5851,8 @@ export function ProjectActionsMenu({
         ref={triggerRef}
         className="icon-button tiny project-menu-trigger"
         type="button"
-        title={`项目操作 ${projectName}`}
-        aria-label={`项目操作 ${projectName}`}
+        title={tr("项目操作 {0}", { 0: projectName })}
+        aria-label={tr("项目操作 {0}", { 0: projectName })}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => {
@@ -5855,25 +5867,25 @@ export function ProjectActionsMenu({
           ref={menuRef}
           className="project-action-menu"
           role="menu"
-          aria-label={`${projectName} 项目操作`}
+          aria-label={tr("{0} 项目操作", { 0: projectName })}
           style={position}
         >
           <button type="button" role="menuitem" disabled={newSessionDisabled} onClick={() => choose(onNewSession)}>
             <MessageSquarePlus />
-            <span>新建会话</span>
+            <span>{tr("新建会话")}</span>
           </button>
           <button type="button" role="menuitem" onClick={() => choose(onEdit)}>
             <Pencil />
-            <span>编辑项目</span>
+            <span>{tr("编辑项目")}</span>
           </button>
           {onToggleFavorite && <button type="button" role="menuitem" onClick={() => choose(onToggleFavorite)}>
             <Star fill={favorite ? "currentColor" : "none"} />
-            <span>{favorite ? "取消收藏项目" : "收藏项目"}</span>
+            <span>{favorite ? tr("取消收藏项目") : tr("收藏项目")}</span>
           </button>}
           <div className="project-action-separator" role="separator" />
           <button className="danger" type="button" role="menuitem" disabled={deleteDisabled} onClick={() => choose(onDelete)}>
             <Trash2 />
-            <span>{deleteDisabled ? "默认项目不可删除" : "删除项目"}</span>
+            <span>{deleteDisabled ? tr("默认项目不可删除") : tr("删除项目")}</span>
           </button>
         </div>,
         document.body,
@@ -5906,7 +5918,7 @@ export function SessionActionsMenu({
   const [position, setPosition] = useState({ top: 8, left: 8 });
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const sessionTitle = info.title || "未命名会话";
+  const sessionTitle = info.title || tr("未命名会话");
 
   const placeMenu = useCallback(() => {
     const trigger = triggerRef.current;
@@ -5963,8 +5975,8 @@ export function SessionActionsMenu({
         ref={triggerRef}
         className="icon-button tiny session-menu-trigger"
         type="button"
-        title={`会话操作 ${sessionTitle}`}
-        aria-label={`会话操作 ${sessionTitle}`}
+        title={tr("会话操作 {0}", { 0: sessionTitle })}
+        aria-label={tr("会话操作 {0}", { 0: sessionTitle })}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => {
@@ -5979,26 +5991,26 @@ export function SessionActionsMenu({
           ref={menuRef}
           className="session-action-menu"
           role="menu"
-          aria-label={`${sessionTitle} 会话操作`}
+          aria-label={tr("{0} 会话操作", { 0: sessionTitle })}
           style={position}
         >
           <div className="session-action-buttons">
             <button type="button" role="menuitem" onClick={() => choose(onToggleFavorite)}>
               <Star fill={favorite ? "currentColor" : "none"} />
-              <span>{favorite ? "取消收藏会话" : "收藏会话"}</span>
+              <span>{favorite ? tr("取消收藏会话") : tr("收藏会话")}</span>
             </button>
             {onFork && <button type="button" role="menuitem" disabled={forking || deleting} onClick={() => choose(onFork)}>
               {forking ? <LoaderCircle className="spin" /> : <GitBranch />}
-              <span>{forking ? "正在分叉会话" : "分叉会话"}</span>
+              <span>{forking ? tr("正在分叉会话") : tr("分叉会话")}</span>
             </button>}
             <button className="danger" type="button" role="menuitem" disabled={deleting} onClick={() => choose(onDelete)}>
               {deleting ? <LoaderCircle className="spin" /> : <Trash2 />}
-              <span>{deleting ? "正在删除会话" : "删除会话"}</span>
+              <span>{deleting ? tr("正在删除会话") : tr("删除会话")}</span>
             </button>
             <div className="session-action-separator" role="separator" />
             <button type="button" role="menuitem" onClick={() => choose(() => setDetailsOpen(true))}>
               <Activity />
-              <span>会话详情</span>
+              <span>{tr("会话详情")}</span>
             </button>
           </div>
         </div>,
@@ -6031,33 +6043,33 @@ export function SessionDetailModal({
     : null;
   const modelLabel = status?.model_profile
     || [status?.provider || info.provider, status?.model || info.model].filter(Boolean).join("/")
-    || "暂无";
+    || tr("暂无");
   const modeLabel = status
     ? `${status.mode === "plan" ? "Plan" : "Agent"}${status.reasoning_effort ? ` · ${status.reasoning_effort}` : ""}`
-    : "暂无";
+    : tr("暂无");
 
   return (
-    <Modal title="会话详情" onClose={onClose}>
+    <Modal title={tr("会话详情")} onClose={onClose}>
       <div className="session-detail-dialog">
         <div className="session-detail-heading">
           <span className="session-detail-heading-icon"><Activity /></span>
           <div>
-            <strong>{info.title || "未命名会话"}</strong>
+            <strong>{info.title || tr("未命名会话")}</strong>
             <small>{modelLabel}</small>
           </div>
         </div>
 
-        <section className="session-context-card" aria-label="当前上下文用量">
+        <section className="session-context-card" aria-label={tr("当前上下文用量")}>
           <div className="session-context-heading">
-            <span title={contextEstimated ? "暂未获得服务端计数，当前为本地估算" : undefined}>当前上下文{contextEstimated ? "（估算）" : ""}</span>
-            <strong>{contextUsed.toLocaleString("zh-CN")} tokens{contextPercent === null ? "" : ` · ${contextPercent.toFixed(1)}%`}</strong>
+            <span title={contextEstimated ? tr("暂未获得服务端计数，当前为本地估算") : undefined}>{tr("当前上下文")}{contextEstimated ? tr("（估算）") : ""}</span>
+            <strong>{contextUsed.toLocaleString(getLocale())} tokens{contextPercent === null ? "" : ` · ${contextPercent.toFixed(1)}%`}</strong>
           </div>
           {contextPercent !== null && (
             <div className="session-context-progress"><span style={{ width: `${contextPercent}%` }} /></div>
           )}
           <small>{contextWindow > 0
-            ? `总窗口 ${contextWindow.toLocaleString("zh-CN")} tokens · 剩余 ${contextRemaining.toLocaleString("zh-CN")} tokens`
-            : "尚未加载上下文窗口上限"}</small>
+            ? tr("总窗口 {0} tokens · 剩余 {1} tokens", { 0: contextWindow.toLocaleString(getLocale()), 1: contextRemaining.toLocaleString(getLocale()) })
+            : tr("尚未加载上下文窗口上限")}</small>
         </section>
 
         <dl className="session-detail-list">
@@ -6065,17 +6077,17 @@ export function SessionDetailModal({
             <dt>Session ID</dt>
             <dd className="session-detail-copy-value">
               <code title={info.session_id}>{info.session_id}</code>
-              <CopyButton text={info.session_id} label="复制 Session ID" className="session-detail-copy" />
+              <CopyButton text={info.session_id} label={tr("复制 Session ID")} className="session-detail-copy" />
             </dd>
           </div>
-          <div><dt>消息</dt><dd>{status?.message_count ?? info.message_count} 条</dd></div>
-          <div><dt>压缩次数</dt><dd>{status?.compact_count ?? 0} 次</dd></div>
-          <div><dt>模型</dt><dd title={modelLabel}>{modelLabel}</dd></div>
-          <div><dt>模式</dt><dd>{modeLabel}</dd></div>
-          <div><dt>创建时间</dt><dd>{info.created_at ? formatDateTime(info.created_at) : "暂无"}</dd></div>
-          <div><dt>工作目录</dt><dd title={info.cwd || undefined}>{info.cwd || "暂无"}</dd></div>
+          <div><dt>{tr("消息")}</dt><dd>{status?.message_count ?? info.message_count}{tr(" 条")}</dd></div>
+          <div><dt>{tr("压缩次数")}</dt><dd>{status?.compact_count ?? 0}{tr(" 次")}</dd></div>
+          <div><dt>{tr("模型")}</dt><dd title={modelLabel}>{modelLabel}</dd></div>
+          <div><dt>{tr("模式")}</dt><dd>{modeLabel}</dd></div>
+          <div><dt>{tr("创建时间")}</dt><dd>{info.created_at ? formatDateTime(info.created_at) : tr("暂无")}</dd></div>
+          <div><dt>{tr("工作目录")}</dt><dd title={info.cwd || undefined}>{info.cwd || tr("暂无")}</dd></div>
           {info.forked_from_session_id && (
-            <div><dt>分叉自</dt><dd title={info.forked_from_session_id}>{info.forked_from_title || info.forked_from_session_id}</dd></div>
+            <div><dt>{tr("分叉自")}</dt><dd title={info.forked_from_session_id}>{info.forked_from_title || info.forked_from_session_id}</dd></div>
           )}
         </dl>
       </div>
@@ -6123,8 +6135,8 @@ function ComposerAddMenu({
       <button
         type="button"
         className="composer-add-trigger"
-        title="添加内容或切换模式"
-        aria-label="添加"
+        title={tr("添加内容或切换模式")}
+        aria-label={tr("添加")}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
@@ -6153,30 +6165,30 @@ function ComposerAddMenu({
         }}
       />
       {open && (
-        <div className="composer-add-menu" role="menu" aria-label="添加">
-          <div className="composer-add-heading">添加</div>
+        <div className="composer-add-menu" role="menu" aria-label={tr("添加")}>
+          <div className="composer-add-heading">{tr("添加")}</div>
           <button type="button" role="menuitem" onClick={() => run(() => imageInputRef.current?.click())}>
-            <ImageIcon /><span>添加图片</span>
+            <ImageIcon /><span>{tr("添加图片")}</span>
           </button>
           <button
             type="button"
             role="menuitem"
             onClick={() => run(() => fileUploadMode === "path" ? onFilePaths() : fileInputRef.current?.click())}
           >
-            <FileText /><span>添加文件</span><small>{fileUploadMode === "path" ? "仅路径" : "含内容"}</small>
+            <FileText /><span>{tr("添加文件")}</span><small>{fileUploadMode === "path" ? tr("仅路径") : tr("含内容")}</small>
           </button>
           <button type="button" role="menuitem" onClick={() => run(onReferencePath)}>
-            <FolderInput /><span>引用文件或文件夹</span>
+            <FolderInput /><span>{tr("引用文件或文件夹")}</span>
           </button>
           <div className="composer-add-separator" />
           <button type="button" role="menuitem" onClick={() => run(onGoal)}>
-            <Target /><span>目标</span>
+            <Target /><span>{tr("目标")}</span>
           </button>
           <button className={planActive ? "active" : ""} type="button" role="menuitem" onClick={() => run(onPlan)}>
-            <ListTodo /><span>计划模式</span>{planActive && <Check />}
+            <ListTodo /><span>{tr("计划模式")}</span>{planActive && <Check />}
           </button>
           <button className={ultraActive ? "active ultra" : "ultra"} type="button" role="menuitem" onClick={() => run(onUltra)}>
-            <Sparkles /><span>Ultra 模式</span>{ultraActive && <Check />}
+            <Sparkles /><span>{tr("Ultra 模式")}</span>{ultraActive && <Check />}
           </button>
         </div>
       )}
@@ -6212,7 +6224,7 @@ function ModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled || models.length === 0}
-        title="选择模型"
+        title={tr("选择模型")}
         onClick={() => setOpen((current) => !current)}
       >
         <span className="picker-trigger-icon"><Bot /></span>
@@ -6220,9 +6232,9 @@ function ModelPicker({
         <ChevronDown className={open ? "picker-chevron open" : "picker-chevron"} />
       </button>
       {open && (
-        <div className="picker-menu model-picker-menu" role="listbox" aria-label="选择模型">
-          <div className="picker-menu-heading"><span>模型</span><small>{models.length} 个可用</small></div>
-          <label className="picker-search"><Search /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型" /></label>
+        <div className="picker-menu model-picker-menu" role="listbox" aria-label={tr("选择模型")}>
+          <div className="picker-menu-heading"><span>{tr("模型")}</span><small>{models.length}{tr(" 个可用")}</small></div>
+          <label className="picker-search"><Search /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr("搜索模型")} /></label>
           <div className="picker-options">
             {grouped.map(({ group, models: entries }) => (
               <div className="picker-model-group" key={group} role="group" aria-label={group}>
@@ -6243,7 +6255,7 @@ function ModelPicker({
                 ))}
               </div>
             ))}
-            {filteredCount === 0 && <span className="picker-empty">没有匹配的模型</span>}
+            {filteredCount === 0 && <span className="picker-empty">{tr("没有匹配的模型")}</span>}
           </div>
         </div>
       )}
@@ -6274,16 +6286,16 @@ function ReasoningEffortPicker({
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
-        title="选择思考强度"
+        title={tr("选择思考强度")}
         onClick={() => setOpen((current) => !current)}
       >
         <Brain />
-        <span className="picker-trigger-label">思考 {selected?.label ?? "自动"}</span>
+        <span className="picker-trigger-label">{tr("思考 ")}{selected?.label ?? tr("自动")}</span>
         <ChevronDown className={open ? "picker-chevron open" : "picker-chevron"} />
       </button>
       {open && (
-        <div className="picker-menu effort-picker-menu" role="menu" aria-label="思考强度">
-          <div className="picker-menu-heading"><span>思考强度</span><small>随会话保存</small></div>
+        <div className="picker-menu effort-picker-menu" role="menu" aria-label={tr("思考强度")}>
+          <div className="picker-menu-heading"><span>{tr("思考强度")}</span><small>{tr("随会话保存")}</small></div>
           <div className="effort-options">
             {REASONING_EFFORT_OPTIONS.map((option) => (
               <button
@@ -6354,12 +6366,12 @@ export function PermissionPicker({
         onClick={() => { if (!open) onRefresh?.(); setOpen((current) => !current); }}
       >
         <Icon />
-        <span className="picker-trigger-label">{inherited ? `默认 · ${summary.inheritedLabel}` : selected.label}</span>
+        <span className="picker-trigger-label">{inherited ? tr("默认 · {0}", { 0: summary.inheritedLabel }) : selected.label}</span>
         <ChevronDown className={open ? "picker-chevron open" : "picker-chevron"} />
       </button>
       {open && (
-        <div className="picker-menu permission-picker-menu" role="menu" aria-label="权限策略">
-          <div className="picker-menu-heading"><span>工具执行权限</span><small>仅作用于当前会话</small></div>
+        <div className="picker-menu permission-picker-menu" role="menu" aria-label={tr("权限策略")}>
+          <div className="picker-menu-heading"><span>{tr("工具执行权限")}</span><small>{tr("仅作用于当前会话")}</small></div>
           <div className="permission-options">
             {PERMISSION_OPTIONS.map((option) => {
               const OptionIcon = option.icon;
@@ -6405,8 +6417,8 @@ export function ContextMeter({
   const searchDetail = status.search_index
     ? [
       status.search_index.state,
-      status.search_index.files == null ? null : `${status.search_index.files} 文件`,
-      status.search_index.chunks == null ? null : `${status.search_index.chunks} 分块`,
+      status.search_index.files == null ? null : tr("{0} 文件", { 0: status.search_index.files }),
+      status.search_index.chunks == null ? null : tr("{0} 分块", { 0: status.search_index.chunks }),
       status.search_index.done == null || status.search_index.total == null
         ? null
         : `${status.search_index.done}/${status.search_index.total}`,
@@ -6417,42 +6429,42 @@ export function ContextMeter({
       <button
         type="button"
         className={`context-meter ${contextClass}`}
-        title={estimated ? "背景窗口（估算）：暂未获得服务端计数，当前为本地估算" : "查看背景窗口"}
-        aria-label={`背景窗口已使用 ${Math.round(percent)}%`}
+        title={estimated ? tr("背景窗口（估算）：暂未获得服务端计数，当前为本地估算") : tr("查看背景窗口")}
+        aria-label={tr("背景窗口已使用 {0}%", { 0: Math.round(percent) })}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
         style={{ "--context-progress": `${percent}%` } as React.CSSProperties}
       >
         <span className="context-meter-ring" />
-        <span>{Math.round(percent)}%{estimated ? " 估算" : ""}</span>
+        <span>{Math.round(percent)}%{estimated ? tr(" 估算") : ""}</span>
       </button>
       {open && (
         <div className="context-popover">
-          <div className="context-popover-title"><span title={estimated ? "暂未获得服务端计数，当前为本地估算" : undefined}>背景窗口{estimated ? "（估算）" : ""}</span><strong>{Math.round(percent)}% 已用</strong></div>
+          <div className="context-popover-title"><span title={estimated ? tr("暂未获得服务端计数，当前为本地估算") : undefined}>{tr("背景窗口")}{estimated ? tr("（估算）") : ""}</span><strong>{Math.round(percent)}{tr("% 已用")}</strong></div>
           <div className="context-progress"><span style={{ width: `${percent}%` }} /></div>
-          <div className="context-stat-row"><span>已用</span><strong>{formatTokenCount(status.context_used_tokens)} / {formatTokenCount(status.context_window_tokens)} tokens</strong></div>
-          <div className="context-stat-row"><span>剩余</span><strong>{formatTokenCount(remaining)} tokens</strong></div>
-          {cache && <div className="context-stat-row"><span>缓存命中率</span><strong>{cache.hitRate.toFixed(1)}%</strong></div>}
-          {cache && <div className="context-stat-row"><span>缓存读取</span><strong>{formatTokenCount(cache.readTokens)} tokens</strong></div>}
-          {cache?.writeTokens != null && <div className="context-stat-row"><span>缓存写入</span><strong>{formatTokenCount(cache.writeTokens)} tokens</strong></div>}
-          <div className="context-stat-row"><span>模型</span><strong>{status.model_profile || [status.provider, status.model].filter(Boolean).join("/") || "未配置"}</strong></div>
-          <div className="context-stat-row"><span>模式</span><strong>{status.mode === "plan" ? "Plan" : "Agent"}</strong></div>
-          <div className="context-stat-row"><span>推理</span><strong>{status.reasoning_effort || "自动"}{status.ultra_mode ? " · Ultra" : ""}</strong></div>
-          <div className="context-stat-row"><span>会话</span><strong>{status.message_count ?? 0} 条消息 · 压缩 {status.compact_count ?? 0} 次</strong></div>
-          <div className="context-stat-row"><span>自动压缩</span><strong>{status.auto_compact_enabled === false ? "关闭" : "开启"}</strong></div>
-          {status.compact_buffer_tokens != null && <div className="context-stat-row"><span>压缩预留</span><strong>{formatTokenCount(status.compact_buffer_tokens)} tokens</strong></div>}
-          {status.auto_compact_enabled !== false && status.compact_input_limit != null && <div className="context-stat-row"><span>压缩触发阈值</span><strong>已用超过 {formatTokenCount(status.compact_input_limit)} tokens</strong></div>}
-          <div className="context-stat-row"><span>输出配置</span><strong>思考 {status.thinking_enabled ? "开启" : "关闭"} · {formatTokenCount(status.max_tokens ?? 0)} tokens</strong></div>
-          {status.tool_count != null && <div className="context-stat-row"><span>可用工具</span><strong>{status.tool_count}</strong></div>}
+          <div className="context-stat-row"><span>{tr("已用")}</span><strong>{formatTokenCount(status.context_used_tokens)} / {formatTokenCount(status.context_window_tokens)} tokens</strong></div>
+          <div className="context-stat-row"><span>{tr("剩余")}</span><strong>{formatTokenCount(remaining)} tokens</strong></div>
+          {cache && <div className="context-stat-row"><span>{tr("缓存命中率")}</span><strong>{cache.hitRate.toFixed(1)}%</strong></div>}
+          {cache && <div className="context-stat-row"><span>{tr("缓存读取")}</span><strong>{formatTokenCount(cache.readTokens)} tokens</strong></div>}
+          {cache?.writeTokens != null && <div className="context-stat-row"><span>{tr("缓存写入")}</span><strong>{formatTokenCount(cache.writeTokens)} tokens</strong></div>}
+          <div className="context-stat-row"><span>{tr("模型")}</span><strong>{status.model_profile || [status.provider, status.model].filter(Boolean).join("/") || tr("未配置")}</strong></div>
+          <div className="context-stat-row"><span>{tr("模式")}</span><strong>{status.mode === "plan" ? "Plan" : "Agent"}</strong></div>
+          <div className="context-stat-row"><span>{tr("推理")}</span><strong>{status.reasoning_effort || tr("自动")}{status.ultra_mode ? " · Ultra" : ""}</strong></div>
+          <div className="context-stat-row"><span>{tr("会话")}</span><strong>{status.message_count ?? 0}{tr(" 条消息 · 压缩 ")}{status.compact_count ?? 0}{tr(" 次")}</strong></div>
+          <div className="context-stat-row"><span>{tr("自动压缩")}</span><strong>{status.auto_compact_enabled === false ? tr("关闭") : tr("开启")}</strong></div>
+          {status.compact_buffer_tokens != null && <div className="context-stat-row"><span>{tr("压缩预留")}</span><strong>{formatTokenCount(status.compact_buffer_tokens)} tokens</strong></div>}
+          {status.auto_compact_enabled !== false && status.compact_input_limit != null && <div className="context-stat-row"><span>{tr("压缩触发阈值")}</span><strong>{tr("已用超过 ")}{formatTokenCount(status.compact_input_limit)} tokens</strong></div>}
+          <div className="context-stat-row"><span>{tr("输出配置")}</span><strong>{tr("思考 ")}{status.thinking_enabled ? tr("开启") : tr("关闭")} · {formatTokenCount(status.max_tokens ?? 0)} tokens</strong></div>
+          {status.tool_count != null && <div className="context-stat-row"><span>{tr("可用工具")}</span><strong>{status.tool_count}</strong></div>}
           {status.prompt_budget && <>
-            <div className="context-stat-row"><span>上次请求加载</span><strong>{status.prompt_budget.loaded_tools} / {status.prompt_budget.available_tools} · {status.prompt_budget.mode}</strong></div>
-            <div className="context-stat-row"><span>System / 工具（估算）</span><strong>{formatTokenCount(status.prompt_budget.system_tokens)} / {formatTokenCount(status.prompt_budget.tool_tokens)} tokens</strong></div>
-            <div className="context-stat-row"><span>其中工具目录（估算）</span><strong>{formatTokenCount(status.prompt_budget.directory_tokens)} tokens</strong></div>
+            <div className="context-stat-row"><span>{tr("上次请求加载")}</span><strong>{status.prompt_budget.loaded_tools} / {status.prompt_budget.available_tools} · {status.prompt_budget.mode}</strong></div>
+            <div className="context-stat-row"><span>{tr("System / 工具（估算）")}</span><strong>{formatTokenCount(status.prompt_budget.system_tokens)} / {formatTokenCount(status.prompt_budget.tool_tokens)} tokens</strong></div>
+            <div className="context-stat-row"><span>{tr("其中工具目录（估算）")}</span><strong>{formatTokenCount(status.prompt_budget.directory_tokens)} tokens</strong></div>
           </>}
-          {(status.agent_total ?? 0) > 0 && <div className="context-stat-row"><span>Agents</span><strong>{status.agent_active ?? 0} 运行中 / {status.agent_total} 个 · {status.agent_failed ?? 0} 失败</strong></div>}
-          {(status.monitor_total ?? 0) > 0 && <div className="context-stat-row"><span>后台任务</span><strong>{status.monitor_active ?? 0} 运行中 / {status.monitor_total} 个 · {status.monitor_failed ?? 0} 失败</strong></div>}
-          {searchDetail && <div className="context-stat-row"><span>语义索引</span><strong>{searchDetail}</strong></div>}
-          <div className="context-stat-row"><span>工作目录</span><strong title={status.cwd}>{status.cwd}</strong></div>
+          {(status.agent_total ?? 0) > 0 && <div className="context-stat-row"><span>{tr("Agent")}</span><strong>{status.agent_active ?? 0}{tr(" 运行中 / ")}{status.agent_total}{tr(" 个 · ")}{status.agent_failed ?? 0}{tr(" 失败")}</strong></div>}
+          {(status.monitor_total ?? 0) > 0 && <div className="context-stat-row"><span>{tr("后台任务")}</span><strong>{status.monitor_active ?? 0}{tr(" 运行中 / ")}{status.monitor_total}{tr(" 个 · ")}{status.monitor_failed ?? 0}{tr(" 失败")}</strong></div>}
+          {searchDetail && <div className="context-stat-row"><span>{tr("语义索引")}</span><strong>{searchDetail}</strong></div>}
+          <div className="context-stat-row"><span>{tr("工作目录")}</span><strong title={status.cwd}>{status.cwd}</strong></div>
         </div>
       )}
     </div>
@@ -6473,8 +6485,8 @@ function ExecutionStatusBar({
   return (
     <div className="execution-status" role="status" aria-live="polite">
       <span className="execution-pulse"><span /></span>
-      <span className="execution-copy"><strong>Agent 正在工作</strong><small>{currentStep?.label ?? "处理中"}</small></span>
-      <span className="execution-time"><span>本轮 {formatElapsed(total)}</span><span>当前步骤 {formatElapsed(step)}</span></span>
+      <span className="execution-copy"><strong>{tr("Agent 正在工作")}</strong><small>{currentStep?.label ?? tr("处理中")}</small></span>
+      <span className="execution-time"><span>{tr("本轮 ")}{formatElapsed(total)}</span><span>{tr("当前步骤 ")}{formatElapsed(step)}</span></span>
     </div>
   );
 }
@@ -6496,21 +6508,21 @@ function EmptyWorkspace({
     return (
       <div className="empty-workspace">
         <WifiOff />
-        <h1>{connection ? "无法连接 Gateway" : "连接 CrabCode Gateway"}</h1>
-        <p>{gateway?.error ?? "添加本地或远程 Gateway 连接"}</p>
-        <button className="command-button" onClick={onConnect}><Server />管理连接</button>
+        <h1>{connection ? tr("无法连接 Gateway") : tr("连接 CrabCode Gateway")}</h1>
+        <p>{gateway?.error ?? tr("添加本地或远程 Gateway 连接")}</p>
+        <button className="command-button" onClick={onConnect}><Server />{tr("管理连接")}</button>
       </div>
     );
   }
   if (gateway?.status !== "online") {
-    return <div className="empty-workspace"><LoaderCircle className="spin" /><h1>正在连接 {connection.name}</h1></div>;
+    return <div className="empty-workspace"><LoaderCircle className="spin" /><h1>{tr("正在连接 ")}{connection.name}</h1></div>;
   }
   return (
     <div className="empty-workspace">
       <Bot />
-      <h1>{project ? `在 ${project.name} 中开始` : "选择一个项目"}</h1>
+      <h1>{project ? tr("在 {0} 中开始", { 0: project.name }) : tr("选择一个项目")}</h1>
       <p>{project ? projectDirectoryTitle(project) : ""}</p>
-      {project && <button className="command-button" onClick={onNew}><MessageSquarePlus />新会话</button>}
+      {project && <button className="command-button" onClick={onNew}><MessageSquarePlus />{tr("新会话")}</button>}
     </div>
   );
 }
@@ -6568,10 +6580,10 @@ function ToolResultView({ toolName, result, isError = false }: { toolName: strin
   if (checklist.length) return <ChecklistResultView result={result} />;
   const text = textFromUnknown(result);
   const isDiff = text.startsWith("---") || text.startsWith("diff --git") || text.includes("\n+++");
-  return <CopyablePre text={text} label={isError ? "复制错误" : isDiff ? "复制 diff" : "复制执行结果"} className={`tool-result ${isDiff ? "diff-view" : ""} ${toolName.toLowerCase() === "computeruse" ? "computer-use-tool-result" : ""}`}>{isDiff ? diffLines(text) : text}</CopyablePre>;
+  return <CopyablePre text={text} label={isError ? tr("复制错误") : isDiff ? tr("复制 diff") : tr("复制执行结果")} className={`tool-result ${isDiff ? "diff-view" : ""} ${toolName.toLowerCase() === "computeruse" ? "computer-use-tool-result" : ""}`}>{isDiff ? diffLines(text) : text}</CopyablePre>;
 }
 
-function CopyablePre({ text, label = "复制", className = "", containerClassName = "", children }: { text: string; label?: string; className?: string; containerClassName?: string; children?: ReactNode }) {
+function CopyablePre({ text, label = tr("复制"), className = "", containerClassName = "", children }: { text: string; label?: string; className?: string; containerClassName?: string; children?: ReactNode }) {
   return (
     <div className={`copyable-content ${containerClassName}`.trim()}>
       <pre className={className}>{children ?? text}</pre>
@@ -6649,7 +6661,7 @@ function PreviewableImage({ src, alt, className, loading }: {
         loading={loading}
         role="button"
         tabIndex={0}
-        aria-label={`放大查看：${alt || "图片"}`}
+        aria-label={tr("放大查看：{0}", { 0: alt || tr("图片") })}
         onClick={openPreview}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
@@ -6662,7 +6674,7 @@ function PreviewableImage({ src, alt, className, loading }: {
           className="image-preview-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label={alt ? `图片预览：${alt}` : "图片预览"}
+          aria-label={alt ? tr("图片预览：{0}", { 0: alt }) : tr("图片预览")}
           onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}
         >
           <img className="image-preview-content" src={src} alt={alt} />
@@ -6670,8 +6682,8 @@ function PreviewableImage({ src, alt, className, loading }: {
             ref={closeButtonRef}
             type="button"
             className="image-preview-close"
-            title="关闭图片预览"
-            aria-label="关闭图片预览"
+            title={tr("关闭图片预览")}
+            aria-label={tr("关闭图片预览")}
             onClick={() => setOpen(false)}
           ><X /></button>
         </div>,
@@ -6690,12 +6702,12 @@ function UserAttachmentIcon({ kind }: { kind: UserAttachmentChip["kind"] }) {
 function InlineImages({ images }: { images?: Array<{ media_type: string; data: string; description?: string }> }) {
   if (!images?.length) return null;
   return (
-    <div className="message-images" aria-label="图片附件">
+    <div className="message-images" aria-label={tr("图片附件")}>
       {images.map((image, index) => (
         <figure className="message-image" key={`${image.media_type}-${index}`}>
           <PreviewableImage
             src={`data:${image.media_type};base64,${image.data}`}
-            alt={`图片 ${index + 1}`}
+            alt={tr("图片 {0}", { 0: index + 1 })}
             loading="lazy"
           />
           {image.description && <figcaption>{image.description}</figcaption>}
@@ -6705,16 +6717,16 @@ function InlineImages({ images }: { images?: Array<{ media_type: string; data: s
   );
 }
 
-const MESSAGE_MARKDOWN_COMPONENTS: Components = {
+const MESSAGE_MARKDOWN_COMPONENTS: Components = localized({
   img: ({ src, alt }) => (
     typeof src === "string" && /^(?:https?:|data:image\/)/i.test(src)
-      ? <PreviewableImage src={src} alt={alt ?? "图片"} loading="lazy" />
+      ? <PreviewableImage src={src} alt={alt ?? tr("图片")} loading="lazy" />
       : null
   ),
   table: ({ children }) => (
     <div className="message-table-shell">
       <div className="message-table-wrap"><table>{children}</table></div>
-      <MessageBlockCopy text={reactNodeText(children).trim()} label="复制表格" />
+      <MessageBlockCopy text={reactNodeText(children).trim()} label={tr("复制表格")} />
     </div>
   ),
   pre: ({ children }) => {
@@ -6724,7 +6736,7 @@ const MESSAGE_MARKDOWN_COMPONENTS: Components = {
       return (
         <div className="message-code-shell">
           <pre className="message-plain-code">{children}</pre>
-          <MessageBlockCopy text={text} label="复制代码" />
+          <MessageBlockCopy text={text} label={tr("复制代码")} />
         </div>
       );
     }
@@ -6740,14 +6752,14 @@ const MESSAGE_MARKDOWN_COMPONENTS: Components = {
         >
           {code.source}
         </SyntaxHighlighter>
-        <MessageBlockCopy text={code.source} label="复制代码" />
+        <MessageBlockCopy text={code.source} label={tr("复制代码")} />
       </div>
     );
   },
-};
+});
 
 export function MessageMarkdown({ children }: { children: string }) {
-  const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(children), [children]);
+  const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(children), [children, getLocale()]);
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -6783,7 +6795,7 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
   const durationLabel = durationMs === null ? null : formatElapsed(durationMs);
   if (item.kind === "turn_duration") {
     if (!showTurnDuration || durationMs === null) return null;
-    const label = `已处理：${formatTurnDuration(durationMs, turnDurationFormat)}`;
+    const label = tr("已处理：{0}", { 0: formatTurnDuration(durationMs, turnDurationFormat) });
     return present(<div className="turn-duration-divider" role="separator" aria-label={label}><span>{label}</span></div>);
   }
   if (item.kind === "file_edit_summary") {
@@ -6797,7 +6809,7 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
     return present(
       <article className="message user-message-shell">
         {(item.images?.length || attachments.length > 0) && (
-          <div className="user-attachment-row" aria-label="附件">
+          <div className="user-attachment-row" aria-label={tr("附件")}>
             <InlineImages images={item.images} />
             {attachments.map((attachment, index) => (
               <div
@@ -6816,7 +6828,7 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
         )}
         {text.trim() && <div className="user-message"><MessageMarkdown>{text}</MessageMarkdown></div>}
         {text.trim() && <div className="message-actions">
-          <CopyButton text={text} label="复制输入" />
+          <CopyButton text={text} label={tr("复制输入")} />
         </div>}
       </article>
     );
@@ -6828,13 +6840,13 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
         <InlineImages images={item.images} />
         {(item.text || item.turnDetails) && <div className="message-actions">
           {item.turnDetails && <TurnDetailsButton details={item.turnDetails} />}
-          {item.text && <CopyButton text={item.text} label="复制回复" />}
+          {item.text && <CopyButton text={item.text} label={tr("复制回复")} />}
           {item.status === "complete" && onFork && (
             <button
               className="copy-button fork-button"
               type="button"
-              title="从此处分叉"
-              aria-label="从此处分叉"
+              title={tr("从此处分叉")}
+              aria-label={tr("从此处分叉")}
               disabled={forkDisabled}
               onClick={() => onFork(item)}
             >
@@ -6850,9 +6862,9 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
       <article className="command-card">
         <header className="command-card-header">
           <Terminal />
-          <strong>{item.title ?? "命令结果"}</strong>
+          <strong>{item.title ?? tr("命令结果")}</strong>
           {item.command && <code>{item.command}</code>}
-          <span>完成</span>
+          <span>{tr("完成")}</span>
         </header>
         <CopyablePre text={item.text ?? ""} className="command-card-content" />
       </article>
@@ -6864,21 +6876,21 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
       <div className="error-line copyable-inline">
         <AlertTriangle />
         <span>{item.text}</span>
-        {item.text && <CopyButton text={item.text} label="复制错误" />}
+        {item.text && <CopyButton text={item.text} label={tr("复制错误")} />}
       </div>
     );
   }
   if (item.kind === "document_job") {
     const progress = item.total ? Math.min(100, Math.round(((item.current ?? 0) / item.total) * 100)) : 0;
     const statusLabel = item.status === "complete"
-      ? "完成"
+      ? tr("完成")
       : item.status === "failed"
-        ? "失败"
+        ? tr("失败")
         : item.status === "cancelled"
-          ? "已取消"
+          ? tr("已取消")
           : item.status === "retrying"
-            ? "校验后重试"
-            : "运行中";
+            ? tr("校验后重试")
+            : tr("运行中");
     return present(
       <article className={`activity-card document-job-card is-${item.status ?? "running"}`}>
         <div className="activity-header">
@@ -6896,8 +6908,7 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
           {item.text && <p>{item.text}</p>}
           {item.status === "failed" && item.engine === "precise" && onCompatibilityRetry && (
             <button className="document-job-retry" type="button" onClick={onCompatibilityRetry}>
-              <RefreshCw />使用兼容模式重试
-            </button>
+              <RefreshCw />{tr("使用兼容模式重试")}</button>
           )}
         </div>
       </article>
@@ -6932,7 +6943,7 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
           <small className="tool-technical-name">{item.title}</small>
           {presentation.summary && <code className="tool-summary">{presentation.summary}</code>}
           <em className={`tool-status ${item.isError ? "error" : item.status === "running" ? "running" : "complete"}`}>
-            {item.isError ? "失败" : item.status === "running" ? "运行中" : "完成"}
+            {item.isError ? tr("失败") : item.status === "running" ? tr("运行中") : tr("完成")}
           </em>
           {durationLabel && <small className="activity-duration">{durationLabel}</small>}
           {collapsed ? <ChevronRight /> : <ChevronDown />}
@@ -6942,18 +6953,18 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
             {presentation.action && <div className="tool-action-badge">{presentation.action}</div>}
             {presentation.fields.length > 0 && (
               <section className="tool-card-section">
-                <h4>调用参数</h4>
+                <h4>{tr("调用参数")}</h4>
                 <div className="tool-detail-list">{presentation.fields.map((field) => <ToolFieldView field={field} key={field.key} />)}</div>
               </section>
             )}
             {result !== undefined && (
               <section className="tool-card-section">
-                <h4>{item.isError ? "错误" : "执行结果"}</h4>
+                <h4>{item.isError ? tr("错误") : tr("执行结果")}</h4>
                 <ToolResultView toolName={item.title ?? "Tool"} result={result} isError={item.isError} />
               </section>
             )}
             <InlineImages images={item.images} />
-            {presentation.fields.length === 0 && result === undefined && <div className="tool-empty">无需参数</div>}
+            {presentation.fields.length === 0 && result === undefined && <div className="tool-empty">{tr("无需参数")}</div>}
           </div>
         )}
       </article>
@@ -6969,10 +6980,10 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
         </button>
         {!collapsed && (
           <CopyablePre
-            text={item.diff ?? "此事件没有附带 diff"}
+            text={item.diff ?? tr("此事件没有附带 diff")}
             className="activity-body diff-view"
           >
-            {item.diff ? diffLines(item.diff) : "此事件没有附带 diff"}
+            {item.diff ? diffLines(item.diff) : tr("此事件没有附带 diff")}
           </CopyablePre>
         )}
       </article>
@@ -6987,15 +6998,15 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
         {item.status === "pending" ? (
           <>
             <div className="request-actions">
-              <button onClick={() => onPermission(item, false)}>拒绝</button>
-              <button onClick={() => onPermission(item, true, true)}>始终允许</button>
-              <button className="primary" onClick={() => onPermission(item, true)}>允许</button>
+              <button onClick={() => onPermission(item, false)}>{tr("拒绝")}</button>
+              <button onClick={() => onPermission(item, true, true)}>{tr("始终允许")}</button>
+              <button className="primary" onClick={() => onPermission(item, true)}>{tr("允许")}</button>
             </div>
             {approvalShortcuts.enabled && isDesktopShell() && (
-              <small>仅一条待审批时可在其他窗口按 {approvalShortcutKeyLabels(approvalShortcuts.approve).join(" + ")} 允许一次、{approvalShortcutKeyLabels(approvalShortcuts.deny).join(" + ")} 拒绝、{approvalShortcutKeyLabels(approvalShortcuts.always_allow).join(" + ")} 始终允许；不会切换到 Crab Desktop。可在设置 → 常规 → 权限快捷键中修改。</small>
+              <small>{tr("仅一条待审批时可在其他窗口按 ")}{approvalShortcutKeyLabels(approvalShortcuts.approve).join(" + ")}{tr(" 允许一次、")}{approvalShortcutKeyLabels(approvalShortcuts.deny).join(" + ")}{tr(" 拒绝、")}{approvalShortcutKeyLabels(approvalShortcuts.always_allow).join(" + ")}{tr(" 始终允许；不会切换到 Crab Desktop。可在设置 → 常规 → 权限快捷键中修改。")}</small>
             )}
           </>
-        ) : <span className={`request-result ${item.status}`}>{item.status === "allowed" ? "已允许" : "已拒绝"}</span>}
+        ) : <span className={`request-result ${item.status}`}>{item.status === "allowed" ? tr("已允许") : tr("已拒绝")}</span>}
       </article>
     );
   }
@@ -7018,7 +7029,7 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
         </div>
         {item.status === "pending" && (
           <div className="request-actions">
-            <button className="primary" disabled={!item.selected?.length} onClick={() => onSubmitChoice(item)}>确认</button>
+            <button className="primary" disabled={!item.selected?.length} onClick={() => onSubmitChoice(item)}>{tr("确认")}</button>
           </div>
         )}
       </article>
@@ -7030,9 +7041,9 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
         <div className="request-title"><Bot /><strong>{item.title}</strong></div>
         <CopyablePre text={textFromUnknown(item.detail)} />
         <div className="request-actions">
-          <button onClick={() => onPlan("cancel")}>取消</button>
-          <button onClick={() => onPlan("revise")}>修改</button>
-          <button className="primary" onClick={() => onPlan("execute")}>执行计划</button>
+          <button onClick={() => onPlan("cancel")}>{tr("取消")}</button>
+          <button onClick={() => onPlan("revise")}>{tr("修改")}</button>
+          <button className="primary" onClick={() => onPlan("execute")}>{tr("执行计划")}</button>
         </div>
       </article>
     );
@@ -7074,7 +7085,7 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
     setError(null);
   };
   return (
-    <Modal title="Gateway 连接" onClose={onClose}>
+    <Modal title={tr("Gateway 连接")} onClose={onClose}>
       <div className="saved-connections">
         {settings.connections.map((connection) => (
           <div className="saved-connection-row" key={connection.id}>
@@ -7086,14 +7097,14 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
               <span><strong>{connection.name}</strong><small>{connection.base_url}</small></span>
               <ChevronRight />
             </button>
-            <button className="icon-button" title="编辑连接" onClick={() => editConnection(connection)}>
+            <button className="icon-button" title={tr("编辑连接")} onClick={() => editConnection(connection)}>
               <Settings />
             </button>
           </div>
         ))}
       </div>
       <div className="modal-divider">
-        <span>{editingConnection ? `编辑 ${editingConnection.name}` : "新建远程连接"}</span>
+        <span>{editingConnection ? tr("编辑 {0}", { 0: editingConnection.name }) : tr("新建远程连接")}</span>
       </div>
       <form
         className="form-grid"
@@ -7105,7 +7116,7 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
           try {
             fallbackName = new URL(baseUrl).host;
           } catch {
-            setError("Gateway 地址无效");
+            setError(tr("Gateway 地址无效"));
             setBusy(false);
             return;
           }
@@ -7131,23 +7142,23 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
           });
         }}
       >
-        <label><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="构建服务器" /></label>
-        <label><span>Gateway 地址</span><input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://host:4096" /></label>
+        <label><span>{tr("名称")}</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={tr("构建服务器")} /></label>
+        <label><span>{tr("Gateway 地址")}</span><input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://host:4096" /></label>
         <label>
-          <span>{editingConnection?.credential_ref ? "密码（留空则保留；浏览器重开后需重新输入）" : "密码"}</span>
+          <span>{editingConnection?.credential_ref ? tr("密码（留空则保留；浏览器重开后需重新输入）") : tr("密码")}</span>
           <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" />
         </label>
         {isInsecureRemoteUrl(baseUrl) && (
           <label className="warning-check">
             <input type="checkbox" checked={allowInsecure} onChange={(event) => setAllowInsecure(event.target.checked)} />
-            <ShieldAlert /><span>允许通过未加密连接传输凭据</span>
+            <ShieldAlert /><span>{tr("允许通过未加密连接传输凭据")}</span>
           </label>
         )}
         {error && <div className="form-error"><AlertTriangle />{error}</div>}
         <div className="modal-actions">
-          {editingConnection && <button type="button" onClick={createConnection}>新建连接</button>}
-          <button type="button" onClick={onClose}>取消</button>
-          <button className="primary" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : editingConnection ? <Settings /> : <Plus />}保存并连接</button>
+          {editingConnection && <button type="button" onClick={createConnection}>{tr("新建连接")}</button>}
+          <button type="button" onClick={onClose}>{tr("取消")}</button>
+          <button className="primary" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : editingConnection ? <Settings /> : <Plus />}{tr("保存并连接")}</button>
         </div>
       </form>
     </Modal>
@@ -7162,10 +7173,10 @@ export function ProjectTypeModal({ capabilities, onClose, onSelect }: {
   const [kind, setKind] = useState<"project" | "document">("project");
   const documentDisabled = capabilities === null;
   return (
-    <Modal title="创建项目" onClose={onClose} wide>
+    <Modal title={tr("创建项目")} onClose={onClose} wide>
       <div className="project-type-modal">
-        <h3>项目类型</h3>
-        <div className="project-type-grid" role="radiogroup" aria-label="项目类型">
+        <h3>{tr("项目类型")}</h3>
+        <div className="project-type-grid" role="radiogroup" aria-label={tr("项目类型")}>
           <button
             type="button"
             role="radio"
@@ -7175,8 +7186,8 @@ export function ProjectTypeModal({ capabilities, onClose, onSelect }: {
           >
             <span className="project-type-check">{kind === "project" && <Check />}</span>
             <Folder />
-            <strong>项目</strong>
-            <small>编辑、运行和测试本地或远程工作区中的文件</small>
+            <strong>{tr("项目")}</strong>
+            <small>{tr("编辑、运行和测试本地或远程工作区中的文件")}</small>
           </button>
           <button
             type="button"
@@ -7188,15 +7199,15 @@ export function ProjectTypeModal({ capabilities, onClose, onSelect }: {
           >
             <span className="project-type-check">{kind === "document" && <Check />}</span>
             <FileText />
-            <strong>文档</strong>
-            <small>{documentDisabled ? "当前 Gateway 版本不支持文档项目" : "阅读、翻译文档并生成 Blog"}</small>
+            <strong>{tr("文档")}</strong>
+            <small>{documentDisabled ? tr("当前 Gateway 版本不支持文档项目") : tr("阅读、翻译文档并生成 Blog")}</small>
           </button>
         </div>
-        {capabilities === undefined && <p className="project-type-status"><LoaderCircle className="spin" />正在检查文档能力…</p>}
+        {capabilities === undefined && <p className="project-type-status"><LoaderCircle className="spin" />{tr("正在检查文档能力…")}</p>}
       </div>
       <div className="modal-actions">
-        <button type="button" onClick={onClose}>取消</button>
-        <button className="primary" type="button" onClick={() => onSelect(kind)}>下一步<ChevronRight /></button>
+        <button type="button" onClick={onClose}>{tr("取消")}</button>
+        <button className="primary" type="button" onClick={() => onSelect(kind)}>{tr("下一步")}<ChevronRight /></button>
       </div>
     </Modal>
   );
@@ -7214,7 +7225,7 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
-  const [workspacePath, setWorkspacePath] = useState(() => defaultProjectDirectory(defaultRoot, "新文档"));
+  const [workspacePath, setWorkspacePath] = useState(() => defaultProjectDirectory(defaultRoot, tr("新文档")));
   const [workspaceEdited, setWorkspaceEdited] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState<"upload" | "convert" | "parse" | null>(null);
@@ -7222,7 +7233,7 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
 
   const applySuggestedName = (value: string) => {
     const filename = value.split(/[\\/]/).at(-1) || value;
-    const suggested = filename.replace(/\.[^.]+$/, "").trim() || "新文档";
+    const suggested = filename.replace(/\.[^.]+$/, "").trim() || tr("新文档");
     setName((current) => current.trim() ? current : suggested);
     if (!workspaceEdited) setWorkspacePath(defaultProjectDirectory(defaultRoot, suggested));
   };
@@ -7258,21 +7269,21 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
 
   const create = async () => {
     if (busy) return;
-    const projectName = name.trim() || "新文档";
+    const projectName = name.trim() || tr("新文档");
     if (!workspacePath.trim()) {
-      setError("请输入文档工作目录");
+      setError(tr("请输入文档工作目录"));
       return;
     }
     if (mode === "file" && !file) {
-      setError("请选择一个本地文档");
+      setError(tr("请选择一个本地文档"));
       return;
     }
     if (file && capabilities && file.size > capabilities.max_bytes) {
-      setError(`文件不能超过 ${Math.round(capabilities.max_bytes / 1024 / 1024)} MiB`);
+      setError(tr("文件不能超过 {0} MiB", { 0: Math.round(capabilities.max_bytes / 1024 / 1024) }));
       return;
     }
     if (unsupportedFormat) {
-      setError("请选择 PDF、Word、ODT、RTF、PPT、TXT、Markdown 或 HTML 文档");
+      setError(tr("请选择 PDF、Word、ODT、RTF、PPT、TXT、Markdown 或 HTML 文档"));
       return;
     }
     if (mode === "url") {
@@ -7280,12 +7291,12 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
         const parsed = new URL(url);
         if (!/^https?:$/.test(parsed.protocol)) throw new Error();
       } catch {
-        setError("请输入有效的 HTTP 或 HTTPS 文档地址");
+        setError(tr("请输入有效的 HTTP 或 HTTPS 文档地址"));
         return;
       }
     }
     if (formatUnavailable) {
-      setError("此格式需要 Gateway 安装 LibreOffice 后才能导入");
+      setError(tr("此格式需要 Gateway 安装 LibreOffice 后才能导入"));
       return;
     }
     setBusy(true);
@@ -7329,15 +7340,15 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
   };
 
   return (
-    <Modal title="创建文档项目" onClose={onClose} wide>
+    <Modal title={tr("创建文档项目")} onClose={onClose} wide>
       <div className="document-project-form">
         <label className="project-name-field">
           <FileText />
-          <input autoFocus value={name} disabled={busy} placeholder="文档项目名称" onChange={(event) => updateName(event.target.value)} />
+          <input autoFocus value={name} disabled={busy} placeholder={tr("文档项目名称")} onChange={(event) => updateName(event.target.value)} />
         </label>
-        <div className="document-source-tabs" role="tablist" aria-label="文档来源">
-          <button className={mode === "file" ? "active" : ""} onClick={() => setMode("file")}>本地文件</button>
-          <button className={mode === "url" ? "active" : ""} onClick={() => setMode("url")}>网络地址</button>
+        <div className="document-source-tabs" role="tablist" aria-label={tr("文档来源")}>
+          <button className={mode === "file" ? "active" : ""} onClick={() => setMode("file")}>{tr("本地文件")}</button>
+          <button className={mode === "url" ? "active" : ""} onClick={() => setMode("url")}>{tr("网络地址")}</button>
         </div>
         {mode === "file" ? (
           <label className={`document-file-drop ${file ? "selected" : ""}`}>
@@ -7353,12 +7364,12 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
               }}
             />
             <FileText />
-            <strong>{file?.name ?? "选择本地文档"}</strong>
-            <small>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MiB` : "PDF、Word、演示文稿及常见文本格式"}</small>
+            <strong>{file?.name ?? tr("选择本地文档")}</strong>
+            <small>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MiB` : tr("PDF、Word、演示文稿及常见文本格式")}</small>
           </label>
         ) : (
           <label className="document-url-field">
-            <span>直接文档地址</span>
+            <span>{tr("直接文档地址")}</span>
             <input
               type="url"
               disabled={busy}
@@ -7370,11 +7381,11 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
                 setError(null);
               }}
             />
-            <small>仅下载直接返回文档文件的 HTTP/HTTPS 地址，不抓取普通网页或网盘分享页。</small>
+            <small>{tr("仅下载直接返回文档文件的 HTTP/HTTPS 地址，不抓取普通网页或网盘分享页。")}</small>
           </label>
         )}
         <label className="document-workspace-field">
-          <span>工作目录</span>
+          <span>{tr("工作目录")}</span>
           <input
             value={workspacePath}
             disabled={busy}
@@ -7383,19 +7394,19 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
               setWorkspacePath(event.target.value);
             }}
           />
-          <small>原文件、翻译数据和 Blog 会存放在这里；不会修改你选择的源文件。</small>
+          <small>{tr("原文件、翻译数据和 Blog 会存放在这里；不会修改你选择的源文件。")}</small>
         </label>
         {capabilities && !capabilities.libreoffice.available && (
-          <div className="document-capability-warning"><AlertTriangle />当前 Gateway 未安装 LibreOffice，首版只能导入 PDF。</div>
+          <div className="document-capability-warning"><AlertTriangle />{tr("当前 Gateway 未安装 LibreOffice，首版只能导入 PDF。")}</div>
         )}
-        {formatUnavailable && <div className="form-error"><AlertTriangle />此格式需要先安装 LibreOffice。</div>}
-        {unsupportedFormat && <div className="form-error"><AlertTriangle />不支持这个文件格式。</div>}
+        {formatUnavailable && <div className="form-error"><AlertTriangle />{tr("此格式需要先安装 LibreOffice。")}</div>}
+        {unsupportedFormat && <div className="form-error"><AlertTriangle />{tr("不支持这个文件格式。")}</div>}
         {stage && (
           <div className="document-import-progress">
             {[
-              ["upload", mode === "url" ? "下载" : "导入"],
-              ...(knownConversion ? [["convert", "转换为 PDF"]] : []),
-              ["parse", "准备文档"],
+              ["upload", mode === "url" ? tr("下载") : tr("导入")],
+              ...(knownConversion ? [["convert", tr("转换为 PDF")]] : []),
+              ["parse", tr("准备文档")],
             ].map(([value, label]) => (
               <span className={stage === value ? "active" : ""} key={value}>{stage === value ? <LoaderCircle className="spin" /> : <Check />}{label}</span>
             ))}
@@ -7404,10 +7415,9 @@ export function DocumentProjectModal({ api, capabilities, defaultRoot, onClose, 
         {error && <div className="form-error"><AlertTriangle />{error}</div>}
       </div>
       <div className="modal-actions">
-        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button type="button" disabled={busy} onClick={onClose}>{tr("取消")}</button>
         <button className="primary" type="button" disabled={busy || formatUnavailable || unsupportedFormat} onClick={() => void create()}>
-          {busy ? <LoaderCircle className="spin" /> : <FileText />}创建文档
-        </button>
+          {busy ? <LoaderCircle className="spin" /> : <FileText />}{tr("创建文档")}</button>
       </div>
     </Modal>
   );
@@ -7434,7 +7444,7 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
   const [choosingDirectory, setChoosingDirectory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const suggestedName = directories[0] ? basename(directories[0]) : "新项目";
+  const suggestedName = directories[0] ? basename(directories[0]) : tr("新项目");
   const documentProject = project?.kind === "document";
   const protectedPrimaryDirectory = protectPrimaryDirectory || documentProject
     ? project?.directories[0] ?? project?.path ?? null
@@ -7444,12 +7454,12 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
     if (busy) return;
     const nextDirectories = [...new Set(directories)];
     if (editing && nextDirectories.length === 0) {
-      setError("请为项目选择一个主目录");
+      setError(tr("请为项目选择一个主目录"));
       return;
     }
     if (protectedPrimaryDirectory
       && comparablePath(nextDirectories[0] ?? "") !== comparablePath(protectedPrimaryDirectory)) {
-      setError(documentProject ? "文档项目的托管工作目录不能修改" : "默认项目的原始主目录不能移除");
+      setError(documentProject ? tr("文档项目的托管工作目录不能修改") : tr("默认项目的原始主目录不能移除"));
       return;
     }
     const shouldCreateDefaultDirectory = !editing && nextDirectories.length === 0;
@@ -7460,7 +7470,7 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
       item.id !== project?.id && comparablePath(item.path) === comparablePath(path)
     ));
     if (duplicate) {
-      setError(`“${duplicate.name}”已经使用这个主目录，请选择其他目录`);
+      setError(tr("“{0}”已经使用这个主目录，请选择其他目录", { 0: duplicate.name }));
       return;
     }
     setBusy(true);
@@ -7497,8 +7507,8 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
         api={api}
         home={directories.at(-1) ?? home}
         roots={roots}
-        title="加入项目目录"
-        selectLabel="加入此目录"
+        title={tr("加入项目目录")}
+        selectLabel={tr("加入此目录")}
         onClose={() => setChoosingDirectory(false)}
         onSelect={(path) => {
           setDirectories((current) => current.some(
@@ -7511,7 +7521,7 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
     );
   }
   return (
-    <Modal title={documentProject ? "编辑文档项目" : editing ? "编辑项目" : "新建项目"} onClose={onClose}>
+    <Modal title={documentProject ? tr("编辑文档项目") : editing ? tr("编辑项目") : tr("新建项目")} onClose={onClose}>
       <div className="project-form">
         <label className="project-name-field">
           <Folder />
@@ -7520,12 +7530,12 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
             value={name}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && void save()}
-            placeholder="给项目起个名字"
+            placeholder={tr("给项目起个名字")}
             disabled={busy}
           />
         </label>
         <section className="project-directories">
-          <h3>{editing ? "项目目录" : "项目文件夹（可选）"}</h3>
+          <h3>{editing ? tr("项目目录") : tr("项目文件夹（可选）")}</h3>
           <div className={`project-directory-box ${directories.length === 0 ? "empty" : ""}`}>
             {directories.map((path, index) => {
               const primaryDirectoryProtected = Boolean(protectedPrimaryDirectory) && index === 0;
@@ -7536,9 +7546,9 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
                   <button
                     className="icon-button small"
                     title={primaryDirectoryProtected
-                      ? documentProject ? "文档项目的托管工作目录不能移除" : "默认项目的主目录不能移除"
-                      : `移除 ${basename(path)}`}
-                    aria-label={`移除目录 ${path}`}
+                      ? documentProject ? tr("文档项目的托管工作目录不能移除") : tr("默认项目的主目录不能移除")
+                      : tr("移除 {0}", { 0: basename(path) })}
+                    aria-label={tr("移除目录 {0}", { 0: path })}
                     disabled={busy || primaryDirectoryProtected}
                     onClick={() => setDirectories((current) => current.filter((item) => item !== path))}
                   >
@@ -7549,24 +7559,24 @@ export function ProjectModal({ api, home, roots, project, projects, protectPrima
             })}
             <button className="project-add-directory" type="button" disabled={busy} onClick={() => setChoosingDirectory(true)}>
               <FolderInput />
-              <span>{directories.length === 0 ? "选择项目文件夹" : "继续加入目录"}</span>
+              <span>{directories.length === 0 ? tr("选择项目文件夹") : tr("继续加入目录")}</span>
             </button>
           </div>
-          {documentProject && <p>主目录由 CrabCode 托管；在这里可以补充供 Agent 参考的目录。</p>}
+          {documentProject && <p>{tr("主目录由 CrabCode 托管；在这里可以补充供 Agent 参考的目录。")}</p>}
           {directories.length === 0 && (
-            <p>{editing ? "每个项目都需要一个独立的主目录。" : "不选择时，将在用户主目录下自动创建同名文件夹。"}</p>
+            <p>{editing ? tr("每个项目都需要一个独立的主目录。") : tr("不选择时，将在用户主目录下自动创建同名文件夹。")}</p>
           )}
         </section>
         {error && <div className="form-error"><AlertTriangle />{error}</div>}
       </div>
       <div className={`modal-actions project-actions ${editing ? "editing" : ""}`}>
         {editing && onRemove && (
-          <button className="danger-button" type="button" onClick={onRemove}>移除项目</button>
+          <button className="danger-button" type="button" onClick={onRemove}>{tr("移除项目")}</button>
         )}
         <span className="project-actions-spacer" />
-        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button type="button" disabled={busy} onClick={onClose}>{tr("取消")}</button>
         <button className="primary" type="button" disabled={busy || (editing && directories.length === 0)} onClick={() => void save()}>
-          {busy && <LoaderCircle className="spin" />}{editing ? "保存更改" : "创建项目"}
+          {busy && <LoaderCircle className="spin" />}{editing ? tr("保存更改") : tr("创建项目")}
         </button>
       </div>
     </Modal>
@@ -7577,8 +7587,8 @@ export function DirectoryModal({
   api,
   home,
   roots,
-  title = "选择项目目录",
-  selectLabel = "使用此目录",
+  title = tr("选择项目目录"),
+  selectLabel = tr("使用此目录"),
   allowFiles = false,
   allowDirectorySelection = true,
   onClose,
@@ -7615,9 +7625,9 @@ export function DirectoryModal({
         {roots.map((root) => <button key={root} onClick={() => setPath(root)}><Folder />{root}</button>)}
       </div>
       <div className="directory-toolbar">
-        <button className="icon-button" title="上一级" disabled={!listing?.parent} onClick={() => listing?.parent && setPath(listing.parent)}><ChevronLeft /></button>
+        <button className="icon-button" title={tr("上一级")} disabled={!listing?.parent} onClick={() => listing?.parent && setPath(listing.parent)}><ChevronLeft /></button>
         <input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => event.key === "Enter" && setPath(event.currentTarget.value)} />
-        <label><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />显示隐藏项目</label>
+        <label><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />{tr("显示隐藏项目")}</label>
       </div>
       <div className="directory-list">
         {!listing && !error && <div className="directory-loading"><LoaderCircle className="spin" /></div>}
@@ -7626,7 +7636,7 @@ export function DirectoryModal({
           <button key={directory.path} onDoubleClick={() => setPath(directory.path)} onClick={() => setPath(directory.path)}>
             <Folder />
             <span>{directory.name}</span>
-            {directory.is_symlink && <small>链接</small>}
+            {directory.is_symlink && <small>{tr("链接")}</small>}
             <ChevronRight />
           </button>
         ))}
@@ -7640,21 +7650,21 @@ export function DirectoryModal({
           >
             <FileText />
             <span>{file.name}</span>
-            <small>{formatFileSize(file.size)}{file.is_symlink ? " · 链接" : ""}</small>
+            <small>{formatFileSize(file.size)}{file.is_symlink ? tr(" · 链接") : ""}</small>
           </button>
         ))}
         {listing && listing.directories.length === 0 && (!allowFiles || (listing.files ?? []).length === 0) && (
-          <div className="directory-empty">此目录为空</div>
+          <div className="directory-empty">{tr("此目录为空")}</div>
         )}
       </div>
       <div className="modal-actions">
-        <button onClick={onClose}>取消</button>
+        <button onClick={onClose}>{tr("取消")}</button>
         <button
           type="button"
           disabled={!selectedFileEntry}
-          title={selectedFileEntry ? "取消文件选择并改为引用当前文件夹" : "尚未选择文件"}
+          title={selectedFileEntry ? tr("取消文件选择并改为引用当前文件夹") : tr("尚未选择文件")}
           onClick={() => setSelectedFile(null)}
-        >取消选择</button>
+        >{tr("取消选择")}</button>
         <button
           className="primary"
           disabled={!listing || (!selectedFileEntry && !allowDirectorySelection)}
@@ -7664,7 +7674,7 @@ export function DirectoryModal({
           }}
         >
           {selectedFileEntry ? <FileText /> : <FolderOpen />}
-          {selectedFileEntry ? "引用此文件" : selectLabel}
+          {selectedFileEntry ? tr("引用此文件") : selectLabel}
         </button>
       </div>
     </Modal>
@@ -7715,24 +7725,24 @@ function GoalModal({ api, sessionId, onClose }: {
     }
   };
   return (
-    <Modal title="目标" onClose={onClose}>
+    <Modal title={tr("目标")} onClose={onClose}>
       <div className="goal-form">
-        <label htmlFor="goal-objective">持续追踪的目标</label>
+        <label htmlFor="goal-objective">{tr("持续追踪的目标")}</label>
         <textarea
           id="goal-objective"
           autoFocus
           value={objective}
           disabled={loading || busy}
-          placeholder="输入当前会话要持续追踪的目标"
+          placeholder={tr("输入当前会话要持续追踪的目标")}
           onChange={(event) => setObjective(event.target.value)}
         />
         {error && <div className="form-error"><AlertTriangle />{error}</div>}
       </div>
       <div className="modal-actions">
-        {hasGoal && <button type="button" disabled={busy} onClick={() => void clear()}>清除目标</button>}
-        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        {hasGoal && <button type="button" disabled={busy} onClick={() => void clear()}>{tr("清除目标")}</button>}
+        <button type="button" disabled={busy} onClick={onClose}>{tr("取消")}</button>
         <button className="primary" disabled={loading || busy || !objective.trim()} onClick={() => void save()}>
-          {busy ? <LoaderCircle className="spin" /> : <Target />}{hasGoal ? "更新目标" : "设置目标"}
+          {busy ? <LoaderCircle className="spin" /> : <Target />}{hasGoal ? tr("更新目标") : tr("设置目标")}
         </button>
       </div>
     </Modal>
@@ -7752,7 +7762,7 @@ function CheckpointModal({ api, sessionId, onClose, onRestored }: {
     void api.checkpoints(sessionId).then(setItems).catch((reason) => setError(String(reason)));
   }, [api, sessionId]);
   const restore = async (id?: string) => {
-    if (!window.confirm(id ? "恢复到这个检查点？文件和会话都将回退。" : "撤销最近一次文件和会话改动？")) return;
+    if (!window.confirm(id ? tr("恢复到这个检查点？文件和会话都将回退。") : tr("撤销最近一次文件和会话改动？"))) return;
     setBusy(true);
     try {
       if (id) await api.revert(sessionId, id);
@@ -7764,8 +7774,8 @@ function CheckpointModal({ api, sessionId, onClose, onRestored }: {
     }
   };
   return (
-    <Modal title="检查点与恢复" onClose={onClose}>
-      <button className="undo-latest" disabled={busy} onClick={() => void restore()}><RotateCcw />撤销最近检查点</button>
+    <Modal title={tr("检查点与恢复")} onClose={onClose}>
+      <button className="undo-latest" disabled={busy} onClick={() => void restore()}><RotateCcw />{tr("撤销最近检查点")}</button>
       <div className="checkpoint-list">
         {!items && !error && <LoaderCircle className="spin" />}
         {items?.map((item) => (
@@ -7773,12 +7783,12 @@ function CheckpointModal({ api, sessionId, onClose, onRestored }: {
             <History />
             <span>
               <strong>{item.label || item.id.slice(0, 8)}</strong>
-              <small>{item.snapshot_id ? "文件快照已包含" : "仅保存对话"}</small>
+              <small>{item.snapshot_id ? tr("文件快照已包含") : tr("仅保存对话")}</small>
             </span>
             <RotateCcw />
           </button>
         ))}
-        {items?.length === 0 && <div className="empty-sidebar">暂无检查点</div>}
+        {items?.length === 0 && <div className="empty-sidebar">{tr("暂无检查点")}</div>}
         {error && <div className="form-error"><AlertTriangle />{error}</div>}
       </div>
     </Modal>
@@ -7793,21 +7803,19 @@ export function ScheduleDeleteModal({ job, busy, error, onClose, onConfirm }: {
   onConfirm: () => void;
 }) {
   return (
-    <Modal title="永久删除任务" onClose={onClose}>
+    <Modal title={tr("永久删除任务")} onClose={onClose}>
       <div className="confirm-dialog-copy">
         <AlertTriangle />
         <div>
-          <strong>删除“{job.name}”？</strong>
-          <p>这个任务及其运行历史会被永久删除，无法恢复。</p>
+          <strong>{tr("删除“")}{job.name}”？</strong>
+          <p>{tr("这个任务及其运行历史会被永久删除，无法恢复。")}</p>
         </div>
       </div>
       {error && <div className="form-error"><AlertTriangle />{error}</div>}
       <div className="modal-actions">
-        <button type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button type="button" disabled={busy} onClick={onClose}>{tr("取消")}</button>
         <button className="confirm-danger" type="button" disabled={busy} onClick={onConfirm}>
-          {busy ? <LoaderCircle className="spin" /> : <Trash2 />}
-          永久删除
-        </button>
+          {busy ? <LoaderCircle className="spin" /> : <Trash2 />}{tr("永久删除")}</button>
       </div>
     </Modal>
   );
@@ -7819,19 +7827,18 @@ export function ProjectDeleteModal({ project, onClose, onConfirm }: {
   onConfirm: () => void;
 }) {
   return (
-    <Modal title="删除项目" onClose={onClose}>
+    <Modal title={tr("删除项目")} onClose={onClose}>
       <div className="confirm-dialog-copy">
         <Trash2 />
         <div>
-          <strong>从列表中删除“{project.name}”？</strong>
-          <p>只会移除项目配置，不会删除项目文件夹、文件或已有会话记录。</p>
+          <strong>{tr("从列表中删除“")}{project.name}”？</strong>
+          <p>{tr("只会移除项目配置，不会删除项目文件夹、文件或已有会话记录。")}</p>
         </div>
       </div>
       <div className="modal-actions">
-        <button type="button" onClick={onClose}>取消</button>
+        <button type="button" onClick={onClose}>{tr("取消")}</button>
         <button className="confirm-danger" type="button" onClick={onConfirm}>
-          <Trash2 />删除项目
-        </button>
+          <Trash2 />{tr("删除项目")}</button>
       </div>
     </Modal>
   );
@@ -7846,7 +7853,7 @@ function Modal({ title, onClose, wide = false, children }: {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
-        <header><h2>{title}</h2><button className="icon-button" title="关闭" onClick={onClose}><X /></button></header>
+        <header><h2>{title}</h2><button className="icon-button" title={tr("关闭")} onClick={onClose}><X /></button></header>
         <div className="modal-body">{children}</div>
       </section>
     </div>

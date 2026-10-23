@@ -25,6 +25,15 @@ describe("Gateway URL handling", () => {
 });
 
 describe("desktop settings migration", () => {
+  it("preserves language choices and migrates missing or invalid values to auto", () => {
+    for (const language of ["auto", "zh-CN", "zh-TW", "en", "ja", "ko", "de", "fr", "es", "pt-BR", "ru"]) {
+      const value = normalizeSettings({ connections: [], language } as unknown as DesktopSettings);
+      expect(normalizeSettings(JSON.parse(JSON.stringify(value))).language).toBe(language);
+    }
+    for (const language of [undefined, "unknown", null]) {
+      expect(normalizeSettings({ connections: [], language } as unknown as DesktopSettings).language).toBe("auto");
+    }
+  });
   it("migrates approval shortcuts and preserves customized disabled settings across serialization", () => {
     expect(normalizeSettings({ connections: [] } as unknown as DesktopSettings).approval_shortcuts)
       .toEqual(DEFAULT_APPROVAL_SHORTCUTS);

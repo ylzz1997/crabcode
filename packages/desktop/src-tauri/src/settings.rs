@@ -86,6 +86,7 @@ fn default_settings() -> Value {
             "last_project_id": null
         }],
         "python_path": null,
+        "language": "auto",
         "sidebar_width": 280,
         "project_files_width": 640,
         "project_files_max_tabs": 5,

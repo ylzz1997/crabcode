@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr, localized } from "./i18n";
 import {
   AlertTriangle,
   BookOpen,
@@ -101,7 +103,7 @@ export function documentZoomDeltaForKeyboardEvent(
 }
 
 export function documentTranslationToggleLabel(showTranslation: boolean): string {
-  return showTranslation ? "查看原文" : "查看译文";
+  return showTranslation ? tr("查看原文") : tr("查看译文");
 }
 
 export function hasDocumentTranslationCache(manifest: DocumentManifest | null, locale: string): boolean {
@@ -162,8 +164,8 @@ export function DocumentToolbarNumberEditor({
         className={`${className} document-toolbar-number`}
         role="button"
         tabIndex={0}
-        title={`双击编辑${ariaLabel}`}
-        aria-label={`${displayValue}，双击编辑${ariaLabel}`}
+        title={tr("双击编辑{0}", { 0: ariaLabel })}
+        aria-label={tr("{0}，双击编辑{1}", { 0: displayValue, 1: ariaLabel })}
         onDoubleClick={(event) => {
           event.preventDefault();
           beginEditing();
@@ -241,8 +243,8 @@ function BlogAssetImage({ api, workspace, src, alt }: {
       if (created) URL.revokeObjectURL(created);
     };
   }, [api, relative, supported, workspace]);
-  if (!supported) return <span className="document-blog-image-unavailable">{alt || "外部图片已拦截"}</span>;
-  if (!objectUrl) return <span className="document-blog-image-loading"><LoaderCircle className="spin" />{alt || "正在加载图片"}</span>;
+  if (!supported) return <span className="document-blog-image-unavailable">{alt || tr("外部图片已拦截")}</span>;
+  if (!objectUrl) return <span className="document-blog-image-loading"><LoaderCircle className="spin" />{alt || tr("正在加载图片")}</span>;
   return <img src={objectUrl} alt={alt ?? ""} />;
 }
 
@@ -250,8 +252,8 @@ export function BlogPreview({ api, workspace, markdown }: { api: GatewayApi; wor
   const components = useMemo<Components>(() => ({
     img: ({ src, alt }) => <BlogAssetImage api={api} workspace={workspace} src={src} alt={alt} />,
     table: ({ children }) => <div className="document-blog-table-wrap"><table>{children}</table></div>,
-  }), [api, workspace]);
-  const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(markdown), [markdown]);
+  }), [api, workspace, getLocale()]);
+  const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(markdown), [markdown, getLocale()]);
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -309,7 +311,7 @@ interface DocumentWorkspaceProps {
   };
 }
 
-const TARGET_LANGUAGES = [
+const TARGET_LANGUAGES = localized([
   ["zh-CN", "简体中文"],
   ["en", "English"],
   ["ja", "日本語"],
@@ -317,12 +319,12 @@ const TARGET_LANGUAGES = [
   ["fr", "Français"],
   ["de", "Deutsch"],
   ["es", "Español"],
-] as const;
+] as const);
 
-const BLOG_LANGUAGES = [
+const BLOG_LANGUAGES = localized([
   ["source", "跟随当前内容"],
   ...TARGET_LANGUAGES,
-] as const;
+] as const);
 
 type SelectionBox = { left: number; top: number; width: number; height: number };
 
@@ -375,8 +377,8 @@ export function unrotateSelectionBox(
 function pageLabel(rects: DocumentSelectionRect[]): string {
   const pages = [...new Set(rects.map((rect) => rect.page))].sort((left, right) => left - right);
   if (pages.length === 0) return "";
-  if (pages.length === 1) return `第 ${pages[0]} 页`;
-  return `第 ${pages[0]}–${pages.at(-1)} 页`;
+  if (pages.length === 1) return tr("第 {0} 页", { 0: pages[0] });
+  return tr("第 {0}–{1} 页", { 0: pages[0], 1: pages.at(-1) });
 }
 
 export function documentSelectionLineRange(
@@ -510,8 +512,8 @@ function DocumentActionsMenu({
         ref={triggerRef}
         className="icon-button small document-actions-trigger"
         type="button"
-        title="文档操作"
-        aria-label="文档操作"
+        title={tr("文档操作")}
+        aria-label={tr("文档操作")}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => {
@@ -526,14 +528,14 @@ function DocumentActionsMenu({
           ref={menuRef}
           className="document-actions-menu"
           role="menu"
-          aria-label="文档操作"
+          aria-label={tr("文档操作")}
           style={position}
         >
           <label className="document-actions-locale">
             <Languages />
-            <span>目标语言</span>
+            <span>{tr("目标语言")}</span>
             <select
-              aria-label="翻译目标语言"
+              aria-label={tr("翻译目标语言")}
               value={locale}
               disabled={sessionBusy}
               onChange={(event) => onLocale(event.target.value)}
@@ -547,14 +549,14 @@ function DocumentActionsMenu({
           </button>
           <button className="danger" type="button" role="menuitem" disabled={clearDisabled} onClick={() => choose(onClear)}>
             {clearing ? <LoaderCircle className="spin" /> : <Trash2 />}
-            <span>清空翻译缓存</span>
+            <span>{tr("清空翻译缓存")}</span>
           </button>
           <div className="document-actions-separator" role="separator" />
           <label className="document-actions-locale">
             <Languages />
-            <span>Blog 语言</span>
+            <span>{tr("Blog 语言")}</span>
             <select
-              aria-label="Blog 生成语言"
+              aria-label={tr("Blog 生成语言")}
               value={blogLanguage}
               disabled={sessionBusy}
               onChange={(event) => onBlogLanguage(event.target.value)}
@@ -564,16 +566,16 @@ function DocumentActionsMenu({
           </label>
           <button className="blog" type="button" role="menuitem" disabled={blogDisabled} onClick={() => choose(onGenerateBlog)}>
             {generatingBlog ? <LoaderCircle className="spin" /> : <Sparkles />}
-            <span>生成 Blog</span>
+            <span>{tr("生成 Blog")}</span>
           </button>
           <button className="danger" type="button" role="menuitem" disabled={blogClearDisabled} onClick={() => choose(onClearBlog)}>
             {clearingBlog ? <LoaderCircle className="spin" /> : <Trash2 />}
-            <span>清空 Blog 缓存</span>
+            <span>{tr("清空 Blog 缓存")}</span>
           </button>
           <div className="document-actions-separator" role="separator" />
           <button type="button" role="menuitem" className={annotationsOpen ? "active" : ""} onClick={() => choose(onToggleAnnotations)}>
             <Tag />
-            <span>查看标注</span>
+            <span>{tr("查看标注")}</span>
             {annotationCount > 0 && <b className="document-actions-count">{annotationCount}</b>}
           </button>
         </div>,
@@ -1210,7 +1212,7 @@ function PdfPage({
           transform: `scale(${previewScale})`,
         }}
       >
-        <canvas ref={canvasRef} aria-label={`第 ${pageNumber} 页`} />
+        <canvas ref={canvasRef} aria-label={tr("第 {0} 页", { 0: pageNumber })} />
         <div
           ref={textLayerRef}
           className={`document-original-text-layer ${showOriginalText ? "show-text" : ""}`}
@@ -1218,7 +1220,7 @@ function PdfPage({
           style={{ "--scale-factor": renderedZoom } as CSSProperties}
         />
         {showTranslation && layout && (
-          <div className="document-translation-layer" aria-label={`第 ${pageNumber} 页译文`}>
+          <div className="document-translation-layer" aria-label={tr("第 {0} 页译文", { 0: pageNumber })}>
             {layout.blocks.map((block) => {
               if (block.kind && block.kind !== "text") return null;
               const text = translated.get(block.id);
@@ -1239,7 +1241,7 @@ function PdfPage({
             })}
           </div>
         )}
-        <div className="document-annotation-layer" aria-label="文档标注">
+        <div className="document-annotation-layer" aria-label={tr("文档标注")}>
           {annotations.flatMap((annotation) => annotation.rects
             .filter((rect) => rect.page === pageNumber)
             .map((rect, index) => {
@@ -1248,11 +1250,11 @@ function PdfPage({
                 <span
                   key={`${annotation.id}-${index}`}
                   className={`${index === 0 ? "has-label" : ""} ${activeAnnotationId === annotation.id ? "is-active" : ""}`.trim()}
-                  data-label={index === 0 ? annotation.label || "标注" : undefined}
+                  data-label={index === 0 ? annotation.label || tr("标注") : undefined}
                   title={[annotation.label, annotation.note].filter(Boolean).join(" · ")}
                   role="button"
                   tabIndex={0}
-                  aria-label={`打开标注 ${annotation.label || "未命名标注"}`}
+                  aria-label={tr("打开标注 {0}", { 0: annotation.label || tr("未命名标注") })}
                   onClick={() => onAnnotationSelect?.(annotation.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -1290,8 +1292,8 @@ function SelectionLanguageMenu({
     !query.trim() || `${value} ${label}`.toLowerCase().includes(query.trim().toLowerCase())
   ));
   return (
-    <div className="document-selection-language-menu" role="menu" aria-label="翻译语言">
-      <label><Search /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索语言" /></label>
+    <div className="document-selection-language-menu" role="menu" aria-label={tr("翻译语言")}>
+      <label><Search /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr("搜索语言")} /></label>
       <div>
         {choices.map(([value, label]) => (
           <button
@@ -1333,14 +1335,14 @@ function SelectionToolbar({
     <div
       className="document-selection-toolbar"
       role="toolbar"
-      aria-label="选中文本操作"
+      aria-label={tr("选中文本操作")}
       style={{ left: position.left, top: position.top }}
       onPointerDown={(event) => event.preventDefault()}
     >
-      <button type="button" title="复制" onClick={onCopy}>{copied ? <Check /> : <Copy />}<span>复制</span></button>
-      <button type="button" title="引用到 Agent" onClick={onReference}><Quote /><span>引用</span></button>
-      <button type="button" title="翻译" disabled={translateBusy} onClick={onTranslate}>{translateBusy ? <LoaderCircle className="spin" /> : <Languages />}<span>翻译</span></button>
-      <button type="button" title="添加标注" onClick={onAnnotate}><Highlighter /><span>标注</span></button>
+      <button type="button" title={tr("复制")} onClick={onCopy}>{copied ? <Check /> : <Copy />}<span>{tr("复制")}</span></button>
+      <button type="button" title={tr("引用到 Agent")} onClick={onReference}><Quote /><span>{tr("引用")}</span></button>
+      <button type="button" title={tr("翻译")} disabled={translateBusy} onClick={onTranslate}>{translateBusy ? <LoaderCircle className="spin" /> : <Languages />}<span>{tr("翻译")}</span></button>
+      <button type="button" title={tr("添加标注")} onClick={onAnnotate}><Highlighter /><span>{tr("标注")}</span></button>
     </div>,
     document.body,
   );
@@ -1363,16 +1365,16 @@ function AnnotationModal({
   const [note, setNote] = useState(initial?.note ?? "");
   return createPortal(
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
-      <section className="modal document-annotation-modal" role="dialog" aria-modal="true" aria-label={initial ? "编辑文档标注" : "添加文档标注"}>
-        <header><h2>{initial ? "编辑标注" : "添加标注"}</h2><button className="icon-button" title="关闭" disabled={saving} onClick={onClose}><X /></button></header>
+      <section className="modal document-annotation-modal" role="dialog" aria-modal="true" aria-label={initial ? tr("编辑文档标注") : tr("添加文档标注")}>
+        <header><h2>{initial ? tr("编辑标注") : tr("添加标注")}</h2><button className="icon-button" title={tr("关闭")} disabled={saving} onClick={onClose}><X /></button></header>
         <div className="modal-body">
           <blockquote>{selection.text}</blockquote>
-          <label><span>Label</span><input autoFocus maxLength={100} value={label} onChange={(event) => setLabel(event.target.value)} placeholder="例如：重点、待确认、灵感" /></label>
-          <label><span>记录</span><textarea rows={5} maxLength={20_000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="写下你的理解、问题或后续动作" /></label>
+          <label><span>{tr("标签")}</span><input autoFocus maxLength={100} value={label} onChange={(event) => setLabel(event.target.value)} placeholder={tr("例如：重点、待确认、灵感")} /></label>
+          <label><span>{tr("记录")}</span><textarea rows={5} maxLength={20_000} value={note} onChange={(event) => setNote(event.target.value)} placeholder={tr("写下你的理解、问题或后续动作")} /></label>
           <div className="modal-actions">
-            <button type="button" disabled={saving} onClick={onClose}>取消</button>
+            <button type="button" disabled={saving} onClick={onClose}>{tr("取消")}</button>
             <button className="primary" type="button" disabled={saving || (!label.trim() && !note.trim())} onClick={() => onSave(label.trim(), note.trim())}>
-              {saving ? <LoaderCircle className="spin" /> : <Highlighter />}{initial ? "保存修改" : "保存标注"}
+              {saving ? <LoaderCircle className="spin" /> : <Highlighter />}{initial ? tr("保存修改") : tr("保存标注")}
             </button>
           </div>
         </div>
@@ -1402,23 +1404,23 @@ function AnnotationSidebar({
     !query.trim() || [annotation.label, annotation.note, annotation.text].join(" ").toLowerCase().includes(query.trim().toLowerCase()),
   );
   return createPortal(
-    <aside className="document-annotations-sidebar" aria-label="文档标注">
+    <aside className="document-annotations-sidebar" aria-label={tr("文档标注")}>
       <header>
-        <div><Tag /><strong>标注</strong><span className="document-annotations-count">{annotations.length}</span></div>
-        <button className="icon-button tiny" type="button" title="关闭标注" aria-label="关闭标注" onClick={onClose}><X /></button>
+        <div><Tag /><strong>{tr("标注")}</strong><span className="document-annotations-count">{annotations.length}</span></div>
+        <button className="icon-button tiny" type="button" title={tr("关闭标注")} aria-label={tr("关闭标注")} onClick={onClose}><X /></button>
       </header>
-      <label className="document-annotations-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标注" aria-label="搜索标注" /></label>
+      <label className="document-annotations-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr("搜索标注")} aria-label={tr("搜索标注")} /></label>
       <div className="document-annotations-list">
-        {filtered.length === 0 ? <p className="document-annotations-empty">{annotations.length ? "没有匹配的标注" : "还没有标注"}</p> : filtered.map((annotation) => (
+        {filtered.length === 0 ? <p className="document-annotations-empty">{annotations.length ? tr("没有匹配的标注") : tr("还没有标注")}</p> : filtered.map((annotation) => (
           <article key={annotation.id} className={`document-annotation-item ${activeId === annotation.id ? "is-active" : ""}`}>
             <button type="button" className="document-annotation-item-main" onClick={() => onSelect(annotation)}>
-              <span className="document-annotation-item-heading"><strong>{annotation.label || "未命名标注"}</strong><small>第 {annotation.rects[0]?.page ?? "-"} 页</small></span>
+              <span className="document-annotation-item-heading"><strong>{annotation.label || tr("未命名标注")}</strong><small>{tr("第 ")}{annotation.rects[0]?.page ?? "-"}{tr(" 页")}</small></span>
               <span className="document-annotation-item-text">{annotation.text}</span>
               {annotation.note && <span className="document-annotation-item-note">{annotation.note}</span>}
             </button>
             <div className="document-annotation-item-actions">
-              <button type="button" className="icon-button tiny" title="编辑标注" aria-label="编辑标注" onClick={() => onEdit(annotation)}><Pencil /></button>
-              <button type="button" className="icon-button tiny danger" title="删除标注" aria-label="删除标注" onClick={() => onDelete(annotation)}><Trash2 /></button>
+              <button type="button" className="icon-button tiny" title={tr("编辑标注")} aria-label={tr("编辑标注")} onClick={() => onEdit(annotation)}><Pencil /></button>
+              <button type="button" className="icon-button tiny danger" title={tr("删除标注")} aria-label={tr("删除标注")} onClick={() => onDelete(annotation)}><Trash2 /></button>
             </div>
           </article>
         ))}
@@ -1732,7 +1734,7 @@ export default function DocumentWorkspace({
         setTranslation(null);
         if (pendingAction === "translate") {
           setPendingAction(null);
-          setError("翻译未生成，请查看右侧 Agent 的失败原因后重试。");
+          setError(tr("翻译未生成，请查看右侧 Agent 的失败原因后重试。"));
         }
       }
       try {
@@ -1744,7 +1746,7 @@ export default function DocumentWorkspace({
         setBlog(null);
         if (pendingAction === "generate_blog") {
           setPendingAction(null);
-          setError("Blog 未生成，请查看右侧 Agent 的失败原因后重试。");
+          setError(tr("Blog 未生成，请查看右侧 Agent 的失败原因后重试。"));
         }
       }
     } catch (reason) {
@@ -1856,7 +1858,7 @@ export default function DocumentWorkspace({
         return;
       }
       if (nextPdf.numPages !== translation.page_count) {
-        throw new Error("高精度译文页数与元数据不一致");
+        throw new Error(tr("高精度译文页数与元数据不一致"));
       }
       setPrecisePdf(nextPdf);
     }).catch((reason) => {
@@ -1893,7 +1895,7 @@ export default function DocumentWorkspace({
       setSelectionTranslation((current) => current && selectionTranslationEvent.operation_id === current.operationId ? {
         ...current,
         status: "failed",
-        message: selectionTranslationEvent.message ?? "选区翻译失败",
+        message: selectionTranslationEvent.message ?? tr("选区翻译失败"),
       } : current);
       return;
     }
@@ -1938,7 +1940,7 @@ export default function DocumentWorkspace({
 
   const translated = useMemo(() => new Map(
     (translation?.engine === "legacy" ? translation.blocks : []).map((block) => [block.id, block.translated_text]),
-  ), [translation]);
+  ), [translation, getLocale()]);
   const showingPreciseTranslation = Boolean(showTranslation && translation?.engine === "precise");
   const activePdf = showingPreciseTranslation ? precisePdf : pdf;
   const totalPages = activePdf?.numPages ?? manifest?.pdf.page_count ?? 0;
@@ -2153,7 +2155,7 @@ export default function DocumentWorkspace({
       setCopiedSelection(true);
       window.setTimeout(() => setCopiedSelection(false), 1400);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法复制选中文本");
+      setError(reason instanceof Error ? reason.message : tr("无法复制选中文本"));
     }
   }, [selection]);
 
@@ -2287,11 +2289,11 @@ export default function DocumentWorkspace({
     : null;
 
   return (
-    <section className="document-workspace" aria-label={`${project.name} 文档工作区`}>
+    <section className="document-workspace" aria-label={tr("{0} 文档工作区", { 0: project.name })}>
       <header className="document-toolbar">
         <div className="document-title" title={manifest?.source.name}>
           <FileText />
-          <span><strong>{project.name}</strong><small>{manifest?.source.name ?? "正在读取文档"}</small></span>
+          <span><strong>{project.name}</strong><small>{manifest?.source.name ?? tr("正在读取文档")}</small></span>
         </div>
         <DocumentViewTabs activeView={filesView ?? view} filesAvailable={Boolean(filesWorkspace)}
           changeCount={filesWorkspace?.changeCount ?? 0} onViewChange={(nextView) => {
@@ -2301,7 +2303,7 @@ export default function DocumentWorkspace({
         {!filesView && view === "document" && (
           <div className="document-tools">
             <DocumentToolbarNumberEditor
-              ariaLabel="当前页"
+              ariaLabel={tr("当前页")}
               className="document-page-indicator"
               displayValue={`${currentPage} / ${totalPages || "–"}`}
               editValue={String(currentPage)}
@@ -2311,9 +2313,9 @@ export default function DocumentWorkspace({
               suffix={` / ${totalPages || "–"}`}
               onCommit={goToPage}
             />
-            <button className="icon-button small" title="缩小 (Alt+-)" aria-label="缩小" onClick={() => changeZoom(-DOCUMENT_ZOOM_STEP)}><Minus /></button>
+            <button className="icon-button small" title={tr("缩小 (Alt+-)")} aria-label={tr("缩小")} onClick={() => changeZoom(-DOCUMENT_ZOOM_STEP)}><Minus /></button>
             <DocumentToolbarNumberEditor
-              ariaLabel="缩放百分比"
+              ariaLabel={tr("缩放百分比")}
               className="document-zoom"
               displayValue={formatDocumentZoom(zoom)}
               editValue={String(Math.round(zoom * 100))}
@@ -2323,14 +2325,14 @@ export default function DocumentWorkspace({
               suffix="%"
               onCommit={setZoomFromInput}
             />
-            <button className="icon-button small" title="放大 (Alt++)" aria-label="放大" onClick={() => changeZoom(DOCUMENT_ZOOM_STEP)}><Plus /></button>
-            <button className="icon-button small" title="顺时针旋转" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
+            <button className="icon-button small" title={tr("放大 (Alt++)")} aria-label={tr("放大")} onClick={() => changeZoom(DOCUMENT_ZOOM_STEP)}><Plus /></button>
+            <button className="icon-button small" title={tr("顺时针旋转")} onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
             <DocumentActionsMenu
               locale={locale}
               blogLanguage={blogLanguage}
               sessionBusy={sessionBusy}
               translating={pendingAction === "translate"}
-              translateLabel={translation?.engine === "legacy" && preciseAvailable ? "升级为高精度 PDF" : "翻译文档"}
+              translateLabel={translation?.engine === "legacy" && preciseAvailable ? tr("升级为高精度 PDF") : tr("翻译文档")}
               clearing={clearingTranslation}
               generatingBlog={pendingAction === "generate_blog"}
               translateDisabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
@@ -2385,21 +2387,21 @@ export default function DocumentWorkspace({
           </div>
         )}
         {!filesView && view === "blog" && blog && (
-          <div className="document-blog-view-tabs" role="tablist" aria-label="Blog 显示模式">
+          <div className="document-blog-view-tabs" role="tablist" aria-label={tr("Blog 显示模式")}>
             <button
               className={blogView === "preview" ? "active" : ""}
               type="button"
               role="tab"
               aria-selected={blogView === "preview"}
               onClick={() => setBlogView("preview")}
-            ><Eye />Preview</button>
+            ><Eye />{tr("预览")}</button>
             <button
               className={blogView === "raw" ? "active" : ""}
               type="button"
               role="tab"
               aria-selected={blogView === "raw"}
               onClick={() => setBlogView("raw")}
-            ><Code2 />Raw</button>
+            ><Code2 />{tr("原文")}</button>
           </div>
         )}
       </header>
@@ -2410,13 +2412,13 @@ export default function DocumentWorkspace({
           role="presentation"
           onMouseDown={(event) => event.target === event.currentTarget && !clearingTranslation && setClearTranslationConfirm(false)}
         >
-          <section className="modal" role="dialog" aria-modal="true" aria-label="清空翻译缓存">
+          <section className="modal" role="dialog" aria-modal="true" aria-label={tr("清空翻译缓存")}>
             <header>
-              <h2>清空翻译缓存</h2>
+              <h2>{tr("清空翻译缓存")}</h2>
               <button
                 className="icon-button"
                 type="button"
-                title="关闭"
+                title={tr("关闭")}
                 disabled={clearingTranslation}
                 onClick={() => setClearTranslationConfirm(false)}
               ><X /></button>
@@ -2425,15 +2427,14 @@ export default function DocumentWorkspace({
               <div className="confirm-dialog-copy">
                 <Trash2 />
                 <div>
-                  <strong>清空{TARGET_LANGUAGES.find(([value]) => value === locale)?.[1] ?? locale}译文？</strong>
-                  <p>已生成译文和未完成的翻译进度都会删除。原文和 Blog 不受影响。</p>
+                  <strong>{tr("清空")}{TARGET_LANGUAGES.find(([value]) => value === locale)?.[1] ?? locale}{tr("译文？")}</strong>
+                  <p>{tr("已生成译文和未完成的翻译进度都会删除。原文和 Blog 不受影响。")}</p>
                 </div>
               </div>
               <div className="modal-actions">
-                <button type="button" disabled={clearingTranslation} onClick={() => setClearTranslationConfirm(false)}>取消</button>
+                <button type="button" disabled={clearingTranslation} onClick={() => setClearTranslationConfirm(false)}>{tr("取消")}</button>
                 <button className="confirm-danger" type="button" disabled={clearingTranslation} onClick={() => void clearTranslationCache()}>
-                  {clearingTranslation ? <LoaderCircle className="spin" /> : <Trash2 />}清空
-                </button>
+                  {clearingTranslation ? <LoaderCircle className="spin" /> : <Trash2 />}{tr("清空")}</button>
               </div>
             </div>
           </section>
@@ -2446,13 +2447,13 @@ export default function DocumentWorkspace({
           role="presentation"
           onMouseDown={(event) => event.target === event.currentTarget && !clearingBlog && setClearBlogConfirm(false)}
         >
-          <section className="modal" role="dialog" aria-modal="true" aria-label="清空 Blog 缓存">
+          <section className="modal" role="dialog" aria-modal="true" aria-label={tr("清空 Blog 缓存")}>
             <header>
-              <h2>清空 Blog 缓存</h2>
+              <h2>{tr("清空 Blog 缓存")}</h2>
               <button
                 className="icon-button"
                 type="button"
-                title="关闭"
+                title={tr("关闭")}
                 disabled={clearingBlog}
                 onClick={() => setClearBlogConfirm(false)}
               ><X /></button>
@@ -2461,15 +2462,14 @@ export default function DocumentWorkspace({
               <div className="confirm-dialog-copy">
                 <Trash2 />
                 <div>
-                  <strong>删除当前 Blog？</strong>
-                  <p>Blog 文件和缓存记录会被删除，原文、译文和文档布局不受影响。</p>
+                  <strong>{tr("删除当前 Blog？")}</strong>
+                  <p>{tr("Blog 文件和缓存记录会被删除，原文、译文和文档布局不受影响。")}</p>
                 </div>
               </div>
               <div className="modal-actions">
-                <button type="button" disabled={clearingBlog} onClick={() => setClearBlogConfirm(false)}>取消</button>
+                <button type="button" disabled={clearingBlog} onClick={() => setClearBlogConfirm(false)}>{tr("取消")}</button>
                 <button className="confirm-danger" type="button" disabled={clearingBlog} onClick={() => void clearBlogCache()}>
-                  {clearingBlog ? <LoaderCircle className="spin" /> : <Trash2 />}清空
-                </button>
+                  {clearingBlog ? <LoaderCircle className="spin" /> : <Trash2 />}{tr("清空")}</button>
               </div>
             </div>
           </section>
@@ -2481,18 +2481,18 @@ export default function DocumentWorkspace({
           <AlertTriangle aria-hidden="true" />
           <span className="document-error-message">{error}</span>
           <div className="document-error-actions">
-            <button type="button" onClick={() => { setError(null); void refreshArtifacts(); }}><RefreshCw />重试</button>
+            <button type="button" onClick={() => { setError(null); void refreshArtifacts(); }}><RefreshCw />{tr("重试")}</button>
             <button
               className="icon-button tiny"
               type="button"
-              title="关闭提示"
-              aria-label="关闭提示"
+              title={tr("关闭提示")}
+              aria-label={tr("关闭提示")}
               onClick={() => setError(null)}
             ><X /></button>
           </div>
         </div>
       )}
-      {!filesView && loading && <div className="document-loading"><LoaderCircle className="spin" />正在准备文档</div>}
+      {!filesView && loading && <div className="document-loading"><LoaderCircle className="spin" />{tr("正在准备文档")}</div>}
       {!loading && (
         <div
           ref={scrollRef}
@@ -2502,7 +2502,7 @@ export default function DocumentWorkspace({
         >
           <div className="document-pdf-pages">
             {scannedPages > 0 && (
-              <div className="document-scan-warning"><AlertTriangle />检测到 {scannedPages} 个无文本页面，可阅读但暂不能原位翻译。</div>
+              <div className="document-scan-warning"><AlertTriangle />{tr("检测到 ")}{scannedPages}{tr(" 个无文本页面，可阅读但暂不能原位翻译。")}</div>
             )}
             {activePdf && Array.from({ length: activePdf.numPages }, (_, index) => (
               <PdfPage
@@ -2533,25 +2533,25 @@ export default function DocumentWorkspace({
           {blogConflict && (
             <div className="document-blog-conflict">
               <AlertTriangle />
-              <span>Blog 已被 Agent 或另一个窗口更新。请选择保留哪个版本。</span>
+              <span>{tr("Blog 已被 Agent 或另一个窗口更新。请选择保留哪个版本。")}</span>
               <button onClick={() => {
                 setBlog(blogConflict.server);
                 setBlogConflict(null);
-              }}>载入服务器版本</button>
+              }}>{tr("载入服务器版本")}</button>
               <button className="primary" onClick={() => {
                 setBlog({ ...blogConflict.local, revision: blogConflict.server.revision });
                 setBlogConflict(null);
                 setBlogTouched(true);
-              }}>保留我的版本</button>
+              }}>{tr("保留我的版本")}</button>
             </div>
           )}
           {pendingAction === "generate_blog" && !blog ? (
-            <div className="document-blog-empty"><LoaderCircle className="spin" /><h2>Agent 正在生成 Blog</h2><p>生成完成后会自动载入这里。</p></div>
+            <div className="document-blog-empty"><LoaderCircle className="spin" /><h2>{tr("Agent 正在生成 Blog")}</h2><p>{tr("生成完成后会自动载入这里。")}</p></div>
           ) : blog ? (
             blogView === "raw" ? (
               <div className="document-blog-raw">
                 <textarea
-                  aria-label="Markdown Blog 编辑器"
+                  aria-label={tr("Markdown Blog 编辑器")}
                   className="document-blog-editor"
                   value={blog.markdown}
                   spellCheck
@@ -2567,7 +2567,7 @@ export default function DocumentWorkspace({
               </div>
             )
           ) : (
-            <div className="document-blog-empty"><BookOpen /><h2>还没有 Blog</h2><p>返回文档视图，选择原文或译文后生成。</p></div>
+            <div className="document-blog-empty"><BookOpen /><h2>{tr("还没有 Blog")}</h2><p>{tr("返回文档视图，选择原文或译文后生成。")}</p></div>
           )}
         </div>
       )}
@@ -2582,12 +2582,12 @@ export default function DocumentWorkspace({
         <button
           type="button"
           className="document-agent-resize"
-          aria-label="调整 Agent 面板宽度"
+          aria-label={tr("调整 Agent 面板宽度")}
           onPointerDown={startResize}
         />
       )}
       {agentCollapsed && (
-        <button className="document-agent-rail" title="展开 Agent" onClick={() => onAgentCollapsed(false)}>
+        <button className="document-agent-rail" title={tr("展开 Agent")} onClick={() => onAgentCollapsed(false)}>
           <PanelRightOpen /><span>Agent</span>
         </button>
       )}
@@ -2623,17 +2623,17 @@ export default function DocumentWorkspace({
             <div className="document-selection-translation-card" style={translationCardPosition} role="status">
               <header>
                 <span><Languages />{TARGET_LANGUAGES.find(([value]) => value === selectionTranslation.locale)?.[1] ?? selectionTranslation.locale}</span>
-                <button className="icon-button tiny" title="关闭翻译" onClick={() => setSelectionTranslation(null)}><X /></button>
+                <button className="icon-button tiny" title={tr("关闭翻译")} onClick={() => setSelectionTranslation(null)}><X /></button>
               </header>
               {selectionTranslation.status === "running" ? (
-                <div className="document-selection-translation-loading"><LoaderCircle className="spin" />正在翻译…</div>
+                <div className="document-selection-translation-loading"><LoaderCircle className="spin" />{tr("正在翻译…")}</div>
               ) : selectionTranslation.status === "failed" ? (
-                <p className="danger">{selectionTranslation.message || "翻译失败"}</p>
+                <p className="danger">{selectionTranslation.message || tr("翻译失败")}</p>
               ) : (
                 <p>{selectionTranslation.translatedText}</p>
               )}
               {selectionTranslation.status === "completed" && (
-                <footer><button type="button" onClick={() => void navigator.clipboard.writeText(selectionTranslation.translatedText)}><Copy />复制译文</button></footer>
+                <footer><button type="button" onClick={() => void navigator.clipboard.writeText(selectionTranslation.translatedText)}><Copy />{tr("复制译文")}</button></footer>
               )}
             </div>
           )}
@@ -2668,9 +2668,9 @@ export default function DocumentWorkspace({
       )}
       {deletingAnnotation && createPortal(
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setDeletingAnnotation(null)}>
-          <section className="modal document-delete-annotation-modal" role="dialog" aria-modal="true" aria-label="删除文档标注">
-            <header><h2>删除标注？</h2><button className="icon-button" type="button" title="关闭" onClick={() => setDeletingAnnotation(null)}><X /></button></header>
-            <div className="modal-body"><p>删除“{deletingAnnotation.label || "未命名标注"}”后无法恢复。</p><div className="modal-actions"><button type="button" onClick={() => setDeletingAnnotation(null)}>取消</button><button className="confirm-danger" type="button" onClick={() => void deleteAnnotation(deletingAnnotation)}><Trash2 />删除</button></div></div>
+          <section className="modal document-delete-annotation-modal" role="dialog" aria-modal="true" aria-label={tr("删除文档标注")}>
+            <header><h2>{tr("删除标注？")}</h2><button className="icon-button" type="button" title={tr("关闭")} onClick={() => setDeletingAnnotation(null)}><X /></button></header>
+            <div className="modal-body"><p>{tr("删除“")}{deletingAnnotation.label || tr("未命名标注")}{tr("”后无法恢复。")}</p><div className="modal-actions"><button type="button" onClick={() => setDeletingAnnotation(null)}>{tr("取消")}</button><button className="confirm-danger" type="button" onClick={() => void deleteAnnotation(deletingAnnotation)}><Trash2 />{tr("删除")}</button></div></div>
           </section>
         </div>,
         document.body,

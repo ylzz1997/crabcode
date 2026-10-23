@@ -100,6 +100,7 @@ export interface ConnectionPreset {
 }
 
 export interface DesktopSettings {
+  language?: import("../../shared/i18n/index.js").LanguagePreference;
   follow_up_mode?: "queue" | "steer";
   schema_version: 4;
   active_connection_id: string;

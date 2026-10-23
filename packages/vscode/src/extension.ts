@@ -4,6 +4,8 @@
  * 连接 WebSocket、聊天面板、权限/选择处理、上下文推送、文件变更与状态栏等。
  */
 
+import { syncLanguage } from "./i18n";
+import { t as tr } from "./i18n";
 import * as vscode from "vscode";
 
 import { CrabCodeConnection } from "./connection";
@@ -52,12 +54,12 @@ class PermissionHandler implements vscode.Disposable {
 
     const detail =
       (reason ? `${reason}\n\n` : "") +
-      (isPeerMessage ? `来自：${peerName}\n\n${peerText}` : `工具：${tool_name}`);
+      (isPeerMessage ? tr("来自：{0}\n\n{1}", { 0: peerName, 1: peerText }) : tr("工具：{0}", { 0: tool_name }));
 
-    const allowItem = "允许";
-    const alwaysAllowItem = "始终允许";
-    const denyItem = "拒绝";
-    const denyFeedbackItem = "拒绝并反馈";
+    const allowItem = tr("允许");
+    const alwaysAllowItem = tr("始终允许");
+    const denyItem = tr("拒绝");
+    const denyFeedbackItem = tr("拒绝并反馈");
 
     const choices = isPeerMessage
       ? [allowItem, alwaysAllowItem, denyItem]
@@ -66,16 +68,16 @@ class PermissionHandler implements vscode.Disposable {
     vscode.window
       .showInformationMessage(
         isPeerMessage
-          ? `CrabCode：是否接收跨 Session 消息？`
-          : `CrabCode：需要你的授权才能执行工具`,
+          ? tr("CrabCode：是否接收跨 Session 消息？")
+          : tr("CrabCode：需要你的授权才能执行工具"),
         { modal: true, detail },
         ...choices,
       )
       .then(async (choice) => {
         if (choice === denyFeedbackItem) {
           const feedback = await vscode.window.showInputBox({
-            prompt: "告诉 AI 应该怎么做",
-            placeHolder: "例如：不要修改这个文件，改用另一种方式…",
+            prompt: tr("告诉 AI 应该怎么做"),
+            placeHolder: tr("例如：不要修改这个文件，改用另一种方式…"),
           });
           const cmd = buildPermissionResponseCommand(tool_use_id, false, {
             agentId: agent_id ?? undefined,
@@ -312,13 +314,13 @@ class FileChangeHandler implements vscode.Disposable {
     if (showDiff && diff && (action === "modify" || action === "create")) {
       // Show a virtual diff document
       const actionZh =
-        action === "create" ? "创建" : action === "modify" ? "修改" : action === "delete" ? "删除" : action;
+        action === "create" ? tr("创建") : action === "modify" ? tr("修改") : action === "delete" ? tr("删除") : action;
       const name = `CrabCode：${path.split(/[\\/]/).pop()}（${actionZh}）`;
       const content = diff;
       showDiffDocument(name, content, path);
     } else {
       const actionZh =
-        action === "create" ? "已创建" : action === "modify" ? "已修改" : action === "delete" ? "已删除" : action;
+        action === "create" ? tr("已创建") : action === "modify" ? tr("已修改") : action === "delete" ? tr("已删除") : action;
       vscode.window.setStatusBarMessage(`CrabCode：${actionZh} ${path.split(/[\\/]/).pop()}`, 3000);
     }
   }
@@ -361,14 +363,15 @@ function createStatusBar(
   );
 
   item.command = "crabcode.openMenu";
-  item.tooltip = "CrabCode：Computer Use、设置、日志";
+  item.tooltip = tr("CrabCode：Computer Use、设置、日志");
 
   function update() {
+    item.tooltip = tr("CrabCode：Computer Use、设置、日志");
     if (connection.connected) {
       item.text = `$(circle-filled) CrabCode${connection.modelName ? `：${connection.modelName}` : ""}`;
       item.backgroundColor = undefined;
     } else {
-      item.text = "$(circle-slash) CrabCode：未连接";
+      item.text = `$(circle-slash) CrabCode：${tr("未连接")}`;
       item.backgroundColor = new vscode.ThemeColor(
         "statusBarItem.errorBackground",
       );
@@ -376,6 +379,7 @@ function createStatusBar(
   }
 
   update();
+  push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration("crabcode.language")) update(); }));
   push(connection.on("connected", () => update()));
   push(connection.on("disconnected", () => update()));
 
@@ -396,9 +400,9 @@ function registerCommands(
   push(vscode.commands.registerCommand("crabcode.openMenu", async () => {
     const choice = await vscode.window.showQuickPick([
       { label: "$(device-desktop) Computer Use", command: "crabcode.computerUse" },
-      { label: "$(settings-gear) 设置", command: "crabcode.openSettingsMenu" },
-      { label: "$(output) 日志", command: "crabcode.showLogs" },
-    ], { title: "CrabCode", placeHolder: "选择要打开的功能" });
+      { label: `$(settings-gear) ${tr("设置")}`, command: "crabcode.openSettingsMenu" },
+      { label: `$(output) ${tr("日志")}`, command: "crabcode.showLogs" },
+    ], { title: "CrabCode", placeHolder: tr("选择要打开的功能") });
     if (choice) await vscode.commands.executeCommand(choice.command);
   }));
   push(vscode.commands.registerCommand("crabcode.openSettingsMenu", () => chatProvider.showSettingsMenu()));
@@ -420,7 +424,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Explain this code:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
+        vscode.window.showWarningMessage(tr("CrabCode：请先在编辑器里选中一段代码。"));
       }
     }),
   );
@@ -434,7 +438,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Fix the issues in this code:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
+        vscode.window.showWarningMessage(tr("CrabCode：请先在编辑器里选中一段代码。"));
       }
     }),
   );
@@ -448,7 +452,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Refactor this code for clarity and efficiency:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
+        vscode.window.showWarningMessage(tr("CrabCode：请先在编辑器里选中一段代码。"));
       }
     }),
   );
@@ -462,7 +466,7 @@ function registerCommands(
       if (text) {
         chatProvider.sendPrompt(`Write tests for this code:\n\n${text}`);
       } else {
-        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
+        vscode.window.showWarningMessage(tr("CrabCode：请先在编辑器里选中一段代码。"));
       }
     }),
   );
@@ -476,7 +480,7 @@ function registerCommands(
       if (text) {
         chatProvider.prefillInput(text);
       } else {
-        vscode.window.showWarningMessage("CrabCode：请先在编辑器里选中一段代码。");
+        vscode.window.showWarningMessage(tr("CrabCode：请先在编辑器里选中一段代码。"));
       }
     }),
   );
@@ -556,7 +560,7 @@ function registerCommands(
       const cwd =
         vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ?? null;
       connection.sendNewSession(cwd);
-      vscode.window.setStatusBarMessage("CrabCode：已创建新会话", 3000);
+      vscode.window.setStatusBarMessage(tr("CrabCode：已创建新会话"), 3000);
     }),
   );
 
@@ -580,7 +584,7 @@ function registerCommands(
         if (!connection.connected) {
           connection.connect();
         }
-        vscode.window.setStatusBarMessage("CrabCode：网关已重启", 3000);
+        vscode.window.setStatusBarMessage(tr("CrabCode：网关已重启"), 3000);
       }
     }),
   );
@@ -647,7 +651,7 @@ async function autoConnect(
   // Show warning if not connected after initial attempt
   if (!connection.connected) {
     vscode.window.showWarningMessage(
-      "CrabCode：无法连接到网关，将自动重试。请检查配置项 crabcode.serverUrl。",
+      tr("CrabCode：无法连接到网关，将自动重试。请检查配置项 crabcode.serverUrl。"),
     );
   }
 }
@@ -660,6 +664,7 @@ let gatewayProc: GatewayProcess | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  syncLanguage();
   // 1. Read configuration
   const config = vscode.workspace.getConfiguration("crabcode");
 
@@ -704,8 +709,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("crabcode")) {
+        syncLanguage();
+        if (e.affectsConfiguration("crabcode.language")) activeChatProvider.refreshLanguage();
         activeConnection.refreshConfiguration();
-        if (e.affectsConfiguration("crabcode.computerUseEnabled") || e.affectsConfiguration("crabcode.serverUrl") || e.affectsConfiguration("crabcode.password")) {
+        if (e.affectsConfiguration("crabcode.language") || e.affectsConfiguration("crabcode.computerUseEnabled") || e.affectsConfiguration("crabcode.serverUrl") || e.affectsConfiguration("crabcode.password")) {
           void computerUse.configure();
         }
         activeChatProvider.notifyConfigurationChanged();

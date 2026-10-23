@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { createTurnProcessPolicy, type ProcessTurn } from "../../shared/turnProcess.js";
@@ -83,19 +84,19 @@ function ProcessTurnView({ turn, sessionKey, enabled, showDuration, showToolCall
   }, [collapsed]);
 
   const seconds = Math.max(0, Math.floor((turn.durationMs ?? 0) / 1000));
-  const duration = durationFormat === "seconds" || seconds < 60 ? `${seconds}秒`
-    : `${Math.floor(seconds / 60)}分${seconds % 60}秒`;
-  const label = !turn.completed ? "处理中" : turn.reason === "interrupted" ? "已中断"
-    : turn.reason && !["end_turn", "stop"].includes(turn.reason) ? "处理已停止" : "已完成";
+  const duration = durationFormat === "seconds" || seconds < 60 ? tr("{0}秒", { 0: seconds })
+    : tr("{0}分{1}秒", { 0: Math.floor(seconds / 60), 1: seconds % 60 });
+  const label = !turn.completed ? tr("处理中") : turn.reason === "interrupted" ? tr("已中断")
+    : turn.reason && !["end_turn", "stop"].includes(turn.reason) ? tr("处理已停止") : tr("已完成");
   return <div className="conversation-turn" ref={root} data-turn-id={turn.id}>
     {turn.items.map((item, index) => <Fragment key={item.id}>
       {enabled && index === firstProcess && <button type="button" className="process-summary"
-        aria-expanded={!collapsed} aria-label={`${collapsed ? "展开" : "收起"}处理过程`}
+        aria-expanded={!collapsed} aria-label={tr("{0}处理过程", { 0: collapsed ? tr("展开") : tr("收起") })}
         onClick={() => setManual(!collapsed)}>
         {collapsed ? <ChevronRight /> : <ChevronDown />}<span>{label}</span>
         {showDuration && turn.durationMs !== null && <span>· {duration}</span>}
-        {showToolCallCount && turn.toolCount > 0 && <span>· {turn.toolCount}次工具调用</span>}
-        {showToolCallCount && turn.errorCount > 0 && <span className="process-error-count">· {turn.errorCount}次工具错误</span>}
+        {showToolCallCount && turn.toolCount > 0 && <span>· {turn.toolCount}{tr("次工具调用")}</span>}
+        {showToolCallCount && turn.errorCount > 0 && <span className="process-error-count">· {turn.errorCount}{tr("次工具错误")}</span>}
       </button>}
       {renderItem(item, { "data-process-entry": item.id,
         "data-process-content": processIds.has(item.id) ? "" : undefined,

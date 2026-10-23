@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { CircleAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -42,17 +43,17 @@ export function TurnDetailsButton({ details }: { details: TurnDetails }) {
   }, [open]);
 
   return <>
-    <button ref={trigger} className="copy-button turn-details-button" type="button" title="本轮详情" aria-label="本轮详情" aria-haspopup="dialog" onClick={() => setOpen(true)}><CircleAlert /></button>
+    <button ref={trigger} className="copy-button turn-details-button" type="button" title={tr("本轮详情")} aria-label={tr("本轮详情")} aria-haspopup="dialog" onClick={() => setOpen(true)}><CircleAlert /></button>
     {open && createPortal(
       <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}>
-        <section ref={dialog} className="modal turn-details-dialog" role="dialog" aria-modal="true" aria-label="本轮详情" tabIndex={-1}>
-          <header><h2>本轮详情</h2><button className="icon-button" title="关闭" aria-label="关闭本轮详情" onClick={() => setOpen(false)}><X /></button></header>
+        <section ref={dialog} className="modal turn-details-dialog" role="dialog" aria-modal="true" aria-label={tr("本轮详情")} tabIndex={-1}>
+          <header><h2>{tr("本轮详情")}</h2><button className="icon-button" title={tr("关闭")} aria-label={tr("关闭本轮详情")} onClick={() => setOpen(false)}><X /></button></header>
           <div className="modal-body">
             <dl className="session-detail-list">
-              <div><dt>Session ID</dt><dd className="session-detail-copy-value"><code title={details.session_id}>{details.session_id}</code><CopyButton text={details.session_id} label="复制 Session ID" className="session-detail-copy" /></dd></div>
+              <div><dt>Session ID</dt><dd className="session-detail-copy-value"><code title={details.session_id}>{details.session_id}</code><CopyButton text={details.session_id} label={tr("复制 Session ID")} className="session-detail-copy" /></dd></div>
               {turnDetailRows(details).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
             </dl>
-            <p className="turn-details-note">次数统计本轮主会话；连续思考内容计为一次。{details.source === "history" && "此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。"}</p>
+            <p className="turn-details-note">{tr("次数统计本轮主会话；连续思考内容计为一次。")}{details.source === "history" && tr("此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。")}</p>
           </div>
         </section>
       </div>, document.body,

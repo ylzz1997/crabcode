@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr, localized, languages, normalizeLanguage } from "./i18n";
 import { VirtualMachineSettings, type VmSettingsUpdate } from "./VirtualMachineSettings";
 import type { LumeInstallerState } from "./lumeInstaller";
 import {
@@ -96,7 +98,7 @@ interface SettingsSectionDefinition {
   searchText: string;
 }
 
-export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
+export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = localized([
   {
     id: "general",
     title: "常规",
@@ -157,20 +159,20 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     description: "Crab Desktop 版本与作者信息",
     searchText: "关于 版本 Crab Desktop Gateway 协议 作者 Yuri Head",
   },
-];
+]);
 
-const GATEWAY_FEATURE_DETAILS: Record<GatewayInstallFeature, { title: string; detail: string }> = {
+const GATEWAY_FEATURE_DETAILS: Record<GatewayInstallFeature, { title: string; detail: string }> = localized({
   search: { title: "Search", detail: "语义代码搜索 · 依赖体积较大" },
   debugger: { title: "Debugger", detail: "DAP 与进程级调试" },
   browser: { title: "Browser", detail: "网页浏览 · 安装 Playwright 与 Chromium" },
-};
+});
 
 export function filterSettingsSections(query: string): SettingsSectionDefinition[] {
-  const normalized = query.trim().toLocaleLowerCase("zh-CN");
+  const normalized = query.trim().toLocaleLowerCase(getLocale());
   if (!normalized) return SETTINGS_SECTIONS;
   return SETTINGS_SECTIONS.filter((section) => (
     `${section.title} ${section.description} ${section.searchText}`
-      .toLocaleLowerCase("zh-CN")
+      .toLocaleLowerCase(getLocale())
       .includes(normalized)
   ));
 }
@@ -217,13 +219,13 @@ async function normalizeDockIcon(file: File): Promise<{ bytes: Uint8Array; previ
     image.src = sourceUrl;
     await new Promise<void>((resolve, reject) => {
       image.onload = () => resolve();
-      image.onerror = () => reject(new Error("无法读取这张图片"));
+      image.onerror = () => reject(new Error(tr("无法读取这张图片")));
     });
     const canvas = document.createElement("canvas");
     canvas.width = DOCK_ICON_SIZE;
     canvas.height = DOCK_ICON_SIZE;
     const context = canvas.getContext("2d");
-    if (!context) throw new Error("无法处理这张图片");
+    if (!context) throw new Error(tr("无法处理这张图片"));
     context.clearRect(0, 0, DOCK_ICON_SIZE, DOCK_ICON_SIZE);
     context.save();
     clipDockIconShape(context);
@@ -239,7 +241,7 @@ async function normalizeDockIcon(file: File): Promise<{ bytes: Uint8Array; previ
     );
     context.restore();
     const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((value) => value ? resolve(value) : reject(new Error("无法生成 PNG 图标")), "image/png");
+      canvas.toBlob((value) => value ? resolve(value) : reject(new Error(tr("无法生成 PNG 图标"))), "image/png");
     });
     return {
       bytes: new Uint8Array(await blob.arrayBuffer()),
@@ -255,23 +257,23 @@ function imageBytesToDataUrl(bytes: Uint8Array): Promise<string> {
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("无法读取自定义图标"));
+    reader.onerror = () => reject(reader.error ?? new Error(tr("无法读取自定义图标")));
     reader.onload = () => resolve(String(reader.result ?? ""));
     reader.readAsDataURL(new Blob([copy.buffer], { type: "image/png" }));
   });
 }
 
 function connectionStatusLabel(status: GatewayViewState["status"] | undefined): string {
-  if (status === "online") return "在线";
-  if (status === "connecting") return "正在连接";
-  if (status === "error") return "连接异常";
-  return "离线";
+  if (status === "online") return tr("在线");
+  if (status === "connecting") return tr("正在连接");
+  if (status === "error") return tr("连接异常");
+  return tr("离线");
 }
 
 function projectDirectorySummary(project: ProjectPreset): string {
-  if (project.directories.length === 0) return "使用用户主目录";
+  if (project.directories.length === 0) return tr("使用用户主目录");
   if (project.directories.length === 1) return project.directories[0];
-  return `${project.directories.length} 个目录 · ${project.directories[0]}`;
+  return tr("{0} 个目录 · {1}", { 0: project.directories.length, 1: project.directories[0] });
 }
 
 interface SettingsViewProps {
@@ -352,6 +354,7 @@ export type AppearanceSettingsUpdate = Partial<Pick<DesktopSettings,
 >>;
 
 export type ConversationSettingsUpdate = Partial<Pick<DesktopSettings,
+  | "language"
   | "show_turn_duration"
   | "show_file_edit_summary"
   | "auto_collapse_process"
@@ -433,7 +436,7 @@ function ThemeColorRow({ schemeLabel, label, value, onChange }: ThemeColorRowPro
     <div className="theme-profile-row">
       <strong>{label}</strong>
       <div className="settings-color-control">
-        <label title={`选择${label}`}>
+        <label title={tr("选择{0}", { 0: label })}>
           <input
             type="color"
             aria-label={`${schemeLabel}${label}`}
@@ -457,7 +460,7 @@ function ThemeProfileEditor({
   profile: ThemeProfile;
   onChange: (changes: Partial<ThemeProfile>) => void;
 }) {
-  const schemeLabel = scheme === "light" ? "浅色主题" : "深色主题";
+  const schemeLabel = scheme === "light" ? tr("浅色主题") : tr("深色主题");
   return (
     <section className={`theme-profile-card ${scheme}`} aria-label={schemeLabel}>
       <header>
@@ -465,68 +468,68 @@ function ThemeProfileEditor({
       </header>
       <ThemeColorRow
         schemeLabel={schemeLabel}
-        label="强调色"
+        label={tr("强调色")}
         value={profile.accent_color}
         onChange={(value) => onChange({ accent_color: value })}
       />
       <ThemeColorRow
         schemeLabel={schemeLabel}
-        label="背景"
+        label={tr("背景")}
         value={profile.background_color}
         onChange={(value) => onChange({ background_color: value })}
       />
       <ThemeColorRow
         schemeLabel={schemeLabel}
-        label="前景"
+        label={tr("前景")}
         value={profile.foreground_color}
         onChange={(value) => onChange({ foreground_color: value })}
       />
       <div className="theme-profile-row">
-        <strong>UI 字体</strong>
+        <strong>{tr("UI 字体")}</strong>
         <select
           className="settings-select-control"
-          aria-label={`${schemeLabel}UI 字体`}
+          aria-label={tr("{0}UI 字体", { 0: schemeLabel })}
           value={profile.ui_font_family}
           onChange={(event) => onChange({ ui_font_family: event.target.value as UiFontFamily })}
         >
-          <option value="system">系统默认</option>
+          <option value="system">{tr("系统默认")}</option>
           <option value="inter">Inter</option>
-          <option value="serif">衬线字体</option>
+          <option value="serif">{tr("衬线字体")}</option>
         </select>
       </div>
       <div className="theme-profile-row">
-        <strong>代码字体</strong>
+        <strong>{tr("代码字体")}</strong>
         <select
           className="settings-select-control"
-          aria-label={`${schemeLabel}代码字体`}
+          aria-label={tr("{0}代码字体", { 0: schemeLabel })}
           value={profile.code_font_family}
           onChange={(event) => onChange({ code_font_family: event.target.value as CodeFontFamily })}
         >
-          <option value="system-mono">系统默认</option>
+          <option value="system-mono">{tr("系统默认")}</option>
           <option value="menlo">Menlo</option>
           <option value="monaco">Monaco</option>
         </select>
       </div>
       <div className="theme-profile-row">
-        <strong>半透明侧栏</strong>
+        <strong>{tr("半透明侧栏")}</strong>
         <button
           className={`settings-switch ${profile.translucent_sidebar ? "on" : ""}`}
           type="button"
           role="switch"
           aria-checked={profile.translucent_sidebar}
-          aria-label={`${schemeLabel}半透明侧栏`}
+          aria-label={tr("{0}半透明侧栏", { 0: schemeLabel })}
           onClick={() => onChange({ translucent_sidebar: !profile.translucent_sidebar })}
         ><span /></button>
       </div>
       <div className="theme-profile-row">
-        <strong>对比度</strong>
+        <strong>{tr("对比度")}</strong>
         <div className="settings-range-control">
           <input
             type="range"
             min="0"
             max="100"
             step="1"
-            aria-label={`${schemeLabel}对比度`}
+            aria-label={tr("{0}对比度", { 0: schemeLabel })}
             value={profile.contrast}
             onChange={(event) => onChange({ contrast: Number(event.target.value) })}
           />
@@ -534,14 +537,14 @@ function ThemeProfileEditor({
         </div>
       </div>
       <div className="theme-profile-row">
-        <strong>圆角比例</strong>
+        <strong>{tr("圆角比例")}</strong>
         <div className="settings-range-control">
           <input
             type="range"
             min="0.5"
             max="1.75"
             step="0.05"
-            aria-label={`${schemeLabel}圆角比例`}
+            aria-label={tr("{0}圆角比例", { 0: schemeLabel })}
             value={profile.radius_scale}
             onChange={(event) => onChange({ radius_scale: Number(event.target.value) })}
           />
@@ -549,14 +552,14 @@ function ThemeProfileEditor({
         </div>
       </div>
       <div className="theme-profile-row">
-        <strong>阴影强度</strong>
+        <strong>{tr("阴影强度")}</strong>
         <div className="settings-range-control">
           <input
             type="range"
             min="0"
             max="100"
             step="1"
-            aria-label={`${schemeLabel}阴影强度`}
+            aria-label={tr("{0}阴影强度", { 0: schemeLabel })}
             value={profile.shadow_strength}
             onChange={(event) => onChange({ shadow_strength: Number(event.target.value) })}
           />
@@ -651,10 +654,10 @@ export function SettingsView({
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState>("unknown");
   const customIconInputRef = useRef<HTMLInputElement>(null);
   const themeImportInputRef = useRef<HTMLInputElement>(null);
-  const matchingSections = useMemo(() => filterSettingsSections(query), [query]);
-  const themeRegistry = useMemo(() => new ThemeRegistry(settings.custom_theme_presets), [settings.custom_theme_presets]);
-  const themePresets = useMemo(() => themeRegistry.list(), [themeRegistry]);
-  const activeTheme = useMemo(() => resolveActiveTheme(settings), [settings]);
+  const matchingSections = useMemo(() => filterSettingsSections(query), [query, getLocale()]);
+  const themeRegistry = useMemo(() => new ThemeRegistry(settings.custom_theme_presets), [settings.custom_theme_presets, getLocale()]);
+  const themePresets = useMemo(() => themeRegistry.list(), [themeRegistry, getLocale()]);
+  const activeTheme = useMemo(() => resolveActiveTheme(settings), [settings, getLocale()]);
   const activeThemeIsBuiltin = themeRegistry.isBuiltin(activeTheme.id);
   const activeGateway = activeConnection ? gateways[activeConnection.id] : null;
   const canManageProjects = activeGateway?.status === "online" && Boolean(activeGateway.workspace);
@@ -803,11 +806,11 @@ export function SettingsView({
 
   const uploadCustomIcon = async (file: File) => {
     if (!file.type.startsWith("image/")) {
-      setAppearanceError("请选择 PNG、JPEG 或 WebP 图片");
+      setAppearanceError(tr("请选择 PNG、JPEG 或 WebP 图片"));
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
-      setAppearanceError("自定义图标不能超过 10MB");
+      setAppearanceError(tr("自定义图标不能超过 10MB"));
       return;
     }
     try {
@@ -842,7 +845,7 @@ export function SettingsView({
         `${safeThemeFilename(activeTheme.name)}.crabtheme.json`,
         "application/json",
       );
-      setThemeTransferMessage(path ? `已导出到 ${path}` : `已导出 ${activeTheme.name} 的主题数据。`);
+      setThemeTransferMessage(path ? tr("已导出到 {0}", { 0: path }) : tr("已导出 {0} 的主题数据。", { 0: activeTheme.name }));
     } catch (error) {
       setAppearanceError(error instanceof Error ? error.message : String(error));
     }
@@ -857,7 +860,7 @@ export function SettingsView({
         `${safeThemeFilename(activeTheme.name)}.crabskin`,
         "application/vnd.crabcode.skin+zip",
       );
-      setThemeTransferMessage(path ? `已导出到 ${path}` : `已导出 ${activeTheme.name} 的完整皮肤包。`);
+      setThemeTransferMessage(path ? tr("已导出到 {0}", { 0: path }) : tr("已导出 {0} 的完整皮肤包。", { 0: activeTheme.name }));
     } catch (error) {
       setAppearanceError(error instanceof Error ? error.message : String(error));
     }
@@ -871,33 +874,33 @@ export function SettingsView({
         ? parseSkinPackage(new Uint8Array(await file.arrayBuffer()))
         : parseThemeDocument(await file.text());
       onThemeImport(imported);
-      setThemeTransferMessage(`已导入并启用 ${imported.name}。`);
+      setThemeTransferMessage(tr("已导入并启用 {0}。", { 0: imported.name }));
     } catch (error) {
       onThemeImportFailure();
-      setAppearanceError(`${error instanceof Error ? error.message : String(error)}；已回退到 Crab 默认皮肤。`);
+      setAppearanceError(tr("{0}；已回退到 Crab 默认皮肤。", { 0: error instanceof Error ? error.message : String(error) }));
     }
   };
 
   return (
     <div className="settings-shell">
-      <aside className="settings-sidebar" aria-label="设置导航">
+      <aside className="settings-sidebar" aria-label={tr("设置导航")}>
         <button className="settings-back" type="button" onClick={onBack}>
           <ArrowLeft />
-          <span>返回工作台</span>
+          <span>{tr("返回工作台")}</span>
         </button>
 
         <label className="settings-search">
           <Search />
           <input
-            aria-label="搜索设置"
+            aria-label={tr("搜索设置")}
             value={query}
-            placeholder="搜索设置"
+            placeholder={tr("搜索设置")}
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
 
-        <div className="settings-nav-heading">设置</div>
-        <nav className="settings-nav" aria-label="设置分类">
+        <div className="settings-nav-heading">{tr("设置")}</div>
+        <nav className="settings-nav" aria-label={tr("设置分类")}>
           {matchingSections.map((section) => {
             const Icon = SECTION_ICONS[section.id];
             return (
@@ -916,12 +919,12 @@ export function SettingsView({
         </nav>
 
         {matchingSections.length === 0 && (
-          <div className="settings-nav-empty">未找到相关设置</div>
+          <div className="settings-nav-empty">{tr("未找到相关设置")}</div>
         )}
 
         <div className="settings-sidebar-brand">
           <span><Settings /></span>
-          <div><strong>Crab Desktop</strong><small>SETTINGS</small></div>
+          <div><strong>Crab Desktop</strong><small>{tr("设置")}</small></div>
         </div>
       </aside>
 
@@ -929,8 +932,8 @@ export function SettingsView({
         {matchingSections.length === 0 ? (
           <div className="settings-empty-state">
             <Search />
-            <h1>未找到设置</h1>
-            <p>试试搜索“连接”、“Python”或“项目”。</p>
+            <h1>{tr("未找到设置")}</h1>
+            <p>{tr("试试搜索“连接”、“Python”或“项目”。")}</p>
           </div>
         ) : (
           <div className="settings-content">
@@ -941,20 +944,37 @@ export function SettingsView({
 
             {activeSection === "general" && (
               <section className="settings-section" aria-labelledby="runtime-settings-title">
-                <h2 id="runtime-settings-title">运行环境</h2>
+                <div className="settings-group">
+                  <div className="settings-row">
+                    <div className="settings-row-copy">
+                      <strong>{tr("界面语言")}</strong>
+                      <span>{tr("更改后立即生效，不影响聊天内容或模型回复。")}</span>
+                    </div>
+                    <select
+                      className="settings-language-select"
+                      aria-label={tr("界面语言")}
+                      value={settings.language ?? "auto"}
+                      onChange={(event) => onConversationChange({ language: normalizeLanguage(event.target.value) })}
+                    >
+                      <option value="auto">{tr("跟随系统")}</option>
+                      {languages.map(([code, name]) => <option key={code} value={code} lang={code}>{name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <h2 id="runtime-settings-title">{tr("运行环境")}</h2>
                 <div className="settings-group gateway-environment-group">
                   {isDesktopShell() ? (
                     <>
                       <div className="settings-row">
                         <div className="settings-row-copy">
-                          <strong>Python 路径</strong>
-                          <span>用于自动安装和启动本地 Gateway，留空时自动检测 python3 或 python。</span>
+                          <strong>{tr("Python 路径")}</strong>
+                          <span>{tr("用于自动安装和启动本地 Gateway，留空时自动检测 python3 或 python。")}</span>
                         </div>
                         <div className="settings-input-control">
                           <input
-                            aria-label="Python 路径"
+                            aria-label={tr("Python 路径")}
                             value={pythonPath}
-                            placeholder="自动检测 python3 / python"
+                            placeholder={tr("自动检测 python3 / python")}
                             onBlur={savePythonPath}
                             onChange={(event) => setPythonPath(event.target.value)}
                             onKeyDown={(event) => {
@@ -965,8 +985,8 @@ export function SettingsView({
                             <button
                               className="icon-button small"
                               type="button"
-                              title="恢复自动检测"
-                              aria-label="恢复自动检测"
+                              title={tr("恢复自动检测")}
+                              aria-label={tr("恢复自动检测")}
                               onClick={() => {
                                 setPythonPath("");
                                 onSavePythonPath("");
@@ -979,20 +999,20 @@ export function SettingsView({
                       </div>
                       <div className="settings-row gateway-suite-row">
                         <div className="settings-row-copy">
-                          <strong>CrabCode 套件</strong>
-                          <span>首次启动会安装 Gateway、Browser 和 Chromium。这里可按需再安装 Search、Debugger 和 Browser；装完后需重启本地 Gateway。</span>
+                          <strong>{tr("CrabCode 套件")}</strong>
+                          <span>{tr("首次启动会安装 Gateway、Browser 和 Chromium。这里可按需再安装 Search、Debugger 和 Browser；装完后需重启本地 Gateway。")}</span>
                         </div>
                         <div className="gateway-suite-install">
                           {gatewayFeaturesLoading && (
                             <div className="settings-loading-status" role="status">
                               <LoaderCircle className="spin" aria-hidden="true" />
-                              <span>正在检测已安装的组件，请稍候…</span>
+                              <span>{tr("正在检测已安装的组件，请稍候…")}</span>
                             </div>
                           )}
-                          <div className="gateway-feature-list" role="group" aria-label="CrabCode 安装组件" aria-busy={gatewayFeaturesLoading}>
+                          <div className="gateway-feature-list" role="group" aria-label={tr("CrabCode 安装组件")} aria-busy={gatewayFeaturesLoading}>
                             <label className="gateway-feature-option is-required">
                               <input type="checkbox" checked disabled readOnly />
-                              <span><strong>Gateway</strong><small>必装 · 本地服务与客户端协议</small></span>
+                              <span><strong>Gateway</strong><small>{tr("必装 · 本地服务与客户端协议")}</small></span>
                             </label>
                             {GATEWAY_INSTALL_FEATURES.map((feature) => {
                               const installed = installedFeatures?.includes(feature) ?? false;
@@ -1008,15 +1028,14 @@ export function SettingsView({
                                   />
                                   <span>
                                     <strong>{meta.title}</strong>
-                                    <small>{installed ? `已安装 · ${meta.detail}` : meta.detail}</small>
+                                    <small>{installed ? tr("已安装 · {0}", { 0: meta.detail }) : meta.detail}</small>
                                   </span>
                                 </label>
                               );
                             })}
                           </div>
                           {gatewayFeatureError !== null && (
-                            <small className="gateway-suite-error" role="alert" title={gatewayFeatureError}>
-                              组件检测失败：{gatewayFeatureError}
+                            <small className="gateway-suite-error" role="alert" title={gatewayFeatureError}>{tr("组件检测失败：")}{gatewayFeatureError}
                             </small>
                           )}
                           <div className="gateway-suite-actions">
@@ -1026,7 +1045,7 @@ export function SettingsView({
                                 type="button"
                                 disabled={gatewaySuiteBusy || systemToolBusy !== null}
                                 onClick={() => setGatewayFeatureRetry((current) => current + 1)}
-                              ><RotateCcw /><span>重新检测</span></button>
+                              ><RotateCcw /><span>{tr("重新检测")}</span></button>
                             )}
                             <button
                               className="settings-command primary"
@@ -1035,7 +1054,7 @@ export function SettingsView({
                               onClick={() => void installSelectedGatewaySuite()}
                             >
                               {gatewaySuiteBusy || gatewayFeaturesLoading ? <LoaderCircle className="spin" /> : <Download />}
-                              <span>{gatewaySuiteBusy ? "正在安装" : gatewayFeaturesLoading ? "正在检测" : "安装套件"}</span>
+                              <span>{gatewaySuiteBusy ? tr("正在安装") : gatewayFeaturesLoading ? tr("正在检测") : tr("安装套件")}</span>
                             </button>
                           </div>
                           {gatewaySuiteBusy && gatewaySuiteProgress && (
@@ -1051,10 +1070,10 @@ export function SettingsView({
                   ) : (
                     <div className="settings-row">
                       <div className="settings-row-copy">
-                        <strong>运行方式</strong>
-                        <span>浏览器版连接已经运行的 Gateway，不负责本地安装和启动。</span>
+                        <strong>{tr("运行方式")}</strong>
+                        <span>{tr("浏览器版连接已经运行的 Gateway，不负责本地安装和启动。")}</span>
                       </div>
-                      <span className="settings-value">浏览器模式</span>
+                      <span className="settings-value">{tr("浏览器模式")}</span>
                     </div>
                   )}
                 </div>
@@ -1062,24 +1081,24 @@ export function SettingsView({
                 {isDesktopShell() && (
                   <>
                     <div className="settings-section-heading general-spaced-heading">
-                      <div><h2>系统工具</h2><p>检测并安装本地 Gateway 使用的命令行工具。</p></div>
+                      <div><h2>{tr("系统工具")}</h2><p>{tr("检测并安装本地 Gateway 使用的命令行工具。")}</p></div>
                     </div>
                     <div className="settings-group">
                       <div className="settings-row">
                         <div className="settings-row-copy">
                           <strong>Ripgrep (rg)</strong>
-                          <span>内置 Grep 会优先使用 ripgrep 进行快速文本搜索；已安装的 rg 会直接复用。</span>
+                          <span>{tr("内置 Grep 会优先使用 ripgrep 进行快速文本搜索；已安装的 rg 会直接复用。")}</span>
                         </div>
                         <div className="system-tool-install">
                           <button
                             className="settings-command primary"
                             type="button"
-                            aria-label="安装 Ripgrep"
+                            aria-label={tr("安装 Ripgrep")}
                             disabled={systemToolBusy !== null || gatewaySuiteBusy || !onInstallSystemTool}
                             onClick={() => void installSelectedSystemTool("ripgrep")}
                           >
                             {systemToolBusy === "ripgrep" ? <LoaderCircle className="spin" /> : <Download />}
-                            <span>{systemToolBusy === "ripgrep" ? "正在检测与安装" : "检测并安装"}</span>
+                            <span>{systemToolBusy === "ripgrep" ? tr("正在检测与安装") : tr("检测并安装")}</span>
                           </button>
                           {systemToolBusy === "ripgrep" && systemToolProgress && (
                             <small className="system-tool-progress" role="status" title={systemToolProgress.detail}>
@@ -1095,15 +1114,15 @@ export function SettingsView({
                 )}
 
                 <div className="settings-section-heading general-spaced-heading">
-                  <div><h2>文件上传</h2><p>控制添加文件时发送完整内容还是仅发送本地路径。</p></div>
+                  <div><h2>{tr("文件上传")}</h2><p>{tr("控制添加文件时发送完整内容还是仅发送本地路径。")}</p></div>
                 </div>
                 <div className="settings-group general-options-group">
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>上传方式</strong>
-                      <span>仅传路径时，从当前 Gateway 的工作区选择文件，不读取或上传文件正文。</span>
+                      <strong>{tr("上传方式")}</strong>
+                      <span>{tr("仅传路径时，从当前 Gateway 的工作区选择文件，不读取或上传文件正文。")}</span>
                     </div>
-                    <div className="settings-segmented" aria-label="文件上传方式">
+                    <div className="settings-segmented" aria-label={tr("文件上传方式")}>
                       {(["content", "path"] as FileUploadMode[]).map((mode) => (
                         <button
                           key={mode}
@@ -1112,18 +1131,18 @@ export function SettingsView({
                           aria-pressed={settings.file_upload_mode === mode}
                           onClick={() => onConversationChange({ file_upload_mode: mode })}
                         >
-                          {mode === "content" ? "上传内容" : "仅传路径"}
+                          {mode === "content" ? tr("上传内容") : tr("仅传路径")}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>最大文件大小</strong>
-                      <span>上传文件内容时的单文件上限，单位 MB，范围 1–100。</span>
+                      <strong>{tr("最大文件大小")}</strong>
+                      <span>{tr("上传文件内容时的单文件上限，单位 MB，范围 1–100。")}</span>
                     </div>
                     <NumberSettingInput
-                      label="最大文件大小（MB）"
+                      label={tr("最大文件大小（MB）")}
                       value={settings.file_upload_max_size_mb}
                       minimum={1}
                       maximum={100}
@@ -1134,16 +1153,16 @@ export function SettingsView({
                 </div>
 
                 <div className="settings-section-heading general-spaced-heading">
-                  <div><h2>文件查看</h2><p>控制项目文件查看区的标签行为。</p></div>
+                  <div><h2>{tr("文件查看")}</h2><p>{tr("控制项目文件查看区的标签行为。")}</p></div>
                 </div>
                 <div className="settings-group general-options-group">
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>最大标签数</strong>
-                      <span>最多同时打开 1–50 个文件；超过上限时替换最早打开的标签。</span>
+                      <strong>{tr("最大标签数")}</strong>
+                      <span>{tr("最多同时打开 1–50 个文件；超过上限时替换最早打开的标签。")}</span>
                     </div>
                     <NumberSettingInput
-                      label="文件查看最大标签数"
+                      label={tr("文件查看最大标签数")}
                       value={settings.project_files_max_tabs}
                       minimum={1}
                       maximum={50}
@@ -1160,15 +1179,15 @@ export function SettingsView({
                 />
 
                 <div className="settings-section-heading general-spaced-heading">
-                  <div><h2>会话</h2><p>控制发送方式、处理用时和系统通知。</p></div>
+                  <div><h2>{tr("会话")}</h2><p>{tr("控制发送方式、处理用时和系统通知。")}</p></div>
                 </div>
                 <div className="settings-group general-options-group">
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>发送快捷键</strong>
-                      <span>空闲时选择按 Enter 发送，或按 {composerModifierLabel()} 发送。</span>
+                      <strong>{tr("发送快捷键")}</strong>
+                      <span>{tr("空闲时选择按 Enter 发送，或按 ")}{composerModifierLabel()}{tr(" 发送。")}</span>
                     </div>
-                    <div className="settings-segmented" aria-label="发送快捷键">
+                    <div className="settings-segmented" aria-label={tr("发送快捷键")}>
                       {(["enter", "mod_enter"] as ComposerSendKey[]).map((key) => (
                         <button
                           key={key}
@@ -1177,17 +1196,17 @@ export function SettingsView({
                           aria-pressed={settings.composer_send_key === key}
                           onClick={() => onConversationChange({ composer_send_key: key })}
                         >
-                          {key === "enter" ? "Enter 发送" : `${composerModifierLabel()} 发送`}
+                          {key === "enter" ? tr("Enter 发送") : tr("{0} 发送", { 0: composerModifierLabel() })}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>跟进处理方式</strong>
-                      <span>运行时将后续消息排队，或引导当前运行。按 {composerModifierLabel()} 对单条消息执行相反操作；Shift+Enter 换行。</span>
+                      <strong>{tr("跟进处理方式")}</strong>
+                      <span>{tr("运行时将后续消息排队，或引导当前运行。按 ")}{composerModifierLabel()}{tr(" 对单条消息执行相反操作；Shift+Enter 换行。")}</span>
                     </div>
-                    <div className="settings-segmented" aria-label="跟进处理方式">
+                    <div className="settings-segmented" aria-label={tr("跟进处理方式")}>
                       {(["queue", "steer"] as const).map((mode) => (
                         <button
                           key={mode}
@@ -1195,70 +1214,70 @@ export function SettingsView({
                           className={(settings.follow_up_mode ?? "queue") === mode ? "active" : ""}
                           aria-pressed={(settings.follow_up_mode ?? "queue") === mode}
                           onClick={() => onConversationChange({ follow_up_mode: mode })}
-                        >{mode === "queue" ? "排队" : "引导"}</button>
+                        >{mode === "queue" ? tr("排队") : tr("引导")}</button>
                       ))}
                     </div>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>自动折叠中间过程</strong>
-                      <span>本轮正常结束后，收起中间说明、思考和工具调用。最终回答保持展开，可随时查看完整过程。</span>
+                      <strong>{tr("自动折叠中间过程")}</strong>
+                      <span>{tr("本轮正常结束后，收起中间说明、思考和工具调用。最终回答保持展开，可随时查看完整过程。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.auto_collapse_process !== false ? "on" : ""}`}
                       type="button" role="switch"
                       aria-checked={settings.auto_collapse_process !== false}
-                      aria-label="自动折叠中间过程"
+                      aria-label={tr("自动折叠中间过程")}
                       onClick={() => onConversationChange({ auto_collapse_process: settings.auto_collapse_process === false })}
                     ><span /></button>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>显示工具调用次数</strong>
-                      <span>在处理状态旁显示本轮工具调用次数及错误次数。默认关闭。</span>
+                      <strong>{tr("显示工具调用次数")}</strong>
+                      <span>{tr("在处理状态旁显示本轮工具调用次数及错误次数。默认关闭。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.show_tool_call_count === true ? "on" : ""}`}
                       type="button" role="switch"
                       aria-checked={settings.show_tool_call_count === true}
-                      aria-label="显示工具调用次数"
+                      aria-label={tr("显示工具调用次数")}
                       onClick={() => onConversationChange({ show_tool_call_count: settings.show_tool_call_count !== true })}
                     ><span /></button>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>在会话结尾显示编辑卡片</strong>
-                      <span>每轮编辑结束后显示文件变更摘要。关闭后仍可在文件工作区查看变更。</span>
+                      <strong>{tr("在会话结尾显示编辑卡片")}</strong>
+                      <span>{tr("每轮编辑结束后显示文件变更摘要。关闭后仍可在文件工作区查看变更。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.show_file_edit_summary ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.show_file_edit_summary}
-                      aria-label="在会话结尾显示编辑卡片"
+                      aria-label={tr("在会话结尾显示编辑卡片")}
                       onClick={() => onConversationChange({ show_file_edit_summary: !settings.show_file_edit_summary })}
                     ><span /></button>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>显示处理用时</strong>
-                      <span>每轮工作结束后，在对话中显示本轮处理总时间。</span>
+                      <strong>{tr("显示处理用时")}</strong>
+                      <span>{tr("每轮工作结束后，在对话中显示本轮处理总时间。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.show_turn_duration ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.show_turn_duration}
-                      aria-label="显示处理用时"
+                      aria-label={tr("显示处理用时")}
                       onClick={() => onConversationChange({ show_turn_duration: !settings.show_turn_duration })}
                     ><span /></button>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>用时格式</strong>
-                      <span>仅显示累计秒数，或按时、分、秒拆分显示。</span>
+                      <strong>{tr("用时格式")}</strong>
+                      <span>{tr("仅显示累计秒数，或按时、分、秒拆分显示。")}</span>
                     </div>
-                    <div className="settings-segmented" aria-label="处理用时格式">
+                    <div className="settings-segmented" aria-label={tr("处理用时格式")}>
                       {(["seconds", "hms"] as TurnDurationFormat[]).map((format) => (
                         <button
                           key={format}
@@ -1268,22 +1287,22 @@ export function SettingsView({
                           disabled={!settings.show_turn_duration}
                           onClick={() => onConversationChange({ turn_duration_format: format })}
                         >
-                          {format === "seconds" ? "仅秒数" : "时分秒"}
+                          {format === "seconds" ? tr("仅秒数") : tr("时分秒")}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>执行时通知</strong>
-                      <span>会话开始执行时弹出系统通知。</span>
+                      <strong>{tr("执行时通知")}</strong>
+                      <span>{tr("会话开始执行时弹出系统通知。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.session_notify_on_start ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.session_notify_on_start}
-                      aria-label="执行时通知"
+                      aria-label={tr("执行时通知")}
                       onClick={() => {
                         const enabled = !settings.session_notify_on_start;
                         onConversationChange({ session_notify_on_start: enabled });
@@ -1297,15 +1316,15 @@ export function SettingsView({
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>执行完毕通知</strong>
-                      <span>会话这一轮执行结束时弹出系统通知。</span>
+                      <strong>{tr("执行完毕通知")}</strong>
+                      <span>{tr("会话这一轮执行结束时弹出系统通知。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.session_notify_on_complete ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.session_notify_on_complete}
-                      aria-label="执行完毕通知"
+                      aria-label={tr("执行完毕通知")}
                       onClick={() => {
                         const enabled = !settings.session_notify_on_complete;
                         onConversationChange({ session_notify_on_complete: enabled });
@@ -1319,15 +1338,15 @@ export function SettingsView({
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>需要操作时通知</strong>
-                      <span>会话请求权限、询问选择或等待确认计划时弹出系统通知。</span>
+                      <strong>{tr("需要操作时通知")}</strong>
+                      <span>{tr("会话请求权限、询问选择或等待确认计划时弹出系统通知。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.session_notify_on_interaction ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.session_notify_on_interaction}
-                      aria-label="需要操作时通知"
+                      aria-label={tr("需要操作时通知")}
                       onClick={() => {
                         const enabled = !settings.session_notify_on_interaction;
                         onConversationChange({ session_notify_on_interaction: enabled });
@@ -1342,11 +1361,11 @@ export function SettingsView({
                   {notificationPermission === "prompt" || notificationPermission === "denied" ? (
                     <div className="settings-row compact">
                       <div className="settings-row-copy">
-                        <strong>通知权限</strong>
+                        <strong>{tr("通知权限")}</strong>
                         <span>
                           {notificationPermission === "denied"
-                            ? "系统拒绝了通知。macOS 请到「系统设置 → 通知」中允许 Crab Desktop；Windows 请在系统通知设置中允许本应用。"
-                            : "尚未获得系统通知权限。macOS 会弹出授权框；若已经拒绝过，请到系统设置的通知中允许 Crab Desktop。"}
+                            ? tr("系统拒绝了通知。macOS 请到「系统设置 → 通知」中允许 Crab Desktop；Windows 请在系统通知设置中允许本应用。")
+                            : tr("尚未获得系统通知权限。macOS 会弹出授权框；若已经拒绝过，请到系统设置的通知中允许 Crab Desktop。")}
                         </span>
                       </div>
                       <button
@@ -1357,9 +1376,7 @@ export function SettingsView({
                             if (state !== "unknown") setNotificationPermission(state);
                           });
                         }}
-                      >
-                        请求通知权限
-                      </button>
+                      >{tr("请求通知权限")}</button>
                     </div>
                   ) : null}
                 </div>
@@ -1368,9 +1385,9 @@ export function SettingsView({
 
             {activeSection === "appearance" && (
               <section className="settings-section appearance-settings" aria-labelledby="appearance-settings-title">
-                <h2 id="appearance-settings-title">皮肤预设</h2>
-                <p className="settings-section-description">每个预设同时包含浅色和深色外观；导入的主题只使用声明式颜色、排版和图片资源，不执行第三方代码。</p>
-                <div className="theme-preset-grid" aria-label="皮肤预设">
+                <h2 id="appearance-settings-title">{tr("皮肤预设")}</h2>
+                <p className="settings-section-description">{tr("每个预设同时包含浅色和深色外观；导入的主题只使用声明式颜色、排版和图片资源，不执行第三方代码。")}</p>
+                <div className="theme-preset-grid" aria-label={tr("皮肤预设")}>
                   {themePresets.map((theme) => {
                     const builtin = themeRegistry.isBuiltin(theme.id);
                     const selected = theme.id === activeTheme.id;
@@ -1402,7 +1419,7 @@ export function SettingsView({
                           </span>
                           <span className="theme-preset-copy">
                             <strong>{theme.name}</strong>
-                            <small>{builtin ? "内置" : theme.author} · v{theme.version}</small>
+                            <small>{builtin ? tr("内置") : theme.author} · v{theme.version}</small>
                           </span>
                           <span className="theme-preset-check"><Check /></span>
                         </button>
@@ -1416,7 +1433,7 @@ export function SettingsView({
                           >
                             <input
                               autoFocus
-                              aria-label={`重命名 ${theme.name}`}
+                              aria-label={tr("重命名 {0}", { 0: theme.name })}
                               maxLength={80}
                               value={themeNameDraft}
                               onChange={(event) => setThemeNameDraft(event.target.value)}
@@ -1427,30 +1444,30 @@ export function SettingsView({
                                 }
                               }}
                             />
-                            <button type="submit" title="保存名称" disabled={!themeNameDraft.trim()}><Check />保存</button>
-                            <button type="button" title="取消重命名" onClick={() => setRenamingThemeId(null)}><X />取消</button>
+                            <button type="submit" title={tr("保存名称")} disabled={!themeNameDraft.trim()}><Check />{tr("保存")}</button>
+                            <button type="button" title={tr("取消重命名")} onClick={() => setRenamingThemeId(null)}><X />{tr("取消")}</button>
                           </form>
                         ) : deletingThemeId === theme.id ? (
                           <div className="theme-preset-inline-action delete" role="alert">
-                            <span>确定删除这个预设？</span>
+                            <span>{tr("确定删除这个预设？")}</span>
                             <button
                               type="button"
                               className="danger confirm"
-                              title={`确认删除 ${theme.name}`}
+                              title={tr("确认删除 {0}", { 0: theme.name })}
                               onClick={() => {
                                 setDeletingThemeId(null);
                                 onThemeDelete(theme.id);
                               }}
-                            ><Trash2 />删除</button>
-                            <button type="button" title="取消删除" onClick={() => setDeletingThemeId(null)}><X />取消</button>
+                            ><Trash2 />{tr("删除")}</button>
+                            <button type="button" title={tr("取消删除")} onClick={() => setDeletingThemeId(null)}><X />{tr("取消")}</button>
                           </div>
                         ) : (
                           <div className="theme-preset-actions">
-                            <button type="button" title={`复制 ${theme.name}`} onClick={() => onThemeDuplicate(theme.id)}><Copy />复制</button>
+                            <button type="button" title={tr("复制 {0}", { 0: theme.name })} onClick={() => onThemeDuplicate(theme.id)}><Copy />{tr("复制")}</button>
                             {!builtin && (
                               <>
-                                <button type="button" title={`重命名 ${theme.name}`} onClick={() => beginThemeRename(theme)}><Pencil />重命名</button>
-                                <button type="button" className="danger" title={`删除 ${theme.name}`} onClick={() => beginThemeDelete(theme)}><Trash2 />删除</button>
+                                <button type="button" title={tr("重命名 {0}", { 0: theme.name })} onClick={() => beginThemeRename(theme)}><Pencil />{tr("重命名")}</button>
+                                <button type="button" className="danger" title={tr("删除 {0}", { 0: theme.name })} onClick={() => beginThemeDelete(theme)}><Trash2 />{tr("删除")}</button>
                               </>
                             )}
                           </div>
@@ -1460,16 +1477,16 @@ export function SettingsView({
                   })}
                 </div>
                 <div className="theme-transfer-toolbar">
-                  <button type="button" onClick={() => themeImportInputRef.current?.click()}><Upload />导入主题或皮肤</button>
-                  <button type="button" onClick={() => void exportTheme()}><Download />导出主题</button>
-                  <button type="button" onClick={() => void exportSkin()} disabled={!activeTheme.visuals && !activeTheme.preview}><Download />导出完整皮肤</button>
-                  <button type="button" onClick={onThemeRestoreDefault} disabled={activeTheme.id === "builtin.crab"}><RotateCcw />恢复 Crab 默认</button>
+                  <button type="button" onClick={() => themeImportInputRef.current?.click()}><Upload />{tr("导入主题或皮肤")}</button>
+                  <button type="button" onClick={() => void exportTheme()}><Download />{tr("导出主题")}</button>
+                  <button type="button" onClick={() => void exportSkin()} disabled={!activeTheme.visuals && !activeTheme.preview}><Download />{tr("导出完整皮肤")}</button>
+                  <button type="button" onClick={onThemeRestoreDefault} disabled={activeTheme.id === "builtin.crab"}><RotateCcw />{tr("恢复 Crab 默认")}</button>
                   <input
                     ref={themeImportInputRef}
                     className="visually-hidden"
                     type="file"
                     accept=".crabtheme.json,.crabskin,application/json,application/zip"
-                    aria-label="导入 Crab 主题或皮肤"
+                    aria-label={tr("导入 Crab 主题或皮肤")}
                     onChange={(event) => {
                       const file = event.target.files?.[0];
                       if (file) void importThemeFile(file);
@@ -1480,7 +1497,7 @@ export function SettingsView({
                 {themeTransferMessage && <div className="appearance-success">{themeTransferMessage}</div>}
 
                 <div className="appearance-subheading appearance-spaced-heading">
-                  <div><h2>外观模式</h2><p>选择跟随系统，或固定使用预设中的浅色或深色版本。</p></div>
+                  <div><h2>{tr("外观模式")}</h2><p>{tr("选择跟随系统，或固定使用预设中的浅色或深色版本。")}</p></div>
                 </div>
                 <div className="theme-choice-grid">
                   <button
@@ -1493,7 +1510,7 @@ export function SettingsView({
                       <span className="theme-preview-sidebar" />
                       <span className="theme-preview-window"><i /><i /><i /></span>
                     </span>
-                    <span className="theme-choice-label"><strong>系统</strong><small>跟随系统外观</small></span>
+                    <span className="theme-choice-label"><strong>{tr("系统")}</strong><small>{tr("跟随系统外观")}</small></span>
                     <span className="theme-choice-check"><Check /></span>
                   </button>
                   <button
@@ -1506,7 +1523,7 @@ export function SettingsView({
                       <span className="theme-preview-sidebar" />
                       <span className="theme-preview-window"><i /><i /><i /></span>
                     </span>
-                    <span className="theme-choice-label"><strong>浅色</strong><small>始终使用浅色主题</small></span>
+                    <span className="theme-choice-label"><strong>{tr("浅色")}</strong><small>{tr("始终使用浅色主题")}</small></span>
                     <span className="theme-choice-check"><Check /></span>
                   </button>
                   <button
@@ -1519,15 +1536,15 @@ export function SettingsView({
                       <span className="theme-preview-sidebar" />
                       <span className="theme-preview-window"><i /><i /><i /></span>
                     </span>
-                    <span className="theme-choice-label"><strong>深色</strong><small>始终使用深色主题</small></span>
+                    <span className="theme-choice-label"><strong>{tr("深色")}</strong><small>{tr("始终使用深色主题")}</small></span>
                     <span className="theme-choice-check"><Check /></span>
                   </button>
                 </div>
 
                 <div className="appearance-subheading appearance-spaced-heading">
                   <div>
-                    <h2>当前预设细节</h2>
-                    <p>{activeThemeIsBuiltin ? "修改任意字段时会自动创建一个可编辑副本。" : `正在编辑 ${activeTheme.name}。`}</p>
+                    <h2>{tr("当前预设细节")}</h2>
+                    <p>{activeThemeIsBuiltin ? tr("修改任意字段时会自动创建一个可编辑副本。") : tr("正在编辑 {0}。", { 0: activeTheme.name })}</p>
                   </div>
                 </div>
                 <div className="theme-profiles">
@@ -1548,41 +1565,41 @@ export function SettingsView({
                 </div>
 
                 <div className="appearance-subheading appearance-spaced-heading">
-                  <div><h2>偏好</h2><p>控制交互指针、字号和文本呈现方式。</p></div>
+                  <div><h2>{tr("偏好")}</h2><p>{tr("控制交互指针、字号和文本呈现方式。")}</p></div>
                 </div>
                 <div className="settings-group appearance-options-group">
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>指针光标</strong>
-                      <span>在按钮、链接和可点击项目上显示手形指针。</span>
+                      <strong>{tr("指针光标")}</strong>
+                      <span>{tr("在按钮、链接和可点击项目上显示手形指针。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.pointer_cursor ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.pointer_cursor}
-                      aria-label="指针光标"
+                      aria-label={tr("指针光标")}
                       onClick={() => onAppearanceChange({ pointer_cursor: !settings.pointer_cursor })}
                     ><span /></button>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>界面字号</strong>
-                      <span>调整正文、导航和表单控件的基础字号。</span>
+                      <strong>{tr("界面字号")}</strong>
+                      <span>{tr("调整正文、导航和表单控件的基础字号。")}</span>
                     </div>
-                    <div className="settings-stepper" aria-label="界面字号">
+                    <div className="settings-stepper" aria-label={tr("界面字号")}>
                       <button
                         type="button"
-                        title="减小界面字号"
-                        aria-label="减小界面字号"
+                        title={tr("减小界面字号")}
+                        aria-label={tr("减小界面字号")}
                         disabled={settings.ui_font_size <= 11}
                         onClick={() => onAppearanceChange({ ui_font_size: settings.ui_font_size - 1 })}
                       ><Minus /></button>
                       <output>{settings.ui_font_size}px</output>
                       <button
                         type="button"
-                        title="增大界面字号"
-                        aria-label="增大界面字号"
+                        title={tr("增大界面字号")}
+                        aria-label={tr("增大界面字号")}
                         disabled={settings.ui_font_size >= 18}
                         onClick={() => onAppearanceChange({ ui_font_size: settings.ui_font_size + 1 })}
                       ><Plus /></button>
@@ -1590,22 +1607,22 @@ export function SettingsView({
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>代码字号</strong>
-                      <span>调整代码块、工具输出和 Diff 的字号。</span>
+                      <strong>{tr("代码字号")}</strong>
+                      <span>{tr("调整代码块、工具输出和 Diff 的字号。")}</span>
                     </div>
-                    <div className="settings-stepper" aria-label="代码字号">
+                    <div className="settings-stepper" aria-label={tr("代码字号")}>
                       <button
                         type="button"
-                        title="减小代码字号"
-                        aria-label="减小代码字号"
+                        title={tr("减小代码字号")}
+                        aria-label={tr("减小代码字号")}
                         disabled={settings.code_font_size <= 10}
                         onClick={() => onAppearanceChange({ code_font_size: settings.code_font_size - 1 })}
                       ><Minus /></button>
                       <output>{settings.code_font_size}px</output>
                       <button
                         type="button"
-                        title="增大代码字号"
-                        aria-label="增大代码字号"
+                        title={tr("增大代码字号")}
+                        aria-label={tr("增大代码字号")}
                         disabled={settings.code_font_size >= 18}
                         onClick={() => onAppearanceChange({ code_font_size: settings.code_font_size + 1 })}
                       ><Plus /></button>
@@ -1613,10 +1630,10 @@ export function SettingsView({
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>Diff 标记</strong>
-                      <span>使用色条或传统的加减号区分变更。</span>
+                      <strong>{tr("Diff 标记")}</strong>
+                      <span>{tr("使用色条或传统的加减号区分变更。")}</span>
                     </div>
-                    <div className="settings-segmented" aria-label="Diff 标记">
+                    <div className="settings-segmented" aria-label={tr("Diff 标记")}>
                       {(["color", "symbols"] as DiffMarkerStyle[]).map((style) => (
                         <button
                           key={style}
@@ -1625,31 +1642,31 @@ export function SettingsView({
                           aria-pressed={settings.diff_marker_style === style}
                           onClick={() => onAppearanceChange({ diff_marker_style: style })}
                         >
-                          {style === "color" ? "色条" : "+ / -"}
+                          {style === "color" ? tr("色条") : "+ / -"}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>字体平滑</strong>
-                      <span>使用抗锯齿方式绘制界面和代码文字。</span>
+                      <strong>{tr("字体平滑")}</strong>
+                      <span>{tr("使用抗锯齿方式绘制界面和代码文字。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.font_smoothing ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.font_smoothing}
-                      aria-label="字体平滑"
+                      aria-label={tr("字体平滑")}
                       onClick={() => onAppearanceChange({ font_smoothing: !settings.font_smoothing })}
                     ><span /></button>
                   </div>
                 </div>
 
                 <div className="appearance-subheading appearance-spaced-heading">
-                  <div><h2>Dock 图标</h2><p>选择应用在 Dock 或任务栏中显示的图标。</p></div>
+                  <div><h2>{tr("Dock 图标")}</h2><p>{tr("选择应用在 Dock 或任务栏中显示的图标。")}</p></div>
                 </div>
-                <div className="dock-icon-grid" aria-label="Dock 图标选择">
+                <div className="dock-icon-grid" aria-label={tr("Dock 图标选择")}>
                   <button
                     className={`dock-icon-choice ${settings.dock_icon === "dark" ? "active" : ""}`}
                     type="button"
@@ -1657,7 +1674,7 @@ export function SettingsView({
                     onClick={() => void selectDockIcon("dark")}
                   >
                     <span className="crab-icon-preview dark"><img src={DARK_DOCK_ICON} alt="" /></span>
-                    <span>黑底白蟹</span>
+                    <span>{tr("黑底白蟹")}</span>
                     <i><Check /></i>
                   </button>
                   <button
@@ -1667,7 +1684,7 @@ export function SettingsView({
                     onClick={() => void selectDockIcon("light")}
                   >
                     <span className="crab-icon-preview light"><img src={LIGHT_DOCK_ICON} alt="" /></span>
-                    <span>白底黑蟹</span>
+                    <span>{tr("白底黑蟹")}</span>
                     <i><Check /></i>
                   </button>
                   <button
@@ -1679,7 +1696,7 @@ export function SettingsView({
                     <span className="crab-icon-preview custom">
                       {customIconPreview ? <img src={customIconPreview} alt="" /> : <ImageIcon />}
                     </span>
-                    <span>自定义图标</span>
+                    <span>{tr("自定义图标")}</span>
                     <i>{settings.dock_icon === "custom" ? <Check /> : <Upload />}</i>
                   </button>
                   <input
@@ -1687,7 +1704,7 @@ export function SettingsView({
                     className="visually-hidden"
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
-                    aria-label="上传自定义 Dock 图标"
+                    aria-label={tr("上传自定义 Dock 图标")}
                     onChange={(event) => {
                       const file = event.target.files?.[0];
                       if (file) void uploadCustomIcon(file);
@@ -1695,32 +1712,30 @@ export function SettingsView({
                     }}
                   />
                 </div>
-                {!isDesktopShell() && <div className="appearance-hint">Dock 图标仅在桌面应用中可更改。</div>}
+                {!isDesktopShell() && <div className="appearance-hint">{tr("Dock 图标仅在桌面应用中可更改。")}</div>}
                 {appearanceError && <div className="appearance-error">{appearanceError}</div>}
               </section>
             )}
 
             {activeSection === "document" && (
               <section className="settings-section" aria-labelledby="document-settings-title">
-                <h2 id="document-settings-title">翻译</h2>
-                <p className="settings-section-description">使用当前会话选择的模型翻译文档。请求会并行执行，译文缓存按批次安全保存。</p>
+                <h2 id="document-settings-title">{tr("翻译")}</h2>
+                <p className="settings-section-description">{tr("使用当前会话选择的模型翻译文档。请求会并行执行，译文缓存按批次安全保存。")}</p>
                 <div className="settings-group document-translation-group">
                   <div className="settings-row document-engine-row">
                     <div className="settings-row-copy">
-                      <strong>高精度 PDF 引擎</strong>
+                      <strong>{tr("高精度 PDF 引擎")}</strong>
                       <span>
                         {preciseEngine?.status === "ready"
-                          ? `BabelDOC ${preciseEngine.version} 已就绪；新的全文翻译会默认生成原生译后 PDF。`
-                          : preciseEngine?.detail ?? (documentEngineLoading ? "正在读取当前 Gateway 的能力…" : documentCapabilities === undefined ? "连接 Gateway 后检测引擎状态。" : "当前 Gateway 不支持高精度 PDF 引擎。")}
+                          ? tr("BabelDOC {0} 已就绪；新的全文翻译会默认生成原生译后 PDF。", { 0: preciseEngine.version })
+                          : preciseEngine?.detail ?? (documentEngineLoading ? tr("正在读取当前 Gateway 的能力…") : documentCapabilities === undefined ? tr("连接 Gateway 后检测引擎状态。") : tr("当前 Gateway 不支持高精度 PDF 引擎。"))}
                       </span>
-                      <small>
-                        本地解析与排版，不接收模型密钥
-                        {preciseEngine?.install_source === "offline_bundle"
-                          ? " · 已校验离线资源包"
-                          : " · 程序与资源来自 BabelDOC 官方源"}
+                      <small>{tr("本地解析与排版，不接收模型密钥")}{preciseEngine?.install_source === "offline_bundle"
+                          ? tr(" · 已校验离线资源包")
+                          : tr(" · 程序与资源来自 BabelDOC 官方源")}
                         {preciseEngine ? ` · BabelDOC ${preciseEngine.version}` : ""}
                         {preciseEngine?.download_bytes
-                          ? ` · ${preciseEngine.download_estimated ? "安装资源约 " : "资源 "}${Math.ceil(preciseEngine.download_bytes / 1024 / 1024)} MiB`
+                          ? ` · ${preciseEngine.download_estimated ? tr("安装资源约 ") : tr("资源 ")}${Math.ceil(preciseEngine.download_bytes / 1024 / 1024)} MiB`
                           : ""}
                       </small>
                       {documentEngineError && <small className="document-engine-error">{documentEngineError}</small>}
@@ -1728,7 +1743,7 @@ export function SettingsView({
                     {documentEngineLoading ? (
                       <div className="settings-loading-status" role="status">
                         <LoaderCircle className="spin" aria-hidden="true" />
-                        <span>正在检测文档引擎…</span>
+                        <span>{tr("正在检测文档引擎…")}</span>
                       </div>
                     ) : canManageDocumentEngine ? (
                       preciseEngine?.status === "ready" ? (
@@ -1737,7 +1752,7 @@ export function SettingsView({
                           type="button"
                           disabled={documentEngineBusy !== null}
                           onClick={() => void manageDocumentEngine("remove")}
-                        ><Trash2 />{documentEngineBusy === "remove" ? "正在删除…" : "删除引擎"}</button>
+                        ><Trash2 />{documentEngineBusy === "remove" ? tr("正在删除…") : tr("删除引擎")}</button>
                       ) : (
                         <div className="document-engine-install">
                           <div className="document-engine-command">
@@ -1745,16 +1760,16 @@ export function SettingsView({
                             <button
                               className="settings-command primary"
                               type="button"
-                              title={`执行 ${documentEngineInstallCommand}`}
+                              title={tr("执行 {0}", { 0: documentEngineInstallCommand })}
                               disabled={documentEngineBusy !== null || documentCapabilities === undefined}
                               onClick={() => void manageDocumentEngine("install")}
-                            ><Terminal />{documentEngineBusy === "install" ? "正在安装…" : preciseEngine?.status === "upgrade_required" ? "执行升级" : "执行安装"}</button>
+                            ><Terminal />{documentEngineBusy === "install" ? tr("正在安装…") : preciseEngine?.status === "upgrade_required" ? tr("执行升级") : tr("执行安装")}</button>
                           </div>
                           {documentEngineBusy === "install" && documentEngineProgress && (
                             <div
                               className="document-engine-progress"
                               role="progressbar"
-                              aria-label="高精度 PDF 引擎安装进度"
+                              aria-label={tr("高精度 PDF 引擎安装进度")}
                               aria-valuemin={0}
                               aria-valuemax={100}
                               aria-valuenow={documentEngineProgress.percent}
@@ -1773,18 +1788,18 @@ export function SettingsView({
                       )
                     ) : (
                       <div className="document-engine-command remote">
-                        <small>请在 Gateway 主机运行</small>
+                        <small>{tr("请在 Gateway 主机运行")}</small>
                         <code>{documentEngineInstallCommand}</code>
                       </div>
                     )}
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>并行请求数</strong>
-                      <span>同时发送给模型的翻译请求数量，范围 1–8。</span>
+                      <strong>{tr("并行请求数")}</strong>
+                      <span>{tr("同时发送给模型的翻译请求数量，范围 1–8。")}</span>
                     </div>
                     <NumberSettingInput
-                      label="翻译并行请求数"
+                      label={tr("翻译并行请求数")}
                       value={settings.document_translation_concurrency}
                       minimum={1}
                       maximum={8}
@@ -1796,11 +1811,11 @@ export function SettingsView({
                   </div>
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>单批 Block 数</strong>
-                      <span>仅兼容模式生效。每次请求携带的文本 Block 数量，范围 10–400；过大的文本仍受字符上限约束。</span>
+                      <strong>{tr("单批 Block 数")}</strong>
+                      <span>{tr("仅兼容模式生效。每次请求携带的文本 Block 数量，范围 10–400；过大的文本仍受字符上限约束。")}</span>
                     </div>
                     <NumberSettingInput
-                      label="翻译单批 Block 数"
+                      label={tr("翻译单批 Block 数")}
                       value={settings.document_translation_batch_size}
                       minimum={10}
                       maximum={400}
@@ -1813,20 +1828,20 @@ export function SettingsView({
                 </div>
 
                 <div className="settings-section-heading general-spaced-heading">
-                  <div><h2>选择</h2><p>控制 PDF 页面中的原文选择行为。</p></div>
+                  <div><h2>{tr("选择")}</h2><p>{tr("控制 PDF 页面中的原文选择行为。")}</p></div>
                 </div>
                 <div className="settings-group">
                   <div className="settings-row compact">
                     <div className="settings-row-copy">
-                      <strong>显示原文</strong>
-                      <span>框选 PDF 文字时显示所选原文；关闭后仍可复制。</span>
+                      <strong>{tr("显示原文")}</strong>
+                      <span>{tr("框选 PDF 文字时显示所选原文；关闭后仍可复制。")}</span>
                     </div>
                     <button
                       className={`settings-switch ${settings.document_show_original_text ? "on" : ""}`}
                       type="button"
                       role="switch"
                       aria-checked={settings.document_show_original_text}
-                      aria-label="显示原文"
+                      aria-label={tr("显示原文")}
                       onClick={() => onDocumentChange({
                         document_show_original_text: !settings.document_show_original_text,
                       })}
@@ -1868,12 +1883,12 @@ export function SettingsView({
               <section className="settings-section" aria-labelledby="connection-settings-title">
                 <div className="settings-section-heading">
                   <div>
-                    <h2 id="connection-settings-title">已保存连接</h2>
-                    <p>切换当前 Gateway，或管理连接地址与凭据。</p>
+                    <h2 id="connection-settings-title">{tr("已保存连接")}</h2>
+                    <p>{tr("切换当前 Gateway，或管理连接地址与凭据。")}</p>
                   </div>
                   <button className="settings-command primary" type="button" onClick={onNewConnection}>
                     <Plus />
-                    <span>添加 Gateway</span>
+                    <span>{tr("添加 Gateway")}</span>
                   </button>
                 </div>
                 <div className="settings-group settings-entity-list">
@@ -1894,13 +1909,13 @@ export function SettingsView({
                         </span>
                         <span className="settings-entity-actions">
                           {active ? (
-                            <span className="settings-current"><Check />当前</span>
+                            <span className="settings-current"><Check />{tr("当前")}</span>
                           ) : (
                             <button
                               className="icon-button small"
                               type="button"
-                              title={`切换至 ${connection.name}`}
-                              aria-label={`切换至 ${connection.name}`}
+                              title={tr("切换至 {0}", { 0: connection.name })}
+                              aria-label={tr("切换至 {0}", { 0: connection.name })}
                               onClick={() => onActivateConnection(connection.id)}
                             >
                               <ArrowRightLeft />
@@ -1909,8 +1924,8 @@ export function SettingsView({
                           <button
                             className="icon-button small"
                             type="button"
-                            title={`编辑 ${connection.name}`}
-                            aria-label={`编辑 ${connection.name}`}
+                            title={tr("编辑 {0}", { 0: connection.name })}
+                            aria-label={tr("编辑 {0}", { 0: connection.name })}
                             onClick={() => onEditConnection(connection.id)}
                           >
                             <Pencil />
@@ -1919,8 +1934,8 @@ export function SettingsView({
                             <button
                               className="icon-button small danger-icon-button"
                               type="button"
-                              title={`删除 ${connection.name}`}
-                              aria-label={`删除 ${connection.name}`}
+                              title={tr("删除 {0}", { 0: connection.name })}
+                              aria-label={tr("删除 {0}", { 0: connection.name })}
                               onClick={() => onDeleteConnection(connection.id)}
                             >
                               <Trash2 />
@@ -1960,8 +1975,8 @@ export function SettingsView({
               <section className="settings-section" aria-labelledby="project-settings-title">
                 <div className="settings-section-heading">
                   <div>
-                    <h2 id="project-settings-title">项目与目录</h2>
-                    <p>管理当前 Gateway 中用于创建会话的工作目录。</p>
+                    <h2 id="project-settings-title">{tr("项目与目录")}</h2>
+                    <p>{tr("管理当前 Gateway 中用于创建会话的工作目录。")}</p>
                   </div>
                   <button
                     className="settings-command primary"
@@ -1970,12 +1985,12 @@ export function SettingsView({
                     onClick={onNewProject}
                   >
                     <Plus />
-                    <span>添加项目</span>
+                    <span>{tr("添加项目")}</span>
                   </button>
                 </div>
 
                 <div className="settings-context-row">
-                  <label htmlFor="settings-project-connection">当前 Gateway</label>
+                  <label htmlFor="settings-project-connection">{tr("当前 Gateway")}</label>
                   <select
                     id="settings-project-connection"
                     value={activeConnection?.id ?? ""}
@@ -1991,18 +2006,18 @@ export function SettingsView({
                 {!canManageProjects && (
                   <div className="settings-inline-note">
                     <WifiOff />
-                    <span>连接 Gateway 后可以新增项目或编辑目录。</span>
+                    <span>{tr("连接 Gateway 后可以新增项目或编辑目录。")}</span>
                   </div>
                 )}
 
                 <div className="settings-context-row document-root-setting">
-                  <label htmlFor="settings-document-root">文档项目默认位置</label>
+                  <label htmlFor="settings-document-root">{tr("文档项目默认位置")}</label>
                   <input
                     id="settings-document-root"
                     value={activeConnection?.document_workspace_root
                       ?? activeGateway?.workspace?.documents_dir
                       ?? ""}
-                    placeholder={activeGateway?.workspace?.documents_dir ?? "连接 Gateway 后自动检测"}
+                    placeholder={activeGateway?.workspace?.documents_dir ?? tr("连接 Gateway 后自动检测")}
                     disabled={!activeConnection || !canManageProjects || !onDocumentWorkspaceRoot}
                     onChange={(event) => activeConnection
                       && onDocumentWorkspaceRoot?.(
@@ -2010,7 +2025,7 @@ export function SettingsView({
                         event.target.value.trim() ? event.target.value : null,
                       )}
                   />
-                  <small>只影响之后创建的文档项目，不移动已有工作区。</small>
+                  <small>{tr("只影响之后创建的文档项目，不移动已有工作区。")}</small>
                 </div>
 
                 <div className="settings-group settings-entity-list">
@@ -2022,13 +2037,13 @@ export function SettingsView({
                         <small title={projectDirectorySummary(project)}>{projectDirectorySummary(project)}</small>
                       </span>
                       <span className="settings-entity-actions">
-                        {project.id === activeProject?.id && <span className="settings-current"><Check />当前</span>}
+                        {project.id === activeProject?.id && <span className="settings-current"><Check />{tr("当前")}</span>}
                         <button
                           className="icon-button small"
                           type="button"
                           disabled={!canManageProjects}
-                          title={`编辑 ${project.name}`}
-                          aria-label={`编辑 ${project.name}`}
+                          title={tr("编辑 {0}", { 0: project.name })}
+                          aria-label={tr("编辑 {0}", { 0: project.name })}
                           onClick={() => onEditProject(project)}
                         >
                           <Pencil />
@@ -2037,7 +2052,7 @@ export function SettingsView({
                     </div>
                   ))}
                   {activeConnection?.projects.length === 0 && (
-                    <div className="settings-list-empty">当前 Gateway 还没有项目</div>
+                    <div className="settings-list-empty">{tr("当前 Gateway 还没有项目")}</div>
                   )}
                 </div>
               </section>
@@ -2049,13 +2064,13 @@ export function SettingsView({
                   <div className="settings-about-mark"><Info /></div>
                   <div className="settings-about-copy">
                     <h2 id="about-settings-title">Crab Desktop</h2>
-                    <p>面向 CrabCode 工作区的桌面客户端。</p>
+                    <p>{tr("面向 CrabCode 工作区的桌面客户端。")}</p>
                     <dl className="settings-about-details">
-                      <div><dt>版本</dt><dd>v{desktopPackage.version}</dd></div>
-                      <div><dt>Gateway 协议</dt><dd>v1</dd></div>
-                      <div><dt>文档布局</dt><dd>paragraph-v1</dd></div>
+                      <div><dt>{tr("版本")}</dt><dd>v{desktopPackage.version}</dd></div>
+                      <div><dt>{tr("Gateway 协议")}</dt><dd>v1</dd></div>
+                      <div><dt>{tr("文档布局")}</dt><dd>paragraph-v1</dd></div>
                     </dl>
-                    <p className="settings-about-author">作者 Yuri Head</p>
+                    <p className="settings-about-author">{tr("作者 Yuri Head")}</p>
                   </div>
                 </div>
               </section>

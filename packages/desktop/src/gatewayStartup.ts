@@ -1,17 +1,18 @@
+import { t as tr } from "./i18n";
 import type { WorkspaceInfo } from "./types";
 
 export function gatewayEnvironmentLog(workspace: WorkspaceInfo): string[] {
   const runtime = workspace.runtime;
   return [
     ...(runtime ? [
-      `CrabCode Gateway 版本：${runtime.gateway_version}`,
-      `Gateway 包路径：${runtime.gateway_path}`,
-      `Gateway 使用的 Python：${runtime.python_version}`,
-      `Python 解释器路径：${runtime.python_executable}`,
-      `Python 环境：${({ venv: "虚拟环境", conda: "Conda 环境", system: "基础环境" })[runtime.environment_kind]} · ${runtime.python_prefix}`,
-      `Gateway 运行平台：${runtime.platform}`,
-    ] : ["此 Gateway 未提供详细运行环境信息（可能为旧版本服务）"]),
-    `Gateway 启动目录：${workspace.startup_cwd}`,
+      tr("CrabCode Gateway 版本：{0}", { 0: runtime.gateway_version }),
+      tr("Gateway 包路径：{0}", { 0: runtime.gateway_path }),
+      tr("Gateway 使用的 Python：{0}", { 0: runtime.python_version }),
+      tr("Python 解释器路径：{0}", { 0: runtime.python_executable }),
+      tr("Python 环境：{0} · {1}", { 0: ({ venv: tr("虚拟环境"), conda: tr("Conda 环境"), system: tr("基础环境") })[runtime.environment_kind], 1: runtime.python_prefix }),
+      tr("Gateway 运行平台：{0}", { 0: runtime.platform }),
+    ] : [tr("此 Gateway 未提供详细运行环境信息（可能为旧版本服务）")]),
+    tr("Gateway 启动目录：{0}", { 0: workspace.startup_cwd }),
   ];
 }
 

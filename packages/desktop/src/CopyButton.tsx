@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -8,7 +9,7 @@ export async function copyText(text: string): Promise<void> {
   }
 
   if (typeof document === "undefined" || !document.execCommand) {
-    throw new Error("当前环境不支持复制");
+    throw new Error(tr("当前环境不支持复制"));
   }
   const textarea = document.createElement("textarea");
   textarea.value = text;
@@ -18,13 +19,13 @@ export async function copyText(text: string): Promise<void> {
   document.body.append(textarea);
   textarea.select();
   try {
-    if (!document.execCommand("copy")) throw new Error("复制失败");
+    if (!document.execCommand("copy")) throw new Error(tr("复制失败"));
   } finally {
     textarea.remove();
   }
 }
 
-export function CopyButton({ text, label = "复制", className = "" }: {
+export function CopyButton({ text, label = tr("复制"), className = "" }: {
   text: string;
   label?: string;
   className?: string;
@@ -48,7 +49,7 @@ export function CopyButton({ text, label = "复制", className = "" }: {
     }
   };
 
-  const title = copied ? "已复制" : label;
+  const title = copied ? tr("已复制") : label;
   return (
     <button
       type="button"

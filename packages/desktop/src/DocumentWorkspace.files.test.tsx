@@ -158,7 +158,7 @@ describe("document file workspace", () => {
     await render();
     clickTab("Blog");
     act(() => Array.from(container.querySelectorAll<HTMLButtonElement>(".document-blog-view-tabs button"))
-      .find((button) => button.textContent === "Raw")!.click());
+      .find((button) => button.textContent === "原文")!.click());
     const editor = container.querySelector<HTMLTextAreaElement>('[aria-label="Markdown Blog 编辑器"]')!;
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(editor, "# Unsaved edit");

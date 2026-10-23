@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n";
+import { t as tr } from "./i18n";
 import { ChevronDown, ChevronRight, Clock3, LoaderCircle, Search, Wrench } from "lucide-react";
 import { useMemo, useState, type CSSProperties } from "react";
 import { CopyButton } from "./CopyButton";
@@ -57,13 +59,13 @@ function recordDetail(item: ChatItem): unknown {
 
 function recordIdentity(item: ChatItem): Pick<TrajectoryRecord, "lane" | "label" | "title" | "preview"> {
   if (item.kind === "user") {
-    return { lane: "input", label: "USER", title: "用户", preview: compactText(item.text) };
+    return { lane: "input", label: "USER", title: tr("用户"), preview: compactText(item.text) };
   }
   if (item.kind === "assistant") {
-    return { lane: "model", label: "ASSISTANT", title: "回复", preview: compactText(item.text) };
+    return { lane: "model", label: "ASSISTANT", title: tr("回复"), preview: compactText(item.text) };
   }
   if (item.kind === "thinking") {
-    return { lane: "model", label: "THINKING", title: "思考", preview: compactText(item.text) };
+    return { lane: "model", label: "THINKING", title: tr("思考"), preview: compactText(item.text) };
   }
   if (item.kind === "tool") {
     const input = item.input ?? (
@@ -85,7 +87,7 @@ function recordIdentity(item: ChatItem): Pick<TrajectoryRecord, "lane" | "label"
     return {
       lane: "tools",
       label: "FILE",
-      title: `${item.action ?? "修改"} ${item.path ?? item.title ?? "文件"}`,
+      title: `${item.action ?? tr("修改")} ${item.path ?? item.title ?? tr("文件")}`,
       preview: compactText(item.diff),
     };
   }
@@ -96,7 +98,7 @@ function recordIdentity(item: ChatItem): Pick<TrajectoryRecord, "lane" | "label"
     return {
       lane: "tools",
       label: "FILE",
-      title: item.title ?? "文件改动",
+      title: item.title ?? tr("文件改动"),
       preview: compactText(files.map((file) => file.path).filter(Boolean).join(" ")),
     };
   }
@@ -104,7 +106,7 @@ function recordIdentity(item: ChatItem): Pick<TrajectoryRecord, "lane" | "label"
     return {
       lane: "input",
       label: "APPROVAL",
-      title: item.title ?? "权限确认",
+      title: item.title ?? tr("权限确认"),
       preview: compactText(item.detail ?? item.text),
     };
   }
@@ -112,20 +114,20 @@ function recordIdentity(item: ChatItem): Pick<TrajectoryRecord, "lane" | "label"
     return {
       lane: "input",
       label: "CHOICE",
-      title: item.title ?? item.question ?? "用户选择",
+      title: item.title ?? item.question ?? tr("用户选择"),
       preview: compactText(item.selected?.length ? item.selected : item.options),
     };
   }
   if (item.kind === "plan") {
-    return { lane: "model", label: "PLAN", title: item.title ?? "计划", preview: compactText(item.detail) };
+    return { lane: "model", label: "PLAN", title: item.title ?? tr("计划"), preview: compactText(item.detail) };
   }
   if (item.kind === "error") {
-    return { lane: "model", label: "ERROR", title: "错误", preview: compactText(item.text) };
+    return { lane: "model", label: "ERROR", title: tr("错误"), preview: compactText(item.text) };
   }
   return {
     lane: "input",
     label: "SYSTEM",
-    title: item.title ?? "系统",
+    title: item.title ?? tr("系统"),
     preview: compactText(item.text ?? item.detail),
   };
 }
@@ -207,8 +209,8 @@ function timelinePositions(records: TrajectoryRecord[], actualDuration: boolean)
 function TrajectoryRecordDetails({ record }: { record: TrajectoryRecord }) {
   const { item } = record;
   const started = record.startedAt === null
-    ? "未记录"
-    : new Intl.DateTimeFormat("zh-CN", {
+    ? tr("未记录")
+    : new Intl.DateTimeFormat(getLocale(), {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -220,14 +222,14 @@ function TrajectoryRecordDetails({ record }: { record: TrajectoryRecord }) {
   return (
     <div className="trajectory-record-details">
       <dl>
-        <div><dt>Turn / Step</dt><dd>{record.turn} / {record.step || "Message"}</dd></div>
-        <div><dt>开始</dt><dd>{started}</dd></div>
-        <div><dt>耗时</dt><dd>{formatDuration(record.durationMs) || "未记录"}</dd></div>
-        <div><dt>状态</dt><dd>{item.isError ? "失败" : item.status === "running" ? "运行中" : item.status ?? "完成"}</dd></div>
+        <div><dt>{tr("轮次 / 步骤")}</dt><dd>{record.turn} / {record.step || "Message"}</dd></div>
+        <div><dt>{tr("开始")}</dt><dd>{started}</dd></div>
+        <div><dt>{tr("耗时")}</dt><dd>{formatDuration(record.durationMs) || tr("未记录")}</dd></div>
+        <div><dt>{tr("状态")}</dt><dd>{item.isError ? tr("失败") : item.status === "running" ? tr("运行中") : item.status ?? tr("完成")}</dd></div>
       </dl>
-      {input && <section><h4>调用参数</h4><div className="copyable-content"><pre>{input}</pre><CopyButton text={input} label="复制调用参数" /></div></section>}
-      {content && <section><h4>内容</h4><div className="copyable-content"><pre>{content}</pre><CopyButton text={content} label="复制内容" /></div></section>}
-      {output && <section><h4>{item.isError ? "错误" : "执行结果"}</h4><div className="copyable-content"><pre>{output}</pre><CopyButton text={output} label={item.isError ? "复制错误" : "复制执行结果"} /></div></section>}
+      {input && <section><h4>{tr("调用参数")}</h4><div className="copyable-content"><pre>{input}</pre><CopyButton text={input} label={tr("复制调用参数")} /></div></section>}
+      {content && <section><h4>{tr("内容")}</h4><div className="copyable-content"><pre>{content}</pre><CopyButton text={content} label={tr("复制内容")} /></div></section>}
+      {output && <section><h4>{item.isError ? tr("错误") : tr("执行结果")}</h4><div className="copyable-content"><pre>{output}</pre><CopyButton text={output} label={item.isError ? tr("复制错误") : tr("复制执行结果")} /></div></section>}
     </div>
   );
 }
@@ -267,11 +269,11 @@ export function TrajectoryView({ items, now }: { items: ChatItem[]; now: number 
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(() => new Set());
   const [callsCollapsed, setCallsCollapsed] = useState(false);
   const [query, setQuery] = useState("");
-  const turns = useMemo(() => deriveTrajectory(items, now), [items, now]);
-  const records = useMemo(() => turns.flatMap((turn) => turn.records), [turns]);
+  const turns = useMemo(() => deriveTrajectory(items, now), [items, now, getLocale()]);
+  const records = useMemo(() => turns.flatMap((turn) => turn.records), [turns, getLocale()]);
   const positioned = useMemo(
     () => timelinePositions(records, actualDuration),
-    [actualDuration, records],
+    [actualDuration, records, getLocale()],
   );
   const needle = query.trim().toLocaleLowerCase();
   const allTurnsCollapsed = turns.length > 0 && turns.every((turn) => collapsedTurns.has(turn.number));
@@ -297,30 +299,30 @@ export function TrajectoryView({ items, now }: { items: ChatItem[]; now: number 
   })).filter((turn) => turn.records.length > 0);
 
   return (
-    <section className="trajectory-view" aria-label="Agent 轨迹">
-      <div className="trajectory-toolbar" role="toolbar" aria-label="轨迹显示设置">
+    <section className="trajectory-view" aria-label={tr("Agent 轨迹")}>
+      <div className="trajectory-toolbar" role="toolbar" aria-label={tr("轨迹显示设置")}>
         <div className="trajectory-toolbar-actions">
           <button
             type="button"
             className={actualDuration ? "active" : ""}
             aria-pressed={actualDuration}
-            title={actualDuration ? "按事件顺序等宽显示" : "按实际耗时显示"}
+            title={actualDuration ? tr("按事件顺序等宽显示") : tr("按实际耗时显示")}
             onClick={() => setActualDuration((value) => !value)}
-          ><Clock3 />Duration</button>
+          ><Clock3 />{tr("耗时")}</button>
           <button
             type="button"
             className={allTurnsCollapsed ? "active" : ""}
             aria-pressed={allTurnsCollapsed}
-            title={allTurnsCollapsed ? "展开全部 Turn" : "折叠全部 Turn"}
+            title={allTurnsCollapsed ? tr("展开全部 Turn") : tr("折叠全部 Turn")}
             onClick={toggleAllTurns}
-          ><span aria-hidden="true">{allTurnsCollapsed ? "⊞" : "⊟"}</span>Turns</button>
+          ><span aria-hidden="true">{allTurnsCollapsed ? "⊞" : "⊟"}</span>{tr("轮次")}</button>
           <button
             type="button"
             className={callsCollapsed ? "active" : ""}
             aria-pressed={callsCollapsed}
-            title={callsCollapsed ? "显示工具调用" : "隐藏工具调用"}
+            title={callsCollapsed ? tr("显示工具调用") : tr("隐藏工具调用")}
             onClick={() => setCallsCollapsed((value) => !value)}
-          ><Wrench />Calls</button>
+          ><Wrench />{tr("调用")}</button>
         </div>
         <label className="trajectory-search">
           <Search />
@@ -328,16 +330,16 @@ export function TrajectoryView({ items, now }: { items: ChatItem[]; now: number 
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索轨迹"
-            aria-label="搜索轨迹"
+            placeholder={tr("搜索轨迹")}
+            aria-label={tr("搜索轨迹")}
           />
           {needle && <span>{visibleTurns.reduce((sum, turn) => sum + turn.records.length, 0)}</span>}
         </label>
       </div>
 
-      <div className="trajectory-overview" aria-label="轨迹总览">
+      <div className="trajectory-overview" aria-label={tr("轨迹总览")}>
         <div className="trajectory-lane-labels" aria-hidden="true">
-          <span>Input</span><span>Model</span><span>Tools</span>
+          <span>{tr("输入")}</span><span>{tr("模型")}</span><span>{tr("工具")}</span>
         </div>
         <div className="trajectory-timeline">
           <i className="trajectory-lane-rule lane-input" />
@@ -356,7 +358,7 @@ export function TrajectoryView({ items, now }: { items: ChatItem[]; now: number 
                 className={`trajectory-timeline-block lane-${record.lane} ${muted ? "muted" : ""}`}
                 style={style}
                 title={`#${record.index} ${record.label} · ${record.title}${record.durationMs === null ? "" : ` · ${formatDuration(record.durationMs)}`}`}
-                aria-label={`定位到轨迹 ${record.index}：${record.title}`}
+                aria-label={tr("定位到轨迹 {0}：{1}", { 0: record.index, 1: record.title })}
                 onClick={() => document.getElementById(`trajectory-record-${record.index}`)?.scrollIntoView({ block: "center" })}
               />
             );
@@ -366,9 +368,9 @@ export function TrajectoryView({ items, now }: { items: ChatItem[]; now: number 
 
       <div className="trajectory-ledger">
         {records.length === 0 ? (
-          <div className="trajectory-empty"><Wrench /><strong>还没有轨迹</strong><span>发送消息后，模型与工具调用会实时出现在这里。</span></div>
+          <div className="trajectory-empty"><Wrench /><strong>{tr("还没有轨迹")}</strong><span>{tr("发送消息后，模型与工具调用会实时出现在这里。")}</span></div>
         ) : visibleTurns.length === 0 ? (
-          <div className="trajectory-empty"><Search /><strong>没有匹配的轨迹</strong><span>试试工具名、命令、文件路径或回复内容。</span></div>
+          <div className="trajectory-empty"><Search /><strong>{tr("没有匹配的轨迹")}</strong><span>{tr("试试工具名、命令、文件路径或回复内容。")}</span></div>
         ) : visibleTurns.map((turn) => {
           const collapsed = collapsedTurns.has(turn.number);
           return (
@@ -380,8 +382,8 @@ export function TrajectoryView({ items, now }: { items: ChatItem[]; now: number 
                 onClick={() => toggleTurn(turn.number)}
               >
                 {collapsed ? <ChevronRight /> : <ChevronDown />}
-                <strong>Turn {turn.number}</strong>
-                <span>{turn.records.length} 条记录</span>
+                <strong>{tr("轮次")}{turn.number}</strong>
+                <span>{turn.records.length}{tr(" 条记录")}</span>
                 {turn.durationMs !== null && <time>{formatDuration(turn.durationMs)}</time>}
               </button>
               {!collapsed && <div className="trajectory-turn-records">{turn.records.map((record) => <TrajectoryLedgerRow key={record.item.id} record={record} />)}</div>}

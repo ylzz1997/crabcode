@@ -1,3 +1,6 @@
+import { configurationSourceLabel, promptSectionLabel } from "./i18n";
+import { getLocale } from "./i18n";
+import { t as tr } from "./i18n";
 import { AlertTriangle, Download, LoaderCircle, Plus, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { savePromptExport } from "./native";
@@ -32,9 +35,9 @@ interface PromptSettingsPanelProps {
 const DEFAULT_TEMPLATE = "default";
 
 function matchesQuery(value: string, query: string): boolean {
-  const needle = query.trim().toLocaleLowerCase("zh-CN");
+  const needle = query.trim().toLocaleLowerCase(getLocale());
   if (!needle) return true;
-  return value.toLocaleLowerCase("zh-CN").includes(needle);
+  return value.toLocaleLowerCase(getLocale()).includes(needle);
 }
 
 function settingsSource(id: string, fallback: ModelSettingsSource["id"]): ModelSettingsSource["id"] {
@@ -43,7 +46,7 @@ function settingsSource(id: string, fallback: ModelSettingsSource["id"]): ModelS
 }
 
 function editableSources(data: PromptSettingsResponse | null): ModelSettingsSource[] {
-  return data?.editable_sources ?? [];
+  return (data?.editable_sources ?? []).map(source => ({ ...source, label: configurationSourceLabel(source) }));
 }
 
 function draftFrom(template: PromptTemplateView | undefined, keys: string[]): Record<string, string> {
@@ -70,7 +73,7 @@ function readFileText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => reject(reader.error ?? new Error("无法读取 JSON 文件"));
+    reader.onerror = () => reject(reader.error ?? new Error(tr("无法读取 JSON 文件")));
     reader.readAsText(file);
   });
 }
@@ -113,10 +116,10 @@ export function PromptSettingsPanel({
   const [mutationBusy, setMutationBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const sourceOptions = editableSources(data);
-  const writableSources = useMemo(() => sourceOptions.filter((item) => item.writable), [sourceOptions]);
+  const writableSources = useMemo(() => sourceOptions.filter((item) => item.writable), [sourceOptions, getLocale()]);
   const online = gateway?.status === "online";
   const canEdit = online && Boolean(onMutate) && writableSources.length > 0;
-  const sectionKeys = useMemo(() => (data?.sections ?? []).map((item) => item.key), [data?.sections]);
+  const sectionKeys = useMemo(() => (data?.sections ?? []).map((item) => item.key), [data?.sections, getLocale()]);
   const templateSignature = useMemo(() => JSON.stringify({
     active: data?.active_template_id ?? null,
     sections: sectionKeys,
@@ -125,7 +128,7 @@ export function PromptSettingsPanel({
       name: item.name,
       sections: item.sections,
     })),
-  }), [data?.active_template_id, data?.templates, sectionKeys]);
+  }), [data?.active_template_id, data?.templates, sectionKeys, getLocale()]);
   const selected = data?.templates.find((item) => item.id === selectedId);
   const savedDraft = draftFrom(selected, sectionKeys);
   const dirty = selectedId === DEFAULT_TEMPLATE
@@ -165,7 +168,7 @@ export function PromptSettingsPanel({
 
   const confirmDiscard = () => {
     if (!dirty) return true;
-    return window.confirm("当前修改尚未保存为模版，切换后会丢弃这些修改。");
+    return window.confirm(tr("当前修改尚未保存为模版，切换后会丢弃这些修改。"));
   };
 
   const selectTemplate = async (id: string) => {
@@ -195,7 +198,7 @@ export function PromptSettingsPanel({
   const saveTemplate = async () => {
     const name = templateName.trim();
     if (!name) {
-      setMutationError("请先填写模版名称");
+      setMutationError(tr("请先填写模版名称"));
       return;
     }
     try {
@@ -246,7 +249,7 @@ export function PromptSettingsPanel({
     setTransferMessage(null);
     const currentName = templateName.trim();
     if (kind === "current" && !currentName) {
-      setMutationError("请先填写模版名称");
+      setMutationError(tr("请先填写模版名称"));
       return;
     }
     const templates = kind === "current"
@@ -257,7 +260,7 @@ export function PromptSettingsPanel({
       }]
       : templatesForExport();
     if (templates.length === 0) {
-      setMutationError("还没有可导出的模版");
+      setMutationError(tr("还没有可导出的模版"));
       return;
     }
     try {
@@ -267,8 +270,8 @@ export function PromptSettingsPanel({
       const path = await downloadPromptFile(filename, text);
       setMutationError(null);
       setTransferMessage(path
-        ? `已导出到 ${path}`
-        : kind === "all" ? `已导出 ${parsed.length} 个模版` : `已导出 ${parsed[0].name}`);
+        ? tr("已导出到 {0}", { 0: path })
+        : kind === "all" ? tr("已导出 {0} 个模版", { 0: parsed.length }) : tr("已导出 {0}", { 0: parsed[0].name }));
     } catch (reason) {
       setMutationError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -276,10 +279,10 @@ export function PromptSettingsPanel({
 
   const importTemplateFile = async (file: File) => {
     if (!canEdit) return;
-    if (dirty && !window.confirm("当前修改尚未保存为模版，导入后会丢弃这些修改。")) return;
+    if (dirty && !window.confirm(tr("当前修改尚未保存为模版，导入后会丢弃这些修改。"))) return;
     setTransferMessage(null);
     if (file.size > 12 * 1024 * 1024) {
-      setMutationError("JSON 文件过大");
+      setMutationError(tr("JSON 文件过大"));
       return;
     }
     let templates: PortablePromptTemplate[];
@@ -301,11 +304,11 @@ export function PromptSettingsPanel({
         });
         imported += 1;
       }
-      setTransferMessage(imported === 1 ? `已导入 ${templates[0].name}` : `已导入 ${imported} 个模版`);
+      setTransferMessage(imported === 1 ? tr("已导入 {0}", { 0: templates[0].name }) : tr("已导入 {0} 个模版", { 0: imported }));
     } catch (reason) {
       if (imported > 0) {
         const detail = reason instanceof Error ? reason.message : String(reason);
-        setMutationError(`已导入 ${imported} 个，随后失败：${detail}`);
+        setMutationError(tr("已导入 {0} 个，随后失败：{1}", { 0: imported, 1: detail }));
       }
     }
   };
@@ -314,7 +317,7 @@ export function PromptSettingsPanel({
     event.preventDefault();
     const text = promptText.trim();
     if (!text) {
-      setMutationError("用户提示不能为空");
+      setMutationError(tr("用户提示不能为空"));
       return;
     }
     try {
@@ -353,7 +356,7 @@ export function PromptSettingsPanel({
   const sourceLabel = (id: string) => sourceOptions.find((item) => item.id === id)?.label ?? "";
   const creating = selectedId === DEFAULT_TEMPLATE;
   const visibleTemplates = (data?.templates ?? []).filter((item) => matchesQuery(item.name, templateQuery));
-  const showDefaultTemplate = matchesQuery("默认", templateQuery);
+  const showDefaultTemplate = matchesQuery(tr("默认"), templateQuery);
   const visiblePrompts = (data?.user_prompts ?? []).filter((item) => matchesQuery(item.text, promptQuery));
   const defaultActive = !data?.active_template_id;
 
@@ -361,8 +364,8 @@ export function PromptSettingsPanel({
     <section className="settings-section prompt-settings-section" aria-labelledby="prompt-settings-title">
       <div className="settings-section-heading">
         <div>
-          <h2 id="prompt-settings-title">提示词</h2>
-          <p>自定义系统与上下文压缩提示词模版，并选择要追加到用户输入的提示。</p>
+          <h2 id="prompt-settings-title">{tr("提示词")}</h2>
+          <p>{tr("自定义系统与上下文压缩提示词模版，并选择要追加到用户输入的提示。")}</p>
         </div>
         <button
           className="settings-command"
@@ -371,21 +374,21 @@ export function PromptSettingsPanel({
           onClick={onRefresh}
         >
           <RefreshCw className={loading ? "spin" : ""} />
-          <span>{loading ? "读取中" : "刷新"}</span>
+          <span>{loading ? tr("读取中") : tr("刷新")}</span>
         </button>
       </div>
 
       <div className="runtime-context-bar">
         <span>Gateway</span>
-        <strong>{activeConnection?.name ?? "未选择"}</strong>
+        <strong>{activeConnection?.name ?? tr("未选择")}</strong>
         <span className="runtime-context-divider" />
-        <span>项目</span>
-        <strong title={activeProject?.path}>{activeProject?.name ?? "Gateway 默认目录"}</strong>
+        <span>{tr("项目")}</span>
+        <strong title={activeProject?.path}>{activeProject?.name ?? tr("Gateway 默认目录")}</strong>
         {canEdit && (
           <label className="runtime-source-picker">
-            <span>写入层</span>
+            <span>{tr("写入层")}</span>
             <select
-              aria-label="提示词设置保存到配置层"
+              aria-label={tr("提示词设置保存到配置层")}
               value={source}
               onChange={(event) => setSource(event.target.value as ModelSettingsSource["id"])}
             >
@@ -395,7 +398,7 @@ export function PromptSettingsPanel({
         )}
       </div>
 
-      {!online && <div className="settings-inline-note"><AlertTriangle />连接 Gateway 后才能读取提示词设置。</div>}
+      {!online && <div className="settings-inline-note"><AlertTriangle />{tr("连接 Gateway 后才能读取提示词设置。")}</div>}
       {error && <div className="settings-inline-note model-settings-error"><AlertTriangle />{error}</div>}
       {mutationError && mutationError !== error && (
         <div className="settings-inline-note model-settings-error"><AlertTriangle />{mutationError}</div>
@@ -407,7 +410,7 @@ export function PromptSettingsPanel({
         <div className="settings-inline-note" key={warning}><AlertTriangle />{warning}</div>
       ))}
       {online && loading && !data && (
-        <div className="model-settings-loading"><LoaderCircle className="spin" />正在读取提示词设置</div>
+        <div className="model-settings-loading"><LoaderCircle className="spin" />{tr("正在读取提示词设置")}</div>
       )}
 
       {online && data && (
@@ -415,8 +418,8 @@ export function PromptSettingsPanel({
           <section className="runtime-settings-group settings-group prompt-template-card" aria-labelledby="prompt-template-title">
             <div className="settings-subsection-heading">
               <div>
-                <h3 id="prompt-template-title">自定义提示词模版</h3>
-                <p>留空的段落使用内置默认。选择「默认」时不套用模版；若配置里已有 prompt_profile，仍会沿用它。导入和导出走 JSON，写入当前选择的配置层。</p>
+                <h3 id="prompt-template-title">{tr("自定义提示词模版")}</h3>
+                <p>{tr("留空的段落使用内置默认。选择「默认」时不套用模版；若配置里已有 prompt_profile，仍会沿用它。导入和导出走 JSON，写入当前选择的配置层。")}</p>
               </div>
             </div>
             <div className="prompt-template-layout">
@@ -424,13 +427,13 @@ export function PromptSettingsPanel({
                 <label className="prompt-list-search">
                   <Search />
                   <input
-                    aria-label="搜索提示词模版"
+                    aria-label={tr("搜索提示词模版")}
                     value={templateQuery}
-                    placeholder="搜索模版"
+                    placeholder={tr("搜索模版")}
                     onChange={(event) => setTemplateQuery(event.target.value)}
                   />
                 </label>
-                <div className="prompt-list-view" role="listbox" aria-label="使用的提示词模版">
+                <div className="prompt-list-view" role="listbox" aria-label={tr("使用的提示词模版")}>
                   {showDefaultTemplate && (
                     <div className={`prompt-list-item${selectedId === DEFAULT_TEMPLATE ? " selected" : ""}`}>
                       <button
@@ -440,8 +443,8 @@ export function PromptSettingsPanel({
                         disabled={!canEdit || mutationBusy}
                         onClick={() => void selectTemplate(DEFAULT_TEMPLATE)}
                       >
-                        <span>默认</span>
-                        {defaultActive && <em>使用中</em>}
+                        <span>{tr("默认")}</span>
+                        {defaultActive && <em>{tr("使用中")}</em>}
                       </button>
                     </div>
                   )}
@@ -456,12 +459,12 @@ export function PromptSettingsPanel({
                       >
                         <span>{item.name}</span>
                         {item.source !== source && sourceLabel(item.source) && <small>{sourceLabel(item.source)}</small>}
-                        {data.active_template_id === item.id && <em>使用中</em>}
+                        {data.active_template_id === item.id && <em>{tr("使用中")}</em>}
                       </button>
                       <button
                         className="prompt-list-delete"
                         type="button"
-                        aria-label={`删除模版 ${item.name}`}
+                        aria-label={tr("删除模版 {0}", { 0: item.name })}
                         disabled={!canEdit || mutationBusy}
                         onClick={() => void deleteTemplate(item)}
                       >
@@ -470,32 +473,32 @@ export function PromptSettingsPanel({
                     </div>
                   ))}
                   {!showDefaultTemplate && visibleTemplates.length === 0 && (
-                    <p className="prompt-settings-empty">没有匹配的模版。</p>
+                    <p className="prompt-settings-empty">{tr("没有匹配的模版。")}</p>
                   )}
                 </div>
               </div>
               <div className="prompt-settings-body">
                 <label className="prompt-settings-field">
-                  <span>模版名称</span>
+                  <span>{tr("模版名称")}</span>
                   <input
-                    aria-label="模版名称"
+                    aria-label={tr("模版名称")}
                     value={templateName}
                     disabled={!canEdit || mutationBusy}
-                    placeholder="保存时使用的名称"
+                    placeholder={tr("保存时使用的名称")}
                     onChange={(event) => setTemplateName(event.target.value)}
                   />
                 </label>
                 {data.sections.map((section) => (
                   <div className="prompt-settings-field" key={section.key}>
-                    <label htmlFor={`prompt-section-${section.key}`}>{section.label}</label>
+                    <label htmlFor={`prompt-section-${section.key}`}>{promptSectionLabel(section)}</label>
                     {section.description && <small>{section.description}</small>}
                     <textarea
                       id={`prompt-section-${section.key}`}
-                      aria-label={section.label}
+                      aria-label={promptSectionLabel(section)}
                       value={draft[section.key] ?? ""}
                       disabled={!canEdit || mutationBusy}
                       rows={4}
-                      placeholder={section.default_text || (section.key === "extra" ? "留空则不追加额外段落" : "留空则使用默认")}
+                      placeholder={section.default_text || (section.key === "extra" ? tr("留空则不追加额外段落") : tr("留空则使用默认"))}
                       onChange={(event) => setDraft((current) => ({ ...current, [section.key]: event.target.value }))}
                     />
                   </div>
@@ -507,7 +510,7 @@ export function PromptSettingsPanel({
                     disabled={!canEdit || mutationBusy}
                     onClick={() => void saveTemplate()}
                   >
-                    <span>{creating ? "保存为模版" : "保存模版"}</span>
+                    <span>{creating ? tr("保存为模版") : tr("保存模版")}</span>
                   </button>
                   {!creating && (
                     <button
@@ -516,7 +519,7 @@ export function PromptSettingsPanel({
                       disabled={!canEdit || mutationBusy}
                       onClick={() => {
                         const name = templateName.trim();
-                        const nextName = name.endsWith(" 副本") ? name : `${name || "未命名"} 副本`;
+                        const nextName = name.endsWith(tr(" 副本")) ? name : tr("{0} 副本", { 0: name || tr("未命名") });
                         void mutate({
                           action: "save_template",
                           source,
@@ -525,7 +528,7 @@ export function PromptSettingsPanel({
                         });
                       }}
                     >
-                      <span>另存为新模版</span>
+                      <span>{tr("另存为新模版")}</span>
                     </button>
                   )}
                   <button
@@ -535,17 +538,17 @@ export function PromptSettingsPanel({
                     onClick={() => void exportTemplates("current")}
                   >
                     <Download />
-                    <span>导出 JSON</span>
+                    <span>{tr("导出 JSON")}</span>
                   </button>
                   <button
                     className="settings-command"
                     type="button"
-                    aria-label="导出全部提示词模版 JSON"
+                    aria-label={tr("导出全部提示词模版 JSON")}
                     disabled={mutationBusy}
                     onClick={() => void exportTemplates("all")}
                   >
                     <Download />
-                    <span>导出全部</span>
+                    <span>{tr("导出全部")}</span>
                   </button>
                   <button
                     className="settings-command"
@@ -554,14 +557,14 @@ export function PromptSettingsPanel({
                     onClick={() => importInputRef.current?.click()}
                   >
                     <Upload />
-                    <span>导入 JSON</span>
+                    <span>{tr("导入 JSON")}</span>
                   </button>
                   <input
                     ref={importInputRef}
                     type="file"
                     accept="application/json,.json"
                     hidden
-                    aria-label="导入提示词模版 JSON"
+                    aria-label={tr("导入提示词模版 JSON")}
                     onChange={(event) => {
                       const file = event.target.files?.[0];
                       event.target.value = "";
@@ -576,24 +579,24 @@ export function PromptSettingsPanel({
           <section className="runtime-settings-group settings-group" aria-labelledby="user-append-title">
             <div className="settings-subsection-heading">
               <div>
-                <h3 id="user-append-title">追加到用户输入</h3>
-                <p>添加后出现在下面的列表里。勾选的提示会追加到发送给模型的用户消息末尾，对话记录仍只显示原文。</p>
+                <h3 id="user-append-title">{tr("追加到用户输入")}</h3>
+                <p>{tr("添加后出现在下面的列表里。勾选的提示会追加到发送给模型的用户消息末尾，对话记录仍只显示原文。")}</p>
               </div>
             </div>
             <div className="prompt-user-pane">
               <label className="prompt-list-search">
                 <Search />
                 <input
-                  aria-label="搜索用户提示"
+                  aria-label={tr("搜索用户提示")}
                   value={promptQuery}
-                  placeholder="搜索用户提示"
+                  placeholder={tr("搜索用户提示")}
                   onChange={(event) => setPromptQuery(event.target.value)}
                 />
               </label>
               {data.user_prompts.length === 0 ? (
-                <p className="prompt-settings-empty">还没有用户提示。</p>
+                <p className="prompt-settings-empty">{tr("还没有用户提示。")}</p>
               ) : visiblePrompts.length === 0 ? (
-                <p className="prompt-settings-empty">没有匹配的用户提示。</p>
+                <p className="prompt-settings-empty">{tr("没有匹配的用户提示。")}</p>
               ) : (
                 <ul className="prompt-user-list">
                   {visiblePrompts.map((item) => (
@@ -601,7 +604,7 @@ export function PromptSettingsPanel({
                       <label>
                         <input
                           type="checkbox"
-                          aria-label={`追加提示：${item.text}`}
+                          aria-label={tr("追加提示：{0}", { 0: item.text })}
                           checked={item.enabled}
                           disabled={!canEdit || mutationBusy}
                           onChange={(event) => void togglePrompt(item.id, item.source, event.target.checked)}
@@ -611,12 +614,12 @@ export function PromptSettingsPanel({
                       <button
                         className="prompt-list-delete"
                         type="button"
-                        aria-label={`移除提示：${item.text}`}
+                        aria-label={tr("移除提示：{0}", { 0: item.text })}
                         disabled={!canEdit || mutationBusy}
                         onClick={() => void deletePrompt(item.id, item.source)}
                       >
                         <Trash2 />
-                        <span>删除</span>
+                        <span>{tr("删除")}</span>
                       </button>
                     </li>
                   ))}
@@ -624,16 +627,16 @@ export function PromptSettingsPanel({
               )}
               <form className="prompt-user-composer" onSubmit={(event) => void addPrompt(event)}>
                 <textarea
-                  aria-label="追加提示内容"
+                  aria-label={tr("追加提示内容")}
                   value={promptText}
                   disabled={!canEdit || mutationBusy}
                   rows={3}
-                  placeholder="例如：始终用中文回答，并先给出结论。"
+                  placeholder={tr("例如：始终用中文回答，并先给出结论。")}
                   onChange={(event) => setPromptText(event.target.value)}
                 />
                 <button className="settings-command primary" type="submit" disabled={!canEdit || mutationBusy}>
                   <Plus />
-                  <span>添加</span>
+                  <span>{tr("添加")}</span>
                 </button>
               </form>
             </div>

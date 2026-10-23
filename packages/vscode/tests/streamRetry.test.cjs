@@ -24,6 +24,7 @@ function loadBusyIndicator(panel) {
   assert.ok(activityCase);
   const noop = () => {};
   const context = vm.createContext({
+    ...require("./helpers/i18n.cjs"),
     isBusy: false, retryActivityLabel: null, busyLabel: { textContent: '' },
     busyIndicator: null, composerCard: null, stopBtn: null, sendBtn: null,
     activeTurn: null, pendingSteeringQueue: [], toolCards: new Map(), thinkingCards: new Map(),
