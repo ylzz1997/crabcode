@@ -954,7 +954,7 @@ export function SettingsView({
                       <span>{tr("更改后立即生效，不影响聊天内容或模型回复。")}</span>
                     </div>
                     <select
-                      className="settings-language-select"
+                      className="settings-select-control settings-language-select"
                       aria-label={tr("界面语言")}
                       value={settings.language ?? "auto"}
                       onChange={(event) => onConversationChange({ language: normalizeLanguage(event.target.value) })}
@@ -964,7 +964,9 @@ export function SettingsView({
                     </select>
                   </div>
                 </div>
-                <h2 id="runtime-settings-title">{tr("运行环境")}</h2>
+                <div className="settings-section-heading general-spaced-heading">
+                  <h2 id="runtime-settings-title">{tr("运行环境")}</h2>
+                </div>
                 <div className="settings-group gateway-environment-group">
                   {isDesktopShell() ? (
                     <>

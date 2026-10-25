@@ -17675,3 +17675,10 @@ html[data-theme="light"] .project-file-code .token.class-name {
   max-width: 45%;
   flex-shrink: 0;
 }
+
+@media (max-width: 760px) {
+  .settings-language-select {
+    width: 100%;
+    max-width: none;
+  }
+}
