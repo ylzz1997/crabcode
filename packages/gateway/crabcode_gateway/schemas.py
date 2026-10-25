@@ -287,6 +287,7 @@ class ModelSettingsMutationRequest(BaseModel):
         "delete_group",
         "set_default_model",
         "clear_default_model",
+        "import_group_models",
     ]
     source: Literal["userSettings", "projectSettings", "localSettings"] = "projectSettings"
     cwd: str | None = None
@@ -294,6 +295,7 @@ class ModelSettingsMutationRequest(BaseModel):
     previous_name: str | None = None
     config: dict[str, Any] | None = None
     remove_fields: list[str] = Field(default_factory=list)
+    model_ids: list[str] = Field(default_factory=list, max_length=1000)
 
     @model_validator(mode="after")
     def validate_mutation(self) -> "ModelSettingsMutationRequest":
@@ -302,6 +304,12 @@ class ModelSettingsMutationRequest(BaseModel):
             raise ValueError("name is required for this model settings action")
         if self.action in {"upsert_model", "upsert_group"} and self.config is None:
             raise ValueError("config is required when creating or updating settings")
+        if self.action == "import_group_models":
+            if not self.model_ids or any(
+                not value.strip() or len(value) > 512 or any(ord(char) < 32 for char in value)
+                for value in self.model_ids
+            ):
+                raise ValueError("Select valid model IDs to add to the group")
         if self.name is not None:
             self.name = self.name.strip()
         return self

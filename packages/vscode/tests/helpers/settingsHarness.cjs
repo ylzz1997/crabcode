@@ -46,6 +46,7 @@ function fixtures(cwd) {
   ];
   const common = { cwd, editable_sources: sources, warnings: [] };
   return {
+    discovery: { group: "shared", models: [{ id: "model-a" }, { id: "org/model-b" }, { id: "model-c" }] },
     runtime: {
       ...common,
       auto_compact_enabled: true,
@@ -220,7 +221,9 @@ function harness({ initial = {}, workspace = {}, section = "general" } = {}) {
   };
   const module = { exports: {} };
   const fetch = async (url, init) => {
-    const resource = String(url).includes("runtime-settings")
+    const resource = String(url).includes("discover-models")
+      ? "discovery"
+      : String(url).includes("runtime-settings")
       ? "runtime"
       : String(url).includes("model-settings")
         ? "models"

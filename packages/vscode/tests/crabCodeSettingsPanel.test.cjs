@@ -2,6 +2,62 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { harness } = require("./helpers/settingsHarness.cjs");
 
+test("group discovery previews, filters and imports into the captured settings layer", async () => {
+  const h = harness({ section: "models" });
+  h.state.models.models[0].group = "shared";
+  await h.settle();
+  h.click("获取模型列表");
+  await h.settle();
+  const fetch = h.requests.find(item => item.url.includes("discover-models"));
+  assert.equal(fetch.method, "POST");
+  assert.equal(fetch.body.group, "shared");
+  assert.ok(fetch.body.cwd.endsWith("settings-project"));
+  assert.equal(fetch.headers.Authorization, "Bearer test-only-secret");
+  assert.equal(h.changedModels, 0);
+  assert.equal(h.doc.querySelector('[aria-label="model-a"]').disabled, true);
+  h.change("搜索模型", "org/", "input");
+  h.change("全选搜索结果", true);
+  assert.match(h.doc.querySelector(".model-discovery").textContent, /已选择 1 个模型/);
+  h.change("保存到配置层", "localSettings");
+  h.fail({ message: "write failed" });
+  h.click("添加所选模型");
+  await h.settle();
+  assert.match(h.doc.querySelector('.model-discovery [role="alert"]').textContent, /write failed/);
+  assert.equal(h.doc.querySelector('[aria-label="org/model-b"]').checked, true);
+  h.fail(null);
+  h.click("添加所选模型");
+  await h.settle();
+  const save = h.requests.at(-1).body;
+  assert.equal(save.action, "import_group_models");
+  assert.equal(save.name, "shared");
+  assert.equal(save.source, "projectSettings");
+  assert.deepEqual(save.model_ids, ["org/model-b"]);
+  assert.equal(h.changedModels, 1);
+  assert.equal(h.doc.querySelector(".model-discovery"), null);
+  h.dom.window.close();
+});
+
+test("group discovery reports errors and never applies results after a connection switch", async () => {
+  const h = harness({ section: "models" });
+  await h.settle();
+  h.fail({ message: "HTTP 401：认证失败" });
+  h.click("获取模型列表");
+  await h.settle();
+  assert.match(h.doc.querySelector('.model-discovery [role="alert"]').textContent, /HTTP 401/);
+  assert.equal([...h.doc.querySelectorAll("button")].find(node => node.textContent === "添加所选模型").disabled, true);
+  h.fail(null);
+  let finish;
+  h.pause(new Promise(resolve => { finish = resolve; }));
+  h.doc.querySelector(".model-discovery .actions button").click();
+  await new Promise(resolve => setImmediate(resolve));
+  h.changeConnection();
+  finish();
+  await h.settle();
+  assert.equal(h.doc.querySelector(".model-discovery"), null);
+  assert.equal(h.changedModels, 0);
+  h.dom.window.close();
+});
+
 test("local preferences preserve user/workspace precedence and validate in the host", async () => {
   const h = harness({
     initial: { followUpMode: "queue" },

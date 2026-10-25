@@ -61,6 +61,27 @@ class ModelTestRequest(BaseModel):
     cwd: str | None = None
 
 
+class GroupModelsRequest(BaseModel):
+    group: str
+    cwd: str | None = None
+
+
+@router.post("/config/discover-models")
+async def discover_group_models(req: GroupModelsRequest, request: Request) -> dict[str, Any]:
+    from crabcode_core.api.model_discovery import ModelDiscoveryError, discover_models
+
+    cwd = _resolve_model_settings_cwd(request, req.cwd)
+    settings = ConfigManager(cwd=cwd).load()
+    config = settings.groups.get(req.group)
+    if config is None:
+        raise HTTPException(status_code=404, detail="配置组不存在，请刷新模型目录")
+    try:
+        models = await discover_models(config, settings.env)
+    except ModelDiscoveryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"group": req.group, "models": models}
+
+
 def _model_test_error(exc: Exception) -> str:
     # Do not return raw provider messages: they may contain keys, headers or URLs.
     from crabcode_core.api.network import certificate_failure
@@ -603,7 +624,39 @@ def _mutate_model_settings(request: Request, req: ModelSettingsMutationRequest) 
     current = _read_settings_object(path)
     action = req.action
 
-    if action in {"upsert_model", "delete_model"}:
+    if action == "import_group_models":
+        import re
+
+        name = _validate_model_settings_name(req.name)
+        preview = _model_settings_from_files(cwd)
+        if name not in preview.groups:
+            raise HTTPException(status_code=404, detail="配置组不存在，请刷新模型目录")
+        models = current.setdefault("models", {})
+        if not isinstance(models, dict):
+            raise HTTPException(status_code=422, detail="models must be a JSON object")
+        existing_ids = {
+            model.effective.get("model") for model in preview.models if model.group == name
+        }
+        used_names = {model.name for model in preview.models} | set(models)
+        for model_id in dict.fromkeys(value.strip() for value in req.model_ids):
+            if model_id in existing_ids:
+                continue
+            # Profile names cannot contain slashes; the API ID remains exact.
+            stem = re.sub(r"[/\\\x00-\x1f]", "-", model_id)[:120].strip()
+            if stem in {".", ".."}:
+                stem = "model"
+            candidate = stem
+            if candidate in used_names:
+                stem = f"{name} - {stem}"[:120]
+                candidate = stem
+            suffix = 2
+            while candidate in used_names:
+                tail = f" ({suffix})"
+                candidate = stem[:120 - len(tail)] + tail
+                suffix += 1
+            models[candidate] = {"group": name, "model": model_id}
+            used_names.add(candidate)
+    elif action in {"upsert_model", "delete_model"}:
         name = _validate_model_settings_name(req.name)
         models = current.get("models")
         if models is None:

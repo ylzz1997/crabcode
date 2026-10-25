@@ -3779,6 +3779,11 @@ function App() {
             if (!api) return Promise.reject(new Error(tr("Gateway 尚未连接")));
             return api.testModel(name, activeProject?.path);
           }}
+          onDiscoverModels={(group) => {
+            const api = activeConnection ? apiRef.current.get(activeConnection.id) : null;
+            if (!api) return Promise.reject(new Error(tr("Gateway 尚未连接")));
+            return api.discoverModels(group, activeProject?.path);
+          }}
           runtimeSettings={activeRuntimeSettingsState?.data ?? null}
           runtimeSettingsLoading={activeRuntimeSettingsState?.loading ?? false}
           runtimeSettingsError={activeRuntimeSettingsState?.error ?? null}

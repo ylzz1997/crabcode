@@ -9191,6 +9191,64 @@ html[data-theme="light"] .document-actions-separator {
   --model-surface: #0c1719;
 }
 
+.model-discovery-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.model-discovery-toolbar input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.model-discovery-description {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-discovery-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.model-discovery-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  font-size: 13px;
+}
+
+.model-discovery-option > span {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+
+.model-discovery-option input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+.model-discovery-option small {
+  color: var(--muted);
+}
+
+.model-discovery-option > small {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .model-refresh-command {
   min-width: 92px;
 }

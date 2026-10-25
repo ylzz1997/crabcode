@@ -18,6 +18,7 @@ import type {
   GitReviewDiff,
   GitReviewScope,
   ModelSettingsResponse,
+  ModelDiscoveryResponse,
   ModelSettingsMutation,
   PromptSettingsMutation,
   PromptSettingsResponse,
@@ -390,6 +391,14 @@ export class GatewayApi {
   modelSettings(cwd?: string): Promise<ModelSettingsResponse> {
     const query = cwd ? `?${new URLSearchParams({ cwd })}` : "";
     return this.request(`/config/model-settings${query}`);
+  }
+
+  discoverModels(group: string, cwd?: string): Promise<ModelDiscoveryResponse> {
+    return this.request("/config/discover-models", {
+      method: "POST",
+      body: JSON.stringify({ group, cwd }),
+      signal: AbortSignal.timeout(20_000),
+    });
   }
 
   testModel(name: string, cwd?: string): Promise<{ ok: boolean; message: string; elapsed_ms?: number }> {

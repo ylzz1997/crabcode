@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
   Pencil,
   Layers3,
   LoaderCircle,
@@ -19,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { GroupModelDiscovery } from "./GroupModelDiscovery";
 import type {
   ConnectionPreset,
   GatewayViewState,
@@ -26,6 +28,7 @@ import type {
   ModelSettingsMutation,
   ModelSettingsSource,
   ModelSettingsResponse,
+  ModelDiscoveryResponse,
   ProjectPreset,
 } from "./types";
 
@@ -39,6 +42,7 @@ interface ModelSettingsPanelProps {
   onRefresh: () => void;
   onMutate?: (mutation: ModelSettingsMutation) => Promise<void>;
   onTest?: (name: string) => Promise<{ ok: boolean; message: string; elapsed_ms?: number }>;
+  onDiscover?: (group: string) => Promise<ModelDiscoveryResponse>;
 }
 
 interface ModelGroupView {
@@ -434,11 +438,15 @@ export function ModelSettingsPanel({
   onRefresh,
   onMutate,
   onTest,
+  onDiscover,
 }: ModelSettingsPanelProps) {
   const [query, setQuery] = useState("");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [editor, setEditor] = useState<EditorTarget | null>(null);
+  const [discovery, setDiscovery] = useState<{ group: string; source: ModelSettingsSource["id"]; context: string } | null>(null);
+  const discoveryContext = JSON.stringify([activeConnection?.id, activeProject?.path]);
+  useEffect(() => { setDiscovery(null); }, [discoveryContext]);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [source, setSource] = useState<ModelSettingsSource["id"]>(
     activeProject ? "projectSettings" : "userSettings",
@@ -630,7 +638,7 @@ export function ModelSettingsPanel({
         <div className="model-settings-loading"><LoaderCircle className="spin" />{tr("正在读取模型配置")}</div>
       )}
 
-      {online && !loading && !error && data && data.models.length === 0 && (
+      {online && !loading && !error && data && data.models.length === 0 && Object.keys(data.groups).length === 0 && (
         <div className="model-settings-empty">
           <Bot />
           <strong>{tr("还没有命名模型")}</strong>
@@ -639,7 +647,7 @@ export function ModelSettingsPanel({
         </div>
       )}
 
-      {data && data.models.length > 0 && (
+      {data && (data.models.length > 0 || Object.keys(data.groups).length > 0) && (
         <>
           <label className="model-settings-search">
             <Search />
@@ -679,6 +687,7 @@ export function ModelSettingsPanel({
                       </button>
                       {canEdit && group.name !== null && (
                         <span className="model-group-actions">
+                          {onDiscover && Object.hasOwn(data.groups, group.name) && <button className="icon-button small" type="button" aria-label={tr("获取 {0} 的模型列表", { 0: group.name })} title={tr("获取模型列表")} disabled={mutationBusy || sourceOptions.some(item => item.id === source && !item.writable)} onClick={() => setDiscovery({ group: group.name!, source, context: discoveryContext })}><Download /></button>}
                           <button className="icon-button small" type="button" aria-label={tr("编辑配置组 {0}", { 0: group.name })} title={tr("编辑配置组")} disabled={mutationBusy} onClick={() => setEditor({ kind: "group", name: group.name!, originalName: group.name!, config: group.config, source: sourceForGroup(group.name!) })}><Pencil /></button>
                           <button className="icon-button small danger-icon-button" type="button" aria-label={tr("删除配置组 {0}", { 0: group.name })} title={tr("删除配置组")} disabled={mutationBusy} onClick={() => setDeleteTarget({ kind: "group", name: group.name!, source: sourceForGroup(group.name!) })}><Trash2 /></button>
                         </span>
@@ -773,6 +782,17 @@ export function ModelSettingsPanel({
             </div>
           )}
         </>
+      )}
+      {discovery && discovery.context === discoveryContext && data && onDiscover && Object.hasOwn(data.groups, discovery.group) && (
+        <GroupModelDiscovery
+          key={`${discoveryContext}:${discovery.group}`}
+          group={discovery.group}
+          sourceLabel={sourceOptions.find(item => item.id === discovery.source)?.label ?? discovery.source}
+          existingIds={new Set(data.models.filter(model => model.group === discovery.group).map(model => String(model.effective.model ?? "")))}
+          onDiscover={onDiscover}
+          onImport={model_ids => mutate({ action: "import_group_models", name: discovery.group, source: discovery.source, cwd: activeProject?.path, model_ids })}
+          onClose={() => setDiscovery(null)}
+        />
       )}
       {editor && data && (
         <ModelSettingsEditor

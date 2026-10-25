@@ -561,6 +561,7 @@ export interface ModelSettingsResponse {
 }
 
 export type ModelSettingsMutationAction =
+  | "import_group_models"
   | "upsert_model"
   | "delete_model"
   | "upsert_group"
@@ -584,6 +585,12 @@ export interface ModelSettingsMutation {
   previous_name?: string;
   config?: Record<string, unknown>;
   remove_fields?: string[];
+  model_ids?: string[];
+}
+
+export interface ModelDiscoveryResponse {
+  group: string;
+  models: Array<{ id: string; name?: string }>;
 }
 
 export interface RuntimeSettingsResponse {

@@ -35,6 +35,7 @@ const ACTIONS: Record<string, readonly string[]> = {
     "remove_extra_tool",
   ],
   models: [
+    "import_group_models",
     "upsert_model",
     "delete_model",
     "upsert_group",
@@ -300,6 +301,11 @@ export class CrabCodeSettingsPanel {
       );
       return { saved: true };
     }
+    if (message.action === "discoverModels") {
+      if (typeof message.group !== "string" || !message.group.trim())
+        throw new Error(tr("请填写名称"));
+      return this.request("models", { group: message.group }, undefined, "/config/discover-models");
+    }
     if (message.action === "import") {
       this.validateSource(message.source);
       const uris = await vscode.window.showOpenDialog({
@@ -366,12 +372,13 @@ export class CrabCodeSettingsPanel {
     resource: Resource,
     mutation?: Record<string, unknown>,
     query?: Record<string, string>,
+    endpoint?: "/config/discover-models",
   ): Promise<unknown> {
     const config = vscode.workspace.getConfiguration("crabcode");
     const url = new URL(config.get("serverUrl", "ws://localhost:4096/ws"));
     url.protocol =
       url.protocol === "wss:" || url.protocol === "https:" ? "https:" : "http:";
-    url.pathname = ENDPOINTS[resource];
+    url.pathname = endpoint ?? ENDPOINTS[resource];
     url.search = "";
     url.hash = "";
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

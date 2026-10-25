@@ -318,13 +318,14 @@ export interface SetPermissionModeRequest {
 
 /** A focused mutation of the named model configuration catalog. */
 export interface ModelSettingsMutationRequest {
-  action: "upsert_model" | "delete_model" | "upsert_group" | "delete_group" | "set_default_model" | "clear_default_model";
+  action: "upsert_model" | "delete_model" | "upsert_group" | "delete_group" | "set_default_model" | "clear_default_model" | "import_group_models";
   source?: "userSettings" | "projectSettings" | "localSettings";
   cwd?: string | null;
   name?: string | null;
   previous_name?: string | null;
   config?: Record<string, unknown> | null;
   remove_fields?: string[];
+  model_ids?: string[];
 }
 
 /** A focused mutation for runtime, Computer Use, and extra-tool settings. */

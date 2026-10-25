@@ -76,6 +76,7 @@ import type {
   GatewayViewState,
   ModelSettingsMutation,
   ModelSettingsResponse,
+  ModelDiscoveryResponse,
   PromptSettingsMutation,
   PromptSettingsResponse,
   RuntimeSettingsMutation,
@@ -323,6 +324,7 @@ interface SettingsViewProps {
   onRefreshModelSettings?: () => void;
   onMutateModelSettings?: (mutation: ModelSettingsMutation) => Promise<void>;
   onTestModel?: (name: string) => Promise<{ ok: boolean; message: string; elapsed_ms?: number }>;
+  onDiscoverModels?: (group: string) => Promise<ModelDiscoveryResponse>;
   runtimeSettings?: RuntimeSettingsResponse | null;
   runtimeSettingsLoading?: boolean;
   runtimeSettingsError?: string | null;
@@ -617,6 +619,7 @@ export function SettingsView({
   onRefreshModelSettings = () => {},
   onMutateModelSettings,
   onTestModel,
+  onDiscoverModels,
   runtimeSettings = null,
   runtimeSettingsLoading = false,
   runtimeSettingsError = null,
@@ -1960,6 +1963,7 @@ export function SettingsView({
                 onRefresh={onRefreshModelSettings}
                 onMutate={onMutateModelSettings}
                 onTest={onTestModel}
+                onDiscover={onDiscoverModels}
               />
             )}
 

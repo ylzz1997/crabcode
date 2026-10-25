@@ -23,6 +23,7 @@ export interface SettingsRequest {
     | "initialize"
     | "read"
     | "mutate"
+    | "discoverModels"
     | "saveLocal"
     | "import"
     | "export"
@@ -38,6 +39,7 @@ export interface SettingsRequest {
   source?: string;
   templates?: unknown;
   message?: string;
+  group?: string;
 }
 export type SettingsEvent =
   | {

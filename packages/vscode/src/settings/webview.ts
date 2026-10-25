@@ -1155,6 +1155,132 @@ async function modelEditor(
   editor.scrollIntoView({ block: "start", behavior: "smooth" });
   nameInput.focus();
 }
+async function groupModelDiscovery(groupName: string): Promise<void> {
+  if (dirty.has("models") && !(await rpc("confirm", { message: tr("放弃当前未保存的模型修改？") }))) return;
+  const page = panelFor("models");
+  page.querySelector(".model-editor")?.remove();
+  const editor = el("section", "card editor model-editor model-discovery");
+  page.append(editor);
+  dirty.add("models");
+  const targetSource = sources.models;
+  const generation = snapshot.generation;
+  const state = data.models as ModelSettingsResponse;
+  const existingIds = new Set((state.models ?? []).filter(model => model.group === groupName).map(model => model.effective?.model));
+  const sourceLabel = state.editable_sources?.find(item => item.id === targetSource)?.label ?? targetSource;
+  editor.append(el("h2", "", `${tr("获取模型列表")} · ${groupName}`),
+    el("p", "inline-note", `${tr("写入 ")}${sourceLabel}`),
+    el("p", "inline-note", tr("选择要加入配置组的模型，已有模型会保留原配置。")));
+  const search = input("", tr("搜索模型"), "search");
+  search.placeholder = tr("搜索模型");
+  const message = el("p", "inline-note");
+  message.setAttribute("role", "status");
+  const list = el("div", "model-discovery-list");
+  const selected = new Set<string>();
+  let models: Array<{ id: string; name?: string }> | null = null;
+  let busy = false;
+  let saving = false;
+  let requestId = 0;
+  const valid = () => editor.isConnected && generation === snapshot.generation;
+  const add = el("button", "button primary", tr("添加所选模型"));
+  add.type = "button";
+  const all = input("", tr("全选搜索结果"), "checkbox");
+  const allLabel = el("label", "model-discovery-option");
+  const count = el("small");
+  const limitNote = el("p", "inline-note", tr("每次最多添加 1000 个模型"));
+  limitNote.setAttribute("role", "alert");
+  allLabel.append(all, document.createTextNode(tr("全选搜索结果")), count);
+  const visible = () => (models ?? []).filter(model => `${model.id} ${model.name ?? ""}`.toLowerCase().includes(search.value.trim().toLowerCase()));
+  const update = () => {
+    const available = visible().filter(model => !existingIds.has(model.id));
+    all.checked = available.length > 0 && available.every(model => selected.has(model.id));
+    all.disabled = busy || saving || !available.length;
+    count.textContent = tr("已选择 {0} 个模型", { 0: selected.size });
+    add.disabled = busy || saving || !selected.size || selected.size > 1000;
+    limitNote.hidden = selected.size <= 1000;
+    search.disabled = saving;
+  };
+  const renderList = () => {
+    list.replaceChildren();
+    for (const model of visible()) {
+      const label = el("label", "model-discovery-option");
+      const check = input("", model.id, "checkbox");
+      check.checked = existingIds.has(model.id) || selected.has(model.id);
+      check.disabled = saving || existingIds.has(model.id);
+      check.addEventListener("change", () => {
+        if (check.checked) selected.add(model.id); else selected.delete(model.id);
+        update();
+      });
+      const copy = el("span");
+      copy.append(el("strong", "", model.id));
+      if (model.name && model.name !== model.id) copy.append(el("small", "", model.name));
+      label.append(check, copy);
+      if (existingIds.has(model.id)) label.append(el("small", "", tr("已添加")));
+      list.append(label);
+    }
+    if (models && !visible().length) list.append(el("p", "empty", models.length ? tr("没有匹配的模型") : tr("接口未返回可用模型")));
+    update();
+  };
+  const fetchModels = async () => {
+    const current = ++requestId;
+    busy = true;
+    models = null;
+    selected.clear();
+    message.textContent = tr("正在获取模型列表");
+    message.setAttribute("role", "status");
+    renderList();
+    try {
+      const result = await rpc("discoverModels", { group: groupName });
+      if (!valid() || current !== requestId) return;
+      models = result.models;
+      message.textContent = "";
+    } catch (error) {
+      if (!valid() || current !== requestId) return;
+      message.textContent = (error as Error).message;
+      message.setAttribute("role", "alert");
+    } finally {
+      if (valid() && current === requestId) {
+        busy = false;
+        renderList();
+      }
+    }
+  };
+  const refresh = button(tr("刷新"), fetchModels);
+  const cancel = button(tr("取消"), () => { dirty.delete("models"); editor.remove(); });
+  add.addEventListener("click", async () => {
+    if (busy || saving || !selected.size || selected.size > 1000 || !valid()) return;
+    saving = true;
+    refresh.disabled = cancel.disabled = true;
+    renderList();
+    try {
+      await mutate("models", { action: "import_group_models", name: groupName, source: targetSource, model_ids: [...selected] });
+      if (!valid()) return;
+      dirty.delete("models");
+      renderModels();
+    } catch (error) {
+      if (!valid()) return;
+      message.textContent = (error as Error).message;
+      message.setAttribute("role", "alert");
+    } finally {
+      if (valid()) {
+        saving = false;
+        refresh.disabled = cancel.disabled = false;
+        renderList();
+      }
+    }
+  });
+  all.addEventListener("change", () => {
+    visible().filter(model => !existingIds.has(model.id)).forEach(model => all.checked ? selected.add(model.id) : selected.delete(model.id));
+    renderList();
+  });
+  search.addEventListener("input", renderList);
+  editor.append(actions(search, refresh), message, allLabel, list, limitNote, actions(cancel, add));
+  editor.scrollIntoView({ block: "start", behavior: "smooth" });
+  search.focus();
+  refresh.disabled = true;
+  await fetchModels();
+  if (valid()) refresh.disabled = false;
+}
+
 function withoutRedacted(value: unknown): unknown {
   if (Array.isArray(value))
     return value.filter((item) => item !== "[redacted]").map(withoutRedacted);
@@ -1282,6 +1408,7 @@ function renderModels(): void {
   const groups = group(page, tr("配置组"));
   for (const [name, config] of Object.entries(state.groups ?? {})) {
     const controls = actions(
+      button(tr("获取模型列表"), () => groupModelDiscovery(name), "text-button"),
       button(tr("编辑"), () => modelEditor("group", name, config), "text-button"),
       button(
         tr("删除"),
