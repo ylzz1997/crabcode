@@ -100,14 +100,17 @@ KNOWN_CONTEXT_WINDOWS: dict[str, int] = {
     "grok-build-0.1": 256_000,
     "grok-code-fast": 256_000,
     # DeepSeek
-    "deepseek-flash": 1_000_000,
-    "deepseek-v4-pro": 1_000_000,
-    "deepseek-v4-flash": 1_000_000,
-    "deepseek-v4.1": 1_000_000,
+    # Official /models metadata: https://api-docs.deepseek.com/api/list-models/
+    # deepseek-flash currently serves DeepSeek-V4.1-Flash-1017.
+    "deepseek-flash": 1_048_576,
+    "deepseek-v4.1-flash-1017": 1_048_576,
+    "deepseek-v4.1-flash": 1_048_576,
+    "deepseek-v4.1": 1_048_576,
+    "deepseek-v4-pro": 1_048_576,
+    "deepseek-v4-flash": 1_048_576,
     "deep-research-preview-04-2026": 1_048_576,
     "deep-research-max-preview-04-2026": 1_048_576,
     "antigravity-preview-09-2026": 1_048_576,
-    "deepseek-v4.1-flash": 1_000_000,
     "deepseek-chat": 128_000,
     "deepseek-reasoner": 128_000,
     # GLM (Zhipu)
@@ -127,6 +130,8 @@ KNOWN_CONTEXT_WINDOWS: dict[str, int] = {
     "qwen3.6-flash": 1_000_000,
     "qwen3.5-plus": 1_000_000,
     "qwen3.5-flash": 1_000_000,
+    "kimi-k3.1-pro-highspeed": 1_000_000,
+    "kimi-k3.1-pro": 1_000_000,
     "kimi-k3": 1_000_000,
     "kimi-k2.7-code": 262_144,
     "kimi-k2.6": 262_144,
@@ -213,6 +218,7 @@ KNOWN_CONTEXT_WINDOWS: dict[str, int] = {
     "mistral": 32_000,
     "mixtral": 32_000,
     # Gemini
+    "gemini-4-argon": 1_048_576,
     "gemini-3.8-live-extended-thinking": 131_072,
     "gemini-3.8-live": 131_072,
     "gemini-3.8-flash": 1_048_576,
