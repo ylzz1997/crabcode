@@ -50,3 +50,14 @@ test('permission changes refresh status and old Gateways remain explicitly unkno
   assert.equal(update.permissionSummary.inheritedLabel, '暂无法读取');
   assert.equal(update.permissionSummary.effectiveDanger, false);
 });
+
+test('permission summaries accept omitted default fields in generated wire types', async () => {
+  const h = loadPanel(async () => ({ ok: true, json: async () => ({
+    permission_policy: { configured_mode: 'default', effective_mode: 'default' },
+  }) }));
+  await h.panel.runtimeControls.refresh('a');
+  const update = h.messages.filter(m => m.type === 'runtimeControls').at(-1);
+  assert.equal(update.permissionSummary.rules, '规则：允许 0 · 询问 0 · 禁止 0');
+  assert.equal(update.permissionSummary.details, '');
+  assert.equal(update.permissionSummary.effectiveDanger, false);
+});

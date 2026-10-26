@@ -1,18 +1,5 @@
 import { t as tr } from "../../../shared/i18n/index.js";
-export interface PermissionRuleInfo {
-  tool: string;
-  path?: string | null;
-  command?: string | null;
-}
-
-export interface PermissionPolicyInfo {
-  configured_mode: string;
-  effective_mode: string;
-  allow: PermissionRuleInfo[];
-  ask: PermissionRuleInfo[];
-  deny: PermissionRuleInfo[];
-  runtime_allow_count: number;
-}
+import type { PermissionPolicyInfo } from "./types";
 
 export function permissionModeLabel(mode: string | undefined): string {
   const labels: Record<string, string> = {
@@ -45,10 +32,10 @@ export function permissionPolicyText(policy: PermissionPolicyInfo | null | undef
     ai_review: tr("按工具规则执行；未匹配规则的常规操作交由 AI 审查"),
     plan: tr("只允许只读操作，写入操作被禁止"),
   };
-  const rules = tr("规则：允许 {0} · 询问 {1} · 禁止 {2}", { 0: policy.allow.length, 1: policy.ask.length, 2: policy.deny.length });
+  const rules = tr("规则：允许 {0} · 询问 {1} · 禁止 {2}", { 0: policy.allow?.length ?? 0, 1: policy.ask?.length ?? 0, 2: policy.deny?.length ?? 0 });
   const details = (["deny", "allow", "ask"] as const).flatMap((kind) => {
     const label = { deny: tr("禁止"), allow: tr("允许"), ask: tr("询问") }[kind];
-    return policy[kind].map((rule) =>
+    return (policy[kind] ?? []).map((rule) =>
       `${label}：${rule.tool}${rule.path ? tr(" · 路径 {0}", { 0: rule.path }) : ""}${rule.command ? tr(" · 命令 {0}", { 0: rule.command }) : ""}`);
   });
   if (details.length) details.unshift(tr("规则匹配顺序：禁止 → 允许 → 询问"));

@@ -23,6 +23,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SCHEMAS_PATH = ROOT / "packages" / "gateway" / "crabcode_gateway" / "schemas.py"
 OUTPUT_PATH = ROOT / "packages" / "vscode" / "src" / "client" / "types.ts"
+IMPORTED_MODEL_SOURCES = {
+    "crabcode_core.types.config": ROOT / "packages/core/crabcode_core/types/config.py",
+}
 
 # ── Python → TypeScript type mapping ─────────────────────────────
 
@@ -217,6 +220,22 @@ def extract_models(source: str) -> tuple[list[ModelInfo], list[str]]:
                         event_payload_variants = _extract_union_names(node.value)
 
     return models, event_payload_variants
+
+
+def load_schema_models() -> tuple[list[ModelInfo], list[str]]:
+    """Include imported wire models without importing the Gateway's dependencies."""
+    source = SCHEMAS_PATH.read_text(encoding="utf-8")
+    models, variants = extract_models(source)
+    for node in ast.iter_child_nodes(ast.parse(source)):
+        if not isinstance(node, ast.ImportFrom) or node.module not in IMPORTED_MODEL_SOURCES:
+            continue
+        imported, _ = extract_models(IMPORTED_MODEL_SOURCES[node.module].read_text(encoding="utf-8"))
+        names = {alias.name: alias.asname or alias.name for alias in node.names}
+        for model in imported:
+            if model.name in names:
+                model.name = names[model.name]
+                models.append(model)
+    return models, variants
 
 
 def _extract_union_names(subscript: ast.Subscript) -> list[str]:
@@ -432,8 +451,7 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="Check if generated file is up-to-date")
     args = parser.parse_args()
 
-    source = SCHEMAS_PATH.read_text(encoding="utf-8")
-    models, event_payload_variants = extract_models(source)
+    models, event_payload_variants = load_schema_models()
     generated = generate_ts(models, event_payload_variants)
 
     if args.check:

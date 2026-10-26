@@ -21,6 +21,11 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
+if __package__:
+    from . import sync_version
+else:
+    import sync_version
+
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ("darwin-arm64", "darwin-x64", "win32-x64")
 
@@ -52,18 +57,10 @@ def check_extension_assets(source: Path) -> None:
 
 
 def check_versions() -> str:
-    version = re.search(
-        r'^VERSION = "([^"]+)"',
-        (ROOT / "packages/core/crabcode_core/_version.py").read_text(),
-        re.MULTILINE,
-    ).group(1)
-    for relative in (
-        "packages/vscode/package.json",
-        "packages/vscode/computer-use/package.json",
-        "packages/desktop/package.json",
-        "packages/desktop/src-tauri/tauri.conf.json",
-    ):
-        if read_json(ROOT / relative)["version"] != version:
+    version = sync_version.load_version()
+    for path, expected in sync_version.rendered_files(version):
+        if path.read_text(encoding="utf-8") != expected:
+            relative = path.relative_to(sync_version.ROOT)
             raise ValueError(f"Version mismatch: {relative}; expected {version}")
     return version
 
@@ -121,6 +118,8 @@ def copy_extension(source: Path, destination: Path) -> None:
             shutil.copytree(item, destination / name, ignore=shutil.ignore_patterns("computer-use", ".DS_Store", "*.map"))
         elif item.is_file():
             shutil.copy2(item, destination / name)
+    for language_pack in source.glob("package.nls*.json"):
+        shutil.copy2(language_pack, destination / language_pack.name)
     manifest = read_json(source / "package.json")
     # Native payloads have already been built on their respective runners.
     # A prepublish hook in this temporary directory would rebuild/replace them.
@@ -129,12 +128,43 @@ def copy_extension(source: Path, destination: Path) -> None:
     (destination / ".vscodeignore").write_text("**/.DS_Store\n**/*.map\n", encoding="utf-8")
 
 
-def check_vsix(archive_path: Path, bundles: dict[str, Path], version: str, target: str | None = None) -> None:
+def localization_keys(value: object) -> set[str]:
+    """Find VS Code manifest placeholders, including nested contribution arrays."""
+    if isinstance(value, str):
+        match = re.fullmatch(r"%([^%]+)%", value)
+        return {match[1]} if match else set()
+    if isinstance(value, dict):
+        values = value.values()
+    elif isinstance(value, list):
+        values = value
+    else:
+        return set()
+    return {key for item in values for key in localization_keys(item)}
+
+
+def check_vsix(archive_path: Path, bundles: dict[str, Path], version: str, target: str | None = None, *,
+               source: Path | None = None) -> None:
     with zipfile.ZipFile(archive_path) as archive:
         manifest = json.loads(archive.read("extension/package.json"))
         expected_name = "crabcode-computer-use" if bundles else "crabcode"
         if manifest["version"] != version or manifest["name"] != expected_name:
             raise ValueError(f"Incorrect extension identity/version: {archive_path}")
+        keys = localization_keys(manifest)
+        language_packs = {name for name in archive.namelist()
+                          if re.fullmatch(r"extension/package\.nls(?:\.[^/]+)?\.json", name)}
+        if keys and "extension/package.nls.json" not in language_packs:
+            raise ValueError(f"Missing default language pack: {archive_path}")
+        for name in language_packs:
+            translations = json.loads(archive.read(name))
+            missing = [key for key in sorted(keys)
+                       if not isinstance(translations.get(key), str) or not translations[key].strip()]
+            if missing:
+                raise ValueError(f"Unresolved localization keys in {name}: {missing}")
+        if source is not None:
+            for path in source.glob("package.nls*.json"):
+                name = "extension/" + path.name
+                if name not in language_packs or archive.read(name) != path.read_bytes():
+                    raise ValueError(f"Missing or changed language pack: {name}")
         if manifest.get("icon"):
             icon = "extension/" + manifest["icon"]
             check_marketplace_icon(archive.read(icon), f"{archive_path}: {icon}")
@@ -212,7 +242,7 @@ def package_vsix(bundle_root: Path, output: Path, version: str) -> None:
         package = output / f"crabcode-{version}.vsix"
         run("node", str(vsce), "package", "--no-dependencies", *vsce_links(ROOT / "packages/vscode"),
             "--out", str(package), cwd=main)
-        check_vsix(package, {}, version)
+        check_vsix(package, {}, version, source=ROOT / "packages/vscode")
         for target in (*PLATFORMS, "universal"):
             selected = bundles if target == "universal" else {target: bundles[target]}
             extension = staging / target
@@ -223,7 +253,8 @@ def package_vsix(bundle_root: Path, output: Path, version: str) -> None:
             args = [] if target == "universal" else ["--target", target]
             run("node", str(vsce), "package", "--no-dependencies", *args,
                 *vsce_links(ROOT / "packages/vscode/computer-use"), "--out", str(package), cwd=extension)
-            check_vsix(package, selected, version, None if target == "universal" else target)
+            check_vsix(package, selected, version, None if target == "universal" else target,
+                       source=ROOT / "packages/vscode/computer-use")
     write_checksums(output)
 
 

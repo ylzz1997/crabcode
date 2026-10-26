@@ -59,7 +59,7 @@ def render_package_lock(path: Path, version: str) -> str:
     text = replace_once(text, r'^(  "version": ")[^"]+("[ \t]*,[ \t]*)$', version, path)
     return replace_once(
         text,
-        r'^(      "version": ")[^"]+("[ \t]*,[ \t]*\n      "license":)',
+        r'^(    "": \{\n(?:      "name": [^\n]+\n)?      "version": ")[^"]+(")',
         version,
         path,
     )
@@ -77,21 +77,27 @@ def rendered_files(version: str) -> Iterable[tuple[Path, str]]:
     for path, has_core_dependency in pyprojects.items():
         yield path, render_pyproject(path, version, core_dependency=has_core_dependency)
 
-    package_json = ROOT / "packages/vscode/package.json"
-    yield package_json, render_package_json(package_json, version)
+    for relative in ("packages/vscode", "packages/vscode/computer-use", "packages/desktop"):
+        package_json = ROOT / relative / "package.json"
+        yield package_json, render_package_json(package_json, version)
+        package_lock = ROOT / relative / "package-lock.json"
+        yield package_lock, render_package_lock(package_lock, version)
 
-    package_lock = ROOT / "packages/vscode/package-lock.json"
-    yield package_lock, render_package_lock(package_lock, version)
+    config = ROOT / "packages/desktop/src-tauri/tauri.conf.json"
+    yield config, render_package_json(config, version)
 
     # Platform Python wheels bundle this component at the same release version.
-    for crate in ("core", "host"):
-        path = ROOT / f"packages/computer-use/{crate}/Cargo.toml"
-        yield path, replace_once(path.read_text(), r'^(version = ")[^"]+("[ \t]*)$', version, path)
+    for relative in ("packages/computer-use/core", "packages/computer-use/host", "packages/desktop/src-tauri"):
+        path = ROOT / relative / "Cargo.toml"
+        yield path, replace_once(path.read_text(encoding="utf-8"), r'^(version = ")[^"]+("[ \t]*)$', version, path)
     for relative in ("packages/computer-use/Cargo.lock", "packages/desktop/src-tauri/Cargo.lock"):
         path = ROOT / relative
-        text = path.read_text()
-        for crate in ("core", "host"):
-            text = replace_once(text, rf'^(name = "crabcode-computer-use-{crate}"\nversion = ")[^"]+(")$', version, path)
+        text = path.read_text(encoding="utf-8")
+        crates = ["crabcode-computer-use-core", "crabcode-computer-use-host"]
+        if relative == "packages/desktop/src-tauri/Cargo.lock":
+            crates.append("crabcode-desktop")
+        for crate in crates:
+            text = replace_once(text, rf'^(name = "{crate}"\nversion = ")[^"]+(")$', version, path)
         yield path, text
 
 

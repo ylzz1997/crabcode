@@ -71,7 +71,7 @@ export interface SessionRuntimeStatus {
   reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
   ultra_mode?: boolean;
   permission_mode?: string;
-  permission_policy?: import("./permissionPresentation").PermissionPolicyInfo | null;
+  permission_policy?: PermissionPolicyInfo | null;
   context_used_tokens?: number;
   context_window_tokens?: number;
   context_remaining_tokens?: number;
@@ -182,6 +182,13 @@ export interface SessionMessagePayload {
   api_error?: string | null;
   request_id?: string | null;
   turn_details?: TurnDetails | null;
+}
+
+/** A single permission rule for tool access control. */
+export interface PermissionRule {
+  tool: string;
+  path?: string | null;
+  command?: string | null;
 }
 
 
@@ -635,6 +642,16 @@ export interface WorkspaceInfo {
   documents_dir?: string;
 }
 
+/** Loaded permission policy, independent of the client's inheritance choice. */
+export interface PermissionPolicyInfo {
+  configured_mode: string;
+  effective_mode: string;
+  allow?: PermissionRule[];
+  ask?: PermissionRule[];
+  deny?: PermissionRule[];
+  runtime_allow_count?: number;
+}
+
 export interface GoalInfo {
   objective: string;
   status: "active" | "paused" | "complete" | "blocked";
@@ -873,8 +890,8 @@ export interface ModelSettingsResponse {
 
 /** Effective runtime and extra-tool settings visible from a workspace. */
 export interface RuntimeSettingsResponse {
-  permission_policy?: import("./permissionPresentation").PermissionPolicyInfo | null;
   cwd: string;
+  permission_policy?: PermissionPolicyInfo | null;
   snapshot_enabled?: boolean;
   snapshot_max_size_mb?: number;
   auto_compact_enabled?: boolean;

@@ -31,6 +31,7 @@ jobs:
         run: |
           python scripts/sync_version.py --check
           python scripts/package_clients.py check
+          python packages/vscode/scripts/gen-types.py --check
       - run: npm ci
         working-directory: packages/vscode
       - run: npm run lint
