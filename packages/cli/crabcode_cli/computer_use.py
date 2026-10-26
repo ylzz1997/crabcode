@@ -250,12 +250,20 @@ async def connect_session(session: Any) -> LocalComputerUse | None:
     backend = LocalComputerUse()
     if not backend.client.installed and backend.client.bundle is None:
         return None
+    session._computer_use_connecting = True
     try:
         await backend.connect()
     except ComputerUseError as exc:
         logger.warning("Computer Use unavailable: %s", exc)
         await backend.close()
         return None
+    except BaseException:
+        # REPL shutdown may cancel an in-flight bootstrap. Do not leave a
+        # heartbeat or partially connected backend behind.
+        await backend.close()
+        raise
+    finally:
+        session._computer_use_connecting = False
     session.computer_use_backend = backend
     session.computer_use_host_id = backend.host_id
     session.computer_use_enabled = True
@@ -267,6 +275,8 @@ def session_status(session: Any) -> str:
     backend = getattr(session, "computer_use_backend", None)
     host_id = getattr(session, "computer_use_host_id", None)
     if backend is None:
+        if getattr(session, "_computer_use_connecting", False):
+            return "starting"
         client = NativeClient()
         return "unavailable (run crabcode computer-use status)" if client.installed or client.bundle else "not installed"
     if not getattr(session, "computer_use_enabled", False):

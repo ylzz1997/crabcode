@@ -2236,10 +2236,21 @@ async def run_repl(
     session.on_tool_event = _on_tool_event
 
     computer_use = None
+    computer_use_task: asyncio.Task[None] | None = None
     try:
         from crabcode_cli.computer_use import connect_session
 
-        computer_use = await connect_session(session)
+        async def connect_computer_use() -> None:
+            nonlocal computer_use
+            try:
+                computer_use = await connect_session(session)
+            except Exception:
+                logger.exception("Failed to connect optional Computer Use component")
+
+        # The optional native host can take tens of seconds to install, start,
+        # or time out. Keep input and normal chat available while it connects;
+        # ComputerUseTool reads the session's backend dynamically.
+        computer_use_task = asyncio.create_task(connect_computer_use())
         if resume_session_id:
             await session.initialize()
             ok = await session.resume(resume_session_id)
@@ -2756,6 +2767,10 @@ async def run_repl(
             console.print()
     finally:
         with _shutdown_deadline():
+            if computer_use_task is not None:
+                computer_use_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await computer_use_task
             if background_consumer is not None:
                 background_consumer.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

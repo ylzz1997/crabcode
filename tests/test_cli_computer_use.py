@@ -230,6 +230,8 @@ def test_repl_automatically_binds_and_cleans_up_on_eof(tmp_path, monkeypatch):
 
             async def next_event():
                 nonlocal requested_status
+                while not session.computer_use_enabled:
+                    await asyncio.sleep(0)
                 assert session.computer_use_enabled
                 assert session.computer_use_backend.is_available(session.computer_use_host_id)
                 if not requested_status:
@@ -247,6 +249,99 @@ def test_repl_automatically_binds_and_cleans_up_on_eof(tmp_path, monkeypatch):
             assert messages[-1]["method"] == "release"
             assert messages[-1]["params"]["allAgents"] is True
             composer.close.assert_awaited_once()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("outcome", ["ready", "cancelled", "failed"])
+def test_repl_accepts_chat_while_native_startup_is_pending(tmp_path, monkeypatch, outcome):
+    from io import StringIO
+    from prompt_toolkit.application.current import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from rich.console import Console
+    from crabcode_cli import repl
+    from crabcode_core.events import CoreSession
+    from crabcode_core.types.event import TurnCompleteEvent
+
+    async def scenario():
+        async with executor(tmp_path) as (client, messages):
+            started = asyncio.Event()
+            finish_startup = asyncio.Event()
+            startup_finished = asyncio.Event()
+
+            async def slow_start():
+                started.set()
+                try:
+                    await finish_startup.wait()
+                    if outcome == "failed":
+                        raise cu.ComputerUseError("startup failed")
+                finally:
+                    startup_finished.set()
+
+            client.start = slow_start
+            monkeypatch.setattr(cu, "NativeClient", lambda: client)
+            session = CoreSession(cwd=str(tmp_path))
+            completed = []
+
+            async def send_message(text, **kwargs):
+                completed.append(text)
+                yield TurnCompleteEvent()
+
+            session.send_message = send_message
+            monkeypatch.setattr(repl, "CoreSession", lambda **kwargs: session)
+            output = StringIO()
+            monkeypatch.setattr(repl, "console", Console(file=output, width=160))
+            composers = []
+            make_composer = repl._PersistentComposer
+
+            def composer(*args):
+                result = make_composer(*args)
+                composers.append(result)
+                return result
+
+            monkeypatch.setattr(repl, "_PersistentComposer", composer)
+
+            async def wait_for(predicate):
+                async def poll():
+                    while not predicate():
+                        await asyncio.sleep(0.01)
+                await asyncio.wait_for(poll(), 3)
+
+            with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+                task = asyncio.create_task(repl.run_repl(cwd=str(tmp_path)))
+                try:
+                    await wait_for(lambda: started.is_set() and composers
+                                   and composers[0].prompt_session.app.is_running)
+                    assert cu.session_status(session) == "starting"
+                    pipe.send_text("hello\r")
+                    await wait_for(lambda: completed == ["hello"] and not composers[0]._busy)
+                    assert not startup_finished.is_set()
+                    pipe.send_text("/status\r")
+                    await wait_for(lambda: "Computer Use: starting" in output.getvalue())
+                    if outcome != "cancelled":
+                        finish_startup.set()
+                        await wait_for(lambda: not session._computer_use_connecting)
+                        if outcome == "ready":
+                            assert session.computer_use_enabled
+                            assert cu.session_status(session).startswith("ready")
+                        else:
+                            assert not session.computer_use_enabled
+                            assert cu.session_status(session).startswith("unavailable")
+                    pipe.send_text("\x04")
+                    await asyncio.wait_for(task, 3)
+                finally:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            assert startup_finished.is_set()
+            assert not session._computer_use_connecting
+            if outcome == "ready":
+                assert session.computer_use_backend._heartbeat is None
+                assert not session.computer_use_backend.is_available(session.computer_use_host_id)
+                assert messages[-1]["method"] == "release"
+            else:
+                assert session.computer_use_backend is None
+                assert messages == []
     asyncio.run(scenario())
 
 

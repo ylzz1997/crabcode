@@ -63,8 +63,13 @@ class ComposerTests(unittest.IsolatedAsyncioTestCase):
             top = next(i for i, row in enumerate(rows) if "CrabCode" in row)
             bottom = next(i for i, row in enumerate(rows) if "Enter sends" in row)
             self.assertEqual(bottom - top, 2)
+            self.assertTrue(rows[top].startswith("╭─"))
+            self.assertTrue(rows[top].endswith("╮"))
             self.assertTrue(rows[top + 1].startswith("│"))
             self.assertTrue(rows[top + 1].endswith("│"))
+            self.assertTrue(rows[bottom].startswith("╰─"))
+            self.assertTrue(rows[bottom].endswith("╯"))
+            self.assertEqual(rows[bottom + 1].strip(), "")
             self.assertIn("● Ready", rows[top - 1])
 
     async def test_second_ctrl_c_exits_without_waiting_for_input_consumer(self):
@@ -243,6 +248,17 @@ class ComposerTests(unittest.IsolatedAsyncioTestCase):
             output.size = Size(rows=24, columns=40)
             composer.prompt_session.app._on_resize()
             await self.wait_for(lambda: window.render_info.window_height == 4)
+            screen = composer.prompt_session.app.renderer._last_screen
+            rows = [
+                "".join(screen.data_buffer[y][x].char for x in range(40))
+                for y in range(screen.height)
+            ]
+            top = next(i for i, row in enumerate(rows) if "CrabCode" in row)
+            self.assertTrue(rows[top].endswith("╮"))
+            self.assertTrue(rows[top + 5].endswith("╯"))
+            for row in rows[top + 1:top + 5]:
+                self.assertTrue(row.startswith("│"), row)
+                self.assertTrue(row.endswith("│"), row)
             self.assertTrue(composer._events.empty())
 
     async def test_enter_accepts_history_search_without_submitting(self):
