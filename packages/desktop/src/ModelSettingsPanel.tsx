@@ -11,6 +11,7 @@ import {
   Pencil,
   Layers3,
   LoaderCircle,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { GroupModelDiscovery } from "./GroupModelDiscovery";
+import { ReviewMenu } from "./ReviewMenu";
 import type {
   ConnectionPreset,
   GatewayViewState,
@@ -687,9 +689,24 @@ export function ModelSettingsPanel({
                       </button>
                       {canEdit && group.name !== null && (
                         <span className="model-group-actions">
-                          {onDiscover && Object.hasOwn(data.groups, group.name) && <button className="icon-button small" type="button" aria-label={tr("获取 {0} 的模型列表", { 0: group.name })} title={tr("获取模型列表")} disabled={mutationBusy || sourceOptions.some(item => item.id === source && !item.writable)} onClick={() => setDiscovery({ group: group.name!, source, context: discoveryContext })}><Download /></button>}
-                          <button className="icon-button small" type="button" aria-label={tr("编辑配置组 {0}", { 0: group.name })} title={tr("编辑配置组")} disabled={mutationBusy} onClick={() => setEditor({ kind: "group", name: group.name!, originalName: group.name!, config: group.config, source: sourceForGroup(group.name!) })}><Pencil /></button>
-                          <button className="icon-button small danger-icon-button" type="button" aria-label={tr("删除配置组 {0}", { 0: group.name })} title={tr("删除配置组")} disabled={mutationBusy} onClick={() => setDeleteTarget({ kind: "group", name: group.name!, source: sourceForGroup(group.name!) })}><Trash2 /></button>
+                          <ReviewMenu key={`${discoveryContext}:${source}:${getLocale()}`} label={null}
+                            ariaLabel={tr("{0} 更多操作", { 0: group.name })} width={200} align="end"
+                            triggerClassName="model-group-menu-trigger" triggerIcon={<MoreHorizontal aria-hidden="true" />}
+                            disabled={mutationBusy}>
+                            {(close) => <>
+                              {onDiscover && Object.hasOwn(data.groups, group.name!) && <button className="model-group-menu-item" type="button" role="menuitem" data-menu-option
+                                aria-label={tr("获取 {0} 的模型列表", { 0: group.name! })}
+                                disabled={sourceOptions.some(item => item.id === source && !item.writable)}
+                                onClick={() => { close(); setDiscovery({ group: group.name!, source, context: discoveryContext }); }}><Download /><span>{tr("获取模型列表")}</span></button>}
+                              <button className="model-group-menu-item" type="button" role="menuitem" data-menu-option
+                                aria-label={tr("编辑配置组 {0}", { 0: group.name! })}
+                                onClick={() => { close(); setEditor({ kind: "group", name: group.name!, originalName: group.name!, config: group.config, source: sourceForGroup(group.name!) }); }}><Pencil /><span>{tr("编辑配置组")}</span></button>
+                              <hr role="separator" />
+                              <button className="model-group-menu-item danger" type="button" role="menuitem" data-menu-option
+                                aria-label={tr("删除配置组 {0}", { 0: group.name! })}
+                                onClick={() => { close(); setDeleteTarget({ kind: "group", name: group.name!, source: sourceForGroup(group.name!) }); }}><Trash2 /><span>{tr("删除配置组")}</span></button>
+                            </>}
+                          </ReviewMenu>
                         </span>
                       )}
                     </div>

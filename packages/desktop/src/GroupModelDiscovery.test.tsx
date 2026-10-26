@@ -23,7 +23,8 @@ it("opens discovery on the group and only imports selected new model IDs", async
   const click = async (text: string) => act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!.click());
   try {
     await act(async () => root.render(<ModelSettingsPanel {...props} />));
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="获取 shared 的模型列表"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="shared 更多操作"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="获取 shared 的模型列表"]')!.click());
     expect(onDiscover).toHaveBeenCalledWith("shared");
     expect(container.querySelector<HTMLInputElement>('[aria-label="old"]')!.disabled).toBe(true);
     expect(onMutate).not.toHaveBeenCalled();
@@ -50,7 +51,8 @@ it("closes discovery and discards pending results when the connection changes", 
   const props = { activeConnection: null, activeProject: null, gateway: { status: "online" } as GatewayViewState, data: { ...data, models: [] }, loading: false, error: null, onRefresh: () => {}, onMutate: vi.fn(async () => {}), onDiscover };
   try {
     await act(async () => root.render(<ModelSettingsPanel {...props} />));
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="获取 shared 的模型列表"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="shared 更多操作"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="获取 shared 的模型列表"]')!.click());
     expect(container.textContent).toContain("正在获取模型列表");
     await act(async () => root.render(<ModelSettingsPanel {...props} activeConnection={{ id: "other" } as ConnectionPreset} />));
     await act(async () => finish({ group: "shared", models: [{ id: "stale" }] }));

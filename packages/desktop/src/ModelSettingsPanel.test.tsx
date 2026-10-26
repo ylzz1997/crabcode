@@ -70,7 +70,8 @@ it("deletes a group from the layer that defines it", async () => {
   data.editable_sources!.push({ id: "projectSettings", label: "项目配置", path: "/project/.crabcode/settings.json", exists: true, writable: true });
   try {
     await act(async () => root.render(<ModelSettingsPanel activeConnection={null} activeProject={null} gateway={{ status: "online" } as GatewayViewState} data={data} loading={false} error={null} onRefresh={() => {}} onMutate={onMutate} />));
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="删除配置组 shared"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="shared 更多操作"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="删除配置组 shared"]')!.click());
     expect(container.querySelector('[role="dialog"][aria-label="删除配置组"]')?.textContent).toContain("项目配置");
     await act(async () => Array.from(container.querySelectorAll<HTMLButtonElement>('.model-delete-dialog button')).find(button => button.textContent?.includes("确认删除"))!.click());
     expect(onMutate).toHaveBeenCalledWith({ action: "delete_group", source: "projectSettings", cwd: undefined, name: "shared" });

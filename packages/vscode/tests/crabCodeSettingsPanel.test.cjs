@@ -6,6 +6,7 @@ test("group discovery previews, filters and imports into the captured settings l
   const h = harness({ section: "models" });
   h.state.models.models[0].group = "shared";
   await h.settle();
+  h.doc.querySelector('[aria-label="shared 更多操作"]').click();
   h.click("获取模型列表");
   await h.settle();
   const fetch = h.requests.find(item => item.url.includes("discover-models"));
@@ -41,6 +42,7 @@ test("group discovery reports errors and never applies results after a connectio
   const h = harness({ section: "models" });
   await h.settle();
   h.fail({ message: "HTTP 401：认证失败" });
+  h.doc.querySelector('[aria-label="shared 更多操作"]').click();
   h.click("获取模型列表");
   await h.settle();
   assert.match(h.doc.querySelector('.model-discovery [role="alert"]').textContent, /HTTP 401/);

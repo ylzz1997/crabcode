@@ -9455,7 +9455,6 @@ html[data-theme="light"] .document-actions-separator {
   padding: 0 6px 0 0;
 }
 
-.model-group-actions .icon-button,
 .model-detail-actions .icon-button {
   width: 25px;
   height: 25px;
@@ -9463,10 +9462,37 @@ html[data-theme="light"] .document-actions-separator {
   padding: 0;
 }
 
-.model-group-actions svg,
 .model-detail-actions svg {
   width: 12px;
   height: 12px;
+}
+
+.model-group-actions {
+  flex: none;
+}
+
+.model-group-actions .model-group-menu-trigger {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.model-group-menu-trigger svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.change-review-turn-menu .model-group-menu-item {
+  justify-content: flex-start;
+  gap: 9px;
+  color: var(--text);
+}
+
+.change-review-turn-menu .model-group-menu-item.danger:not(:disabled) {
+  color: var(--red);
 }
 
 .model-settings-group-toggle {

@@ -48,6 +48,7 @@ const promptDrafts = new Map<
 >();
 let userPromptDraft = "";
 const sources: Partial<Record<Resource, string>> = {};
+let closeGroupMenu: ((restoreFocus?: boolean) => void) | undefined;
 const PATHS: Record<string, string> = {
   settings:
     "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M9 3l-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 2 3-1 1-3 3-1 1-3-2-2 1-3-3-2-3 1z",
@@ -58,6 +59,10 @@ const PATHS: Record<string, string> = {
   chart: "M4 3v17h17M8 16v-5m5 5V7m5 9V4",
   search: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14m5 12 6 6",
   arrow: "M7 17 17 7M7 7h10v10",
+  more: "M6 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0M20 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0",
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  pencil: "m16 3 5 5M3 21l5-1L21 7a2 2 0 0 0-5-5L3 16z",
+  trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
 };
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -123,6 +128,101 @@ function button(
       });
   });
   return node;
+}
+function groupActionsMenu(name: string, disabled: boolean, items: {
+  label: string;
+  ariaLabel: string;
+  icon: string;
+  action: () => unknown | Promise<unknown>;
+  danger?: boolean;
+}[]): HTMLButtonElement {
+  const trigger = el("button", "group-actions-trigger");
+  trigger.type = "button";
+  trigger.disabled = disabled;
+  trigger.title = tr("更多操作");
+  trigger.setAttribute("aria-label", tr("{0} 更多操作", { 0: name }));
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.append(icon("more"));
+  const open = (last = false) => {
+    if (trigger.disabled) return;
+    closeGroupMenu?.();
+    const menu = el("div", "group-actions-menu");
+    menu.id = "model-group-actions-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", trigger.getAttribute("aria-label")!);
+    const close = (restoreFocus = false) => {
+      menu.remove();
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.removeAttribute("aria-controls");
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("focusin", outside);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", place);
+      if (closeGroupMenu === close) closeGroupMenu = undefined;
+      if (restoreFocus && trigger.isConnected) trigger.focus({ preventScroll: true });
+    };
+    const outside = (event: Event) => {
+      if (!menu.contains(event.target as Node) && !trigger.contains(event.target as Node)) close();
+    };
+    const place = () => {
+      const anchor = trigger.getBoundingClientRect();
+      if (!trigger.isConnected || anchor.bottom < 0 || anchor.top > window.innerHeight) { close(); return; }
+      menu.style.left = `${Math.max(8, Math.min(anchor.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
+      menu.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - menu.offsetHeight - 8))}px`;
+    };
+    const onScroll = (event: Event) => { if (!menu.contains(event.target as Node)) place(); };
+    for (const item of items) {
+      if (item.danger) {
+        const separator = el("hr");
+        separator.setAttribute("role", "separator");
+        menu.append(separator);
+      }
+      const option = button(item.label, async () => {
+        close(true);
+        trigger.disabled = true;
+        try { await item.action(); }
+        finally { trigger.disabled = disabled; }
+      }, `group-action-menu-item${item.danger ? " danger" : ""}`);
+      option.prepend(icon(item.icon));
+      option.setAttribute("role", "menuitem");
+      option.setAttribute("aria-label", item.ariaLabel);
+      menu.append(option);
+    }
+    const options = [...menu.querySelectorAll<HTMLButtonElement>("button")];
+    menu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); close(true); }
+      else if (event.key === "Tab") close(true);
+      else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const index = options.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+        options[next]?.focus();
+      }
+    });
+    document.body.append(menu);
+    place();
+    trigger.setAttribute("aria-expanded", "true");
+    trigger.setAttribute("aria-controls", menu.id);
+    closeGroupMenu = close;
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("focusin", outside);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", place);
+    options[last ? options.length - 1 : 0]?.focus({ preventScroll: true });
+  };
+  trigger.addEventListener("click", () => {
+    if (trigger.getAttribute("aria-expanded") === "true") closeGroupMenu?.(true);
+    else open();
+  });
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      open(event.key === "ArrowUp");
+    }
+  });
+  return trigger;
 }
 function select(
   options: readonly (readonly [string, string])[],
@@ -260,6 +360,7 @@ function acceptSnapshot(next: SettingsSnapshot): void {
   const changed = snapshot && next.generation !== snapshot.generation;
   const languageChanged = next.locale && next.locale !== getLocale();
   snapshot = next;
+  if (changed || languageChanged) closeGroupMenu?.();
   if (languageChanged) {
     setLocale(next.locale!);
     document.documentElement.lang = getLocale();
@@ -326,6 +427,7 @@ function resourceFor(section: Section): Resource | undefined {
       : section;
 }
 async function navigate(section: Section): Promise<void> {
+  closeGroupMenu?.();
   if (!SECTIONS.some((item) => item.id === section)) section = "general";
   active = section;
   refreshSectionLanguage(section);
@@ -1293,6 +1395,7 @@ function withoutRedacted(value: unknown): unknown {
   return value;
 }
 function renderModels(): void {
+  closeGroupMenu?.();
   const page = panelFor("models");
   page.replaceChildren();
   localRows(page, "models");
@@ -1407,21 +1510,14 @@ function renderModels(): void {
   );
   const groups = group(page, tr("配置组"));
   for (const [name, config] of Object.entries(state.groups ?? {})) {
-    const controls = actions(
-      button(tr("获取模型列表"), () => groupModelDiscovery(name), "text-button"),
-      button(tr("编辑"), () => modelEditor("group", name, config), "text-button"),
-      button(
-        tr("删除"),
-        () => removeModel("group", name, state.group_sources?.[name] ?? []),
-        "text-button danger",
-      ),
-    );
-    controls.querySelectorAll("button").forEach((node) => {
-      node.disabled = !canEdit;
-    });
-    groups.append(
-      row(name, tr("{0} 个共享参数", { 0: Object.keys(config).length }), controls),
-    );
+    const controls = groupActionsMenu(name, !canEdit, [
+      { label: tr("获取模型列表"), ariaLabel: tr("获取 {0} 的模型列表", { 0: name }), icon: "download", action: () => groupModelDiscovery(name) },
+      { label: tr("编辑配置组"), ariaLabel: tr("编辑配置组 {0}", { 0: name }), icon: "pencil", action: () => modelEditor("group", name, config) },
+      { label: tr("删除配置组"), ariaLabel: tr("删除配置组 {0}", { 0: name }), icon: "trash", action: () => removeModel("group", name, state.group_sources?.[name] ?? []), danger: true },
+    ]);
+    const groupRow = row(name, tr("{0} 个共享参数", { 0: Object.keys(config).length }), controls);
+    groupRow.classList.add("model-group-row");
+    groups.append(groupRow);
   }
   if (!Object.keys(state.groups ?? {}).length)
     groups.append(el("p", "empty", tr("配置组可以让多个模型共享连接与参数。")));

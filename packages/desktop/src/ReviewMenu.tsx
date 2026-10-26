@@ -2,10 +2,11 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 
-export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, role = "menu", triggerIcon, triggerClassName = "", animated = false, children }: {
+export function ReviewMenu({ label, ariaLabel, width = 220, align = "start", disabled = false, role = "menu", triggerIcon, triggerClassName = "", animated = false, children }: {
   label: ReactNode;
   ariaLabel: string;
   width?: number;
+  align?: "start" | "end";
   disabled?: boolean;
   role?: "menu" | "dialog";
   triggerIcon?: ReactNode;
@@ -40,9 +41,10 @@ export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, ro
       const anchor = triggerRef.current?.getBoundingClientRect();
       const menu = menuRef.current;
       if (anchor && menu) {
+        const menuWidth = Math.min(width, window.innerWidth - 16);
         const next = {
           top: Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - menu.offsetHeight - 8)),
-          left: Math.max(8, Math.min(anchor.left, window.innerWidth - Math.min(width, window.innerWidth - 16) - 8)),
+          left: Math.max(8, Math.min(align === "end" ? anchor.right - menuWidth : anchor.left, window.innerWidth - menuWidth - 8)),
         };
         setPosition((current) => current.top === next.top && current.left === next.left ? current : next);
       }
@@ -52,7 +54,7 @@ export function ReviewMenu({ label, ariaLabel, width = 220, disabled = false, ro
     (menuRef.current?.querySelector<HTMLElement>('[aria-checked="true"]:not(:disabled), [aria-pressed="true"]:not(:disabled)')
       ?? menuRef.current?.querySelector<HTMLElement>('button:not(:disabled), input'))?.focus();
     return () => cancelAnimationFrame(frame);
-  }, [open, width]);
+  }, [open, width, align]);
 
   useEffect(() => {
     if (!open) return;
