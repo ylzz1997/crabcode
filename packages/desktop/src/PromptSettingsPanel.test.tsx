@@ -318,16 +318,18 @@ describe("PromptSettingsPanel", () => {
     });
 
     const input = container.querySelector<HTMLInputElement>('[aria-label="导入提示词模版 JSON"]')!;
-    const choose = async (contents: string, filename: string) => {
+    const choose = async (contents: string, filename: string, templateCount: number) => {
       const file = new File([contents], filename, { type: "application/json" });
+      const expectedCalls = onMutate.mock.calls.length + templateCount;
       await act(async () => {
         Object.defineProperty(input, "files", { configurable: true, value: [file] });
         input.dispatchEvent(new Event("change", { bubbles: true }));
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        // FileReader may need multiple event-loop turns before the templates are saved.
+        await vi.waitFor(() => expect(onMutate).toHaveBeenCalledTimes(expectedCalls));
       });
     };
 
-    await choose(JSON.stringify({ name: "值班", sections: { intro: "先结论", extra: "  " } }), "值班.json");
+    await choose(JSON.stringify({ name: "值班", sections: { intro: "先结论", extra: "  " } }), "值班.json", 1);
     expect(onMutate).toHaveBeenLastCalledWith(expect.objectContaining({
       action: "save_template",
       source: "userSettings",
@@ -342,7 +344,7 @@ describe("PromptSettingsPanel", () => {
         { id: "care", name: "客服", sections: { intro: "更新" } },
         { name: "夜班", sections: { system: "简短" } },
       ],
-    }), "prompt-templates.json");
+    }), "prompt-templates.json", 2);
     expect(onMutate).toHaveBeenCalledWith(expect.objectContaining({
       action: "save_template",
       template_id: "care",
