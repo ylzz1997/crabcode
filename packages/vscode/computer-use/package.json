@@ -3,7 +3,7 @@
   "displayName": "CrabCode Computer Use",
   "description": "%description%",
   "publisher": "crabcode",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "repository": {
     "type": "git",
