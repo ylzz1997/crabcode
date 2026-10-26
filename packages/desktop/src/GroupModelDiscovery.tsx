@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { t as tr } from "./i18n";
-import type { ModelDiscoveryResponse } from "./types";
+import type { DiscoveredModelSettings, ModelDiscoveryResponse } from "./types";
 
 export function GroupModelDiscovery({ group, sourceLabel, existingIds, onDiscover, onImport, onClose }: {
   group: string;
   sourceLabel: string;
   existingIds: Set<string>;
   onDiscover: (group: string) => Promise<ModelDiscoveryResponse>;
-  onImport: (ids: string[]) => Promise<void>;
+  onImport: (ids: string[], metadata: Record<string, DiscoveredModelSettings>) => Promise<void>;
   onClose: () => void;
 }) {
   const [models, setModels] = useState<ModelDiscoveryResponse["models"] | null>(null);
@@ -46,7 +46,10 @@ export function GroupModelDiscovery({ group, sourceLabel, existingIds, onDiscove
     setSaving(true);
     setError(null);
     try {
-      await onImport(selectedIds);
+      const metadata = Object.fromEntries((models ?? [])
+        .filter(model => selectedIds.includes(model.id) && model.config)
+        .map(model => [model.id, model.config!]));
+      await onImport(selectedIds, metadata);
       onClose();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -66,6 +69,7 @@ export function GroupModelDiscovery({ group, sourceLabel, existingIds, onDiscove
       </header>
       <div className="model-editor-body">
         <p className="model-discovery-description">{tr("选择要加入配置组的模型，已有模型会保留原配置。")}</p>
+        <p className="model-discovery-description">{tr("导入时自动填写接口提供的上下文、输出和思考设置；未提供的字段沿用现有配置。")}</p>
         <div className="model-discovery-toolbar">
           <input type="search" aria-label={tr("搜索模型")} placeholder={tr("搜索模型")} value={query} onChange={event => setQuery(event.target.value)} disabled={saving} autoFocus />
           <button type="button" className="settings-command" disabled={loading || saving} onClick={() => void refresh()}><RefreshCw />{tr("刷新")}</button>
@@ -95,7 +99,13 @@ export function GroupModelDiscovery({ group, sourceLabel, existingIds, onDiscove
                   return next;
                 });
               }} />
-              <span><strong>{model.id}</strong>{model.name && model.name !== model.id && <small>{model.name}</small>}</span>
+              <span><strong>{model.id}</strong>{model.name && model.name !== model.id && <small>{model.name}</small>}
+                {model.config && <small>{[
+                  model.config.context_window != null && `${tr("上下文窗口")}: ${model.config.context_window}`,
+                  model.config.max_tokens != null && `${tr("最大输出 Token")}: ${model.config.max_tokens}`,
+                  model.config.thinking_enabled != null && `${tr("思考")}: ${model.config.thinking_enabled ? tr("开启") : tr("关闭")}`,
+                ].filter(Boolean).join(" · ")}</small>}
+              </span>
               {existingIds.has(model.id) && <small>{tr("已添加")}</small>}
             </label>)}
             {!visible.length && <p className="settings-list-empty">{models.length ? tr("没有匹配的模型") : tr("接口未返回可用模型")}</p>}

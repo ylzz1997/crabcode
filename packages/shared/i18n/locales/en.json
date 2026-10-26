@@ -1134,6 +1134,7 @@
   "导入将刷新模板列表，放弃未保存的修改？": "Will importing refresh the template list and discard unsaved modifications?",
   "导入提示词模板": "import prompttemplate",
   "导入提示词模版 JSON": "import prompttemplate JSON",
+  "导入时自动填写接口提供的上下文、输出和思考设置；未提供的字段沿用现有配置。": "Import automatically fills context, output, and thinking settings supplied by the API. Missing fields keep the existing settings.",
   "导入模板": "Import template",
   "导出 Core Dump": "Export Core Dump",
   "导出 JSON": "Export JSON",

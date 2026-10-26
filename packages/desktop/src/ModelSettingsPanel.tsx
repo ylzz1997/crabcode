@@ -807,7 +807,7 @@ export function ModelSettingsPanel({
           sourceLabel={sourceOptions.find(item => item.id === discovery.source)?.label ?? discovery.source}
           existingIds={new Set(data.models.filter(model => model.group === discovery.group).map(model => String(model.effective.model ?? "")))}
           onDiscover={onDiscover}
-          onImport={model_ids => mutate({ action: "import_group_models", name: discovery.group, source: discovery.source, cwd: activeProject?.path, model_ids })}
+          onImport={(model_ids, model_metadata) => mutate({ action: "import_group_models", name: discovery.group, source: discovery.source, cwd: activeProject?.path, model_ids, model_metadata })}
           onClose={() => setDiscovery(null)}
         />
       )}

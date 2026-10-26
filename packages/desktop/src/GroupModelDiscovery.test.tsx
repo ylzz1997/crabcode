@@ -12,12 +12,13 @@ const data: ModelSettingsResponse = {
   editable_sources: [{ id: "userSettings", label: "用户配置", path: "/user/settings.json", exists: true, writable: true }],
 };
 
-it("opens discovery on the group and only imports selected new model IDs", async () => {
+it("previews discovered settings and imports metadata only for selected new models", async () => {
   (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  const onDiscover = vi.fn(async () => ({ group: "shared", models: [{ id: "old" }, { id: "org/new" }, { id: "other" }] }));
+  const config = { context_window: 131072, max_tokens: 8192, thinking_enabled: false };
+  const onDiscover = vi.fn(async () => ({ group: "shared", models: [{ id: "old", config }, { id: "org/new", config }, { id: "other", config }] }));
   const onMutate = vi.fn().mockRejectedValueOnce(new Error("write failed")).mockResolvedValue(undefined);
   const props = { activeConnection: null, activeProject: null, gateway: { status: "online" } as GatewayViewState, data, loading: false, error: null, onRefresh: () => {}, onMutate, onDiscover };
   const click = async (text: string) => act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!.click());
@@ -28,12 +29,15 @@ it("opens discovery on the group and only imports selected new model IDs", async
     expect(onDiscover).toHaveBeenCalledWith("shared");
     expect(container.querySelector<HTMLInputElement>('[aria-label="old"]')!.disabled).toBe(true);
     expect(onMutate).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("上下文窗口: 131072");
+    expect(container.textContent).toContain("最大输出 Token: 8192");
+    expect(container.textContent).toContain("思考: 关闭");
     await act(async () => container.querySelector<HTMLInputElement>('[aria-label="org/new"]')!.click());
     await click("添加所选模型");
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("write failed");
     expect(container.querySelector<HTMLInputElement>('[aria-label="org/new"]')!.checked).toBe(true);
     await click("添加所选模型");
-    expect(onMutate).toHaveBeenLastCalledWith({ action: "import_group_models", name: "shared", source: "userSettings", cwd: undefined, model_ids: ["org/new"] });
+    expect(onMutate).toHaveBeenLastCalledWith({ action: "import_group_models", name: "shared", source: "userSettings", cwd: undefined, model_ids: ["org/new"], model_metadata: { "org/new": config } });
     expect(container.querySelector('[role="dialog"]')).toBeNull();
   } finally {
     await act(async () => root.unmount());

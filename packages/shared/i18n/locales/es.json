@@ -1134,6 +1134,7 @@
   "导入将刷新模板列表，放弃未保存的修改？": "¿La importación actualizará la lista de plantillas y descartará las modificaciones no guardadas?",
   "导入提示词模板": "importar plantilla de solicitud",
   "导入提示词模版 JSON": "importar plantilla de solicitud JSON",
+  "导入时自动填写接口提供的上下文、输出和思考设置；未提供的字段沿用现有配置。": "Al importar, se completan automáticamente los ajustes de contexto, salida y razonamiento proporcionados por la API. Los campos ausentes conservan los ajustes existentes.",
   "导入模板": "Importar plantilla",
   "导出 Core Dump": "Exportar volcado de núcleo",
   "导出 JSON": "Exportar JSON",

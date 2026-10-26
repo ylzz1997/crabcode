@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 from collections.abc import Mapping
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -16,6 +17,63 @@ from crabcode_core.types.config import ApiConfig
 
 class ModelDiscoveryError(ValueError):
     """A safe, user-facing discovery error (never a raw provider response)."""
+
+
+def _token_limit(*values: Any) -> int | None:
+    # Metadata is optional: ignore malformed values without losing the catalog.
+    limits = [value for value in values if type(value) is int and 0 < value <= 2_147_483_647]
+    return min(limits) if limits else None
+
+
+def _model_metadata(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize explicit limits; never guess capabilities from a model name."""
+    # https://platform.claude.com/docs/en/api/models/list
+    # https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties
+    top = entry.get("top_provider")
+    top = top if isinstance(top, dict) else {}
+    result: dict[str, Any] = {}
+    context = _token_limit(*(entry.get(key) for key in (
+        "context_length", "context_window", "max_context_length", "max_model_len", "max_input_tokens",
+    )), top.get("context_length"))
+    output = _token_limit(*(entry.get(key) for key in (
+        "max_output_tokens", "max_completion_tokens", "max_tokens",
+    )), top.get("max_completion_tokens"))
+    if context is not None:
+        result["context_window"] = context
+    if output is not None:
+        result["max_tokens"] = output
+    capabilities = entry.get("capabilities")
+    thinking = capabilities.get("thinking") if isinstance(capabilities, dict) else None
+    supported = thinking.get("supported") if isinstance(thinking, dict) else None
+    if type(supported) is bool:
+        result["thinking_enabled"] = supported
+    return result
+
+
+def model_import_config(metadata: Mapping[str, Any], group: ApiConfig) -> dict[str, Any]:
+    """Apply only supported settings, retaining explicit group preferences."""
+    result: dict[str, Any] = {}
+    context = _token_limit(metadata.get("context_window"))
+    if context is not None and group.context_window is None:
+        result["context_window"] = context
+    output = _token_limit(metadata.get("max_tokens"))
+    if output is not None:
+        # A deliberately smaller output budget stays in force. Otherwise use
+        # the published model limit instead of the generic 16k default.
+        result["max_tokens"] = min(output, group.max_tokens) if "max_tokens" in group.model_fields_set else output
+    thinking = metadata.get("thinking_enabled")
+    if type(thinking) is bool:
+        result["thinking_enabled"] = thinking and group.thinking_enabled
+    protocol = (group.format or "openai") if group.provider == "router" else (group.provider or "anthropic")
+    if protocol == "anthropic" and output is not None and result.get("thinking_enabled", group.thinking_enabled):
+        # Anthropic budgeted thinking requires at least 1024 tokens, strictly
+        # below max_tokens. Importing a smaller limit must not break requests.
+        budget = min(group.thinking_budget, result["max_tokens"] - 1)
+        if budget < 1024:
+            result["thinking_enabled"] = False
+        elif budget != group.thinking_budget:
+            result["thinking_budget"] = budget
+    return result
 
 
 def _connection(config: ApiConfig, env: Mapping[str, str]) -> tuple[str, httpx.Headers, bool]:
@@ -63,9 +121,9 @@ def _connection(config: ApiConfig, env: Mapping[str, str]) -> tuple[str, httpx.H
     return endpoint, headers, anthropic
 
 
-async def _fetch(config: ApiConfig, env: Mapping[str, str]) -> list[dict[str, str]]:
+async def _fetch(config: ApiConfig, env: Mapping[str, str]) -> list[dict[str, Any]]:
     endpoint, headers, anthropic = _connection(config, env)
-    models: dict[str, dict[str, str]] = {}
+    models: dict[str, dict[str, Any]] = {}
     cursors: set[str] = set()
     params: dict[str, str | int] = {"limit": 1000} if anthropic else {}
     remaining_bytes = 4 * 1024 * 1024
@@ -93,10 +151,13 @@ async def _fetch(config: ApiConfig, env: Mapping[str, str]) -> list[dict[str, st
                 if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 512 or any(ord(char) < 32 for char in model_id):
                     raise ModelDiscoveryError("模型列表包含无效的模型 ID，请检查服务端响应")
                 model_id = model_id.strip()
-                model = {"id": model_id}
-                display_name = entry.get("display_name")
+                model: dict[str, Any] = {"id": model_id}
+                display_name = entry.get("display_name") or entry.get("name")
                 if isinstance(display_name, str) and display_name.strip():
                     model["name"] = display_name.strip()[:512]
+                settings = model_import_config(_model_metadata(entry), config)
+                if settings:
+                    model["config"] = settings
                 models.setdefault(model_id, model)
                 if len(models) > 5000:
                     raise ModelDiscoveryError("模型列表过大，请缩小服务端返回范围后重试")
@@ -110,7 +171,7 @@ async def _fetch(config: ApiConfig, env: Mapping[str, str]) -> list[dict[str, st
     raise ModelDiscoveryError("模型列表分页过多，请缩小服务端返回范围后重试")
 
 
-async def discover_models(config: ApiConfig, settings_env: Mapping[str, str] | None = None) -> list[dict[str, str]]:
+async def discover_models(config: ApiConfig, settings_env: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
     try:
         # Match session initialization's setdefault precedence without mutating
         # the Gateway environment or requiring an initialized chat session.

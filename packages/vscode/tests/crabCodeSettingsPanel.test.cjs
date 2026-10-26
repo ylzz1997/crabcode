@@ -5,6 +5,8 @@ const { harness } = require("./helpers/settingsHarness.cjs");
 test("group discovery previews, filters and imports into the captured settings layer", async () => {
   const h = harness({ section: "models" });
   h.state.models.models[0].group = "shared";
+  const config = { context_window: 131072, max_tokens: 8192, thinking_enabled: false };
+  h.state.discovery.models.forEach(model => { model.config = config; });
   await h.settle();
   h.doc.querySelector('[aria-label="shared 更多操作"]').click();
   h.click("获取模型列表");
@@ -15,6 +17,9 @@ test("group discovery previews, filters and imports into the captured settings l
   assert.ok(fetch.body.cwd.endsWith("settings-project"));
   assert.equal(fetch.headers.Authorization, "Bearer test-only-secret");
   assert.equal(h.changedModels, 0);
+  assert.match(h.doc.querySelector(".model-discovery").textContent, /上下文窗口: 131072/);
+  assert.match(h.doc.querySelector(".model-discovery").textContent, /最大输出 Token: 8192/);
+  assert.match(h.doc.querySelector(".model-discovery").textContent, /思考: 关闭/);
   assert.equal(h.doc.querySelector('[aria-label="model-a"]').disabled, true);
   h.change("搜索模型", "org/", "input");
   h.change("全选搜索结果", true);
@@ -33,6 +38,7 @@ test("group discovery previews, filters and imports into the captured settings l
   assert.equal(save.name, "shared");
   assert.equal(save.source, "projectSettings");
   assert.deepEqual(save.model_ids, ["org/model-b"]);
+  assert.deepEqual(save.model_metadata, { "org/model-b": config });
   assert.equal(h.changedModels, 1);
   assert.equal(h.doc.querySelector(".model-discovery"), null);
   h.dom.window.close();

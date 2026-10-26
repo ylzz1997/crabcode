@@ -13,6 +13,7 @@ import type {
   SettingsSnapshot,
 } from "./protocol";
 import type {
+  ModelDiscoveryEntry,
   ModelSettingsResponse,
   ModelSettingsSource,
   PromptSettingsResponse,
@@ -1271,14 +1272,15 @@ async function groupModelDiscovery(groupName: string): Promise<void> {
   const sourceLabel = state.editable_sources?.find(item => item.id === targetSource)?.label ?? targetSource;
   editor.append(el("h2", "", `${tr("获取模型列表")} · ${groupName}`),
     el("p", "inline-note", `${tr("写入 ")}${sourceLabel}`),
-    el("p", "inline-note", tr("选择要加入配置组的模型，已有模型会保留原配置。")));
+    el("p", "inline-note", tr("选择要加入配置组的模型，已有模型会保留原配置。")),
+    el("p", "inline-note", tr("导入时自动填写接口提供的上下文、输出和思考设置；未提供的字段沿用现有配置。")));
   const search = input("", tr("搜索模型"), "search");
   search.placeholder = tr("搜索模型");
   const message = el("p", "inline-note");
   message.setAttribute("role", "status");
   const list = el("div", "model-discovery-list");
   const selected = new Set<string>();
-  let models: Array<{ id: string; name?: string }> | null = null;
+  let models: ModelDiscoveryEntry[] | null = null;
   let busy = false;
   let saving = false;
   let requestId = 0;
@@ -1315,6 +1317,11 @@ async function groupModelDiscovery(groupName: string): Promise<void> {
       const copy = el("span");
       copy.append(el("strong", "", model.id));
       if (model.name && model.name !== model.id) copy.append(el("small", "", model.name));
+      if (model.config) copy.append(el("small", "", [
+        model.config.context_window != null && `${tr("上下文窗口")}: ${model.config.context_window}`,
+        model.config.max_tokens != null && `${tr("最大输出 Token")}: ${model.config.max_tokens}`,
+        model.config.thinking_enabled != null && `${tr("思考")}: ${model.config.thinking_enabled ? tr("开启") : tr("关闭")}`,
+      ].filter(Boolean).join(" · ")));
       label.append(check, copy);
       if (existingIds.has(model.id)) label.append(el("small", "", tr("已添加")));
       list.append(label);
@@ -1354,7 +1361,10 @@ async function groupModelDiscovery(groupName: string): Promise<void> {
     refresh.disabled = cancel.disabled = true;
     renderList();
     try {
-      await mutate("models", { action: "import_group_models", name: groupName, source: targetSource, model_ids: [...selected] });
+      const model_metadata = Object.fromEntries((models ?? [])
+        .filter(model => selected.has(model.id) && model.config)
+        .map(model => [model.id, model.config]));
+      await mutate("models", { action: "import_group_models", name: groupName, source: targetSource, model_ids: [...selected], model_metadata });
       if (!valid()) return;
       dirty.delete("models");
       renderModels();

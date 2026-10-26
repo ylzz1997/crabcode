@@ -1134,6 +1134,7 @@
   "导入将刷新模板列表，放弃未保存的修改？": "Wird durch den Import die Vorlagenliste aktualisiert und nicht gespeicherte Änderungen verworfen?",
   "导入提示词模板": "Eingabeaufforderungsvorlage importieren",
   "导入提示词模版 JSON": "Eingabeaufforderungsvorlage JSON importieren",
+  "导入时自动填写接口提供的上下文、输出和思考设置；未提供的字段沿用现有配置。": "Beim Import werden die von der API gelieferten Kontext-, Ausgabe- und Denkeinstellungen automatisch übernommen. Fehlende Felder behalten die bisherigen Einstellungen.",
   "导入模板": "Vorlage importieren",
   "导出 Core Dump": "Core-Dump exportieren",
   "导出 JSON": "Exportieren Sie JSON",

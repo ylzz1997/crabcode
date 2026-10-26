@@ -580,6 +580,8 @@ For DeepSeek V4 thinking mode with tool calls, enable reasoning pass-through:
 
 CrabCode automatically manages the context window to prevent `400 token limit exceeded` errors.
 
+When importing new models with **Get model list** on a configuration group in Desktop or VS Code, CrabCode saves context and output limits supplied by `/models`. It recognizes Anthropic's `max_input_tokens` / `max_tokens`, OpenRouter's `context_length` / `top_provider.max_completion_tokens`, and common compatible API limit fields, using the smaller limit when several are present. Explicit thinking capability metadata configures the thinking switch; Anthropic thinking budgets are kept below the output limit. Explicit group context overrides, smaller output budgets, and disabled thinking are preserved. Existing model profiles are untouched, and missing metadata continues to inherit settings or use runtime defaults. Temperature, reasoning effort, prices, and image/tool capabilities are not inferred from model names or automatically changed.
+
 **How context window size is resolved** (in priority order):
 
 1. `context_window` field in your `api` config (explicit override)

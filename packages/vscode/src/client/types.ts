@@ -15,6 +15,20 @@ export interface ImageAttachment {
   description?: string;
 }
 
+/** Allowlisted settings from the model catalog, never connection credentials. */
+export interface DiscoveredModelSettings {
+  context_window?: number | null;
+  max_tokens?: number | null;
+  thinking_enabled?: boolean | null;
+  thinking_budget?: number | null;
+}
+
+export interface ModelDiscoveryEntry {
+  id: string;
+  name?: string | null;
+  config?: DiscoveredModelSettings | null;
+}
+
 export interface WorkspaceDirectoryEntry {
   name: string;
   path: string;
@@ -333,6 +347,7 @@ export interface ModelSettingsMutationRequest {
   config?: Record<string, unknown> | null;
   remove_fields?: string[];
   model_ids?: string[];
+  model_metadata?: Record<string, DiscoveredModelSettings>;
 }
 
 /** A focused mutation for runtime, Computer Use, and extra-tool settings. */
@@ -607,6 +622,11 @@ export interface UsageDailyResponse {
   tracking_started_at?: string | null;
   first_recorded_at?: string | null;
   last_recorded_at?: string | null;
+}
+
+export interface ModelDiscoveryResponse {
+  group: string;
+  models: ModelDiscoveryEntry[];
 }
 
 export interface SessionInfo {

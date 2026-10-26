@@ -1134,6 +1134,7 @@
   "导入将刷新模板列表，放弃未保存的修改？": "A importação atualizará a lista de modelos e descartará as modificações não salvas?",
   "导入提示词模板": "modelo de prompt de importação",
   "导入提示词模版 JSON": "importar modelo de prompt JSON",
+  "导入时自动填写接口提供的上下文、输出和思考设置；未提供的字段沿用现有配置。": "A importação preenche automaticamente as configurações de contexto, saída e raciocínio fornecidas pela API. Os campos ausentes mantêm as configurações existentes.",
   "导入模板": "Modelo de importação",
   "导出 Core Dump": "Exportar dump principal",
   "导出 JSON": "Exportar JSON",

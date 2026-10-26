@@ -105,6 +105,41 @@ def test_empty_catalog(monkeypatch):
     assert asyncio.run(discovery.discover_models(ApiConfig(provider="openai"))) == []
 
 
+@pytest.mark.parametrize("entry,expected", [
+    ({"name": "Custom model", "context_length": 200000, "top_provider": {"context_length": 128000, "max_completion_tokens": 8192}},
+     {"name": "Custom model", "config": {"context_window": 128000, "max_tokens": 8192}}),
+    ({"display_name": "Claude", "max_input_tokens": 200000, "max_tokens": 64000,
+      "capabilities": {"thinking": {"supported": True}}},
+     {"name": "Claude", "config": {"context_window": 200000, "max_tokens": 64000, "thinking_enabled": True}}),
+    ({"context_window": 32000, "max_output_tokens": 4096, "capabilities": {"thinking": {"supported": False}}},
+     {"config": {"context_window": 32000, "max_tokens": 4096, "thinking_enabled": False}}),
+    ({"max_model_len": 8192}, {"config": {"context_window": 8192}}),
+    ({"max_context_length": 16384, "max_completion_tokens": 4096}, {"config": {"context_window": 16384, "max_tokens": 4096}}),
+    ({"context_length": 0, "max_tokens": -1, "capabilities": {"thinking": {"supported": "false"}},
+      "extra_body": {"secret": "do-not-copy"}, "base_url": "https://untrusted.test"}, {}),
+    ({"context_length": True, "max_tokens": "64000", "top_provider": [], "capabilities": "bad"}, {}),
+    ({"context_length": 1.5, "max_tokens": 2**60, "supported_parameters": ["temperature"]}, {}),
+    ({"context_length": None, "max_tokens": None, "top_provider": {"context_length": 8192}}, {"config": {"context_window": 8192}}),
+])
+def test_model_metadata_normalization(monkeypatch, entry, expected):
+    transport(monkeypatch, lambda request: httpx.Response(200, json={"data": [{"id": "custom", **entry}]}))
+    result = asyncio.run(discovery.discover_models(ApiConfig(provider="openai")))
+    assert result == [{"id": "custom", **expected}]
+
+
+def test_discovery_respects_group_overrides_and_clamps_anthropic_budget(monkeypatch):
+    entry = {"id": "custom", "max_input_tokens": 200000, "max_tokens": 8192, "capabilities": {"thinking": {"supported": True}}}
+    transport(monkeypatch, lambda request: httpx.Response(200, json={"data": [entry]}))
+    config = ApiConfig(provider="anthropic", context_window=64000, max_tokens=4096)
+    result = asyncio.run(discovery.discover_models(config))
+    assert result[0]["config"] == {"max_tokens": 4096, "thinking_enabled": True, "thinking_budget": 4095}
+    config.thinking_enabled = False
+    assert asyncio.run(discovery.discover_models(config))[0]["config"] == {"max_tokens": 4096, "thinking_enabled": False}
+    config.thinking_enabled = True
+    config.max_tokens = 512
+    assert asyncio.run(discovery.discover_models(config))[0]["config"] == {"max_tokens": 512, "thinking_enabled": False}
+
+
 def test_non_json_response_is_reported_without_exposing_body(monkeypatch):
     transport(monkeypatch, lambda request: httpx.Response(200, text="<html>secret-credential</html>"))
     with pytest.raises(discovery.ModelDiscoveryError, match="有效的模型列表") as error:
@@ -198,3 +233,77 @@ def test_batch_import_skips_existing_and_preserves_layers(catalog):
     assert client.post("/config/model-settings", json={**body, "name": "missing"}).status_code == 404
     assert client.post("/config/model-settings", json={**body, "model_ids": ["valid", "\n"]}).status_code == 422
     assert project_file.read_bytes() == saved
+
+
+def test_discovered_settings_round_trip_and_existing_models_are_untouched(catalog, monkeypatch):
+    client, cwd, user_file, project_file = catalog
+    user_before = user_file.read_bytes()
+    metadata = {"context_window": 131072, "max_tokens": 8192, "thinking_enabled": False}
+    transport(monkeypatch, lambda request: httpx.Response(200, json={"data": [
+        {"id": "fresh", "context_length": 131072, "max_output_tokens": 8192, "capabilities": {"thinking": {"supported": False}}},
+    ]}))
+    result = client.post("/config/discover-models", json={"group": "shared", "cwd": cwd}).json()
+    assert result["models"][0]["config"] == metadata
+    response = client.post("/config/model-settings", json={
+        "action": "import_group_models", "source": "projectSettings", "cwd": cwd, "name": "shared",
+        "model_ids": ["fresh", "old-id", "no-metadata"],
+        "model_metadata": {"fresh": result["models"][0]["config"], "old-id": metadata},
+    })
+    assert response.status_code == 200
+    saved = json.loads(project_file.read_text())["models"]
+    assert saved == {"fresh": {"group": "shared", "model": "fresh", **metadata},
+                     "no-metadata": {"group": "shared", "model": "no-metadata"}}
+    effective = next(model["effective"] for model in response.json()["models"] if model["name"] == "fresh")
+    assert all(effective[key] == value for key, value in metadata.items())
+    assert effective["timeout"] == 60
+    assert user_file.read_bytes() == user_before
+
+
+def test_import_rechecks_group_limits_and_saves_valid_thinking_budget(catalog):
+    client, cwd, user_file, project_file = catalog
+    raw = json.loads(project_file.read_text())
+    raw["groups"]["shared"].update(provider="anthropic", context_window=64000, max_tokens=4096)
+    project_file.write_text(json.dumps(raw))
+    response = client.post("/config/model-settings", json={
+        "action": "import_group_models", "source": "projectSettings", "cwd": cwd, "name": "shared",
+        "model_ids": ["fresh"],
+        "model_metadata": {"fresh": {"context_window": 200000, "max_tokens": 64000, "thinking_enabled": True}},
+    })
+    assert response.status_code == 200
+    saved = json.loads(project_file.read_text())["models"]["fresh"]
+    assert saved == {"group": "shared", "model": "fresh", "max_tokens": 4096,
+                     "thinking_enabled": True, "thinking_budget": 4095}
+    effective = next(model["effective"] for model in response.json()["models"] if model["name"] == "fresh")
+    assert effective["context_window"] == 64000
+    assert effective["max_tokens"] == 4096
+    assert effective["thinking_budget"] == 4095
+    assert effective["http_headers"]["Authorization"] == "[redacted]"
+
+
+def test_token_limits_remain_visible_without_exposing_credentials():
+    assert routes._redact_model_settings({
+        "max_tokens": 8192, "thinking_budget": 4096, "api_key": "secret", "access_token": "secret",
+        "http_headers": {"Authorization": "secret", "max_tokens": "secret"},
+    }) == {
+        "max_tokens": 8192, "thinking_budget": 4096, "api_key": "[redacted]", "access_token": "[redacted]",
+        "http_headers": {"Authorization": "[redacted]", "max_tokens": "[redacted]"},
+    }
+
+
+@pytest.mark.parametrize("metadata", [
+    {"fresh": {"context_window": -1}}, {"fresh": {"max_tokens": True}},
+    {"fresh": {"max_tokens": "8192"}}, {"fresh": {"max_tokens": 2**60}},
+    {"fresh": {"thinking_enabled": "false"}}, {"fresh": {"thinking_budget": 12}},
+    {"fresh": {"base_url": "https://untrusted.test"}},
+    {"fresh": {"http_headers": {"Authorization": "secret"}}},
+    {"not-selected": {"max_tokens": 8192}},
+])
+def test_invalid_import_metadata_never_writes(catalog, metadata):
+    client, cwd, user_file, project_file = catalog
+    originals = [path.read_bytes() for path in (user_file, project_file)]
+    response = client.post("/config/model-settings", json={
+        "action": "import_group_models", "source": "projectSettings", "cwd": cwd, "name": "shared",
+        "model_ids": ["fresh"], "model_metadata": metadata,
+    })
+    assert response.status_code == 422
+    assert [path.read_bytes() for path in (user_file, project_file)] == originals

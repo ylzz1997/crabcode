@@ -569,6 +569,8 @@ DeepSeek V4 思考模式配合工具调用时，需要开启 reasoning 回传：
 
 CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报错。
 
+在 Desktop 或 VS Code 的模型设置中，从配置组「获取模型列表」并导入新模型时，会自动保存 `/models` 返回的上下文窗口和最大输出 token 数。支持 Anthropic 的 `max_input_tokens` / `max_tokens`、OpenRouter 的 `context_length` / `top_provider.max_completion_tokens`，以及兼容接口的常见限制字段；有多项限制时取较小值。接口明确提供思考能力时会设置思考开关，Anthropic 的思考预算也会限制在输出上限以内。配置组中手动指定的上下文窗口、较小的输出预算和关闭思考的偏好会保留；已有模型不会被覆盖，接口未提供的字段继续继承配置或使用运行时默认值。温度、思考强度、价格和图像/工具能力不会根据模型名称推测或自动改写。
+
 **上下文窗口大小的解析优先级：**
 
 1. `api` 配置中显式指定的 `context_window` 字段

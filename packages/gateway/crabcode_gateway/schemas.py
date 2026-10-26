@@ -277,6 +277,27 @@ class SetPermissionModeRequest(BaseModel):
     session_id: str | None = None
 
 
+class DiscoveredModelSettings(BaseModel):
+    """Allowlisted settings from the model catalog, never connection credentials."""
+
+    model_config = {"extra": "forbid"}
+    context_window: int | None = Field(default=None, strict=True, gt=0, le=2_147_483_647)
+    max_tokens: int | None = Field(default=None, strict=True, gt=0, le=2_147_483_647)
+    thinking_enabled: bool | None = Field(default=None, strict=True)
+    thinking_budget: int | None = Field(default=None, strict=True, ge=1024, le=2_147_483_647)
+
+
+class ModelDiscoveryEntry(BaseModel):
+    id: str
+    name: str | None = None
+    config: DiscoveredModelSettings | None = None
+
+
+class ModelDiscoveryResponse(BaseModel):
+    group: str
+    models: list[ModelDiscoveryEntry]
+
+
 class ModelSettingsMutationRequest(BaseModel):
     """A focused mutation of the named model configuration catalog."""
 
@@ -296,6 +317,7 @@ class ModelSettingsMutationRequest(BaseModel):
     config: dict[str, Any] | None = None
     remove_fields: list[str] = Field(default_factory=list)
     model_ids: list[str] = Field(default_factory=list, max_length=1000)
+    model_metadata: dict[str, DiscoveredModelSettings] = Field(default_factory=dict, max_length=1000)
 
     @model_validator(mode="after")
     def validate_mutation(self) -> "ModelSettingsMutationRequest":
@@ -310,6 +332,8 @@ class ModelSettingsMutationRequest(BaseModel):
                 for value in self.model_ids
             ):
                 raise ValueError("Select valid model IDs to add to the group")
+            if not self.model_metadata.keys() <= {value.strip() for value in self.model_ids}:
+                raise ValueError("Model metadata must belong to the selected model IDs")
         if self.name is not None:
             self.name = self.name.strip()
         return self

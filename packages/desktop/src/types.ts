@@ -586,11 +586,19 @@ export interface ModelSettingsMutation {
   config?: Record<string, unknown>;
   remove_fields?: string[];
   model_ids?: string[];
+  model_metadata?: Record<string, DiscoveredModelSettings>;
+}
+
+export interface DiscoveredModelSettings {
+  context_window?: number | null;
+  max_tokens?: number | null;
+  thinking_enabled?: boolean | null;
+  thinking_budget?: number | null;
 }
 
 export interface ModelDiscoveryResponse {
   group: string;
-  models: Array<{ id: string; name?: string }>;
+  models: Array<{ id: string; name?: string | null; config?: DiscoveredModelSettings | null }>;
 }
 
 export interface RuntimeSettingsResponse {

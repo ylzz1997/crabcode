@@ -29,6 +29,7 @@ from crabcode_gateway.schemas import (
     GoalRequest,
     GoalState,
     ModelInfo,
+    ModelDiscoveryResponse,
     ModelSettingsEntry,
     ModelSettingsMutationRequest,
     ModelSettingsResponse,
@@ -66,7 +67,7 @@ class GroupModelsRequest(BaseModel):
     cwd: str | None = None
 
 
-@router.post("/config/discover-models")
+@router.post("/config/discover-models", response_model=ModelDiscoveryResponse, response_model_exclude_none=True)
 async def discover_group_models(req: GroupModelsRequest, request: Request) -> dict[str, Any]:
     from crabcode_core.api.model_discovery import ModelDiscoveryError, discover_models
 
@@ -316,7 +317,10 @@ def _redact_model_settings(value: Any, key: str = "") -> Any:
     """Keep useful configuration visible without echoing embedded credentials."""
     normalized_key = key.lower().replace("-", "_")
     is_reference = normalized_key.endswith("_env") or normalized_key.endswith("_path")
-    if key and not is_reference and any(part in normalized_key for part in _SENSITIVE_CONFIG_KEYS):
+    is_token_count = type(value) is int and normalized_key in {
+        "max_tokens", "max_output_tokens", "max_completion_tokens", "budget_tokens", "compact_buffer_tokens",
+    }
+    if key and not is_reference and not is_token_count and any(part in normalized_key for part in _SENSITIVE_CONFIG_KEYS):
         return "[redacted]"
     if isinstance(value, dict):
         return {
@@ -626,11 +630,13 @@ def _mutate_model_settings(request: Request, req: ModelSettingsMutationRequest) 
 
     if action == "import_group_models":
         import re
+        from crabcode_core.api.model_discovery import model_import_config
 
         name = _validate_model_settings_name(req.name)
         preview = _model_settings_from_files(cwd)
         if name not in preview.groups:
             raise HTTPException(status_code=404, detail="配置组不存在，请刷新模型目录")
+        group = ConfigManager(cwd=cwd).load().groups[name]
         models = current.setdefault("models", {})
         if not isinstance(models, dict):
             raise HTTPException(status_code=422, detail="models must be a JSON object")
@@ -654,7 +660,9 @@ def _mutate_model_settings(request: Request, req: ModelSettingsMutationRequest) 
                 tail = f" ({suffix})"
                 candidate = stem[:120 - len(tail)] + tail
                 suffix += 1
-            models[candidate] = {"group": name, "model": model_id}
+            metadata = req.model_metadata.get(model_id)
+            settings = model_import_config(metadata.model_dump(exclude_none=True), group) if metadata else {}
+            models[candidate] = {"group": name, "model": model_id, **settings}
             used_names.add(candidate)
     elif action in {"upsert_model", "delete_model"}:
         name = _validate_model_settings_name(req.name)
