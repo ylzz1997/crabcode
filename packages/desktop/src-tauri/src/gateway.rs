@@ -22,6 +22,8 @@ mod windows_python;
 
 const MIN_PYTHON_MAJOR: u32 = 3;
 const MIN_PYTHON_MINOR: u32 = 10;
+// The Gateway's agent-client-protocol dependency requires Python < 3.15.
+const MAX_PYTHON_MINOR: u32 = 14;
 const GATEWAY_PROTOCOL: i64 = 1;
 const DESKTOP_ORIGIN: &str = "tauri://localhost";
 #[cfg(target_os = "windows")]
@@ -347,9 +349,11 @@ fn python_version(candidate: &str) -> Option<(u32, u32)> {
 }
 
 fn supported_gateway_python(candidate: &str) -> bool {
-    python_version(candidate).is_some_and(|(major, minor)| {
-        major > MIN_PYTHON_MAJOR || (major == MIN_PYTHON_MAJOR && minor >= MIN_PYTHON_MINOR)
-    })
+    python_version(candidate).is_some_and(supported_gateway_python_version)
+}
+
+fn supported_gateway_python_version((major, minor): (u32, u32)) -> bool {
+    major == MIN_PYTHON_MAJOR && (MIN_PYTHON_MINOR..=MAX_PYTHON_MINOR).contains(&minor)
 }
 
 fn push_unique(candidates: &mut Vec<String>, candidate: String) {
@@ -474,7 +478,7 @@ fn detect_development_python(configured: Option<&str>) -> Result<String, String>
             return Ok(candidate);
         }
     }
-    Err("Python 3.10 or newer was not found. Install Python or set a Python path in Desktop settings.".to_string())
+    Err("Python 3.10 through 3.14 was not found. Install a compatible Python or set a Python path in Desktop settings.".to_string())
 }
 
 fn detect_document_engine_python(configured: Option<&str>) -> Result<String, String> {
@@ -935,7 +939,7 @@ fn start_release_gateway_at(
     if processes.stopping.load(Ordering::Acquire) {
         return Err("Desktop is shutting down".to_string());
     }
-    let base_python = base_python.ok_or_else(|| "Python 3.10 or newer was not found. Install Python or set a Python path in Desktop settings.".to_string())?;
+    let base_python = base_python.ok_or_else(|| "Python 3.10 through 3.14 was not found. Install a compatible Python or set a Python path in Desktop settings.".to_string())?;
     progress(
         "creating_environment",
         "未找到可复用的安装，正在准备 CrabCode 独立 Python 环境",
@@ -1382,7 +1386,7 @@ fn python_for_feature_probe(configured: Option<&str>) -> Result<String, String> 
         }
     }
     fallback.ok_or_else(|| {
-        "Python 3.10 or newer was not found. Install Python or set a Python path in Desktop settings."
+        "Python 3.10 through 3.14 was not found. Install a compatible Python or set a Python path in Desktop settings."
             .to_string()
     })
 }
@@ -1645,7 +1649,7 @@ fn resolve_gateway_install_python(configured: Option<&str>) -> Result<String, St
         .into_iter()
         .find(|candidate| supported_gateway_python(candidate))
         .ok_or_else(|| {
-            "Python 3.10 or newer was not found. Install Python or set a Python path in Desktop settings."
+            "Python 3.10 through 3.14 was not found. Install a compatible Python or set a Python path in Desktop settings."
                 .to_string()
         })?;
     let environment = managed_gateway_environment_dir()?;
@@ -2262,6 +2266,16 @@ mod tests {
         assert!(arguments
             .windows(2)
             .any(|pair| pair == ["--cors", DESKTOP_ORIGIN]));
+    }
+
+    #[test]
+    fn gateway_python_range_matches_installable_dependencies() {
+        for version in [(3, 10), (3, 13), (3, 14)] {
+            assert!(supported_gateway_python_version(version));
+        }
+        for version in [(2, 7), (3, 9), (3, 15), (4, 0)] {
+            assert!(!supported_gateway_python_version(version));
+        }
     }
 
     #[cfg(target_os = "windows")]

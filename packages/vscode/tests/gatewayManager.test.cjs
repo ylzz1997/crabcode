@@ -140,16 +140,34 @@ test("POSIX discovery does not probe the Windows launcher", async () => {
 test("Windows Store aliases and stale uv installs fall back to a discovered interpreter", async () => {
   const stale = "C:\\uv\\cpython-3.13\\python.exe";
   const old = "C:\\Python39\\python.exe";
+  const tooNew = "C:\\Python315\\python.exe";
   const working = "C:\\用户目录\\uv\\cpython-3.13.16\\python.exe";
   const calls = [];
   const detect = loadDetection((command) => {
     calls.push(command);
     if (command === "python" || command === "python3") return "Python was not found; Microsoft Store";
     if (command === old) return "Python 3.9.8";
+    if (command === tooNew) return "Python 3.15.0";
     if (command === working) return "Python 3.13.16";
-  }, "win32", [], undefined, [stale, old, working]);
+  }, "win32", [], undefined, [stale, old, tooNew, working]);
   assert.equal(await detect(config), working);
   assert.ok(calls.indexOf(stale) < calls.indexOf(working));
+  assert.ok(calls.indexOf(tooNew) < calls.indexOf(working));
+});
+
+for (const version of ["3.10.0", "3.14.0"]) {
+  test(`Python ${version} is within the supported Gateway range`, async () => {
+    const detect = loadDetection(() => `Python ${version}`);
+    assert.equal(await detect({ get: () => "configured-python" }), "configured-python");
+  });
+}
+
+test("unsupported explicitly configured Python falls back to a compatible interpreter", async () => {
+  const detect = loadDetection((command) => {
+    if (command === "configured-python") return "Python 3.15.0";
+    if (command === "python3") return "Python 3.13.16";
+  });
+  assert.equal(await detect({ get: () => "configured-python" }), "python3");
 });
 
 function unreachableHttp() {

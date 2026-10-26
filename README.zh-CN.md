@@ -319,7 +319,8 @@ Gateway 允许工作区内的 `cwd`。
 Tauri 额外提供系统凭据库与本地 Gateway 自动启动；浏览器版连接已经运行的
 Gateway，密码只保留在当前浏览器标签页中。
 
-Desktop 启动本地服务需要 Python 3.10 或更新版本。Windows 版会依次检查指定的
+Desktop 启动本地服务需要 Python 3.10–3.14（当前网关依赖尚不支持 Python 3.15）。
+Windows 版会依次检查指定的
 Python 路径、PATH 命令、注册表中的 Python、uv（包括 `UV_PYTHON_INSTALL_DIR`）、
 常见安装目录和 Conda 目录。Python 不必加入 PATH；商店占位程序和无法运行的
 解释器会被跳过。也可以在**设置 → 常规 → Python 路径**中手动指定可执行文件。

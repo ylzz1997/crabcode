@@ -322,7 +322,8 @@ plans, diffs, and checkpoint recovery. Tauri additionally provides system
 credential storage and automatic local Gateway startup; browser mode connects
 to an already-running Gateway and retains passwords only for the current tab.
 
-Local Desktop startup requires Python 3.10 or newer. On Windows, Desktop checks
+Local Desktop startup requires Python 3.10–3.14 (the current Gateway dependencies
+do not support Python 3.15). On Windows, Desktop checks
 the configured Python path and PATH commands, then registered Python installations,
 uv (including `UV_PYTHON_INSTALL_DIR`), standard installation folders, and common
 Conda locations. Python does not need to be on PATH; Microsoft Store placeholders

@@ -17,6 +17,8 @@ const GATEWAY_PKG = "crabcode[gateway]";
 const GATEWAY_CLI_MODULE = "crabcode_cli";
 const MIN_PYTHON_MAJOR = 3;
 const MIN_PYTHON_MINOR = 10;
+// agent-client-protocol, required by the Gateway, does not support Python 3.15.
+const MAX_PYTHON_MINOR = 14;
 const MIN_GATEWAY_PROTOCOL = 1;
 const MAX_GATEWAY_PROTOCOL = 1;
 const HEALTH_TIMEOUT_MS = 2_000;
@@ -345,7 +347,7 @@ export async function detectPython(
     const v = await checkPython(userPath);
     if (v) return userPath;
     vscode.window.showWarningMessage(
-      tr("CrabCode：配置的 pythonPath「{0}」无效或版本低于 3.10，将尝试自动检测。", { 0: userPath }),
+      tr("CrabCode：配置的 pythonPath「{0}」无效或不在支持的 Python 3.10–3.14 范围内，将尝试自动检测。", { 0: userPath }),
     );
   }
 
@@ -400,7 +402,7 @@ async function checkPython(bin: string): Promise<boolean> {
     if (code !== 0) return false;
     const v = parsePythonVersion(stdout);
     if (!v) return false;
-    return v.major > MIN_PYTHON_MAJOR || (v.major === MIN_PYTHON_MAJOR && v.minor >= MIN_PYTHON_MINOR);
+    return v.major === MIN_PYTHON_MAJOR && v.minor >= MIN_PYTHON_MINOR && v.minor <= MAX_PYTHON_MINOR;
   } catch {
     return false;
   }
@@ -652,7 +654,7 @@ export async function chooseAndInstallGatewaySuite(
   const python = await detectPython(config);
   if (!python) {
     vscode.window.showErrorMessage(
-      tr("CrabCode：未找到 Python >= 3.10，请安装 Python 或在设置中指定 crabcode.pythonPath。"),
+      tr("CrabCode：未找到 Python 3.10–3.14，请安装兼容版本或在设置中指定 crabcode.pythonPath。"),
     );
     return false;
   }
@@ -917,7 +919,7 @@ async function handleRunningIncompatibleGateway(
   const python = await detectPython(config);
   if (!python) {
     vscode.window.showErrorMessage(
-      tr("CrabCode：未找到 Python >= 3.10，无法安装匹配的本地 gateway。"),
+      tr("CrabCode：未找到 Python 3.10–3.14，无法安装匹配的本地 gateway。"),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
@@ -1018,7 +1020,7 @@ export async function ensureGateway(
   const python = await detectPython(config);
   if (!python) {
     vscode.window.showErrorMessage(
-      tr("CrabCode：未找到 Python >= 3.10，请安装 Python 或在设置中指定 crabcode.pythonPath。"),
+      tr("CrabCode：未找到 Python 3.10–3.14，请安装兼容版本或在设置中指定 crabcode.pythonPath。"),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
