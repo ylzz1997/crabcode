@@ -57,7 +57,7 @@ class AzureOpenAIAdapter(OpenAIAdapter):
             kwargs["default_headers"] = config.http_headers
 
         from crabcode_core.api.network import sdk_options
-        return openai.AsyncAzureOpenAI(**kwargs, **sdk_options(config))
+        return openai.AsyncAzureOpenAI(**kwargs, **sdk_options(config, self._sdk))
 
     def _resolve_model(self, config: ModelConfig) -> str:
         """Azure uses deployment names instead of model names."""

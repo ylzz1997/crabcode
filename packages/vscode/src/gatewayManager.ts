@@ -298,6 +298,30 @@ function protocolCompatibility(support: ProtocolSupport): { compatible: boolean;
   return { compatible: true };
 }
 
+function gatewayCompatibility(
+  info: InstalledGatewayInfo,
+  expectedVersion: string,
+  usingWorkspaceSources = false,
+): { compatible: boolean; reason?: string } {
+  const protocol = protocolCompatibility(info);
+  if (!protocol.compatible || usingWorkspaceSources) return protocol;
+
+  // Protocol compatibility alone does not include runtime bug fixes. Keep newer
+  // releases, but require at least the extension's release for packaged gateways.
+  const current = /^(\d+)\.(\d+)\.(\d+)(-[^+]+)?(?:\+.*)?$/.exec(info.version);
+  const expected = /^(\d+)\.(\d+)\.(\d+)(-[^+]+)?(?:\+.*)?$/.exec(expectedVersion);
+  if (current && expected) {
+    const difference = [1, 2, 3].map((i) => Number(current[i]) - Number(expected[i])).find((n) => n !== 0) ?? 0;
+    if (difference > 0 || (difference === 0 && (!current[4] || current[4] === expected[4]))) {
+      return protocol;
+    }
+  }
+  return {
+    compatible: false,
+    reason: tr("gateway 版本 {0} 不满足扩展要求的 {1}", { 0: info.version, 1: expectedVersion }),
+  };
+}
+
 // ── Python detection ─────────────────────────────────────────────────
 
 /**
@@ -855,7 +879,7 @@ async function handleRunningIncompatibleGateway(
   gatewayProc: GatewayProcess,
   launchOptions: PythonLaunchOptions,
 ): Promise<GatewayEnsureResult> {
-  const compatibility = protocolCompatibility(health);
+  const compatibility = gatewayCompatibility(health, expectedVersion, launchOptions.usingWorkspaceSources);
   const detail =
     tr("CrabCode {0}（协议 {1}）：", { 0: health.version, 1: health.protocolVersion ?? tr("未声明") }) +
     `${compatibility.reason ?? tr("不兼容")}`;
@@ -864,6 +888,15 @@ async function handleRunningIncompatibleGateway(
   if (!target.isLocal) {
     vscode.window.showWarningMessage(
       tr("CrabCode：远程 gateway 不兼容。{0}。请在远程服务器升级到兼容版本。", { 0: detail }),
+    );
+    return { python: "", gatewayReady: false, startedByUs: false };
+  }
+
+  if (!gatewayProc.ownsProcess) {
+    // Another window or a manually started process may use a different Python.
+    // Do not modify its environment or terminate a process we do not own.
+    vscode.window.showWarningMessage(
+      tr("CrabCode：当前 gateway 不是由扩展启动。请先停止旧进程，再执行“CrabCode：连接网关”。"),
     );
     return { python: "", gatewayReady: false, startedByUs: false };
   }
@@ -884,6 +917,8 @@ async function handleRunningIncompatibleGateway(
     return { python: "", gatewayReady: false, startedByUs: false };
   }
 
+  // Stop before pip replaces modules/DLLs, which may be locked on Windows.
+  gatewayProc.stop();
   if (!launchOptions.usingWorkspaceSources) {
     const installed = await installExpectedGateway(python, expectedVersion, outputChannel);
     if (!installed) {
@@ -891,16 +926,6 @@ async function handleRunningIncompatibleGateway(
     }
   }
 
-  if (!gatewayProc.ownsProcess) {
-    vscode.window.showWarningMessage(
-      launchOptions.usingWorkspaceSources
-        ? tr("CrabCode：当前 gateway 不是由扩展启动。请先停止旧进程，再执行“CrabCode：连接网关”。")
-        : tr("CrabCode {0} 已安装，但当前 gateway 不是由扩展启动。请重启 gateway 后重新连接。", { 0: expectedVersion }),
-    );
-    return { python, gatewayReady: false, startedByUs: false };
-  }
-
-  gatewayProc.stop();
   const started = await gatewayProc.start(
     python,
     target,
@@ -913,7 +938,7 @@ async function handleRunningIncompatibleGateway(
 
 /**
  * Ensure the gateway is ready:
- *  1. Probe /health and validate the protocol compatibility range
+ *  1. Probe /health and validate protocol compatibility and minimum release
  *  2. For a missing local gateway, detect Python and install if needed
  *  3. Start a local gateway, or warn without installing for remote targets
  *
@@ -946,7 +971,7 @@ export async function ensureGateway(
   // Check the actual gateway identity and protocol before touching local Python.
   const existing = await probeGatewayHealth(target, password);
   if (existing.health) {
-    const compatibility = protocolCompatibility(existing.health);
+    const compatibility = gatewayCompatibility(existing.health, expectedVersion, launchOptions.usingWorkspaceSources);
     if (compatibility.compatible) {
       outputChannel.appendLine(
         tr("[CrabCode] 网关已就绪 ({0}, ", { 0: displayHealthUrl(target) }) +
@@ -1029,7 +1054,7 @@ export async function ensureGateway(
         return { python, gatewayReady: false, startedByUs: false };
       }
     } else {
-      const compatibility = protocolCompatibility(installed);
+      const compatibility = gatewayCompatibility(installed, expectedVersion);
       if (!compatibility.compatible) {
         outputChannel.appendLine(
           tr("[CrabCode] 已安装 gateway {0} 不兼容：{1}", { 0: installed.version, 1: compatibility.reason }),

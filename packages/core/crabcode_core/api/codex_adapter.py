@@ -486,6 +486,7 @@ class CodexAdapter(APIAdapter):
     def __init__(self, config: ApiConfig):
         import openai
 
+        self._sdk = openai
         self.config = config
         api_key = None
         oauth_account_id = None
@@ -524,7 +525,7 @@ class CodexAdapter(APIAdapter):
         # differing built-in policy (which also retries 429) and apply the
         # configured policy explicitly in _create_sdk_response_stream().
         from crabcode_core.api.network import sdk_options
-        kwargs.update(sdk_options(config))
+        kwargs.update(sdk_options(config, self._sdk))
         self.client = openai.AsyncOpenAI(**kwargs)
 
     async def resolve_context_window(self) -> int:

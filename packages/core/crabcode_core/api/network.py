@@ -26,17 +26,24 @@ def http_options(config: Any) -> dict[str, Any]:
     return {"trust_env": False, "proxy": proxy}
 
 
-def request_timeout(config: Any) -> httpx.Timeout:
+def request_timeout(config: Any, sdk: Any = None) -> Any:
     timeout = float(getattr(config, "timeout", 300))
-    return httpx.Timeout(timeout, connect=min(timeout, 10.0))
+    # SDK exports follow their supported transport (httpx or httpx2).
+    timeout_type = sdk.Timeout if sdk is not None else httpx.Timeout
+    return timeout_type(timeout, connect=min(timeout, 10.0))
 
 
-def sdk_options(config: Any) -> dict[str, Any]:
+def sdk_http_client(config: Any, sdk: Any = None) -> Any:
+    client_type = sdk.DefaultAsyncHttpxClient if sdk is not None else httpx.AsyncClient
+    return client_type(**http_options(config), timeout=request_timeout(config, sdk))
+
+
+def sdk_options(config: Any, sdk: Any) -> dict[str, Any]:
     # The query loop owns retry budgets; nested SDK retries hide progress.
-    options: dict[str, Any] = {"max_retries": 0, "timeout": request_timeout(config)}
+    options: dict[str, Any] = {"max_retries": 0, "timeout": request_timeout(config, sdk)}
     routing = http_options(config)
     if routing:
-        options["http_client"] = httpx.AsyncClient(**routing, timeout=request_timeout(config))
+        options["http_client"] = sdk_http_client(config, sdk)
     return options
 
 

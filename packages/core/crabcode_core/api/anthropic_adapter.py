@@ -123,6 +123,7 @@ def _tools_to_api(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 class AnthropicAdapter(APIAdapter):
     """Adapter for Anthropic's Messages API (direct, first-party)."""
 
+    _sdk = anthropic
     emits_response_item_events = True
 
     def __init__(self, config: ApiConfig):
@@ -143,7 +144,7 @@ class AnthropicAdapter(APIAdapter):
             kwargs["default_headers"] = config.http_headers
 
         from crabcode_core.api.network import sdk_options
-        self.client = anthropic.AsyncAnthropic(**kwargs, **sdk_options(config))
+        self.client = anthropic.AsyncAnthropic(**kwargs, **sdk_options(config, self._sdk))
         self._api_key = api_key
 
     def _messages_url(self) -> str | None:
@@ -632,7 +633,7 @@ class BedrockAdapter(AnthropicAdapter):
     def __init__(self, config: ApiConfig):
         self.config = config
         from crabcode_core.api.network import sdk_options
-        self.client = anthropic.AsyncAnthropicBedrock(**sdk_options(config))
+        self.client = anthropic.AsyncAnthropicBedrock(**sdk_options(config, self._sdk))
 
 
 class VertexAdapter(AnthropicAdapter):
@@ -644,5 +645,5 @@ class VertexAdapter(AnthropicAdapter):
         self.client = anthropic.AsyncAnthropicVertex(
             region=os.environ.get("CLOUD_ML_REGION", "us-east5"),
             project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID"),
-            **sdk_options(config),
+            **sdk_options(config, self._sdk),
         )

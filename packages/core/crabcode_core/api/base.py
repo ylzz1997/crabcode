@@ -188,13 +188,13 @@ class APIAdapter(ABC):
     async def reset_network_client(self) -> None:
         """Replace a failed SDK connection pool without changing its routing policy."""
         import asyncio
-        from crabcode_core.api.network import http_options, request_timeout
+        from crabcode_core.api.network import sdk_http_client
 
         client = getattr(self, "client", None)
         copy = getattr(client, "with_options", None)
         if not callable(copy):
             return
-        transport = httpx.AsyncClient(timeout=request_timeout(self.config), **http_options(self.config))
+        transport = sdk_http_client(self.config, getattr(self, "_sdk", None))
         try:
             replacement = copy(http_client=transport, max_retries=0)
         except BaseException:

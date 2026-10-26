@@ -148,7 +148,7 @@ function unreachableHttp() {
 
 function outputLog() {
   const lines = [];
-  return { lines, appendLine: (line) => lines.push(line), append: (text) => lines.push(text) };
+  return { lines, show() {}, appendLine: (line) => lines.push(line), append: (text) => lines.push(text) };
 }
 
 for (const missingDependencies of [true, false]) {
@@ -263,3 +263,97 @@ test("independent feature package specs always keep Gateway, stable order, and p
     "crabcode[gateway,search,debugger]==0.1.5",
   );
 });
+
+function healthyHttp(version) {
+  return {
+    get(_url, _options, callback) {
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        callback(response);
+        response.emit("data", Buffer.from(JSON.stringify({
+          status: "ok", version, protocol_version: 1,
+          min_protocol_version: 1, max_protocol_version: 1,
+        })));
+        response.emit("end");
+      });
+      return request;
+    },
+  };
+}
+
+for (const scenario of [
+  { installed: "0.1.7", running: false, accept: true, upgraded: true, ready: true },
+  { installed: "0.1.7", running: false, accept: false, upgraded: false, ready: false },
+  { installed: "0.1.8", running: false, upgraded: false, ready: true },
+  { installed: "0.1.9", running: false, upgraded: false, ready: true },
+  { installed: "0.1.8-rc1", running: false, accept: true, upgraded: true, ready: true },
+  { installed: "0.1.7", running: true, owned: true, accept: true, upgraded: true, ready: true },
+  { installed: "0.1.7", running: true, owned: true, accept: false, upgraded: false, ready: false },
+  { installed: "0.1.7", running: true, owned: false, upgraded: false, ready: false },
+  { installed: "0.1.7", running: true, remote: true, upgraded: false, ready: false },
+  { installed: "0.1.8", running: true, upgraded: false, ready: true },
+  { installed: "0.1.9", running: true, upgraded: false, ready: true },
+]) {
+  test(`gateway release upgrade ${JSON.stringify(scenario)}`, async () => {
+    const actions = [];
+    const warnings = [];
+    const { ensureGateway } = loadGatewayManager({
+      http: scenario.running ? healthyHttp(scenario.installed) : unreachableHttp(),
+      vscode: {
+        workspace: { workspaceFolders: [] },
+        extensions: { getExtension: () => undefined },
+        ProgressLocation: { Notification: 15 },
+        window: {
+          withProgress: (_options, task) => task(),
+          showErrorMessage: (message) => { throw new Error(message); },
+          showWarningMessage: async (message, _options, upgrade) => {
+            warnings.push(message);
+            return scenario.accept ? upgrade : undefined;
+          },
+        },
+      },
+      childProcess: {
+        execFile(_command, args, _options, callback) {
+          actions.push("inspect");
+          callback(null, args[0] === "--version" ? "Python 3.13.1" : JSON.stringify({
+            version: scenario.installed, protocol_version: 1,
+            min_protocol_version: 1, max_protocol_version: 1,
+          }), "");
+        },
+        spawn(command, args) {
+          actions.push("install");
+          assert.equal(command, "test-python");
+          assert.deepEqual(Array.from(args), ["-m", "pip", "install", "--upgrade", "crabcode[gateway]==0.1.8"]);
+          const child = new EventEmitter();
+          queueMicrotask(() => child.emit("close", 0));
+          return child;
+        },
+      },
+    });
+    const gateway = {
+      ownsProcess: Boolean(scenario.owned),
+      stop() { actions.push("stop"); this.ownsProcess = false; },
+      async start() { actions.push("start"); this.ownsProcess = true; return true; },
+    };
+    const result = await ensureGateway({
+      get(key, fallback) {
+        if (key === "pythonPath") return "test-python";
+        if (key === "serverUrl" && scenario.remote) return "wss://gateway.example.test/ws";
+        return fallback;
+      },
+    }, outputLog(), gateway, "0.1.8");
+    assert.equal(result.gatewayReady, scenario.ready);
+    assert.equal(actions.includes("install"), scenario.upgraded);
+    if (scenario.running && scenario.upgraded) {
+      assert.ok(actions.indexOf("stop") < actions.indexOf("install"));
+      assert.ok(actions.indexOf("install") < actions.indexOf("start"));
+    }
+    if (scenario.running && !scenario.upgraded) {
+      assert.deepEqual(actions, []);
+    }
+    if (!scenario.ready) assert.ok(warnings.length > 0);
+  });
+}

@@ -1,7 +1,7 @@
 {
   "name": "crabcode-desktop",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "scripts": {
     "computer-use:build": "node ../computer-use/scripts/build.mjs --out src-tauri/resources/computer-use --sync-local-clients",

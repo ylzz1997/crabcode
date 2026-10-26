@@ -1,3 +1,3 @@
 """Single source of truth for the CrabCode release version."""
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
