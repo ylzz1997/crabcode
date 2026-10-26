@@ -319,6 +319,14 @@ Gateway 允许工作区内的 `cwd`。
 Tauri 额外提供系统凭据库与本地 Gateway 自动启动；浏览器版连接已经运行的
 Gateway，密码只保留在当前浏览器标签页中。
 
+Desktop 启动本地服务需要 Python 3.10 或更新版本。Windows 版会依次检查指定的
+Python 路径、PATH 命令、注册表中的 Python、uv（包括 `UV_PYTHON_INSTALL_DIR`）、
+常见安装目录和 Conda 目录。Python 不必加入 PATH；商店占位程序和无法运行的
+解释器会被跳过。也可以在**设置 → 常规 → Python 路径**中手动指定可执行文件。
+需要时 Desktop 会在独立环境中安装后端依赖，但不会自动安装 Python 本身。
+VS Code 扩展在指定解释器、Python 扩展、工作区 `.venv`、Conda 和 PATH 都不可用时，
+也会搜索上述 Windows 安装位置；可通过 `crabcode.pythonPath` 指定要使用的解释器。
+
 Desktop 和 VS Code 扩展中的每条已完成助手回复都可以分叉到新会话。新会话会
 立即打开，保留该回复之前的对话，并显示来源会话/标题；运行中的轮次、待处理的
 工具、权限请求和 WebSocket 运行态不会被复制。VS Code 聊天里的复制按钮默认隐藏，

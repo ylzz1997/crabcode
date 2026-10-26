@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 
+#[cfg(target_os = "windows")]
+#[path = "windows_python.rs"]
+mod windows_python;
+
 const MIN_PYTHON_MAJOR: u32 = 3;
 const MIN_PYTHON_MINOR: u32 = 10;
 const GATEWAY_PROTOCOL: i64 = 1;
@@ -435,7 +439,7 @@ fn extend_macos_python_candidates(candidates: &mut Vec<String>, home: Option<&Pa
 fn python_candidates(configured: Option<&str>, include_managed: bool) -> Vec<String> {
     let mut candidates = Vec::new();
     if let Some(value) = configured.filter(|value| !value.trim().is_empty()) {
-        push_unique(&mut candidates, value.to_string());
+        push_unique(&mut candidates, value.trim().to_string());
     }
     if include_managed {
         if let Ok(environment) = managed_gateway_environment_dir() {
@@ -450,7 +454,10 @@ fn python_candidates(configured: Option<&str>, include_managed: bool) -> Vec<Str
     push_unique(&mut candidates, "python3".to_string());
     push_unique(&mut candidates, "python".to_string());
     #[cfg(target_os = "windows")]
-    push_unique(&mut candidates, "py".to_string());
+    {
+        push_unique(&mut candidates, "py".to_string());
+        windows_python::extend_candidates(&mut candidates);
+    }
 
     // Finder-launched macOS apps do not inherit the user's shell PATH. Check
     // common package-manager and version-manager locations explicitly so the
@@ -2255,6 +2262,42 @@ mod tests {
         assert!(arguments
             .windows(2)
             .any(|pair| pair == ["--cors", DESKTOP_ORIGIN]));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_discovery_preserves_configured_python_priority() {
+        let candidates = python_candidates(Some("  C:\\custom Python\\python.exe  "), false);
+        assert_eq!(candidates[0], "C:\\custom Python\\python.exe");
+        assert_eq!(&candidates[1..4], ["python3", "python", "py"]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "probes installed Windows Python; set CRABCODE_TEST_PYTHON and run explicitly"]
+    fn discovers_real_windows_python_without_path() {
+        let expected = std::env::var("CRABCODE_TEST_PYTHON").expect("Set CRABCODE_TEST_PYTHON");
+        let candidates = python_candidates(None, false);
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&expected)),
+            "Not discovered: {expected}\n{candidates:#?}"
+        );
+        // Simulate the PATH aliases and a stale interpreter failing, then use
+        // the same supported-version probe as the release gateway startup.
+        let mut absolute = vec!["C:\\missing-crabcode-test-python\\python.exe".to_string()];
+        absolute.extend(
+            candidates
+                .into_iter()
+                .filter(|candidate| Path::new(candidate).is_absolute()),
+        );
+        let detected = absolute
+            .iter()
+            .find(|candidate| supported_gateway_python(candidate))
+            .expect("No usable Python outside PATH");
+        assert!(supported_gateway_python(&expected));
+        println!("Detected without PATH: {detected}; verified expected installation: {expected}");
     }
 
     #[cfg(target_os = "macos")]

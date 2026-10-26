@@ -11,6 +11,7 @@ import * as net from "net";
 import * as path from "path";
 import { execFile, spawn, spawnSync, type ChildProcess } from "child_process";
 import * as vscode from "vscode";
+import { windowsPythonCandidates } from "./windowsPython";
 
 const GATEWAY_PKG = "crabcode[gateway]";
 const GATEWAY_CLI_MODULE = "crabcode_cli";
@@ -333,6 +334,7 @@ function gatewayCompatibility(
  *  3. Workspace .venv
  *  4. Conda environments (base + named envs)
  *  5. `python3` / `python` on PATH
+ *  6. Windows launcher, registry, uv, and common installation directories
  */
 export async function detectPython(
   config: vscode.WorkspaceConfiguration,
@@ -383,6 +385,9 @@ export async function detectPython(
   if (process.platform === "win32") {
     const { stdout, code } = await execAsync("py", ["-3", "-c", "import sys; print(sys.executable)"]);
     if (code === 0 && stdout && await checkPython(stdout)) return stdout;
+    for (const candidate of await windowsPythonCandidates()) {
+      if (await checkPython(candidate)) return candidate;
+    }
   }
 
   return null;

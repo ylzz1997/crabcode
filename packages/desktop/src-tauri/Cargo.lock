@@ -729,6 +729,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tempfile",
  "url",
+ "winreg",
 ]
 
 [[package]]

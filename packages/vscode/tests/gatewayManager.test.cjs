@@ -6,7 +6,7 @@ const { test } = require("node:test");
 const { EventEmitter } = require("node:events");
 const ts = require("typescript");
 
-function loadDetection(probe, platform = "win32", workspaceRoots = [], pythonExtension) {
+function loadDetection(probe, platform = "win32", workspaceRoots = [], pythonExtension, windowsCandidates = []) {
   const filename = path.join(__dirname, "../src/gatewayManager.ts");
   const source = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -17,6 +17,7 @@ function loadDetection(probe, platform = "win32", workspaceRoots = [], pythonExt
     process: { platform, env: {} },
     URL,
     require(name) {
+      if (name === "./windowsPython") return { windowsPythonCandidates: async () => windowsCandidates };
       if (name === "./i18n") return require("./helpers/i18n.cjs");
       if (name === "vscode") return {
         extensions: { getExtension: () => pythonExtension },
@@ -49,6 +50,7 @@ function loadGatewayManager(options = {}) {
     Buffer,
     setTimeout: options.setTimeout ?? setTimeout,
     require(name) {
+      if (name === "./windowsPython") return { windowsPythonCandidates: async () => [] };
       if (name === "./i18n") return require("./helpers/i18n.cjs");
       if (name === "vscode") return options.vscode ?? {
         extensions: { getExtension: () => undefined },
@@ -133,6 +135,21 @@ test("unusable workspace .venv falls back to a working PATH interpreter", async 
 test("POSIX discovery does not probe the Windows launcher", async () => {
   const detect = loadDetection((command) => { assert.notEqual(command, "py"); }, "linux");
   assert.equal(await detect(config), null);
+});
+
+test("Windows Store aliases and stale uv installs fall back to a discovered interpreter", async () => {
+  const stale = "C:\\uv\\cpython-3.13\\python.exe";
+  const old = "C:\\Python39\\python.exe";
+  const working = "C:\\用户目录\\uv\\cpython-3.13.16\\python.exe";
+  const calls = [];
+  const detect = loadDetection((command) => {
+    calls.push(command);
+    if (command === "python" || command === "python3") return "Python was not found; Microsoft Store";
+    if (command === old) return "Python 3.9.8";
+    if (command === working) return "Python 3.13.16";
+  }, "win32", [], undefined, [stale, old, working]);
+  assert.equal(await detect(config), working);
+  assert.ok(calls.indexOf(stale) < calls.indexOf(working));
 });
 
 function unreachableHttp() {

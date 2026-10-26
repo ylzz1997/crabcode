@@ -322,6 +322,17 @@ plans, diffs, and checkpoint recovery. Tauri additionally provides system
 credential storage and automatic local Gateway startup; browser mode connects
 to an already-running Gateway and retains passwords only for the current tab.
 
+Local Desktop startup requires Python 3.10 or newer. On Windows, Desktop checks
+the configured Python path and PATH commands, then registered Python installations,
+uv (including `UV_PYTHON_INSTALL_DIR`), standard installation folders, and common
+Conda locations. Python does not need to be on PATH; Microsoft Store placeholders
+and unusable interpreters are skipped. You can also set an executable explicitly
+under **Settings → General → Python path**. Desktop installs its backend into a
+separate environment when needed; it does not install Python itself.
+The VS Code extension uses the same additional Windows discovery sources after
+checking its configured interpreter, Python extension, workspace `.venv`, Conda,
+and PATH. Set `crabcode.pythonPath` to select a particular installation.
+
 Downloadable Desktop DMG/MSI installers and platform/universal VSIXs are built
 through **Actions → Client Packages → Run workflow**. See
 [manual client packaging](CLIENT_PACKAGING.md) for downloads and signing.
