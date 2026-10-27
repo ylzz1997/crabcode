@@ -117,17 +117,72 @@ describe('automatic process disclosure', () => {
     } finally { h.close(); }
   });
 
-  it('defers automatic collapse while process text is selected', () => {
-    const h = harness('selection');
+  it('keeps the process folded when visible answer text is selected or focused', () => {
+    const h = harness('answer-selection');
+    const selection = window.getSelection()!;
+    try {
+      h.render(fixture());
+      for (const id of ['f', 'u', 'edits']) {
+        const item = h.node.querySelector<HTMLButtonElement>(`[data-item="${id}"]`)!;
+        const range = document.createRange();
+        range.selectNodeContents(item);
+        act(() => {
+          item.focus();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          document.dispatchEvent(new Event('selectionchange'));
+        });
+        expect(h.hidden('pre')).toBe(true);
+        expect(h.hidden('tool')).toBe(true);
+        expect(h.node.querySelector('.process-summary')?.getAttribute('aria-expanded')).toBe('false');
+        expect(selection.toString()).toBe(item.textContent);
+      }
+    } finally { selection.removeAllRanges(); h.close(); }
+  });
+
+  it('does not reveal hidden process entries when a selection spans the turn', () => {
+    const h = harness('turn-selection');
+    const selection = window.getSelection()!;
+    try {
+      h.render(fixture());
+      for (const selector of ['.conversation-turn', '[data-item="pre"]']) {
+        const range = document.createRange();
+        range.selectNodeContents(h.node.querySelector(selector)!);
+        act(() => {
+          selection.removeAllRanges();
+          selection.addRange(range);
+          document.dispatchEvent(new Event('selectionchange'));
+        });
+        expect(h.hidden('pre')).toBe(true);
+        expect(h.hidden('tool')).toBe(true);
+      }
+    } finally { selection.removeAllRanges(); h.close(); }
+  });
+
+  it.each([false, true])('defers automatic collapse while process text is selected (cross-entry: %s)', (crossEntry) => {
+    const h = harness(`selection-${crossEntry}`);
     try {
       h.render(fixture().slice(0, -1), true, true);
       const range = document.createRange();
       range.selectNodeContents(h.node.querySelector('[data-item="pre"]')!);
+      if (crossEntry) range.setStart(h.node.querySelector('[data-item="u"]')!, 0);
       act(() => { window.getSelection()!.addRange(range); document.dispatchEvent(new Event('selectionchange')); });
       h.render(fixture());
       expect(h.hidden('pre')).toBe(false);
       act(() => { window.getSelection()!.removeAllRanges(); document.dispatchEvent(new Event('selectionchange')); });
       expect(h.hidden('pre')).toBe(true);
+    } finally { h.close(); }
+  });
+
+  it('defers automatic collapse while a process control is focused and folds after blur', async () => {
+    const h = harness('process-focus');
+    try {
+      h.render(fixture().slice(0, -1), true, true);
+      act(() => h.node.querySelector<HTMLButtonElement>('[data-item="tool"]')!.focus());
+      h.render(fixture());
+      expect(h.hidden('tool')).toBe(false);
+      await act(async () => h.node.querySelector<HTMLButtonElement>('[data-item="tool"]')!.blur());
+      expect(h.hidden('tool')).toBe(true);
     } finally { h.close(); }
   });
 

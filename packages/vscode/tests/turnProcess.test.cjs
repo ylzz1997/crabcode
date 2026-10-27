@@ -143,6 +143,47 @@ test('manual expansion survives new history IDs, session switches and setting ch
   } finally { w.dom.window.close(); }
 });
 
+test('selecting final text or the whole turn keeps hidden process entries folded', () => {
+  const w = webview();
+  try {
+    w.replay();
+    const selection = w.dom.window.getSelection();
+    for (const selector of ['#msg-f', '.turn-content', '#msg-pre']) {
+      const range = w.doc.createRange();
+      range.selectNodeContents(w.doc.querySelector(selector));
+      selection.removeAllRanges();
+      selection.addRange(range);
+      w.doc.dispatchEvent(new w.dom.window.Event('selectionchange'));
+      assert.equal(w.hidden('msg-pre'), true, selector);
+      assert.equal(w.hidden('tool-t'), true, selector);
+      assert.equal(w.doc.querySelector('.turn-summary').getAttribute('aria-expanded'), 'false');
+      assert.equal(selection.getRangeAt(0), range);
+    }
+    assert.deepEqual(w.errors, []);
+  } finally { w.dom.window.close(); }
+});
+
+test('selection intersecting visible process content postpones folding until cleared', () => {
+  const w = webview();
+  try {
+    w.replay(history().slice(0, -1), { busy: true });
+    const selection = w.dom.window.getSelection();
+    const range = w.doc.createRange();
+    range.setStart(w.doc.getElementById('msg-u'), 0);
+    range.setEndAfter(w.doc.getElementById('msg-pre'));
+    selection.addRange(range);
+    w.doc.dispatchEvent(new w.dom.window.Event('selectionchange'));
+    w.send({ type: 'processTurnEnd', reason: 'end_turn', finalMessageId: 'final-uuid' });
+    assert.equal(w.hidden('msg-pre'), false);
+    assert.equal(w.hidden('tool-t'), false);
+    selection.removeAllRanges();
+    w.doc.dispatchEvent(new w.dom.window.Event('selectionchange'));
+    assert.equal(w.hidden('msg-pre'), true);
+    assert.equal(w.hidden('tool-t'), true);
+    assert.deepEqual(w.errors, []);
+  } finally { w.dom.window.close(); }
+});
+
 test('live content folds only at a normal terminal boundary, not when final streaming begins', () => {
   const w = webview();
   try {

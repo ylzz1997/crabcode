@@ -41,18 +41,22 @@ function ProcessTurnView({ turn, sessionKey, enabled, showDuration, showToolCall
   useEffect(() => {
     const check = () => {
       const selection = window.getSelection();
-      const node = root.current;
-      const active = document.activeElement?.closest("[data-process-content]");
-      setInteracting(!!node && (!!active && node.contains(active)
-        || !!selection && !selection.isCollapsed && !!selection.anchorNode && node.contains(selection.anchorNode)));
+      const ranges = selection && !selection.isCollapsed
+        ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index)) : [];
+      // Interaction can postpone folding visible process content, never reveal
+      // hidden entries when the answer (or the whole turn) is selected.
+      const entries = root.current?.querySelectorAll<HTMLElement>("[data-process-content]") ?? [];
+      setInteracting([...entries].some((entry) => !entry.hidden
+        && (entry.contains(document.activeElement) || ranges.some((range) => range.intersectsNode(entry)))));
     };
+    const checkAfterBlur = () => queueMicrotask(check);
     document.addEventListener("selectionchange", check);
     document.addEventListener("focusin", check);
-    document.addEventListener("focusout", check);
+    document.addEventListener("focusout", checkAfterBlur);
     return () => {
       document.removeEventListener("selectionchange", check);
       document.removeEventListener("focusin", check);
-      document.removeEventListener("focusout", check);
+      document.removeEventListener("focusout", checkAfterBlur);
     };
   }, []);
 

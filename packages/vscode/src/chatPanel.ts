@@ -7612,9 +7612,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function processInteractionActive(turn) {
       const selection = window.getSelection();
+      const ranges = selection && !selection.isCollapsed
+        ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index)) : [];
       return turn.entries.some(({ el }) => turn.processIds?.includes(el.dataset.processId)
-        && (el.contains(document.activeElement) || selection && !selection.isCollapsed
-          && selection.anchorNode && el.contains(selection.anchorNode)));
+        && !el.classList.contains('turn-detail-hidden')
+        && (el.contains(document.activeElement) || ranges.some(range => range.intersectsNode(el))));
     }
 
     function preserveProcessScroll(change, hiding) {
