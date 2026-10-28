@@ -92,7 +92,7 @@ describe('automatic process disclosure', () => {
     } finally { h.close(); }
   });
 
-  it('folds computer-use screenshots with the process while keeping image outputs visible', () => {
+  it('folds screenshots and read images with the process while keeping image outputs visible', () => {
     const h = harness('computer-use');
     const images = [{ data: 'YQ==', media_type: 'image/png' }];
     const items = fixture();
@@ -100,20 +100,29 @@ describe('automatic process disclosure', () => {
       ...['observe', 'click', 'scroll'].map((action): ChatItem => ({
         id: action, kind: 'tool', title: 'ComputerUse', input: { action }, images, status: 'complete',
       })),
+      ...['Read', 'FileRead'].map((title): ChatItem => ({
+        id: title, kind: 'tool', title, input: { file_path: '/work/cover.png' }, images, status: 'complete',
+      })),
       { id: 'picture', kind: 'tool', title: 'Image', images, status: 'complete' });
+    const processIds = ['observe', 'click', 'scroll', 'Read', 'FileRead'];
     try {
       h.render(items);
-      for (const id of ['observe', 'click', 'scroll']) expect(h.hidden(id)).toBe(true);
+      for (const id of processIds) expect(h.hidden(id)).toBe(true);
       expect(h.hidden('picture')).toBe(false);
       expect(h.hidden('f')).toBe(false);
       act(() => h.node.querySelector<HTMLButtonElement>('.process-summary')!.click());
-      for (const id of ['observe', 'click', 'scroll']) expect(h.hidden(id)).toBe(false);
+      for (const id of processIds) expect(h.hidden(id)).toBe(false);
       act(() => h.node.querySelector<HTMLButtonElement>('[data-item="scroll"]')!.click());
+      act(() => h.node.querySelector<HTMLButtonElement>('[data-item="Read"]')!.click());
       act(() => h.node.querySelector<HTMLButtonElement>('.process-summary')!.click());
-      for (const id of ['observe', 'click', 'scroll']) expect(h.hidden(id)).toBe(true);
+      for (const id of processIds) expect(h.hidden(id)).toBe(true);
+      expect(h.hidden('picture')).toBe(false);
+      expect(h.hidden('f')).toBe(false);
       h.render(items, false);
       expect(h.hidden('scroll')).toBe(false);
+      expect(h.hidden('Read')).toBe(false);
       expect(h.node.querySelector('[data-item="scroll"]')?.textContent).toBe('tool:open');
+      expect(h.node.querySelector('[data-item="Read"]')?.textContent).toBe('tool:open');
     } finally { h.close(); }
   });
 

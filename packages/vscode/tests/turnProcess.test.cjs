@@ -82,12 +82,14 @@ test('webview defaults to folding the completed process while final text and act
 });
 
 for (const source of ['history', 'live']) {
-  test(`computer-use screenshots fold with the process and survive expansion (${source})`, () => {
+  test(`screenshots and read images fold with the process and survive expansion (${source})`, () => {
     const w = webview();
     const images = [{ data: 'YQ==', media_type: 'image/png' }];
     const cards = ['observe', 'click', 'scroll'].map(action => tool({
       id: action, toolName: 'ComputerUse', input: { action }, images, collapsed: false,
-    }));
+    })).concat(['Read', 'FileRead'].map(toolName => tool({
+      id: toolName, toolName, input: { file_path: '/work/cover.png' }, images, collapsed: false,
+    })));
     const picture = tool({ id: 'picture', toolName: 'Image', images, collapsed: false });
     try {
       if (source === 'history') {
@@ -107,6 +109,8 @@ for (const source of ['history', 'live']) {
       }
       const screenshot = w.doc.querySelector('#tool-scroll .tool-result-image');
       assert.ok(screenshot);
+      const readImage = w.doc.querySelector('#tool-Read .tool-result-image');
+      assert.ok(readImage);
       for (const { card } of cards) assert.equal(w.hidden('tool-' + card.id), true, card.id);
       assert.equal(w.hidden('tool-picture'), false);
       assert.equal(w.hidden('msg-f'), false);
@@ -114,9 +118,13 @@ for (const source of ['history', 'live']) {
       for (const { card } of cards) assert.equal(w.hidden('tool-' + card.id), false, card.id);
       w.doc.querySelector('.turn-summary').click();
       for (const { card } of cards) assert.equal(w.hidden('tool-' + card.id), true, card.id);
+      assert.equal(w.hidden('tool-picture'), false);
+      assert.equal(w.hidden('msg-f'), false);
       w.send({ type: 'processDisplayOptions', autoCollapseProcess: false });
       assert.equal(w.hidden('tool-scroll'), false);
+      assert.equal(w.hidden('tool-Read'), false);
       assert.equal(w.doc.querySelector('#tool-scroll .tool-result-image'), screenshot);
+      assert.equal(w.doc.querySelector('#tool-Read .tool-result-image'), readImage);
       assert.deepEqual(w.errors, []);
     } finally { w.dom.window.close(); }
   });

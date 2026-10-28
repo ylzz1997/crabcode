@@ -18,11 +18,11 @@ export function createTurnProcessPolicy() {
     const finalIds = new Set(assistants.filter((item) => !explicitFinal
       || messageId(item) === explicitFinal || item.id === explicitFinal).map((item) => item.id));
     const processIds = items.filter((item) => {
-      // ComputerUse screenshots document intermediate actions, so fold them
-      // with their tool cards. Other image outputs remain visible.
-      const computerUse = item.kind === 'tool'
-        && item.title?.trim().toLowerCase().replace(/[\s.-]/g, '') === 'computeruse';
-      if (item.images?.length && !computerUse) return false;
+      // Screenshots and images read from files are intermediate observations.
+      // Fold them with their tool cards; keep image outputs visible.
+      const observation = item.kind === 'tool' && ['computeruse', 'read', 'fileread']
+        .includes(item.title?.trim().toLowerCase().replace(/[\s.-]/g, ''));
+      if (item.images?.length && !observation) return false;
       if (['thinking', 'tool', 'file_change'].includes(item.kind)) return true;
       return item.kind === 'assistant' && finalIds.size > 0 && !finalIds.has(item.id);
     }).map((item) => item.id);
