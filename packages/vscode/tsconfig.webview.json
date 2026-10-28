@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["src/settings/**/*.ts"]
+  "include": ["src/settings/**/*.ts", "src/chat/**/*.ts"]
 }

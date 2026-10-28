@@ -4730,6 +4730,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private getHtmlForWebview(webview: vscode.Webview): string {
     const nonce = getNonce();
+    const markdownScript = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "chatMarkdown.js"));
 
     return /*html*/ `${trHtml(`<!DOCTYPE html>
 <html lang="${getLocale()}">
@@ -4989,6 +4990,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       white-space: pre-wrap;
       word-break: break-word;
       line-height: 1.55;
+    }
+    .assistant-markdown strong { font-weight: 700; }
+    .assistant-markdown :not(pre) > code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+      font-family: var(--vscode-editor-font-family, monospace);
     }
     .copyable-content {
       position: relative;
@@ -7490,7 +7498,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="model-menu-list" class="model-menu-list"></div>
   </div>
-  `)}<script nonce="${nonce}">(function() {
+  `)}<script nonce="${nonce}" src="${markdownScript}"></script>
+  <script nonce="${nonce}">(function() {
       const localeData = ${webviewLocaleData(getLocale())};
       const i18n = (${createI18n.toString()})(localeData.locale, localeData.dictionaries);
       const { t: tr, html: trHtml, localized, getLocale } = i18n;
@@ -8426,7 +8435,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (!paragraph.length) return;
         const source = paragraph.join('\\n');
         const image = standaloneImage(source);
-        parts.push(image || '<div class="md-text">' + escapeHtml(source) + '</div>');
+        parts.push(image || '<div class="md-text">' + CrabCodeMarkdown.renderInlineMarkdown(source) + '</div>');
         paragraph = [];
       };
       const flushCode = () => {
@@ -8468,8 +8477,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
           index -= 1;
           const rows = tableLines.map(tableRowCells);
-          const headHtml = rows[0].map(cell => '<th>' + escapeHtml(cell) + '</th>').join('');
-          const bodyHtml = rows.slice(1).map(row => '<tr>' + header.map((_, cellIndex) => '<td>' + escapeHtml(row[cellIndex] || '') + '</td>').join('') + '</tr>').join('');
+          const headHtml = rows[0].map(cell => '<th>' + CrabCodeMarkdown.renderInlineMarkdown(cell) + '</th>').join('');
+          const bodyHtml = rows.slice(1).map(row => '<tr>' + header.map((_, cellIndex) => '<td>' + CrabCodeMarkdown.renderInlineMarkdown(row[cellIndex] || '') + '</td>').join('') + '</tr>').join('');
           parts.push('<div class="copyable-content message-table-shell"><div class="message-table-wrap"><table><thead><tr>' + headHtml + '</tr></thead><tbody>' + bodyHtml + '</tbody></table></div>' + copyButtonHtml(tableSourceLines.join('\\n'), tr("复制表格"), 'tool-copy-button') + '</div>');
           continue;
         }

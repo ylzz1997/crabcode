@@ -440,6 +440,9 @@
     "i18n:extract": "node ../../scripts/i18n.mjs --extract"
   },
   "dependencies": {
+    "remark-cjk-friendly": "^2.3.3",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
     "ws": "^8.21.3"
   },
   "devDependencies": {

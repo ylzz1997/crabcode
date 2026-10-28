@@ -27,7 +27,8 @@ function loadMethod(name) {
   return sandbox.Harness.prototype[name];
 }
 
-const html = loadMethod("getHtmlForWebview").call({}, {});
+const { loadPanel } = require("./helpers/chatPanelHarness.cjs");
+const html = loadPanel().panel.getHtmlForWebview({});
 const script = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
 const scriptSource = ts.createSourceFile("webview.js", script, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 

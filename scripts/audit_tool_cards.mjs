@@ -61,9 +61,9 @@ if (functionStart < 0 || literalStart < 0 || literalEnd < "</html>`".length) {
   throw new Error("VS Code Webview template was not found");
 }
 const templateLiteral = chatPanel.slice(literalStart, literalEnd);
-const html = Function("nonce", "createSlashCommands", "createTurnProcessPolicy", "trHtml", "getLocale", "webviewLocaleData", "createI18n", `return ${templateLiteral}`)("audit-nonce", createSlashCommands, createTurnProcessPolicy, value => value, () => "zh-CN", () => JSON.stringify({ locale: "zh-CN", dictionaries: {} }), createI18n);
-const webviewScript = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)?.[1];
-if (!webviewScript) throw new Error("VS Code Webview script was not found");
-Function(webviewScript);
+const html = Function("nonce", "markdownScript", "createSlashCommands", "createTurnProcessPolicy", "trHtml", "getLocale", "webviewLocaleData", "createI18n", `return ${templateLiteral}`)("audit-nonce", "chatMarkdown.js", createSlashCommands, createTurnProcessPolicy, value => value, () => "zh-CN", () => JSON.stringify({ locale: "zh-CN", dictionaries: {} }), createI18n);
+const webviewScripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match => match[1]).filter(script => script.trim());
+if (!webviewScripts.length) throw new Error("VS Code Webview script was not found");
+for (const script of webviewScripts) Function(script);
 
 console.log(`Tool card audit passed for Desktop and VS Code (${registeredNames.length} registered tools).`);

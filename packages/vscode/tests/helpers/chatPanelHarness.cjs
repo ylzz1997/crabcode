@@ -2,6 +2,12 @@ const { buildSync } = require('esbuild');
 const vm = require('node:vm');
 const path = require('node:path');
 
+const markdownSource = buildSync({
+  entryPoints: [path.join(__dirname, '../../src/chat/markdown.ts')],
+  bundle: true, write: false, platform: 'browser', format: 'iife',
+  globalName: 'CrabCodeMarkdown', minify: true,
+}).outputFiles[0].text;
+
 function loadPanel(fetch) {
   const source = buildSync({ entryPoints: [path.join(__dirname, '../../src/chatPanel.ts')], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['vscode'] }).outputFiles[0].text;
   const module = { exports: {} };
@@ -20,7 +26,7 @@ function loadPanel(fetch) {
     FileType: { File: 1, Directory: 2 },
     QuickPickItemKind: { Separator: -1 },
     ConfigurationTarget: { Global: 1 },
-    Uri: { file: uriFor },
+    Uri: { file: uriFor, joinPath: (uri, ...parts) => uriFor(path.join(uri.fsPath, ...parts)) },
     window: {
       activeTextEditor: undefined,
       get visibleTextEditors() {
@@ -58,10 +64,18 @@ function loadPanel(fetch) {
   const connection = { sessionId: 'a', connected: true, on: (name, fn) => { listeners[name] = fn; }, ensureSession() {}, send: (text, options) => { sent.push({ text, ...options }); return 'operation'; } };
   const saved = new Map();
   const storage = { get: key => saved.get(key), update: async (key, value) => saved.set(key, value) };
-  const panel = new module.exports.ChatPanelProvider({}, connection, undefined, storage);
+  const panel = new module.exports.ChatPanelProvider(uriFor(path.resolve(__dirname, '../..')), connection, undefined, storage);
+  const getRawWebviewHtml = webview => module.exports.ChatPanelProvider.prototype.getHtmlForWebview.call(panel, {
+    asWebviewUri: uri => uri.fsPath, ...webview,
+  });
+  // jsdom does not load VS Code resource URIs. Inline the same browser bundle
+  // before the panel script so rendering tests exercise the production parser.
+  panel.getHtmlForWebview = webview => getRawWebviewHtml(webview)
+    .replace(/<script[^>]* src="[^"]*chatMarkdown\.js"><\/script>\s*/, '')
+    .replace(/(<script nonce="[^"]+">)/, opening => opening + markdownSource + '\n');
   const messages = [];
   panel.postMessage = msg => messages.push(msg);
   panel.displayedSessionId = 'a';
-  return { panel, connection, messages, saved, sent, listeners, config, quickPicks, workspaceRoot, workspacePath };
+  return { panel, connection, messages, saved, sent, listeners, config, quickPicks, workspaceRoot, workspacePath, getRawWebviewHtml };
 }
 module.exports = { loadPanel };

@@ -19,6 +19,18 @@ const webviewOpts = {
   minify: isProd,
 };
 
+const chatMarkdownOpts = {
+  entryPoints: ["src/chat/markdown.ts"],
+  bundle: true,
+  outfile: "dist/chatMarkdown.js",
+  globalName: "CrabCodeMarkdown",
+  format: "iife",
+  platform: "browser",
+  target: "ES2022",
+  sourcemap: !isProd,
+  minify: isProd,
+};
+
 const buildOpts = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
@@ -36,8 +48,8 @@ const buildOpts = {
 
 if (!isProd) {
   // Watch mode
-  Promise.all([buildOpts, webviewOpts].map(opts => esbuild.context(opts).then(ctx => ctx.watch())))
+  Promise.all([buildOpts, webviewOpts, chatMarkdownOpts].map(opts => esbuild.context(opts).then(ctx => ctx.watch())))
     .catch(() => process.exit(1));
 } else {
-  Promise.all([buildOpts, webviewOpts].map(opts => esbuild.build(opts))).catch(() => process.exit(1));
+  Promise.all([buildOpts, webviewOpts, chatMarkdownOpts].map(opts => esbuild.build(opts))).catch(() => process.exit(1));
 }

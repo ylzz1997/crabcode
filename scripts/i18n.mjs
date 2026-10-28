@@ -35,8 +35,9 @@ function collect(source, file) {
     // The chat browser script is intentionally embedded under a nonce.
     if (ts.isTemplateExpression(node) && node.templateSpans.some(span => span.literal.text.includes('acquireVsCodeApi()'))) {
       const cooked = node.head.text + node.templateSpans.map((span, index) => `__HOST_${index}__` + span.literal.text).join('');
-      const script = cooked.match(/<script[^>]*>([\s\S]*?)<\/script>/)?.[1];
-      if (script) collect(script, 'chat-browser.js');
+      for (const match of cooked.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) {
+        if (match[1].trim()) collect(match[1], 'chat-browser.js');
+      }
     }
     ts.forEachChild(node, visit);
   }
