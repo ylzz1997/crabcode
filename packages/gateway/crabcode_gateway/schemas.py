@@ -1200,6 +1200,7 @@ class PromptTemplateView(BaseModel):
     name: str
     sections: dict[str, str] = Field(default_factory=dict)
     source: str
+    builtin: bool = False
 
 
 class UserAppendPromptView(BaseModel):

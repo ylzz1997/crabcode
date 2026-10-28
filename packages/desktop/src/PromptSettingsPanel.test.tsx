@@ -165,9 +165,11 @@ describe("PromptSettingsPanel", () => {
           activeConnection={null}
           activeProject={null}
           gateway={gateway}
-          data={{ ...data, active_template_id: "care", templates: [{
-            ...data.templates[0], sections: { intro: "custom identity", compact_prompt: "Previous checkpoint rules" },
-          }] }}
+          data={{
+            ...data, active_template_id: "care", templates: [{
+              ...data.templates[0], sections: { intro: "custom identity", compact_prompt: "Previous checkpoint rules" },
+            }]
+          }}
           loading={false}
           error={null}
           onRefresh={() => undefined}
@@ -358,4 +360,31 @@ describe("PromptSettingsPanel", () => {
     }));
     expect(container.textContent).toContain("已导入 2 个模版");
   });
+});
+
+it("previews a read-only compatible template and copies its exact full text", async () => {
+  const native = "\n  Keep original formatting.\n\n";
+  const builtin = { id: "builtin:claude-code", name: "Claude Code", builtin: true, source: "builtin", sections: { native_system: native } };
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const onMutate = vi.fn(async (_mutation: PromptSettingsMutation) => undefined);
+  try {
+    await act(async () => root.render(<PromptSettingsPanel activeConnection={null} activeProject={null} gateway={gateway}
+      data={{ ...data, active_template_id: builtin.id, templates: [builtin], sections: [{ key: "native_system", label: "完整提示词" }, ...data.sections] }}
+      loading={false} error={null} onRefresh={() => undefined} onMutate={onMutate} />));
+    expect(container.textContent).toContain("Claude Code (兼容版本)");
+    const text = container.querySelector<HTMLTextAreaElement>('[aria-label="完整提示词"]')!;
+    expect(text.value).toBe(native);
+    expect(text.readOnly).toBe(true);
+    expect(container.querySelector('[aria-label="介绍"]')).toBeNull();
+    expect(container.querySelector('[aria-label="删除模版 Claude Code"]')).toBeNull();
+    const copy = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "另存为新模版")!;
+    await act(async () => copy.click());
+    expect(onMutate).toHaveBeenCalledWith(expect.objectContaining({ action: "save_template", template_name: "Claude Code 副本", sections: expect.objectContaining({ native_system: native }) }));
+    expect(onMutate.mock.calls[0][0].template_id).toBeUndefined();
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+  }
 });

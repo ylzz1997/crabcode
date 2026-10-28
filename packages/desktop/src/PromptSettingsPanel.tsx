@@ -63,8 +63,9 @@ function sectionsForExport(draft: Record<string, string>, keys: string[]): Recor
   const sections: Record<string, string> = {};
   const ordered = [...keys, ...Object.keys(draft).filter((key) => !keys.includes(key))];
   for (const key of ordered) {
-    const text = (draft[key] ?? "").trim();
-    if (text) sections[key] = text;
+    const raw = draft[key] ?? "";
+    const text = key === "native_system" ? raw : raw.trim();
+    if (text.trim()) sections[key] = text;
   }
   return sections;
 }
@@ -130,6 +131,8 @@ export function PromptSettingsPanel({
     })),
   }), [data?.active_template_id, data?.templates, sectionKeys, getLocale()]);
   const selected = data?.templates.find((item) => item.id === selectedId);
+  const builtin = selected?.builtin === true;
+  const visibleSections = (data?.sections ?? []).filter(section => !selected?.sections.native_system || ["native_system", "agent_prompt", "compact_prompt", "extra"].includes(section.key));
   const savedDraft = draftFrom(selected, sectionKeys);
   const dirty = selectedId === DEFAULT_TEMPLATE
     ? templateName.trim() !== "" || sectionKeys.some((key) => (draft[key] ?? "").trim() !== "")
@@ -418,7 +421,7 @@ export function PromptSettingsPanel({
           <section className="runtime-settings-group settings-group prompt-template-card" aria-labelledby="prompt-template-title">
             <div className="settings-subsection-heading">
               <div>
-                <h3 id="prompt-template-title">{tr("自定义提示词模版")}</h3>
+                <h3 id="prompt-template-title">{tr("提示词模板")}</h3>
                 <p>{tr("留空的段落使用内置默认。选择「默认」时不套用模版；若配置里已有 prompt_profile，仍会沿用它。导入和导出走 JSON，写入当前选择的配置层。")}</p>
               </div>
             </div>
@@ -458,10 +461,10 @@ export function PromptSettingsPanel({
                         onClick={() => void selectTemplate(item.id)}
                       >
                         <span>{item.name}</span>
-                        {item.source !== source && sourceLabel(item.source) && <small>{sourceLabel(item.source)}</small>}
+                        {!item.builtin && item.source !== source && sourceLabel(item.source) && <small>{sourceLabel(item.source)}</small>}
                         {data.active_template_id === item.id && <em>{tr("使用中")}</em>}
                       </button>
-                      <button
+                      {!item.builtin && <button
                         className="prompt-list-delete"
                         type="button"
                         aria-label={tr("删除模版 {0}", { 0: item.name })}
@@ -469,7 +472,7 @@ export function PromptSettingsPanel({
                         onClick={() => void deleteTemplate(item)}
                       >
                         <Trash2 />
-                      </button>
+                      </button>}
                     </div>
                   ))}
                   {!showDefaultTemplate && visibleTemplates.length === 0 && (
@@ -478,40 +481,43 @@ export function PromptSettingsPanel({
                 </div>
               </div>
               <div className="prompt-settings-body">
+                {builtin && <p>{tr("{0} (兼容版本)", { 0: selected.name })}</p>}
                 <label className="prompt-settings-field">
                   <span>{tr("模版名称")}</span>
                   <input
                     aria-label={tr("模版名称")}
                     value={templateName}
+                    readOnly={builtin}
                     disabled={!canEdit || mutationBusy}
                     placeholder={tr("保存时使用的名称")}
                     onChange={(event) => setTemplateName(event.target.value)}
                   />
                 </label>
-                {data.sections.map((section) => (
-                  <div className="prompt-settings-field" key={section.key}>
+                {visibleSections.map((section) => (
+                  <div className="prompt-settings-field" key={`${selectedId}:${section.key}`}>
                     <label htmlFor={`prompt-section-${section.key}`}>{promptSectionLabel(section)}</label>
-                    {section.description && <small>{section.description}</small>}
+                    {section.key === "native_system" ? <small>{tr("完整提示词替换默认行为段落，运行环境与权限仍由 CrabCode 提供。")}</small> : section.description && <small>{section.description}</small>}
                     <textarea
                       id={`prompt-section-${section.key}`}
                       aria-label={promptSectionLabel(section)}
                       value={draft[section.key] ?? ""}
+                      readOnly={builtin}
                       disabled={!canEdit || mutationBusy}
-                      rows={4}
+                      rows={section.key === "native_system" ? 18 : 4}
                       placeholder={section.default_text || (section.key === "extra" ? tr("留空则不追加额外段落") : tr("留空则使用默认"))}
                       onChange={(event) => setDraft((current) => ({ ...current, [section.key]: event.target.value }))}
                     />
                   </div>
                 ))}
                 <div className="prompt-settings-actions">
-                  <button
+                  {!builtin && <button
                     className="settings-command primary"
                     type="button"
                     disabled={!canEdit || mutationBusy}
                     onClick={() => void saveTemplate()}
                   >
                     <span>{creating ? tr("保存为模版") : tr("保存模版")}</span>
-                  </button>
+                  </button>}
                   {!creating && (
                     <button
                       className="settings-command"
@@ -519,7 +525,9 @@ export function PromptSettingsPanel({
                       disabled={!canEdit || mutationBusy}
                       onClick={() => {
                         const name = templateName.trim();
-                        const nextName = name.endsWith(tr(" 副本")) ? name : tr("{0} 副本", { 0: name || tr("未命名") });
+                        const baseName = tr("{0} 副本", { 0: (name || tr("未命名")).slice(0, 70) });
+                        let nextName = baseName;
+                        for (let n = 2; data.templates.some(item => item.name === nextName); n++) nextName = `${baseName} ${n}`;
                         void mutate({
                           action: "save_template",
                           source,

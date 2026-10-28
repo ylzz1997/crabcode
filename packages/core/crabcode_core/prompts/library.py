@@ -17,6 +17,7 @@ from crabcode_core.types.config import (
 )
 
 PROMPT_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("native_system", "完整提示词"),
     ("prefix", "身份前缀"),
     ("intro", "介绍"),
     ("system", "系统规则"),
@@ -56,8 +57,8 @@ def profile_from_sections(sections: dict[str, str]) -> PromptProfile:
     for key, raw in sections.items():
         if not isinstance(raw, str):
             continue
-        text = raw.strip()
-        if not text or key not in PROMPT_SECTION_KEYS:
+        text = raw if key == "native_system" else raw.strip()
+        if not text.strip() or key not in PROMPT_SECTION_KEYS:
             continue
         if key == "extra":
             extra.append(text)
@@ -72,8 +73,13 @@ def resolve_prompt_profile(settings: CrabCodeSettings) -> PromptProfile | None:
     """Return the active template, otherwise a legacy prompt_profile."""
     active = settings.active_prompt_template
     if active:
+        from crabcode_core.prompts.presets import get_builtin_template
+
+        builtin = get_builtin_template(active)
+        if builtin is not None:
+            return profile_from_sections(builtin.sections)
         match = next(
-            (item for item in last_by_id(settings.prompt_templates) if item.id == active),
+            (item for item in last_by_id(settings.prompt_templates) if item.id == active and not active.startswith("builtin:")),
             None,
         )
         if match is not None:

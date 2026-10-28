@@ -153,6 +153,7 @@ export interface PromptTemplateView {
   name: string;
   source: string;
   sections?: Record<string, string>;
+  builtin?: boolean;
 }
 
 export interface UserAppendPromptView {

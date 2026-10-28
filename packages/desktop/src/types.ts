@@ -654,6 +654,7 @@ export interface PromptSectionInfo {
 }
 
 export interface PromptTemplateView {
+  builtin?: boolean;
   id: string;
   name: string;
   sections: Record<string, string>;

@@ -1596,17 +1596,21 @@ function renderPrompts(): void {
   });
   card.append(row(tr("编辑模板"), tr("选择已有模板，或从默认内容新建。"), picker));
   const chosen = templates.find((item) => item.id === selectedTemplate);
+  const builtin = chosen?.builtin === true;
+  if (builtin) card.append(el("p", "group-description", tr("{0} (兼容版本)", { 0: chosen.name })));
   const savedDraft = promptDrafts.get(selectedTemplate);
   const name = input(savedDraft?.name ?? chosen?.name ?? "", tr("模板名称"));
   name.placeholder = tr("给模板起个名字");
+  name.readOnly = builtin;
   name.addEventListener("input", () => dirty.add("prompts"));
   const editor = el("fieldset", "prompt-editor");
   editor.disabled = !canEdit;
   editor.append(row(tr("模板名称"), "", name));
   const fields = new Map<string, HTMLTextAreaElement>();
   for (const section of state.sections ?? []) {
+    if (chosen?.sections?.native_system && !["native_system", "agent_prompt", "compact_prompt", "extra"].includes(section.key)) continue;
     const details = el("details", "prompt-section");
-    details.open = section.key === "extra";
+    details.open = section.key === "extra" || section.key === "native_system";
     details.append(el("summary", "", promptSectionLabel(section)));
     if (section.description)
       details.append(el("p", "group-description", section.description));
@@ -1616,7 +1620,9 @@ function renderPrompts(): void {
       chosen?.sections?.[section.key] ??
       "";
     area.placeholder = section.default_text ?? tr("留空沿用默认");
-    area.rows = 9;
+    area.rows = section.key === "native_system" ? 18 : 9;
+    area.readOnly = builtin;
+    if (section.key === "native_system") details.append(el("p", "group-description", tr("完整提示词替换默认行为段落，运行环境与权限仍由 CrabCode 提供。")));
     area.setAttribute("aria-label", promptSectionLabel(section));
     area.addEventListener("input", () => dirty.add("prompts"));
     fields.set(section.key, area);
@@ -1648,15 +1654,18 @@ function renderPrompts(): void {
   editor.append(
     actions(
       button(
-        tr("保存并启用"),
+        builtin ? tr("另存为新模版") : tr("保存并启用"),
         async () => {
           const value = draft();
           if (!value.name) throw new Error(tr("请填写模板名称"));
+          const baseName = tr("{0} 副本", { 0: value.name.slice(0, 70) });
+          let copyName = baseName;
+          for (let n = 2; templates.some(item => item.name === copyName); n++) copyName = `${baseName} ${n}`;
           await lockEditor(card, () =>
             mutate("prompts", {
               action: "save_template",
-              template_id: value.id,
-              template_name: value.name,
+              template_id: builtin ? undefined : value.id,
+              template_name: builtin ? copyName : value.name,
               sections: value.sections,
             }),
           );
@@ -1711,7 +1720,7 @@ function renderPrompts(): void {
     ),
   );
   (transfer.firstElementChild as HTMLButtonElement).disabled = !canEdit;
-  if (chosen) {
+  if (chosen && !builtin) {
     const remove = button(
       tr("删除模板"),
       async () => {

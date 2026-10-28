@@ -882,12 +882,16 @@ def _editable_prompt_sources(cwd: str) -> list[ModelSettingsSource]:
 
 def _prompt_settings_from_files(cwd: str) -> PromptSettingsResponse:
     from crabcode_core.prompts.library import PROMPT_SECTIONS, last_by_id
+    from crabcode_core.prompts.presets import builtin_templates, is_builtin_id
     from crabcode_core.prompts.system import get_default_prompt_sections
 
     default_sections = get_default_prompt_sections()
     manager = ConfigManager(cwd=cwd)
     settings = manager.load()
-    templates = last_by_id(list(settings.prompt_templates))
+    templates = [*builtin_templates(), *(
+        item for item in last_by_id(list(settings.prompt_templates))
+        if not is_builtin_id(item.id)
+    )]
     user_prompts = last_by_id(list(settings.user_append_prompts))
     template_sources = _prompt_source_map(manager, "prompt_templates")
     prompt_sources = _prompt_source_map(manager, "user_append_prompts")
@@ -905,7 +909,8 @@ def _prompt_settings_from_files(cwd: str) -> PromptSettingsResponse:
                 id=item.id,
                 name=item.name,
                 sections=dict(item.sections),
-                source=template_sources.get(item.id, "userSettings"),
+                source="builtin" if is_builtin_id(item.id) else template_sources.get(item.id, "userSettings"),
+                builtin=is_builtin_id(item.id),
             )
             for item in templates
         ],
@@ -952,10 +957,10 @@ def _clean_prompt_sections(sections: dict[str, str] | None) -> dict[str, str]:
     for key, value in (sections or {}).items():
         if key not in PROMPT_SECTION_KEYS or not isinstance(value, str):
             continue
-        text = value.strip()
-        if not text:
+        text = value if key == "native_system" else value.strip()
+        if not text.strip():
             continue
-        if len(text) > 20000:
+        if len(text) > (128000 if key == "native_system" else 20000):
             raise HTTPException(status_code=422, detail=f"{key} is too long")
         cleaned[key] = text
     return cleaned
@@ -1014,6 +1019,10 @@ def _mutate_prompt_settings(
     import uuid
 
     from crabcode_core.types.config import PromptTemplateConfig, UserAppendPromptConfig
+    from crabcode_core.prompts.presets import is_builtin_id
+
+    if req.action in {"save_template", "delete_template"} and is_builtin_id((req.template_id or "").strip()):
+        raise HTTPException(status_code=400, detail="内置模版只读，请另存为新模版")
 
     cwd = _resolve_model_settings_cwd(request, req.cwd)
     path = _settings_mutation_path(cwd, req.source)

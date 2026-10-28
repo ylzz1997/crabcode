@@ -22,6 +22,9 @@ class PromptProfile(BaseModel):
     # Agent identity line — used to build the default intro section.
     prefix: str = DEFAULT_PREFIX
 
+    # Full-text templates retain whitespace and replace the behavioral sections.
+    native_system: str | None = None
+
     # ── Behavioral sections (domain-specific, the main things to swap) ──
 
     intro: str | None = None

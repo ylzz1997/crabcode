@@ -50,3 +50,20 @@ describe("prompt template JSON", () => {
     expect(promptTemplateFilename("prompt-templates")).toBe("prompt-templates.json");
   });
 });
+
+it("preserves full prompt whitespace and imports bundled IDs as editable copies", () => {
+  const native = "\n  Exact text\n" + "long prompt ".repeat(2000) + "\n\n";
+  const text = serializePromptTemplate({ id: "builtin:codex", name: "Codex", sections: { native_system: native } });
+  expect(parsePromptTemplateFile(text)).toEqual([{ name: "Codex 副本", sections: { native_system: native } }]);
+  expect(parsePromptTemplateFile(JSON.stringify({ id: " builtin:codex ", name: "Codex", sections: { native_system: native } }))[0].id).toBeUndefined();
+});
+
+it("exports bundled prompts beside existing copies without duplicate names", () => {
+  const templates = [
+    { id: "builtin:codex", name: "Codex", sections: { native_system: "\nfull text\n" } },
+    { id: "custom", name: "Codex 副本", sections: { native_system: "edited" } },
+  ];
+  const exported = parsePromptTemplateFile(serializePromptTemplates(templates));
+  expect(exported.map(item => item.name)).toEqual(["Codex 副本 2", "Codex 副本"]);
+  expect(exported.map(item => item.id)).toEqual([undefined, "custom"]);
+});

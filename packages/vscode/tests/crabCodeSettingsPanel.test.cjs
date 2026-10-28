@@ -424,3 +424,25 @@ test("local preferences can save while a Gateway request is still pending", asyn
   await h.settle();
   h.dom.window.close();
 });
+
+test("built-in compatible prompts are read-only and copy as full text", async () => {
+  const h = harness({ section: "prompts" });
+  const native = "\n  Keep original formatting.\n\n";
+  h.state.prompts.templates.push({ id: "builtin:claude-code", name: "Claude Code", builtin: true, source: "builtin", sections: { native_system: native } });
+  h.state.prompts.sections.push({ key: "native_system", label: "完整提示词" });
+  await h.settle();
+  h.change("编辑模板", "builtin:claude-code");
+  await h.settle();
+  assert.match(h.doc.body.textContent, /Claude Code \(兼容版本\)/);
+  const area = h.doc.querySelector('[aria-label="完整提示词"]');
+  assert.equal(area.value, native);
+  assert.equal(area.readOnly, true);
+  assert.ok(!Array.from(h.doc.querySelectorAll("button")).some(button => button.textContent === "删除模板"));
+  h.click("另存为新模版");
+  await h.settle();
+  const saved = h.requests.filter(item => item.body?.action === "save_template").at(-1).body;
+  assert.equal(saved.template_name, "Claude Code 副本");
+  assert.equal(saved.template_id, undefined);
+  assert.equal(saved.sections.native_system, native);
+  h.dom.window.close();
+});

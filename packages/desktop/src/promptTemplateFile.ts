@@ -7,7 +7,7 @@ export interface PortablePromptTemplate {
 
 const NAME_LIMIT = 80;
 const SECTION_LIMIT = 20_000;
-const FILE_LIMIT = 40;
+const FILE_LIMIT = 48;
 const TEXT_LIMIT = 12 * 1024 * 1024;
 
 export function promptTemplateFilename(name: string): string {
@@ -27,7 +27,7 @@ export function serializePromptTemplate(template: PortablePromptTemplate): strin
 }
 
 export function serializePromptTemplates(templates: PortablePromptTemplate[]): string {
-  return `${JSON.stringify({ templates: templates.map(portableTemplate) }, null, 2)}\n`;
+  return `${JSON.stringify({ templates: parsePromptTemplateFile(JSON.stringify({ templates })).map(portableTemplate) }, null, 2)}\n`;
 }
 
 export function parsePromptTemplateFile(text: string): PortablePromptTemplate[] {
@@ -43,20 +43,22 @@ export function parsePromptTemplateFile(text: string): PortablePromptTemplate[] 
   if (items.length === 0) throw new Error(tr("JSON 里没有提示词模版"));
   if (items.length > FILE_LIMIT) throw new Error(tr("提示词模版数量已达上限"));
   const names = new Set<string>();
+  const customNames = new Set(items.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !String((item as Record<string, unknown>).id ?? "").trim().startsWith("builtin:")).map(item => String(item.name ?? "").trim()));
   const ids = new Set<string>();
-  return items.map((item, index) => normalizePromptTemplate(item, index, names, ids));
+  return items.map((item, index) => normalizePromptTemplate(item, index, names, ids, customNames));
 }
 
 function portableTemplate(template: PortablePromptTemplate): PortablePromptTemplate {
   const sections: Record<string, string> = {};
   for (const [key, value] of Object.entries(template.sections)) {
     if (typeof value !== "string") continue;
-    const text = value.trim();
-    if (text) sections[key] = text;
+    const text = key === "native_system" ? value : value.trim();
+    if (text.trim()) sections[key] = text;
   }
   const stored: PortablePromptTemplate = { name: template.name.trim(), sections };
   const id = template.id?.trim();
-  if (id) stored.id = id;
+  if (id?.startsWith("builtin:")) stored.name = tr("{0} 副本", { 0: stored.name });
+  else if (id) stored.id = id;
   return stored;
 }
 
@@ -77,15 +79,21 @@ function normalizePromptTemplate(
   index: number,
   names: Set<string>,
   ids: Set<string>,
+  customNames: Set<string>,
 ): PortablePromptTemplate {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new Error(tr("第 {0} 个模版不是对象", { 0: index + 1 }));
   }
   const record = item as Record<string, unknown>;
-  const name = typeof record.name === "string" ? record.name.trim() : "";
+  let name = typeof record.name === "string" ? record.name.trim() : "";
   if (!name) throw new Error(tr("第 {0} 个模版缺少名称", { 0: index + 1 }));
   if (name === "默认") throw new Error(tr("模版名称不能是「默认」"));
   if (name.length > NAME_LIMIT) throw new Error(tr("模版「{0}」的名称过长", { 0: name.slice(0, 20) }));
+  if (typeof record.id === "string" && record.id.trim().startsWith("builtin:")) {
+    const base = tr("{0} 副本", { 0: name });
+    name = base;
+    for (let n = 2; names.has(name) || customNames.has(name); n++) name = `${base} ${n}`;
+  }
   if (names.has(name)) throw new Error(tr("模版「{0}」在文件里重复", { 0: name }));
   names.add(name);
   let id: string | undefined;
@@ -102,11 +110,11 @@ function normalizePromptTemplate(
   if (record.sections && typeof record.sections === "object") {
     for (const [key, value] of Object.entries(record.sections)) {
       if (typeof value !== "string") continue;
-      const text = value.trim();
-      if (!text) continue;
-      if (text.length > SECTION_LIMIT) throw new Error(tr("模版「{0}」的 {1} 过长", { 0: name, 1: key }));
+      const text = key === "native_system" ? value : value.trim();
+      if (!text.trim()) continue;
+      if (text.length > (key === "native_system" ? 128_000 : SECTION_LIMIT)) throw new Error(tr("模版「{0}」的 {1} 过长", { 0: name, 1: key }));
       sections[key] = text;
     }
   }
-  return id ? { id, name, sections } : { name, sections };
+  return id && !id.startsWith("builtin:") ? { id, name, sections } : { name, sections };
 }

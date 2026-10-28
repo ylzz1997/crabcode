@@ -87,8 +87,9 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
         assert initial.status_code == 200
         body = initial.json()
         assert body["active_template_id"] is None
-        assert body["templates"] == []
-        assert body["sections"][0]["key"] == "prefix"
+        assert len(body["templates"]) == 8
+        assert all(item["builtin"] for item in body["templates"])
+        assert body["sections"][0]["key"] == "native_system"
         assert any(section["key"] == "extra" for section in body["sections"])
         compact = next(section for section in body["sections"] if section["key"] == "compact_prompt")
         assert compact["label"] == "上下文压缩提示词"
@@ -99,7 +100,7 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
         assert defaults["agent_prompt"] == DEFAULT_AGENT_PROMPT
         system_prompt = get_system_prompt(["Skill"], "test")
         for key, text in defaults.items():
-            if key not in {"prefix", "agent_prompt", "compact_prompt", "extra"}:
+            if key not in {"prefix", "agent_prompt", "compact_prompt", "extra", "native_system"}:
                 assert text
                 assert text in system_prompt
 
@@ -113,9 +114,9 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
         assert saved.status_code == 200
         saved_body = saved.json()
         assert saved_body["active_template_id"]
-        assert saved_body["templates"][0]["name"] == "客服"
+        assert saved_body["templates"][-1]["name"] == "客服"
         expected_sections = {"intro": "custom identity", "compact_prompt": "保留目标和下一步"}
-        assert saved_body["templates"][0]["sections"] == expected_sections
+        assert saved_body["templates"][-1]["sections"] == expected_sections
         assert resolve_compact_prompt(session._prompt_profile) == "保留目标和下一步"
 
         stored = json.loads((home / ".crabcode" / "settings.json").read_text(encoding="utf-8"))
@@ -128,7 +129,7 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
             "sections": {"intro": "custom identity", "compact_prompt": "  \n"},
         })
         assert cleared.status_code == 200
-        assert cleared.json()["templates"][0]["sections"] == {"intro": "custom identity"}
+        assert cleared.json()["templates"][-1]["sections"] == {"intro": "custom identity"}
         assert resolve_compact_prompt(session._prompt_profile) == DEFAULT_COMPACT_PROMPT
 
         default = client.post("/config/prompt-settings", json={
@@ -171,7 +172,7 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
         })
         assert rejected.status_code == 400
 
-        template_id = saved_body["templates"][0]["id"]
+        template_id = saved_body["templates"][-1]["id"]
         prompt_id = checked.json()["user_prompts"][0]["id"]
         project_settings = project / ".crabcode" / "settings.json"
         project_settings.parent.mkdir(parents=True, exist_ok=True)
@@ -188,7 +189,7 @@ def test_prompt_settings_round_trip(tmp_path, monkeypatch):
             "template_id": template_id,
         })
         assert deleted_template.status_code == 200
-        assert deleted_template.json()["templates"] == []
+        assert all(item["builtin"] for item in deleted_template.json()["templates"])
         assert deleted_template.json()["active_template_id"] is None
         user_stored = json.loads((home / ".crabcode" / "settings.json").read_text(encoding="utf-8"))
         project_stored = json.loads(project_settings.read_text(encoding="utf-8"))
