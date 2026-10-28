@@ -712,6 +712,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         syncLanguage();
         if (e.affectsConfiguration("crabcode.language")) activeChatProvider.refreshLanguage();
         activeConnection.refreshConfiguration();
+        if (e.affectsConfiguration("crabcode.serverUrl") || e.affectsConfiguration("crabcode.password")) {
+          void activeChatProvider.fetchAndSendSessions();
+        }
         if (e.affectsConfiguration("crabcode.language") || e.affectsConfiguration("crabcode.computerUseEnabled") || e.affectsConfiguration("crabcode.serverUrl") || e.affectsConfiguration("crabcode.password")) {
           void computerUse.configure();
         }
@@ -722,6 +725,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
   );
+
+  push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    void activeChatProvider.fetchAndSendSessions();
+  }));
 
   // 5. Register PermissionHandler and ChoiceHandler
   const permissionHandler = new PermissionHandler(activeConnection);

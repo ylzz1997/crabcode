@@ -8,7 +8,7 @@ const markdownSource = buildSync({
   globalName: 'CrabCodeMarkdown', minify: true,
 }).outputFiles[0].text;
 
-function loadPanel(fetch) {
+function loadPanel(fetch, initialWorkspaceState = []) {
   const source = buildSync({ entryPoints: [path.join(__dirname, '../../src/chatPanel.ts')], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['vscode'] }).outputFiles[0].text;
   const module = { exports: {} };
   const config = { serverUrl: 'ws://localhost:4096/ws' };
@@ -62,7 +62,7 @@ function loadPanel(fetch) {
   const listeners = {};
   const sent = [];
   const connection = { sessionId: 'a', connected: true, on: (name, fn) => { listeners[name] = fn; }, ensureSession() {}, send: (text, options) => { sent.push({ text, ...options }); return 'operation'; } };
-  const saved = new Map();
+  const saved = new Map(initialWorkspaceState);
   const storage = { get: key => saved.get(key), update: async (key, value) => saved.set(key, value) };
   const panel = new module.exports.ChatPanelProvider(uriFor(path.resolve(__dirname, '../..')), connection, undefined, storage);
   const getRawWebviewHtml = webview => module.exports.ChatPanelProvider.prototype.getHtmlForWebview.call(panel, {
@@ -76,6 +76,6 @@ function loadPanel(fetch) {
   const messages = [];
   panel.postMessage = msg => messages.push(msg);
   panel.displayedSessionId = 'a';
-  return { panel, connection, messages, saved, sent, listeners, config, quickPicks, workspaceRoot, workspacePath, getRawWebviewHtml };
+  return { vscode, panel, connection, messages, saved, sent, listeners, config, quickPicks, workspaceRoot, workspacePath, getRawWebviewHtml };
 }
 module.exports = { loadPanel };

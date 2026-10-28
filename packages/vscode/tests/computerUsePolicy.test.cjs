@@ -13,7 +13,7 @@ function connection(preferences) {
   const module = { exports: {} };
   let currentPreferences = preferences;
   const config = values => ({
-    get: (_key, fallback) => fallback,
+    get: (key, fallback) => values[key]?.workspaceValue ?? values[key]?.globalValue ?? fallback,
     inspect: key => values[key] ?? { defaultValue: 'allow_foreground' },
   });
   vm.runInNewContext(source, {
@@ -90,4 +90,15 @@ test('native host binding follows create and resume and enablement follows every
   }
   assert.equal(messages[2].computer_use_enabled, true);
   assert.equal(messages[3].computer_use_enabled, false);
+});
+
+
+test('model defaults apply to new sessions but never override a resumed session', () => {
+  const { conn, messages } = connection({ chatModelDefault: { globalValue: 'default-profile' } });
+  conn.sendNewSession('/workspace');
+  conn.sendResumeSession('saved-session');
+  conn.sendNewSession('/workspace', { model_profile: 'explicit-profile' });
+  assert.equal(messages[0].model_profile, 'default-profile');
+  assert.equal(messages[1].model_profile, undefined);
+  assert.equal(messages[2].model_profile, 'explicit-profile');
 });

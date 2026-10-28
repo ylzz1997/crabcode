@@ -74,8 +74,19 @@ failures and the selected interpreter appear in the **CrabCode** output channel.
   guidance at the next safe boundary. Unsent input remains recoverable after a stop.
 - Streaming chat with Markdown, code blocks, diffs, tool results, attachments,
   permissions, choices, and plans.
+  Markdown headings, nested lists, quotes, links, task lists, strikethrough and
+  tables use the same CommonMark/GFM and CJK parsing rules as Desktop, including
+  restored history and streaming replies. Code/table copy and image preview
+  controls preserve the original content.
 - Explain, fix, refactor, test, or send the selected editor code to chat.
-- Create, resume, interrupt, and fork conversation sessions.
+- Create, resume, interrupt, and fork conversation sessions. Session and history
+  lists default to the current workspace folders. Use their scope selector to
+  switch to **All projects** (the latest 200 sessions on the connected Gateway);
+  the selection is remembered per workspace. Without an open folder, select
+  **All projects** to browse sessions.
+- Restoring a conversation restores its saved model profile. The editor's default
+  model applies to new sessions; refreshing settings or reconnecting does not
+  replace an existing session's model.
 - Choose reasoning effort from the composer capsule (none through max). Enable
   Ultra mode from **+**, and click its gradient capsule to turn it off. These
   settings are saved per session in the workspace and restored on reconnect.

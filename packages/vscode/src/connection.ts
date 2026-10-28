@@ -345,6 +345,7 @@ export class CrabCodeConnection implements vscode.Disposable {
     this.log(`new_session requested cwd=${cwd ?? "(none)"}${hasOverrides ? " with API overrides" : ""}`);
     const computerUseMode = this.computerUseModeOverride();
     this.sendRaw(serializeCommand(buildNewSessionCommand(cwd, {
+      model_profile: this.config.get<string>("chatModelDefault", "").trim() || undefined,
       ...(computerUseMode ? { computer_use_mode: computerUseMode } : {}),
       computer_use_target_scope: this.computerUseTargetScopeOverride(),
       computer_use_delivery_policy: this.computerUseDeliveryPolicyOverride(),
@@ -465,6 +466,11 @@ export class CrabCodeConnection implements vscode.Disposable {
           this._sessionId = payload.properties.session_id as string;
           this.log(`heartbeat session=${this._sessionId}`);
           this.flushPendingSessionCommands();
+        }
+        break;
+      case "model_change":
+        if (!payload.session_id || payload.session_id === this._sessionId) {
+          this._modelName = payload.model_profile;
         }
         break;
       case "turn_complete":

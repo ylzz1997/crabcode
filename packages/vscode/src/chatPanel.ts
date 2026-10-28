@@ -357,6 +357,8 @@ interface SessionState {
   contextUsage: ContextUsageStatus | null;
   batchDenied: boolean;
   mode: "agent" | "plan";
+  modelName: string | null;
+  modelRevision: number;
   pendingSteeringMessages: ChatMessage[];
   startNewAssistantMessage: boolean;
 }
@@ -377,6 +379,8 @@ function createEmptySessionState(): SessionState {
     contextUsage: null,
     batchDenied: false,
     mode: "agent",
+    modelName: null,
+    modelRevision: 0,
     pendingSteeringMessages: [],
     startNewAssistantMessage: false,
   };
@@ -394,8 +398,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private busySessions = new Set<string>();
   private interruptRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private latestModelRequestId = 0;
+  private sessionListScope: "workspace" | "all" = "workspace";
+  private sessionListRequestId = 0;
   private _lastModelsFetchTime = 0;
-  private _modelsFetchInProgress = false;
+  private modelCatalogKey = "";
+  private modelFetch: { key: string; promise: Promise<{ models: string[]; groups: Record<string, string> }> } | null = null;
   private static readonly MODELS_FETCH_COOLDOWN_MS = 30_000;
   private lastNonEmptyModels: string[] = [];
   private lastNonEmptyModelGroups: Record<string, string> = {};
@@ -449,12 +456,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly connection: CrabCodeConnection,
     private readonly outputChannel?: vscode.OutputChannel,
-    workspaceState?: vscode.Memento,
+    private readonly workspaceState?: vscode.Memento,
   ) {
+    this.sessionListScope = workspaceState?.get("crabcode.sessionListScope") === "all" ? "all" : "workspace";
     this.runtimeControls = new RuntimeControls(
       workspaceState,
       async (endpoint, sessionId, preference) => {
         const url = new URL(this._gatewayUrl(endpoint));
+        const state = this.getSessionState(sessionId);
+        const modelRevision = state.modelRevision;
         if (!preference) url.searchParams.set("session_id", sessionId);
         const response = await fetch(url.toString(), {
           method: preference ? "POST" : "GET",
@@ -467,6 +477,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         });
         if (!response.ok) throw new Error(await this.gatewayError(response));
         const status = await response.json() as SessionRuntimeStatus;
+        const modelName = status.model_profile || status.model;
+        if (modelName && state.modelRevision === modelRevision && url.origin === new URL(this._gatewayUrl(endpoint)).origin) {
+          state.modelName = modelName;
+          if (sessionId === this.displayedSessionId) void this.pushChatOptions();
+        }
         if (status.mode === "agent" || status.mode === "plan") {
           this.getSessionState(sessionId).mode = status.mode;
           if (sessionId === this.displayedSessionId) this.postMessage({ type: "modeChange", mode: status.mode });
@@ -581,6 +596,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (this.displayedSessionId && this.connection.connected) void this.runtimeControls.refresh(this.displayedSessionId);
           break;
         case "webviewReady":
+          this.postMessage({ type: "sessionListScope", scope: this.sessionListScope,
+            hasWorkspace: !!vscode.workspace.workspaceFolders?.length });
           this.sendCurrentSessionInfo();
           this.pushRuntimeControls();
           if (this.displayedSessionId && this.connection.connected) {
@@ -599,6 +616,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case "setModel":
           if (typeof msg.name === "string" && msg.name.length > 0) {
+            this.currentState.modelName = msg.name;
+            this.currentState.modelRevision++;
             this.connection.sendSwitchModel(
               msg.name,
               this.displayedSessionId ?? this.connection.sessionId ?? undefined,
@@ -719,6 +738,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         case "fetchSessions":
           void this.fetchAndSendSessions();
+          break;
+        case "setSessionListScope":
+          if (msg.scope === "workspace" || msg.scope === "all") {
+            this.sessionListScope = msg.scope;
+            void this.workspaceState?.update("crabcode.sessionListScope", msg.scope).then(undefined, error => {
+              this.outputChannel?.appendLine(`[CrabCode] Failed to save session list scope: ${String(error)}`);
+            });
+            void this.fetchAndSendSessions();
+          }
           break;
         case "resumeSession":
           if (typeof msg.sessionId === "string") {
@@ -1370,15 +1398,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       const url = new URL(wsUrl);
       url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-      url.pathname = "/session/list";
+      url.pathname = "/session/resolve";
       url.search = "";
+      url.searchParams.set("selector", sid);
       const headers: Record<string, string> = {};
       if (password) headers.Authorization = `Bearer ${password}`;
       const response = await fetch(url.toString(), { headers });
       if (!response.ok) return;
-      const sessions = (await response.json()) as Array<SessionInfo>;
-      const found = sessions.find((s) => s.session_id === sid);
-      if (found?.title) {
+      const found = (await response.json()) as SessionInfo;
+      if (found?.title && this.connection.sessionId === sid && this.displayedSessionId === sid) {
         const origin = found.forked_from_title
           || (found.forked_from_session_id ? tr("会话 {0}…", { 0: found.forked_from_session_id.slice(0, 8) }) : null);
         this.postMessage({ type: "sessionInfo", sessionId: sid, title: found.title, origin, status: null });
@@ -1526,20 +1554,42 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async fetchAndSendSessions(): Promise<void> {
-    const cfg = vscode.workspace.getConfiguration("crabcode");
-    const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
-    const password = cfg.get<string>("password", "");
+  public async fetchAndSendSessions(options: { recentLimit?: number; query?: string } = {}): Promise<void> {
+    const requestId = ++this.sessionListRequestId;
+    const scope = this.sessionListScope;
+    const folders = [...new Set((vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath))];
+    const state = { scope, hasWorkspace: folders.length > 0 };
+    this.postMessage({ type: "sessionList", ...state, sessions: [], loading: true });
     try {
-      const url = new URL(wsUrl);
-      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-      url.pathname = "/session/list";
-      url.search = "";
-      const headers: Record<string, string> = {};
-      if (password) headers.Authorization = `Bearer ${password}`;
-      const response = await fetch(url.toString(), { headers });
-      if (!response.ok) return;
-      const sessions = (await response.json()) as Array<SessionInfo>;
+      const headers = this._gatewayHeaders();
+      const load = async (url: URL, body?: object): Promise<SessionInfo[]> => {
+        const response = await fetch(url.toString(), {
+          method: body ? "POST" : "GET",
+          headers: body ? { ...headers, "Content-Type": "application/json" } : headers,
+          body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) throw new Error(await this.gatewayError(response));
+        return await response.json() as SessionInfo[];
+      };
+      let sessions: SessionInfo[];
+      const limit = options.recentLimit ?? 200;
+      if (options.query !== undefined) {
+        sessions = await load(new URL(this._gatewayUrl("/session/search")), { query: options.query, limit: 20 });
+      } else if (scope === "all") {
+        const url = new URL(this._gatewayUrl("/session/recent"));
+        url.searchParams.set("limit", String(limit));
+        sessions = await load(url);
+      } else {
+        const lists = await Promise.all(folders.map(cwd => {
+          const url = new URL(this._gatewayUrl("/session/list"));
+          url.searchParams.set("cwd", cwd);
+          return load(url);
+        }));
+        sessions = [...new Map(lists.flat().map(session => [session.session_id, session])).values()];
+        if (folders.length > 1) sessions.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+      }
+      if (requestId !== this.sessionListRequestId) return;
       const sessionList = sessions.map((s) => ({
         session_id: s.session_id,
         message_count: s.message_count,
@@ -1548,11 +1598,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         title: s.title ?? s.session_id.slice(0, 12),
         forked_from_title: s.forked_from_title,
         forked_from_session_id: s.forked_from_session_id,
+        cwd: s.cwd,
+        tokens_used: scope === "all" ? s.tokens_used : undefined,
+        preview: s.preview,
         status: this.busySessions.has(s.session_id) ? "running" : "done",
       }));
-      this.postMessage({ type: "sessionList", sessions: sessionList });
-    } catch {
-      // gateway not ready yet — ignore
+      this.postMessage({ type: "sessionList", ...state, sessions: sessionList,
+        limit: scope === "all" && options.query === undefined && sessions.length >= limit ? limit : null });
+    } catch (error) {
+      if (requestId !== this.sessionListRequestId) return;
+      this.postMessage({ type: "sessionList", ...state, sessions: [],
+        error: tr("加载会话列表失败：{0}", { 0: error instanceof Error ? error.message : String(error) }) });
     }
   }
 
@@ -1613,6 +1669,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     this.sendCurrentSessionInfo();
+    void this.pushChatOptions();
     setTimeout(() => void this.fetchAndSendCurrentTitle(), 500);
   }
 
@@ -1820,53 +1877,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async fetchRecentSessions(limit: number): Promise<void> {
-    try {
-      const url = new URL(this._gatewayUrl("/session/recent"));
-      url.searchParams.set("limit", String(limit));
-      const response = await fetch(url.toString(), { headers: this._gatewayHeaders() });
-      if (!response.ok) return;
-      const sessions = (await response.json()) as Array<SessionInfo>;
-      const sessionList = sessions.map((s) => ({
-        session_id: s.session_id,
-        message_count: s.message_count,
-        model: s.model,
-        created_at: s.created_at,
-        title: s.title ?? s.session_id.slice(0, 12),
-        cwd: s.cwd,
-        tokens_used: s.tokens_used,
-        preview: s.preview,
-        forked_from_title: s.forked_from_title,
-        forked_from_session_id: s.forked_from_session_id,
-        status: this.busySessions.has(s.session_id) ? "running" : "done",
-      }));
-      this.postMessage({ type: "sessionList", sessions: sessionList });
-    } catch { /* ignore */ }
+    this.sessionListScope = "all";
+    await this.fetchAndSendSessions({ recentLimit: limit });
   }
 
   private async searchSessions(query: string): Promise<void> {
-    try {
-      const response = await fetch(this._gatewayUrl("/session/search"), {
-        method: "POST",
-        headers: { ...this._gatewayHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ query, limit: 20 }),
-      });
-      if (!response.ok) return;
-      const sessions = (await response.json()) as Array<SessionInfo>;
-      const sessionList = sessions.map((s) => ({
-        session_id: s.session_id,
-        message_count: s.message_count,
-        model: s.model,
-        created_at: s.created_at,
-        title: s.title ?? s.session_id.slice(0, 12),
-        cwd: s.cwd,
-        tokens_used: s.tokens_used,
-        preview: s.preview,
-        forked_from_title: s.forked_from_title,
-        forked_from_session_id: s.forked_from_session_id,
-        status: this.busySessions.has(s.session_id) ? "running" : "done",
-      }));
-      this.postMessage({ type: "sessionList", sessions: sessionList });
-    } catch { /* ignore */ }
+    this.sessionListScope = "all";
+    await this.fetchAndSendSessions({ query });
   }
 
   private async archiveSession(sessionId: string): Promise<void> {
@@ -2988,14 +3005,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async resolveModelsFromSettingsOrGateway(): Promise<string[]> {
+  private async resolveModelsFromSettingsOrGateway(sessionId: string | null): Promise<{ models: string[]; groups: Record<string, string> }> {
     const cfg = vscode.workspace.getConfiguration("crabcode");
     const configuredModels = cfg.get<string[]>("chatModels", []) ?? [];
     if (configuredModels.length > 0) {
-      this.lastNonEmptyModelGroups = Object.fromEntries(
-        configuredModels.map((name) => [name, "default"]),
-      );
-      return configuredModels;
+      return { models: configuredModels, groups: Object.fromEntries(configuredModels.map(name => [name, "default"])) };
     }
 
     const wsUrl = cfg.get<string>("serverUrl", "ws://localhost:4096/ws");
@@ -3006,7 +3020,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       url.protocol = url.protocol === "wss:" ? "https:" : "http:";
       url.pathname = "/config/models";
       url.search = "";
-      const sessionId = this.displayedSessionId ?? this.connection.sessionId;
       if (sessionId) url.searchParams.set("session_id", sessionId);
 
       const headers: Record<string, string> = {};
@@ -3016,7 +3029,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       const response = await fetch(url.toString(), { headers });
       if (!response.ok) {
-        return [];
+        return { models: [], groups: {} };
       }
 
       const models = (await response.json()) as GatewayModelInfo[];
@@ -3025,37 +3038,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           .filter((model) => typeof model.name === "string" && model.name.length > 0)
           .map((model) => [model.name, model.group || "default"]),
       );
-      if (models.length > 0) this.lastNonEmptyModelGroups = modelGroups;
-      return models.map((model) => model.name).filter((name) => name.length > 0);
+      return { models: models.map(model => model.name).filter(name => name.length > 0), groups: modelGroups };
     } catch {
-      return [];
+      return { models: [], groups: {} };
     }
   }
 
-  /** After WebSocket connects, align server session with workspace settings. */
+  /** Keep permission preferences in sync. Model defaults apply only on creation;
+   * resuming a conversation must preserve the model saved by the Gateway. */
   public async syncSessionPreferencesFromSettings(): Promise<void> {
-    if (!this.connection.connected) {
-      return;
-    }
-
+    if (!this.connection.connected) return;
+    const sessionId = this.connection.sessionId;
     const cfg = vscode.workspace.getConfiguration("crabcode");
-    const models = await this.resolveModelsFromSettingsOrGateway();
-    const defaultModel = cfg.get<string>("chatModelDefault", "") ?? "";
-    const mode = normalizePermissionMode(
-      cfg.get<string>("permissionMode", "default"),
-    );
-
-    if (models.length > 0) {
-      const pick =
-        defaultModel && models.includes(defaultModel) ? defaultModel : models[0];
-      this.connection.sendSwitchModel(
-        pick,
-        this.connection.sessionId ?? undefined,
-      );
-    }
     this.connection.sendSetPermissionMode(
-      mode,
-      this.connection.sessionId ?? undefined,
+      normalizePermissionMode(cfg.get<string>("permissionMode", "default")),
+      sessionId ?? undefined,
     );
     void this.pushChatOptions();
   }
@@ -3063,50 +3060,37 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async pushChatOptions(): Promise<void> {
     const requestId = ++this.latestModelRequestId;
     const cfg = vscode.workspace.getConfiguration("crabcode");
-    let fetchedModels: string[];
-    let modelGroups: Record<string, string> = {};
-
-    // Throttle: skip the HTTP fetch if we recently fetched and a fetch is
-    // already in-flight.  Heartbeats every 10 s were causing a flood of
-    // /config/models requests that could starve the event loop.
-    const now = Date.now();
-    const skipFetch =
-      this._modelsFetchInProgress ||
-      (now - this._lastModelsFetchTime < ChatPanelProvider.MODELS_FETCH_COOLDOWN_MS &&
-        this.lastNonEmptyModels.length > 0);
-
-    if (skipFetch) {
-      fetchedModels = this.lastNonEmptyModels;
-      modelGroups = this.lastNonEmptyModelGroups;
-    } else {
-      try {
-        this._modelsFetchInProgress = true;
-        fetchedModels = await this.resolveModelsFromSettingsOrGateway();
-        modelGroups = this.lastNonEmptyModelGroups;
-        this._lastModelsFetchTime = Date.now();
-      } catch {
-        fetchedModels = [];
-      } finally {
-        this._modelsFetchInProgress = false;
+    const sessionId = this.displayedSessionId ?? this.connection.sessionId;
+    const key = JSON.stringify([this._gatewayUrl("/"), sessionId, cfg.get<string[]>("chatModels", [])]);
+    const sameCatalog = key === this.modelCatalogKey;
+    let fetchedModels = sameCatalog ? this.lastNonEmptyModels : [];
+    let modelGroups = sameCatalog ? this.lastNonEmptyModelGroups : {};
+    if (!sameCatalog || Date.now() - this._lastModelsFetchTime >= ChatPanelProvider.MODELS_FETCH_COOLDOWN_MS || !fetchedModels.length) {
+      if (this.modelFetch?.key !== key) {
+        this.modelFetch = { key, promise: this.resolveModelsFromSettingsOrGateway(sessionId) };
       }
-    }
-    if (!modelGroups) modelGroups = {};
-    if (requestId !== this.latestModelRequestId) {
-      return;
-    }
-    if (fetchedModels.length > 0) {
+      const pending = this.modelFetch;
+      const result = await pending.promise;
+      if (this.modelFetch === pending) this.modelFetch = null;
+      if (requestId !== this.latestModelRequestId || sessionId !== (this.displayedSessionId ?? this.connection.sessionId)) return;
+      if (result.models.length > 0) {
+        fetchedModels = result.models;
+        modelGroups = result.groups;
+      }
+      this.modelCatalogKey = key;
       this.lastNonEmptyModels = fetchedModels;
+      this.lastNonEmptyModelGroups = modelGroups;
+      this._lastModelsFetchTime = Date.now();
     }
+    if (requestId !== this.latestModelRequestId) return;
     const defaultModel = cfg.get<string>("chatModelDefault", "") ?? "";
-    const fallbackModels = uniqNonEmpty([
-      this.connection.modelName,
-      defaultModel,
-    ]);
-    const models = fetchedModels.length > 0
-      ? fetchedModels
-      : (this.lastNonEmptyModels.length > 0 ? this.lastNonEmptyModels : fallbackModels);
+    const sessionModel = (sessionId ? this.getSessionState(sessionId).modelName : null)
+      || (sessionId === this.connection.sessionId ? this.connection.modelName : null);
+    // A restored profile can be absent from a user-filtered model menu. Keep it
+    // visible instead of presenting a different default as the active model.
+    const models = uniqNonEmpty([...fetchedModels, sessionModel || "", ...(!sessionId ? [defaultModel] : [])]);
     if (Object.keys(modelGroups).length === 0) {
-      modelGroups = Object.fromEntries(models.map((name) => [name, "default"]));
+      modelGroups = Object.fromEntries(models.map(name => [name, "default"]));
     }
     const mode = normalizePermissionMode(
       cfg.get<string>("permissionMode", "default"),
@@ -3117,19 +3101,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const fileUploadMaxSizeMb = normalizeFileUploadMaxSizeMb(
       cfg.get<number>("fileUploadMaxSizeMb", 5),
     );
-    const selectedModel =
-      this.connection.modelName && models.includes(this.connection.modelName)
-        ? this.connection.modelName
-        : defaultModel;
+    const selectedModel = sessionModel || (!sessionId ? defaultModel : "");
     const composerSendKey = cfg.get<string>("composerSendKey", "enter") === "enter"
       ? "enter"
       : "mod_enter";
     this.postMessage({
       type: "options",
+      sessionId,
       models,
       modelGroups,
       defaultModel,
       selectedModel,
+      modelPending: !!sessionId && !sessionModel,
       permissionMode: mode,
       pendingEditsVisibleFiles,
       autoCollapseProcess: cfg.get<boolean>("autoCollapseProcess", true) !== false,
@@ -3587,6 +3570,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.displayedSessionId = connSid;
           // Ensure state exists for this session
           const state = this.getSessionState(connSid);
+          if (this.connection.modelName) state.modelName = this.connection.modelName;
           // Preserve busy state if this session was previously busy
           if (!state.isBusy && this.busySessions.has(connSid)) {
             state.isBusy = true;
@@ -3634,6 +3618,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private routeEventToState(payload: EventPayload, state: SessionState, updateWebview: boolean): void {
     switch (payload.type) {
+      case "model_change":
+        state.modelName = payload.model_profile;
+        state.modelRevision++;
+        if (updateWebview) void this.pushChatOptions();
+        break;
       case "stream_text":
         state.retryLabel = null;
         this.finalizeThinkingOnState(state, updateWebview);
@@ -4991,6 +4980,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       word-break: break-word;
       line-height: 1.55;
     }
+    .assistant-markdown p { margin: 0 0 10px; }
+    .assistant-markdown > :first-child { margin-top: 0; }
+    .assistant-markdown > :last-child, .assistant-markdown li > :last-child { margin-bottom: 0; }
+    .assistant-markdown :is(h1, h2, h3, h4, h5, h6) { margin: 18px 0 10px; font-weight: 650; line-height: 1.4; }
+    .assistant-markdown h1 { font-size: 1.6em; }
+    .assistant-markdown h2 { font-size: 1.4em; }
+    .assistant-markdown h3 { font-size: 1.2em; }
+    .assistant-markdown :is(h4, h5, h6) { font-size: 1em; }
+    .assistant-markdown ul, .assistant-markdown ol { margin: 8px 0 12px; padding-left: 24px; }
+    .assistant-markdown li { margin: 4px 0; }
+    .assistant-markdown li > p { margin-bottom: 4px; }
+    .assistant-markdown .md-task-item { list-style: none; }
+    .assistant-markdown .md-task-item > input { margin-left: -18px; }
+    .assistant-markdown .md-task-item > input + p { display: inline; }
+    .assistant-markdown blockquote { margin: 10px 0; padding: 4px 12px; border-left: 3px solid var(--vscode-textBlockQuote-border, var(--border)); color: var(--text-muted); }
+    .assistant-markdown hr { margin: 16px 0; border: 0; border-top: 1px solid var(--border); }
+    .assistant-markdown a { color: var(--vscode-textLink-foreground, var(--accent)); text-decoration: underline; }
     .assistant-markdown strong { font-weight: 700; }
     .assistant-markdown :not(pre) > code {
       padding: 1px 4px;
@@ -7018,7 +7024,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-foreground);
       opacity: 0.85;
     }
+    .session-scope-select {
+      min-width: 0;
+      max-width: 48%;
+      padding: 3px 4px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--vscode-dropdown-background, var(--surface-elevated));
+      color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+      font: inherit;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .session-scope-select:focus-visible { outline: 1px solid var(--vscode-focusBorder, var(--accent)); }
+    .session-list-header-title, .history-panel-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .session-list-new-btn {
+      flex-shrink: 0;
       width: 26px;
       height: 26px;
       border: none;
@@ -7325,6 +7346,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <span class="session-list-header-title">会话列表</span>
+      <select class="session-scope-select" id="session-list-scope" aria-label="会话范围">
+        <option value="workspace">当前项目</option>
+        <option value="all">所有项目</option>
+      </select>
       <button type="button" class="session-list-new-btn" id="session-list-new-btn" title="新建会话">+</button>
     </div>
     <div id="session-list-items">
@@ -7337,6 +7362,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <span class="history-panel-title">历史会话</span>
+      <select class="session-scope-select" id="history-scope" aria-label="会话范围">
+        <option value="workspace">当前项目</option>
+        <option value="all">所有项目</option>
+      </select>
     </div>
     <div class="history-search-wrap">
       <input type="text" id="history-search" class="history-search" placeholder="搜索历史会话…" autocomplete="off" spellcheck="false" />
@@ -7347,7 +7376,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="session-header">
     <div class="session-header-left">
-      <button type="button" class="session-back-btn" id="session-back-btn" title="所有会话">
+      <button type="button" class="session-back-btn" id="session-back-btn" title="会话列表">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <span class="session-title" id="session-title">新会话</span>
@@ -7752,6 +7781,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let sessionListVisible = false;
     let historyPanelVisible = false;
     let historySearchQuery = '';
+    let sessionListState = { scope: 'workspace', hasWorkspace: true };
+    const sessionScopeSelects = document.querySelectorAll('.session-scope-select');
+    function syncSessionScope() {
+      sessionScopeSelects.forEach(function(select) { select.value = sessionListState.scope; });
+    }
+    syncSessionScope();
+    sessionScopeSelects.forEach(function(select) {
+      select.addEventListener('change', function() {
+        sessionListState = { scope: select.value, hasWorkspace: sessionListState.hasWorkspace, loading: true };
+        syncSessionScope();
+        renderSessionList([]);
+        renderHistoryList([], historySearchQuery);
+        vscode.postMessage({ type: 'setSessionListScope', scope: select.value });
+      });
+    });
+
+    function sessionListEmptyText(fallback) {
+      if (sessionListState.loading) return tr("正在加载会话列表");
+      if (sessionListState.error) return sessionListState.error;
+      if (sessionListState.scope === 'workspace' && !sessionListState.hasWorkspace) return tr("请先打开项目，或切换到所有项目");
+      return fallback;
+    }
+
+    function sessionListLimitNote() {
+      return sessionListState.limit ? '<div class="session-list-empty">' + escapeHtml(tr("显示最近 {0} 个会话", { 0: sessionListState.limit })) + '</div>' : '';
+    }
 
     function setSessionTitle(title) {
       currentSessionTitle = title || tr("新会话");
@@ -7801,7 +7856,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (session.model) parts.push(session.model);
       if (session.forked_from_title) parts.push(tr("来自 ") + session.forked_from_title);
       else if (session.forked_from_session_id) parts.push(tr("来自 ") + session.forked_from_session_id.slice(0, 8) + '…');
-      if (session.cwd) {
+      if (session.cwd && sessionListState.scope === 'all') {
         const cwdParts = String(session.cwd).split(/[\\/]/).filter(Boolean);
         if (cwdParts.length > 0) parts.push(cwdParts[cwdParts.length - 1]);
       }
@@ -7829,7 +7884,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return s.message_count > 0 || s.session_id === currentSessionId;
       });
       if (visibleSessions.length === 0) {
-        sessionListItems.innerHTML = trHtml("<div class=\\"session-list-empty\\">暂无会话</div>");
+        sessionListItems.innerHTML = '<div class="session-list-empty">' + escapeHtml(sessionListEmptyText(tr("暂无会话"))) + '</div>';
         return;
       }
       sessionListItems.innerHTML = visibleSessions.map(function(s) {
@@ -7844,7 +7899,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             (meta ? '<div class="session-item-meta">' + escapeHtml(meta) + '</div>' : '') +
           '</div>' +
         '</div>';
-      }).join('');
+      }).join('') + sessionListLimitNote();
       sessionListItems.querySelectorAll('.session-item').forEach(function(el) {
         el.addEventListener('click', function() {
           const sid = el.getAttribute('data-session-id');
@@ -7867,7 +7922,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         });
       }
       if (items.length === 0) {
-        historyListItems.innerHTML = '<div class="history-list-empty">' + (query ? tr("无匹配结果") : tr("暂无历史记录")) + '</div>';
+        historyListItems.innerHTML = '<div class="history-list-empty">' + escapeHtml(sessionListEmptyText(query ? tr("无匹配结果") : tr("暂无历史记录"))) + '</div>';
         return;
       }
       historyListItems.innerHTML = items.map(function(s) {
@@ -7880,7 +7935,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             (meta ? '<div class="history-item-meta">' + escapeHtml(meta) + '</div>' : '') +
           '</div>' +
         '</div>';
-      }).join('');
+      }).join('') + sessionListLimitNote();
       historyListItems.querySelectorAll('.history-item').forEach(function(el) {
         el.addEventListener('click', function() {
           const sid = el.getAttribute('data-session-id');
@@ -8399,94 +8454,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    function tableRowCells(line) {
-      let value = String(line || '').trim();
-      if (value.startsWith('|')) value = value.slice(1);
-      if (value.endsWith('|')) value = value.slice(0, -1);
-      return value.split('|').map(cell => cell.trim());
-    }
-
-    function isTableSeparator(line) {
-      const cells = tableRowCells(line);
-      return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
-    }
-
-    function isTableAt(lines, index) {
-      return index + 1 < lines.length
-        && lines[index].includes('|')
-        && isTableSeparator(lines[index + 1]);
-    }
-
     function renderAssistantMarkdown(text) {
-      const lines = String(text || '').split('\\n');
-      const parts = [];
-      let paragraph = [];
-      let code = null;
-      let codeLines = [];
-
-      const standaloneImage = (value) => {
-        const match = String(value || '').trim().match(new RegExp('^!\\\\[([^\\\\]]*)\\\\]\\\\((https?:\\\\/\\\\/[^)\\\\s]+|data:image\\\\/[^)]+)\\\\)$', 'i'));
-        if (!match) return '';
-        const alt = match[1] || tr("图片");
-        return '<img class="assistant-inline-image" data-image-preview src="' + escapeAttr(match[2]) + '" alt="' + escapeAttr(alt) + trHtml("\\" loading=\\"lazy\\" role=\\"button\\" tabindex=\\"0\\" aria-label=\\"放大查看：") + escapeAttr(alt) + '" />';
-      };
-
-      const flushParagraph = () => {
-        if (!paragraph.length) return;
-        const source = paragraph.join('\\n');
-        const image = standaloneImage(source);
-        parts.push(image || '<div class="md-text">' + CrabCodeMarkdown.renderInlineMarkdown(source) + '</div>');
-        paragraph = [];
-      };
-      const flushCode = () => {
-        if (code === null) return;
-        const source = codeLines.join('\\n');
-        const languageClass = code.trim() ? ' language-' + escapeAttr(code.trim().toLowerCase()) : '';
-        parts.push('<div class="copyable-content message-code-shell"><pre><code class="' + languageClass + '">' + escapeHtml(source) + '</code></pre>' + copyButtonHtml(source, tr("复制代码"), 'tool-copy-button') + '</div>');
-        code = null;
-        codeLines = [];
-      };
-
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index];
-        const fenceMarker = String.fromCharCode(96).repeat(3);
-        const fence = line.match(new RegExp('^\\s*' + fenceMarker + '\\s*([^' + String.fromCharCode(96) + ']*)\\s*$'));
-        if (fence) {
-          if (code !== null) flushCode();
-          else {
-            flushParagraph();
-            code = fence[1] || '';
-            codeLines = [];
-          }
-          continue;
-        }
-        if (code !== null) {
-          codeLines.push(line);
-          continue;
-        }
-        if (isTableAt(lines, index)) {
-          flushParagraph();
-          const tableLines = [lines[index]];
-          const tableSourceLines = [lines[index], lines[index + 1]];
-          const header = tableRowCells(lines[index]);
-          index += 2;
-          while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
-            tableLines.push(lines[index]);
-            tableSourceLines.push(lines[index]);
-            index += 1;
-          }
-          index -= 1;
-          const rows = tableLines.map(tableRowCells);
-          const headHtml = rows[0].map(cell => '<th>' + CrabCodeMarkdown.renderInlineMarkdown(cell) + '</th>').join('');
-          const bodyHtml = rows.slice(1).map(row => '<tr>' + header.map((_, cellIndex) => '<td>' + CrabCodeMarkdown.renderInlineMarkdown(row[cellIndex] || '') + '</td>').join('') + '</tr>').join('');
-          parts.push('<div class="copyable-content message-table-shell"><div class="message-table-wrap"><table><thead><tr>' + headHtml + '</tr></thead><tbody>' + bodyHtml + '</tbody></table></div>' + copyButtonHtml(tableSourceLines.join('\\n'), tr("复制表格"), 'tool-copy-button') + '</div>');
-          continue;
-        }
-        paragraph.push(line);
-      }
-      if (code !== null) flushCode();
-      flushParagraph();
-      return parts.join('');
+      return CrabCodeMarkdown.renderMarkdown(String(text || ''), {
+        code: function(source, language) {
+          const languageClass = language ? ' language-' + escapeAttr(language.toLowerCase()) : '';
+          return '<div class="copyable-content message-code-shell"><pre><code class="' + languageClass + '">' + escapeHtml(source) + '</code></pre>' + copyButtonHtml(source, tr("复制代码"), 'tool-copy-button') + '</div>';
+        },
+        table: function(html, source) {
+          return '<div class="copyable-content message-table-shell"><div class="message-table-wrap">' + html + '</div>' + copyButtonHtml(source, tr("复制表格"), 'tool-copy-button') + '</div>';
+        },
+        image: function(url, description) {
+          const alt = description || tr("图片");
+          return '<img class="assistant-inline-image" data-image-preview src="' + escapeAttr(url) + '" alt="' + escapeAttr(alt) + trHtml("\\" loading=\\"lazy\\" role=\\"button\\" tabindex=\\"0\\" aria-label=\\"放大查看：") + escapeAttr(alt) + '" />';
+        },
+      });
     }
 
     function attachmentGlyph(kind) {
@@ -9872,6 +9853,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function applyOptions(msg) {
+      if (msg.sessionId && currentSessionId && msg.sessionId !== currentSessionId) return;
       hasReceivedOptions = true;
       maxTextFileSizeMb = Math.min(100, Math.max(1, Math.floor(Number(msg.fileUploadMaxSizeMb) || 5)));
       composerSendKey = msg.composerSendKey === 'mod_enter' ? 'mod_enter' : 'enter';
@@ -9881,13 +9863,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       updateSendButtonTitle();
       const models = msg.models || [];
       const previousValue = currentModelValue;
-      if (models.length === 0) {
+      if (models.length === 0 || msg.modelPending) {
         currentModelList = [];
         currentModelGroups = {};
         currentModelValue = '';
         if (modelBtn) modelBtn.disabled = true;
         if (modelSelectLabel) {
-          modelSelectLabel.textContent = msg.connected ? tr("（网关未返回可用模型）") : tr("（正在连接网关…）");
+          modelSelectLabel.textContent = msg.modelPending ? tr("正在加载会话") : (msg.connected ? tr("（网关未返回可用模型）") : tr("（正在连接网关…）"));
           modelSelectLabel.title = modelSelectLabel.textContent;
         }
         if (modelSelectWrap) modelSelectWrap.classList.add('is-empty');
@@ -11408,7 +11390,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             renderMentionPopup(mergeMentionItems(msg.items || []));
           }
           break;
+        case 'sessionListScope':
+          sessionListState = msg;
+          syncSessionScope();
+          break;
         case 'sessionList':
+          sessionListState = msg;
+          syncSessionScope();
           renderSessionList(msg.sessions);
           renderHistoryList(msg.sessions, historySearchQuery);
           break;
