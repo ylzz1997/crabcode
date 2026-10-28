@@ -209,7 +209,7 @@ _SLASH_COMMANDS: dict[str, list[str]] = {
     "/ultra": ["true", "false"],
     "/logs": ["-f", "--follow", "--clear", "--tail"],
     "/model": [],  # Dynamic: model names
-    "/add": ["model", "group"],
+    "/add": ["model", "group", "discover"],
     "/del": ["model", "group"],
     "/new": [],
     "/compact": [],
@@ -394,7 +394,7 @@ class _CrabCodeCompleter(Completer):
             "/ultra": "toggle/set ultra mode",
             "/logs": "show background logs",
             "/model": "show/switch model",
-            "/add": "add a model or group",
+            "/add": "add a model or group, or fetch models from a group",
             "/del": "delete a model or group",
             "/new": "start new session",
             "/compact": "compact conversation",
@@ -2978,7 +2978,7 @@ async def _handle_command(
             "[bold]/logs --clear <name>[/] — clear a background log\n"
             "[bold]/model[/] — browse and switch configured models\n"
             "[bold]/model <name>[/] — switch to a named model\n"
-            "[bold]/add [model|group][/] — add a model profile or shared group\n"
+            "[bold]/add [model|group|discover][/] — add a model/group or fetch models from a group\n"
             "[bold]/del [model|group][/] — delete a model profile or shared group\n"
             "[bold]/new[/] — start a new session\n"
             "[bold]/compact[/] — compact conversation\n"
@@ -3263,12 +3263,14 @@ async def _handle_command(
 
     if cmd in {"/add", "/del"}:
         kind_value = arg.casefold()
-        if kind_value not in {"", "model", "group"}:
-            console.print(f"[dim]Usage: {cmd} [model|group][/]")
+        allowed_kinds = {"", "model", "group", "discover"} if cmd == "/add" else {"", "model", "group"}
+        if kind_value not in allowed_kinds:
+            choices = "model|group|discover" if cmd == "/add" else "model|group"
+            console.print(f"[dim]Usage: {cmd} [{choices}][/]")
             return True
 
         from crabcode_cli.model_manager import manage_model_catalog
-        from crabcode_core.config.model_catalog import ModelCatalogError
+        from crabcode_core.config.model_catalog import CatalogImportResult, ModelCatalogError
 
         try:
             result = await manage_model_catalog(
@@ -3283,6 +3285,15 @@ async def _handle_command(
             return True
         if result is None:
             console.print("[dim]Model configuration unchanged.[/]")
+            return True
+
+        if isinstance(result, CatalogImportResult):
+            message = Text("✓ ", style="green")
+            message.append(f"Imported {len(result.names)} models", style="bold green")
+            message.append(f" from {result.group}")
+            message.append(f" · {result.path}", style="dim")
+            console.print(message)
+            console.print(Text("  Choose an imported model with /model", style="dim"))
             return True
 
         message = Text()

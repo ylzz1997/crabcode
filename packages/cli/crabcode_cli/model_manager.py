@@ -1,4 +1,4 @@
-"""Guided terminal menus for adding and deleting model catalog entries."""
+"""Guided terminal menus for adding, discovering and deleting models."""
 
 from __future__ import annotations
 
@@ -16,17 +16,20 @@ from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 
 from crabcode_cli.session_picker import PICKER_STYLE, _plain
+from crabcode_core.api.model_discovery import ModelDiscoveryError, discover_models
 from crabcode_core.config.manager import ConfigManager
 from crabcode_core.config.model_catalog import (
     SETTINGS_SOURCE_LABELS,
     WRITABLE_SETTINGS_SOURCES,
     CatalogKind,
+    CatalogImportResult,
     CatalogMutationResult,
     ModelCatalogError,
     WritableSettingsSource,
     add_catalog_entry,
     catalog_names,
     delete_catalog_entry,
+    import_group_models,
     list_catalog_definitions,
     referencing_models,
     settings_source_path,
@@ -36,6 +39,7 @@ from crabcode_core.events import CoreSession
 
 
 ManagementAction = Literal["add", "delete"]
+ManagementKind = Literal["model", "group", "discover"]
 
 _SENSITIVE_CONFIG_KEYS = (
     "api_key",
@@ -53,6 +57,7 @@ class MenuOption:
     value: str
     label: str
     hint: str = ""
+    disabled: bool = False
 
 
 class Prompter(Protocol):
@@ -64,6 +69,10 @@ class Prompter(Protocol):
         searchable: bool = True,
         initial: str | None = None,
     ) -> str | None: ...
+
+    async def multiselect(
+        self, message: str, options: Sequence[MenuOption],
+    ) -> list[str] | None: ...
 
     async def text(self, message: str, *, initial: str = "") -> str | None: ...
 
@@ -85,12 +94,16 @@ class SearchableMenu:
         *,
         searchable: bool = True,
         initial: str | None = None,
+        multiple: bool = False,
     ) -> None:
         self.title = title
         self.message = message
         self.options = list(options)
         self.searchable = searchable
         self.initial = initial
+        self.multiple = multiple
+        self.checked: set[str] = set()
+        self.selection_error = ""
         self.matches = self.options.copy()
         self.selected = next(
             (index for index, option in enumerate(self.matches) if option.value == initial),
@@ -118,8 +131,38 @@ class SearchableMenu:
 
         @bindings.add("enter", eager=True)
         def confirm(event: Any) -> None:
-            if self.matches:
+            if self.multiple:
+                if self.checked:
+                    event.app.exit(result=[option.value for option in self.options if option.value in self.checked])
+            elif self.matches:
                 event.app.exit(result=self.matches[self.selected].value)
+
+        if multiple:
+            @bindings.add("tab", eager=True)
+            @bindings.add(" ", eager=True)
+            def toggle(event: Any) -> None:
+                if self.matches:
+                    option = self.matches[self.selected]
+                    if option.disabled:
+                        return
+                    self.selection_error = ""
+                    if option.value in self.checked:
+                        self.checked.remove(option.value)
+                    elif len(self.checked) < 1000:
+                        self.checked.add(option.value)
+                    else:
+                        self.selection_error = "Select at most 1000 models per import."
+
+            @bindings.add("c-a", eager=True)
+            def toggle_visible(event: Any) -> None:
+                visible = {option.value for option in self.matches if not option.disabled}
+                self.selection_error = ""
+                if visible <= self.checked:
+                    self.checked.difference_update(visible)
+                elif len(self.checked | visible) <= 1000:
+                    self.checked.update(visible)
+                else:
+                    self.selection_error = "Select at most 1000 models; narrow the search first."
 
         @bindings.add("up")
         @bindings.add("down")
@@ -172,11 +215,11 @@ class SearchableMenu:
                 self.list_window,
                 Window(FormattedTextControl(self._details), height=2, wrap_lines=True),
                 Window(char="─", height=1, style="class:hint"),
-                Window(FormattedTextControl(self._footer), height=2, wrap_lines=True),
+                Window(FormattedTextControl(self._footer), height=3 if multiple else 2, wrap_lines=True),
             ]
         )
         focused = self.search if searchable else self.list_control
-        self.app: Application[str | None] = Application(
+        self.app: Application[str | list[str] | None] = Application(
             layout=Layout(HSplit(content), focused_element=focused),
             key_bindings=bindings,
             full_screen=True,
@@ -218,10 +261,13 @@ class SearchableMenu:
         fragments: list[tuple[str, str]] = []
         for index, option in enumerate(self.matches):
             style = "class:selected" if index == self.selected else ""
+            marker = ""
+            if self.multiple:
+                marker = "[✓] " if option.disabled else "[x] " if option.value in self.checked else "[ ] "
             fragments.extend(
                 [
                     (style, "  ❯ " if index == self.selected else "    "),
-                    (style, _plain(option.label)),
+                    (style, marker + _plain(option.label)),
                     ("", "\n" if index < len(self.matches) - 1 else ""),
                 ]
             )
@@ -237,6 +283,12 @@ class SearchableMenu:
 
     def _footer(self) -> list[tuple[str, str]]:
         count = len(self.matches)
+        if self.multiple:
+            return [("class:hint",
+                "  ↑↓ browse · Space/Tab toggle · Enter import · Esc cancel\n"
+                "  Ctrl+A toggle results · Type to search · Ctrl+U clear\n"
+                f"  {self.selection_error or f'{len(self.checked)} selected · {count} shown'}"
+            )]
         search_help = " · Type to search" if self.searchable else ""
         return [
             (
@@ -246,7 +298,7 @@ class SearchableMenu:
             )
         ]
 
-    async def run(self) -> str | None:
+    async def run(self) -> str | list[str] | None:
         if not self.options:
             return None
         return await self.app.run_async()
@@ -264,13 +316,22 @@ class TerminalPrompter:
         searchable: bool = True,
         initial: str | None = None,
     ) -> str | None:
-        return await SearchableMenu(
+        result = await SearchableMenu(
             "Model management",
             message,
             options,
             searchable=searchable,
             initial=initial,
         ).run()
+        return cast(str | None, result)
+
+    async def multiselect(
+        self, message: str, options: Sequence[MenuOption],
+    ) -> list[str] | None:
+        result = await SearchableMenu(
+            "Get models from group", message, options, multiple=True,
+        ).run()
+        return cast(list[str] | None, result)
 
     async def text(self, message: str, *, initial: str = "") -> str | None:
         prompt: PromptSession[str] = PromptSession()
@@ -337,17 +398,21 @@ _FORMATS: tuple[MenuOption, ...] = tuple(
 async def manage_model_catalog(
     session: CoreSession,
     action: ManagementAction,
-    kind: CatalogKind | None = None,
+    kind: ManagementKind | None = None,
     *,
     prompter: Prompter | None = None,
-) -> CatalogMutationResult | None:
-    """Run the guided add/delete flow and refresh the current session catalog."""
+) -> CatalogMutationResult | CatalogImportResult | None:
+    """Run the guided management flow and refresh the current session catalog."""
     active_prompter = prompter or TerminalPrompter()
     try:
         selected_kind = kind or await _choose_kind(action, active_prompter)
         if selected_kind is None:
             return None
-        if action == "add":
+        if selected_kind == "discover":
+            if action != "add":
+                raise ModelCatalogError("Use /add discover to fetch models from a group.")
+            result = await _discover_group_models(session, active_prompter)
+        elif action == "add":
             result = await _add_entry(session, selected_kind, active_prompter)
         else:
             result = await _delete_entry(session, selected_kind, active_prompter)
@@ -358,17 +423,74 @@ async def manage_model_catalog(
         return None
 
 
-async def _choose_kind(action: ManagementAction, prompter: Prompter) -> CatalogKind | None:
+async def _choose_kind(action: ManagementAction, prompter: Prompter) -> ManagementKind | None:
+    options = [
+        MenuOption("model", "Model", "A named model profile shown by /model"),
+        MenuOption("group", "Group", "Shared provider and API settings inherited by models"),
+    ]
+    if action == "add":
+        options.append(MenuOption("discover", "Get models from group", "Fetch, search and import models using a saved group"))
     value = await prompter.select(
         "What do you want to add?" if action == "add" else "What do you want to delete?",
-        (
-            MenuOption("model", "Model", "A named model profile shown by /model"),
-            MenuOption("group", "Group", "Shared provider and API settings inherited by models"),
-        ),
+        options,
         searchable=False,
         initial="model",
     )
-    return cast(CatalogKind | None, value)
+    return cast(ManagementKind | None, value)
+
+
+async def _discover_group_models(
+    session: CoreSession, prompter: Prompter,
+) -> CatalogImportResult | None:
+    settings = ConfigManager(cwd=session.cwd).load()
+    if not settings.groups:
+        raise ModelCatalogError("No configuration groups found. Create one with /add group first.")
+    name = await prompter.select(
+        "Select a group to fetch models from",
+        [MenuOption(name, name, _config_hint(group.model_dump(exclude_none=True)))
+         for name, group in settings.groups.items()],
+    )
+    if name is None:
+        return None
+    prompter.note("Fetching model list", f"Group: {_plain(name)} · timeout: 15 seconds")
+    try:
+        models = await discover_models(settings.groups[name], settings.env)
+    except ModelDiscoveryError as exc:
+        raise ModelCatalogError(str(exc)) from None
+    existing_ids = {config.model for config in settings.models.values() if config.group == name}
+    available = [model for model in models if model["id"] not in existing_ids]
+    if not available:
+        prompter.note("Model list", "All returned models are already in this group." if models else "The API returned no models.")
+        return None
+    options = []
+    for model in models:
+        existing = model["id"] in existing_ids
+        metadata = model.get("config", {})
+        hints = [model.get("name", "")]
+        hints.extend(f"{key}: {value}" for key, value in metadata.items())
+        options.append(MenuOption(
+            model["id"], model["id"] + (" · already added" if existing else ""),
+            " · ".join(hint for hint in hints if hint), disabled=existing,
+        ))
+    selected = await prompter.multiselect(f"Group: {name} · select models to import", options)
+    if not selected:
+        return None
+    selected_ids = set(selected)
+    if not selected_ids <= {model["id"] for model in available}:
+        raise ModelCatalogError("Select only available models from the fetched list.")
+    source = await _choose_source(session.cwd, prompter)
+    preview = "\n".join(_plain(model_id) for model_id in selected[:20])
+    if len(selected) > 20:
+        preview += f"\n… and {len(selected) - 20} more"
+    prompter.note(
+        f'Import {len(selected)} models from "{_plain(name)}" into {SETTINGS_SOURCE_LABELS[source]}', preview,
+    )
+    if not await prompter.confirm("Import selected models?", default=True):
+        return None
+    return import_group_models(
+        session.cwd, source, name, selected,
+        {model["id"]: model["config"] for model in models if model["id"] in selected_ids and model.get("config")},
+    )
 
 
 async def _choose_source(cwd: str, prompter: Prompter) -> WritableSettingsSource:

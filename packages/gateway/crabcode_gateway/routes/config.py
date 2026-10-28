@@ -629,8 +629,7 @@ def _mutate_model_settings(request: Request, req: ModelSettingsMutationRequest) 
     action = req.action
 
     if action == "import_group_models":
-        import re
-        from crabcode_core.api.model_discovery import model_import_config
+        from crabcode_core.config.model_catalog import group_model_entries
 
         name = _validate_model_settings_name(req.name)
         preview = _model_settings_from_files(cwd)
@@ -644,26 +643,11 @@ def _mutate_model_settings(request: Request, req: ModelSettingsMutationRequest) 
             model.effective.get("model") for model in preview.models if model.group == name
         }
         used_names = {model.name for model in preview.models} | set(models)
-        for model_id in dict.fromkeys(value.strip() for value in req.model_ids):
-            if model_id in existing_ids:
-                continue
-            # Profile names cannot contain slashes; the API ID remains exact.
-            stem = re.sub(r"[/\\\x00-\x1f]", "-", model_id)[:120].strip()
-            if stem in {".", ".."}:
-                stem = "model"
-            candidate = stem
-            if candidate in used_names:
-                stem = f"{name} - {stem}"[:120]
-                candidate = stem
-            suffix = 2
-            while candidate in used_names:
-                tail = f" ({suffix})"
-                candidate = stem[:120 - len(tail)] + tail
-                suffix += 1
-            metadata = req.model_metadata.get(model_id)
-            settings = model_import_config(metadata.model_dump(exclude_none=True), group) if metadata else {}
-            models[candidate] = {"group": name, "model": model_id, **settings}
-            used_names.add(candidate)
+        models.update(group_model_entries(
+            name, group, req.model_ids,
+            {key: value.model_dump(exclude_none=True) for key, value in req.model_metadata.items()},
+            existing_ids=existing_ids, used_names=used_names,
+        ))
     elif action in {"upsert_model", "delete_model"}:
         name = _validate_model_settings_name(req.name)
         models = current.get("models")

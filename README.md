@@ -592,7 +592,7 @@ For DeepSeek V4 thinking mode with tool calls, enable reasoning pass-through:
 
 CrabCode automatically manages the context window to prevent `400 token limit exceeded` errors.
 
-When importing new models with **Get model list** on a configuration group in Desktop or VS Code, CrabCode saves context and output limits supplied by `/models`. It recognizes Anthropic's `max_input_tokens` / `max_tokens`, OpenRouter's `context_length` / `top_provider.max_completion_tokens`, and common compatible API limit fields, using the smaller limit when several are present. Explicit thinking capability metadata configures the thinking switch; Anthropic thinking budgets are kept below the output limit. Explicit group context overrides, smaller output budgets, and disabled thinking are preserved. Existing model profiles are untouched, and missing metadata continues to inherit settings or use runtime defaults. Temperature, reasoning effort, prices, and image/tool capabilities are not inferred from model names or automatically changed.
+When importing new models with **Get model list** on a configuration group in Desktop or VS Code, or with `/add discover` in the CLI, CrabCode saves context and output limits supplied by `/models`. It recognizes Anthropic's `max_input_tokens` / `max_tokens`, OpenRouter's `context_length` / `top_provider.max_completion_tokens`, and common compatible API limit fields, using the smaller limit when several are present. Explicit thinking capability metadata configures the thinking switch; Anthropic thinking budgets are kept below the output limit. Explicit group context overrides, smaller output budgets, and disabled thinking are preserved. Existing model profiles are untouched, and missing metadata continues to inherit settings or use runtime defaults. Temperature, reasoning effort, prices, and image/tool capabilities are not inferred from model names or automatically changed.
 
 **How context window size is resolved** (in priority order):
 
@@ -778,8 +778,9 @@ crabcode --model-profile smart    # short: -M smart
 /model fast         # switch to the "fast" (ollama) profile
 /model smart        # switch to the "smart" (anthropic) profile
 /model code         # switch to the "code" (openai) profile
-/add                # guided menu: add a model or shared group
+/add                # guided menu: add a model/group or fetch models from a group
 /add model          # open the add-model wizard directly
+/add discover       # fetch and batch-import models from an existing group
 /del group          # choose and delete a group definition
 ```
 
@@ -787,6 +788,13 @@ Switching does not clear conversation history — you can mix models freely with
 The `/add` and `/del` wizards let you choose user, shared-project, or local-project
 settings. Delete targets show their exact source layer; the active model (or its
 group) is protected until you switch away from it.
+Use `/add discover` (or **Get models from group** in `/add`) to fetch the same
+model list available in Desktop. Choose a saved group, type to search, use
+Space/Tab to toggle models and Ctrl+A to toggle all search results, then press
+Enter to choose the destination settings layer and confirm the import. Each batch
+supports up to 1000 models. Existing models and defaults are preserved; new
+profiles inherit the group's connection settings and use API-provided metadata
+for context, output and thinking limits. Use `/model` to switch after importing.
 
 ## Built-in Tools
 
@@ -1168,7 +1176,7 @@ never modified by either client.
 | `/logs --clear <name>` | Clear a specific log file |
 | `/model` | Open a searchable model picker organized by group; ↑/↓ select, Enter switches, Esc cancels, Tab and ←/→ filter groups |
 | `/model <name>` | Switch to a named model from `settings.models` |
-| `/add [model\|group]` | Add a named model or shared group with a guided, searchable configuration wizard |
+| `/add [model\|group\|discover]` | Add a model/group or fetch, select and batch-import models from an existing group |
 | `/del [model\|group]` | Delete a model or group from a selected writable settings layer |
 | `/effort` | Show the active reasoning effort |
 | `/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>` | Set reasoning effort for subsequent requests in the current runtime session |

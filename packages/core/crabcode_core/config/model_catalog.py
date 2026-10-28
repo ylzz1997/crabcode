@@ -5,12 +5,14 @@ from __future__ import annotations
 import codecs
 import json
 import os
+import re
 import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from crabcode_core.api.model_discovery import model_import_config
 from crabcode_core.config.manager import ConfigManager, SETTING_SOURCES
 from crabcode_core.filesystem import replace_with_retry
 from crabcode_core.text_io import normalize_newlines, read_utf8_text
@@ -56,6 +58,85 @@ class CatalogMutationResult:
     source: WritableSettingsSource
     path: Path
     cleared_default: bool = False
+
+
+@dataclass(frozen=True)
+class CatalogImportResult:
+    group: str
+    names: tuple[str, ...]
+    source: WritableSettingsSource
+    path: Path
+
+
+def group_model_entries(
+    group_name: str,
+    group: ApiConfig,
+    model_ids: list[str],
+    model_metadata: dict[str, dict[str, Any]],
+    *,
+    existing_ids: set[str],
+    used_names: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Prepare a batch with the same inheritance and aliases for every client."""
+    if not model_ids or len(model_ids) > 1000:
+        raise ModelCatalogError("Select between 1 and 1000 models to import.")
+    if any(
+        not isinstance(value, str) or not value.strip() or len(value) > 512
+        or any(ord(char) < 32 for char in value)
+        for value in model_ids
+    ):
+        raise ModelCatalogError("The model list contains an invalid model ID.")
+    entries: dict[str, dict[str, Any]] = {}
+    used_names = set(used_names)
+    for model_id in dict.fromkeys(value.strip() for value in model_ids):
+        if model_id in existing_ids:
+            continue
+        # Profile names cannot contain slashes; the API ID remains exact.
+        stem = re.sub(r"[/\\\x00-\x1f]", "-", model_id)[:120].strip()
+        if stem in {".", ".."}:
+            stem = "model"
+        candidate = stem
+        if candidate in used_names:
+            stem = f"{group_name} - {stem}"[:120]
+            candidate = stem
+        suffix = 2
+        while candidate in used_names:
+            tail = f" ({suffix})"
+            candidate = stem[:120 - len(tail)] + tail
+            suffix += 1
+        settings = model_import_config(model_metadata.get(model_id, {}), group)
+        entries[candidate] = {"group": group_name, "model": model_id, **settings}
+        used_names.add(candidate)
+    return entries
+
+
+def import_group_models(
+    cwd: str,
+    source: WritableSettingsSource,
+    group_name: str,
+    model_ids: list[str],
+    model_metadata: dict[str, dict[str, Any]],
+) -> CatalogImportResult:
+    """Save a whole batch atomically, preserving other layers and defaults."""
+    group_name = validate_catalog_name(group_name)
+    settings = ConfigManager(cwd=cwd).load()
+    group = settings.groups.get(group_name)
+    if group is None:
+        raise ModelCatalogError("The configuration group no longer exists. Fetch the list again.")
+    path = settings_source_path(cwd, source)
+    current = _read_settings_object(path)
+    models = current.setdefault("models", {})
+    if not isinstance(models, dict):
+        raise ModelCatalogError(f'"models" in {path} must be a JSON object.')
+    entries = group_model_entries(
+        group_name, group, model_ids, model_metadata,
+        existing_ids={config.model for config in settings.models.values() if config.group == group_name and config.model},
+        used_names=catalog_names(cwd, "model") | set(models),
+    )
+    if entries:
+        models.update(entries)
+        _atomic_write_settings(path, current)
+    return CatalogImportResult(group_name, tuple(entries), source, path)
 
 
 def validate_catalog_name(name: str) -> str:

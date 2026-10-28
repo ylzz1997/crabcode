@@ -578,7 +578,7 @@ DeepSeek V4 思考模式配合工具调用时，需要开启 reasoning 回传：
 
 CrabCode 会自动管理上下文窗口，防止因 token 超限导致 `400` 报错。
 
-在 Desktop 或 VS Code 的模型设置中，从配置组「获取模型列表」并导入新模型时，会自动保存 `/models` 返回的上下文窗口和最大输出 token 数。支持 Anthropic 的 `max_input_tokens` / `max_tokens`、OpenRouter 的 `context_length` / `top_provider.max_completion_tokens`，以及兼容接口的常见限制字段；有多项限制时取较小值。接口明确提供思考能力时会设置思考开关，Anthropic 的思考预算也会限制在输出上限以内。配置组中手动指定的上下文窗口、较小的输出预算和关闭思考的偏好会保留；已有模型不会被覆盖，接口未提供的字段继续继承配置或使用运行时默认值。温度、思考强度、价格和图像/工具能力不会根据模型名称推测或自动改写。
+在 Desktop 或 VS Code 的模型设置中从配置组「获取模型列表」，或在 CLI 中使用 `/add discover` 导入新模型时，会自动保存 `/models` 返回的上下文窗口和最大输出 token 数。支持 Anthropic 的 `max_input_tokens` / `max_tokens`、OpenRouter 的 `context_length` / `top_provider.max_completion_tokens`，以及兼容接口的常见限制字段；有多项限制时取较小值。接口明确提供思考能力时会设置思考开关，Anthropic 的思考预算也会限制在输出上限以内。配置组中手动指定的上下文窗口、较小的输出预算和关闭思考的偏好会保留；已有模型不会被覆盖，接口未提供的字段继续继承配置或使用运行时默认值。温度、思考强度、价格和图像/工具能力不会根据模型名称推测或自动改写。
 
 **上下文窗口大小的解析优先级：**
 
@@ -758,14 +758,20 @@ crabcode --model-profile smart    # 简写：-M smart
 /model              # 打开模型选择页，搜索并切换已配置的模型
 /model fast         # 切换到 "fast" 模型
 /model local        # 切换到 "local"（如 Ollama 本地模型）
-/add                # 进入引导菜单，添加模型或共享 group
+/add                # 进入引导菜单，添加模型/group 或从 group 获取模型
 /add model          # 直接进入添加模型向导
+/add discover       # 从已有 group 获取模型列表并批量导入
 /del group          # 选择并删除一个 group 定义
 ```
 
 切换模型不会清空对话历史，可以在同一会话中混用不同模型。
 `/add` 与 `/del` 向导可选择用户级、项目共享或项目本地配置层；删除列表会
 明确显示定义所在层。当前正在使用的模型及其 group 需先切换后才能删除。
+使用 `/add discover`（或 `/add` 菜单中的 **Get models from group**）可获取与
+Desktop 相同的模型列表。选定已有 group 后，输入文字搜索，按空格或 Tab 勾选，
+Ctrl+A 全选/取消当前搜索结果，再按 Enter 选择保存层并确认导入；每批最多 1000 个。
+已有模型和默认模型保持不变，新模型继承 group 的连接配置，并应用接口提供的
+上下文、输出和思考限制。导入后可用 `/model` 切换。
 
 ## 内置工具
 
@@ -1150,7 +1156,7 @@ Desktop 的“设置 → 运行与工具”可以直接编辑这些字段，也�
 | `/logs --clear <名称>` | 清空指定日志文件 |
 | `/model` | 打开按分组展示、可搜索的模型选择页；↑/↓ 选择、Enter 切换、Esc 返回，Tab 与 ←/→ 筛选分组 |
 | `/model <名称>` | 切换到 `settings.models` 中的命名模型 |
-| `/add [model\|group]` | 通过可搜索的引导向导添加命名模型或共享 group |
+| `/add [model\|group\|discover]` | 添加模型/group，或从已有 group 获取、选择并批量导入模型 |
 | `/del [model\|group]` | 从指定的可写配置层删除模型或 group |
 | `/effort` | 查看当前 reasoning effort |
 | `/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>` | 设置当前运行会话后续请求的 reasoning effort |
