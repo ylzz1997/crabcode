@@ -38,6 +38,7 @@ import {
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -256,7 +257,7 @@ export function BlogPreview({ api, workspace, markdown }: { api: GatewayApi; wor
   const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(markdown), [markdown, getLocale()]);
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkMath]}
       rehypePlugins={[[rehypeKatex, {
         strict: "ignore",
         throwOnError: false,

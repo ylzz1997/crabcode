@@ -218,7 +218,7 @@ describe("ProjectFilesWorkspace", () => {
     });
     const workspaceFile = vi.fn(async (path: string) => ({
       type: "text/plain",
-      text: async () => path.endsWith("README.md") ? "# Project\n\nHello" : "export default 1",
+      text: async () => path.endsWith("README.md") ? "# Project\n\n自动执行**“销毁程序（析构）”**，继续。" : "export default 1",
     } as Blob));
     const onReference = vi.fn();
     const onClose = vi.fn();
@@ -274,11 +274,13 @@ describe("ProjectFilesWorkspace", () => {
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
     expect(workspaceFile).toHaveBeenCalledWith("/work/crab/README.md");
     expect(container.querySelector(".project-file-markdown h1")?.textContent).toBe("Project");
+    expect(container.querySelector(".project-file-markdown strong")?.textContent).toBe("“销毁程序（析构）”");
 
     const source = Array.from(container.querySelectorAll<HTMLButtonElement>(".project-file-view-toggle button"))
       .find((button) => button.textContent === "源码")!;
     act(() => source.click());
     expect(container.querySelector(".project-file-code")?.textContent).toContain("# Project");
+    expect(container.querySelector(".project-file-code")?.textContent).toContain("**“销毁程序（析构）”**");
 
     const reference = container.querySelector<HTMLButtonElement>(".project-file-reference")!;
     act(() => reference.click());

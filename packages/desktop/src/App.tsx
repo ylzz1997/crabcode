@@ -83,6 +83,7 @@ import rust from "react-syntax-highlighter/dist/esm/languages/prism/rust";
 import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import rehypeKatex from "rehype-katex";
+import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import DocumentWorkspace from "./DocumentWorkspace";
@@ -6767,7 +6768,7 @@ export function MessageMarkdown({ children }: { children: string }) {
   const normalizedMarkdown = useMemo(() => normalizeMarkdownMathDelimiters(children), [children, getLocale()]);
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkMath]}
       rehypePlugins={[rehypeKatex]}
       components={MESSAGE_MARKDOWN_COMPONENTS}
     >

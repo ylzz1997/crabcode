@@ -34,6 +34,7 @@ import python from "react-syntax-highlighter/dist/esm/languages/prism/python";
 import rust from "react-syntax-highlighter/dist/esm/languages/prism/rust";
 import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
+import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
 import type { GatewayApi } from "./gateway";
 import { ChangeReview, ChangeReviewFiles, type WorkspaceChangeReview } from "./ChangeReview";
@@ -718,7 +719,7 @@ export function ProjectFilesWorkspace({
             <div className="project-file-image"><img src={preview.imageUrl} alt={selectedFile?.name ?? tr("文件图片")} /></div>
           )}
           {preview.status === "ready" && preview.kind === "markdown" && !markdownSource && (
-            <article className="project-file-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={PROJECT_MARKDOWN_COMPONENTS}>{preview.text}</ReactMarkdown></article>
+            <article className="project-file-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly]} components={PROJECT_MARKDOWN_COMPONENTS}>{preview.text}</ReactMarkdown></article>
           )}
           {preview.status === "ready" && (preview.kind === "text" || (preview.kind === "markdown" && markdownSource)) && (
             <SourcePreview text={preview.text} language={selectedClassification?.language ?? null} />

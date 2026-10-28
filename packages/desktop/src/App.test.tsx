@@ -256,6 +256,49 @@ describe("remote file and folder references", () => {
 });
 
 describe("MessageMarkdown", () => {
+  it("renders CJK emphasis next to punctuation while preserving literal markers", () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const markdown = [
+      "自动执行**“销毁程序（析构）”**，一刀斩断。",
+      "**中文句号。**后面继续。",
+      "これは**「強調」**です。",
+      "이것은**강조(괄호)**입니다.",
+      "`自动执行**“销毁程序”**`",
+      "```text\n自动执行**“销毁程序”**\n```",
+      String.raw`自动执行\*\*“销毁程序”\*\*`,
+      'a**"foo"**',
+    ].join("\n\n");
+
+    act(() => root.render(<MessageMarkdown>{markdown}</MessageMarkdown>));
+
+    expect(Array.from(container.querySelectorAll("strong"), (node) => node.textContent)).toEqual([
+      "“销毁程序（析构）”", "中文句号。", "「強調」", "강조(괄호)",
+    ]);
+    expect(Array.from(container.querySelectorAll("code"), (node) => node.textContent?.trim())).toEqual([
+      "自动执行**“销毁程序”**", "自动执行**“销毁程序”**",
+    ]);
+    expect(container.textContent).toContain("自动执行**“销毁程序”**");
+    expect(container.textContent).toContain('a**"foo"**');
+
+    act(() => root.unmount());
+  });
+
+  it("renders CJK bold once a streamed closing delimiter arrives", () => {
+    (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    act(() => root.render(<MessageMarkdown>{"自动执行**“销毁程序（析构）”"}</MessageMarkdown>));
+    expect(container.querySelector("strong")).toBeNull();
+    act(() => root.render(<MessageMarkdown>{"自动执行**“销毁程序（析构）”**，"}</MessageMarkdown>));
+    expect(container.querySelector("strong")?.textContent).toBe("“销毁程序（析构）”");
+    expect(container.textContent).toBe("自动执行“销毁程序（析构）”，");
+
+    act(() => root.unmount());
+  });
+
   it("renders GFM tables in a scrollable themed container", () => {
     (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement("div");

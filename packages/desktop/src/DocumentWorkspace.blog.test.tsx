@@ -23,6 +23,17 @@ describe("document Blog math", () => {
     container.remove();
   });
 
+  it("renders CJK bold inside a table alongside math", () => {
+    const markdown = "| 说明 | 公式 |\n|---|---|\n| 执行**“析构”**后继续 | $x^2$ |";
+
+    act(() => root.render(
+      <BlogPreview api={{} as GatewayApi} workspace="/test" markdown={markdown} />,
+    ));
+
+    expect(container.querySelector(".document-blog-table-wrap td strong")?.textContent).toBe("“析构”");
+    expect(container.querySelectorAll(".katex")).toHaveLength(1);
+  });
+
   it("renders dollar and LaTeX-style math delimiters with KaTeX", () => {
     const markdown = String.raw`Inline $y$ and \(x_t\), followed by:
 
