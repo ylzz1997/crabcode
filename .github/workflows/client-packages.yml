@@ -1,10 +1,17 @@
 name: Client Packages
 run-name: Client packages · ${{ github.ref_name }} · ${{ github.run_number }}
 
-# Download the packages from this run's Artifacts and upload them manually.
-# Python Release/PyPI publishing is intentionally independent.
+# Keep this filename: both registries' trusted publishers are bound to it.
+# Manual runs build artifacts only. Releases also upload assets; stable releases
+# publish the same VSIXs to both registries. Python/PyPI remains independent.
 on:
   workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: client-packages-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -32,6 +39,11 @@ jobs:
           python scripts/sync_version.py --check
           python scripts/package_clients.py check
           python packages/vscode/scripts/gen-types.py --check
+      - name: Check release tag matches client versions
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python scripts/package_clients.py check --release-tag "$RELEASE_TAG"
       - run: npm ci
         working-directory: packages/vscode
       - run: npm run lint
@@ -105,6 +117,8 @@ jobs:
     timeout-minutes: 20
     needs: native
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -144,7 +158,61 @@ jobs:
       - name: Add download instructions
         run: |
           echo '## VSIX packages' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Download **vsix-${{ github.run_number }}** from Artifacts and unzip it. It contains the universal CrabCode main extension, three platform Computer Use companions, the all-platform companion, and SHA256SUMS. Upload the VSIXs to the extension store manually.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Download **vsix-${{ github.run_number }}** from Artifacts and unzip it. It contains the universal CrabCode main extension, three platform Computer Use companions, the all-platform companion, and SHA256SUMS. Release runs also attach these VSIXs to the release; stable releases publish them to both extension stores.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload VSIXs to GitHub Release
+        if: github.event_name == 'release'
+        working-directory: dist/vsix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cp SHA256SUMS vsix-SHA256SUMS
+          gh release upload "$RELEASE_TAG" ./*.vsix vsix-SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish-extensions:
+    name: Publish VSIXs · ${{ matrix.registry }}
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    needs: vsix
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        registry: [marketplace, open-vsx]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: vsix-${{ github.run_number }}
+          path: dist/vsix
+      - name: Verify downloaded VSIX checksums
+        working-directory: dist/vsix
+        run: sha256sum --check SHA256SUMS
+      - name: Install Marketplace publisher with OIDC support
+        if: matrix.registry == 'marketplace'
+        run: npm install --global @vscode/vsce@4.1.0
+      - name: Install Open VSX publisher with OIDC support
+        if: matrix.registry == 'open-vsx'
+        run: npm install --global ovsx@1.3.0
+      # Publish prebuilt packages without rerunning vscode:prepublish. Each call
+      # obtains its own short-lived credential. Duplicates are safe to retry.
+      - name: Publish all VSIXs to Visual Studio Marketplace
+        if: matrix.registry == 'marketplace'
+        run: |
+          for package in dist/vsix/*.vsix; do
+            vsce publish --packagePath "$package" --oidc --skip-duplicate
+          done
+      - name: Publish all VSIXs to Open VSX
+        if: matrix.registry == 'open-vsx'
+        run: |
+          for package in dist/vsix/*.vsix; do
+            ovsx publish "$package" --trusted-publishing --skip-duplicate
+          done
 
   desktop:
     name: Desktop installer · ${{ matrix.platform }}
@@ -161,6 +229,8 @@ jobs:
           - platform: win32-x64
             os: windows-2022
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     env:
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
@@ -212,3 +282,13 @@ jobs:
         run: |
           echo '## Desktop installer' >> "$GITHUB_STEP_SUMMARY"
           echo 'Download **desktop-${{ matrix.platform }}-${{ github.run_number }}** from Artifacts. It contains the DMG or MSI and SHA256SUMS.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Desktop installer to GitHub Release
+        if: github.event_name == 'release'
+        shell: bash
+        working-directory: dist/desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cp SHA256SUMS desktop-${{ matrix.platform }}-SHA256SUMS
+          gh release upload "$RELEASE_TAG" ./crab-desktop-* desktop-${{ matrix.platform }}-SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber

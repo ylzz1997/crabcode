@@ -65,6 +65,11 @@ def check_versions() -> str:
     return version
 
 
+def check_release_tag(tag: str, version: str) -> None:
+    if tag not in (version, f"v{version}"):
+        raise ValueError(f"Release tag {tag!r} does not match client version {version!r}")
+
+
 def executable_relative(platform: str) -> Path:
     if platform.startswith("darwin-"):
         return Path("Crab Computer Use.app/Contents/MacOS/crabcode-computer-use-host")
@@ -168,6 +173,12 @@ def check_vsix(archive_path: Path, bundles: dict[str, Path], version: str, targe
         if manifest.get("icon"):
             icon = "extension/" + manifest["icon"]
             check_marketplace_icon(archive.read(icon), f"{archive_path}: {icon}")
+        if source is not None:
+            source_icon = read_json(source / "package.json").get("icon")
+            if manifest.get("icon") != source_icon:
+                raise ValueError(f"Missing or changed extension icon declaration: {archive_path}")
+            if source_icon and archive.read("extension/" + source_icon) != (source / source_icon).read_bytes():
+                raise ValueError(f"Extension icon changed during packaging: {archive_path}")
         identity = ET.fromstring(archive.read("extension.vsixmanifest")).find(".//{*}Identity")
         if identity is None or identity.get("TargetPlatform") != target:
             raise ValueError(f"Incorrect VSIX platform: {archive_path}")
@@ -312,9 +323,12 @@ def main() -> None:
     parser.add_argument("command", choices=("check", "native", "vsix", "desktop"))
     parser.add_argument("--bundle-root", type=Path, default=ROOT / "packages/computer-use/dist")
     parser.add_argument("--platform", choices=PLATFORMS)
+    parser.add_argument("--release-tag", help="Require the release tag to match the packaged version")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/clients")
     args = parser.parse_args()
     version = check_versions()
+    if args.release_tag is not None:
+        check_release_tag(args.release_tag, version)
     if args.command == "check":
         for relative in ("packages/vscode", "packages/vscode/computer-use"):
             check_extension_assets(ROOT / relative)

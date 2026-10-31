@@ -1,6 +1,6 @@
 // Regenerate the checked-in macOS and Windows icons from the shared PNG master.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,11 @@ try {
   }
   execFileSync("/usr/bin/iconutil", ["-c", "icns", iconset, "-o", destination], { stdio: "inherit" });
   console.log(`Computer Use icon: ${destination}`);
+
+  // The extension uses the same Computer Use artwork at a Marketplace-safe size.
+  const extensionIcon = path.resolve(root, "../vscode/computer-use/logo.png");
+  copyFileSync(path.join(iconset, "icon_256x256@2x.png"), extensionIcon);
+  console.log(`Computer Use extension icon: ${extensionIcon}`);
 
   // Windows supports PNG-backed ICO entries. Keep every size in one file so
   // Explorer can select an appropriate rendition for its view and display DPI.

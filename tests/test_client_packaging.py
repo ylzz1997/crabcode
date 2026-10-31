@@ -155,6 +155,7 @@ class ClientPackagingTests(unittest.TestCase):
     def test_verification_rejects_dropped_or_changed_locales(self):
         source = self.root / "source"
         source.mkdir()
+        (source / "package.json").write_text("{}", encoding="utf-8")
         english = {"description": "Description"}
         chinese = {"description": "描述"}
         for name, values in (("package.nls.json", english), ("package.nls.zh-cn.json", chinese)):
@@ -167,6 +168,18 @@ class ClientPackagingTests(unittest.TestCase):
                 archive = self.archive({}, manifest_overrides={"description": "%description%"}, language_packs=packs)
                 with self.assertRaisesRegex(ValueError, "Missing or changed language pack.*zh-cn"):
                     packaging.check_vsix(archive, {}, self.version, source=source)
+
+    def test_packaging_preserves_extension_specific_icon(self):
+        source = self.root / "source"
+        source.mkdir()
+        icon = self.png_header(512, 512)
+        (source / "package.json").write_text(json.dumps({"icon": "logo.png"}), encoding="utf-8")
+        (source / "logo.png").write_bytes(icon)
+        packaging.check_vsix(self.archive({}, icon=icon), {}, self.version, source=source)
+        with self.assertRaisesRegex(ValueError, "icon declaration"):
+            packaging.check_vsix(self.archive({}), {}, self.version, source=source)
+        with self.assertRaisesRegex(ValueError, "icon changed"):
+            packaging.check_vsix(self.archive({}, icon=self.png_header(256, 256)), {}, self.version, source=source)
 
     @staticmethod
     def png_header(width, height):
@@ -248,6 +261,13 @@ class ClientVersionTests(unittest.TestCase):
                         packaging.check_versions()
                 finally:
                     path.write_text(original, encoding="utf-8")
+
+    def test_release_tag_must_match_packaged_version(self):
+        for tag in ("1.2.3", "v1.2.3"):
+            packaging.check_release_tag(tag, "1.2.3")
+        for tag in ("1.2.4", "v1.2.4", "v1.2.3-rc.1", "main", "", "refs/tags/v1.2.3"):
+            with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "does not match"):
+                packaging.check_release_tag(tag, "1.2.3")
 
 
 if __name__ == "__main__":

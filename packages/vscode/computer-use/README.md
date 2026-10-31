@@ -18,5 +18,8 @@ For source development, run `npm ci`, `npm run computer-use:build`, then
 `npm run build`. The JavaScript prepublish hook does not rebuild native payloads.
 **Actions → Client Packages → Run workflow** creates the three platform VSIXs
 and an all-platform VSIX, together with the main extension and Desktop installers.
+Publishing a GitHub Release also uploads these packages as release assets;
+stable releases publish all VSIXs to Visual Studio Marketplace and Open VSX
+using trusted publishing. The companion uses the native Computer Use icon.
 See [client packaging](../../../CLIENT_PACKAGING.md) for downloads and signing,
 and `../../computer-use/README.md` for native development and regression validation.

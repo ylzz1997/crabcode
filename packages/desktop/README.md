@@ -149,8 +149,10 @@ The Gateway WebSocket protocol remains version 1.
 
 Run **Actions → Client Packages → Run workflow** to build Apple Silicon and Intel
 Mac DMGs plus a Windows x64 MSI. Download the `desktop-*` artifacts from that run.
-The workflow also builds platform and universal VSIXs. It is manual-only and
-does not create or publish a GitHub Release or change Python publishing.
+Publishing a GitHub Release automatically builds and attaches all three installers,
+platform and universal VSIXs, and their SHA256 checksums to that release. Stable
+releases also publish the extensions to Visual Studio Marketplace and Open VSX.
+Manual runs only build Actions artifacts. Python publishing remains independent.
 See [client packaging](../../CLIENT_PACKAGING.md) for outputs, optional signing
 secrets, verification and retention periods.
 
