@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "crabcode-computer-use-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "base64 0.22.1",
  "core-foundation 0.10.1",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "crabcode-computer-use-host"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "cc",
  "crabcode-computer-use-core",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "crabcode-desktop"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "base64 0.22.1",
  "crabcode-computer-use-core",

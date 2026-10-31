@@ -3,6 +3,15 @@
 All notable changes to the CrabCode Visual Studio Code extension are documented
 in this file.
 
+## 0.1.9
+
+- Build client packages when a GitHub Release is published and attach all VSIXs
+  and macOS/Windows Desktop installers with SHA256 checksums.
+- Publish the prebuilt main and Computer Use extensions to Visual Studio
+  Marketplace and Open VSX through trusted publishing on stable releases.
+- Give the Computer Use companion its own native Computer Use icon and verify
+  that packaging preserves each extension's icon.
+
 ## 0.1.6
 
 - Add `crabcode.computerUseMode` with background-application and foreground-desktop modes; explicit VS Code values override the Gateway mode without automatic fallback.

@@ -27,7 +27,7 @@ follow VS Code's own display language. Translation catalogs are included in the 
 2. For a local Gateway, install CrabCode with Gateway support:
 
    ```bash
-   python -m pip install "crabcode[gateway]==0.1.8"
+   python -m pip install "crabcode[gateway]==0.1.9"
    crabcode gateway
    ```
 
@@ -246,13 +246,13 @@ npm test
 npm run package
 ```
 
-The package command builds the universal main extension and creates `crabcode-0.1.8.vsix`.
+The package command builds the universal main extension and creates `crabcode-0.1.9.vsix`.
 It does not embed native components. The companion must also be installed.
 For extension-host development, `npm run watch` (also used by the F5 launch task)
 builds a debug native component and the companion before starting the JavaScript watcher.
 The F5 launch configuration loads both extensions.
 Install it with **Extensions → … → Install from VSIX…**, or run
-`code --install-extension crabcode-0.1.8.vsix`. Node.js and npm are only required
+`code --install-extension crabcode-0.1.9.vsix`. Node.js and npm are only required
 for building the extension, not for installing the VSIX in VS Code.
 
 For platform and all-platform VSIXs, run **Actions → Client Packages → Run workflow**

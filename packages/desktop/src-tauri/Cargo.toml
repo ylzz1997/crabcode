@@ -1,6 +1,6 @@
 [package]
 name = "crabcode-desktop"
-version = "0.1.8"
+version = "0.1.9"
 description = "Desktop client for CrabCode Gateway"
 authors = ["CrabCode"]
 edition = "2021"

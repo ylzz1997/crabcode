@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "crabcode-debugger"
 # Synced from packages/core/crabcode_core/_version.py by scripts/sync_version.py.
-version = "0.1.8"
+version = "0.1.9"
 description = "DAP and process-level debugging tools for CrabCode"
 requires-python = ">=3.10"
 dependencies = [
-    "crabcode-core>=0.1.8",
+    "crabcode-core>=0.1.9",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -12,7 +12,7 @@ runner, then reuses those bundles for the extensions and installers.
 
 The workflow must be committed before creating the release tag. The tag must be
 the version in the checked-out client manifests, with an optional `v` prefix
-(for example, `0.1.8` or `v0.1.8`). Version mismatches fail before native builds.
+(for example, `0.1.9` or `v0.1.9`). Version mismatches fail before native builds.
 Use a new version when changing published packages; existing registry versions
 are not replaced. The independent `python-publish.yml` workflow continues to
 handle Python/PyPI publishing.
