@@ -181,6 +181,8 @@ class OpenAIAdapter(APIAdapter):
         api_key: str | None = None
         if config.api_key_env:
             api_key = os.environ.get(config.api_key_env)
+        if not api_key and self._allows_placeholder_api_key():
+            api_key = "ollama"
         if not api_key:
             api_key = os.environ.get("OPENAI_API_KEY")
 
@@ -194,6 +196,9 @@ class OpenAIAdapter(APIAdapter):
 
         from crabcode_core.api.network import sdk_options
         return openai.AsyncOpenAI(**kwargs, **sdk_options(config, self._sdk))
+
+    def _allows_placeholder_api_key(self) -> bool:
+        return False
 
     def _resolve_model(self, config: ModelConfig) -> str:
         """Resolve the model name for the API call.  Override in subclasses."""
@@ -226,14 +231,69 @@ class OpenAIAdapter(APIAdapter):
 
         if config.temperature is not None:
             params["temperature"] = config.temperature
+        if config.stop_sequences is not None:
+            params["stop"] = safe_utf8_json_tree(config.stop_sequences)
+        if self.config.prompt_cache_key:
+            params["prompt_cache_key"] = self.config.prompt_cache_key
+        if self.config.prompt_cache_retention:
+            params["prompt_cache_retention"] = self.config.prompt_cache_retention
 
+        reasoning_effort = (
+            config.reasoning_effort
+            if config.reasoning_effort is not None
+            else self.config.reasoning_effort
+        )
+        if self._allows_placeholder_api_key() and reasoning_effort is None and not config.thinking_enabled:
+            reasoning_effort = "none"
         extra_body = safe_utf8_json_tree(dict(self.config.extra_body or {}))
+        model_name = model.rsplit("/", 1)[-1].lower()
+        is_gemini = (
+            model_name.startswith("gemini-")
+            or self.config.provider == "gemini"
+            or (self.config.provider == "router" and self.config.format == "gemini")
+        )
+        if is_gemini:
+            # The shared composer has higher effort levels than Gemini exposes.
+            if reasoning_effort in {"xhigh", "max"}:
+                reasoning_effort = "high"
+
+            # Python SDK extra_body is merged into the HTTP body. Google's
+            # extension itself is a nested wire-level "extra_body" field.
+            # Preserve explicit provider settings, including summary opt-out.
+            # Legacy non-thinking models must not receive a thinking config.
+            google_extra = (
+                extra_body.setdefault("extra_body", {})
+                if not model_name.startswith(("gemini-1.", "gemini-2.0"))
+                else None
+            )
+            if isinstance(google_extra, dict):
+                google = google_extra.setdefault("google", {})
+                if isinstance(google, dict):
+                    thinking = google.setdefault("thinking_config", {})
+                    if isinstance(thinking, dict):
+                        if "includeThoughts" not in thinking:
+                            thinking.setdefault("include_thoughts", config.thinking_enabled)
+                        # Native level/budget and OpenAI effort are mutually
+                        # exclusive. Explicit extra_body remains authoritative.
+                        if any(key in thinking for key in (
+                            "thinking_level", "thinking_budget", "thinkingLevel", "thinkingBudget",
+                        )):
+                            reasoning_effort = None
+                        elif model_name.startswith("gemini-2.5-") and reasoning_effort is None and config.thinking_enabled:
+                            # Token budgets are supported by 2.5; later models
+                            # use named levels instead. Explicit effort wins.
+                            thinking["thinking_budget"] = config.thinking_budget
+
+        if reasoning_effort is not None:
+            params["reasoning_effort"] = reasoning_effort
         if extra_body:
             params["extra_body"] = extra_body
 
         tool_call_buffers: dict[int, dict[str, str]] = {}
 
-        stream = await self.client.chat.completions.create(**params)
+        from crabcode_core.api.network import request_timeout, retry_request
+        params["timeout"] = request_timeout(config, getattr(self, "_sdk", None), fallback=self.config)
+        stream = await retry_request(self.config, lambda: self.client.chat.completions.create(**params))
         async for chunk in stream:
             if not chunk.choices:
                 if chunk.usage:

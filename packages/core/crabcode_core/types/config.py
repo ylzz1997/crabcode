@@ -129,7 +129,7 @@ class ApiConfig(BaseModel):
     # Explicit opt-in for a separate unbounded 5s..60s connection retry path.
     unbounded_connection_retries: bool = False
     context_window: int | None = None  # override auto-detected context window
-    prompt_cache_key: str | None = None  # OpenAI Responses API prompt cache routing key
+    prompt_cache_key: str | None = None  # OpenAI Chat Completions / Responses cache routing key
     prompt_caching: Literal["auto", "enabled", "disabled"] = "auto"
     prompt_cache_retention: Literal["in_memory", "24h"] | None = None
     extra_body: dict[str, Any] = Field(default_factory=dict)

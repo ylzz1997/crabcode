@@ -183,22 +183,17 @@ class AnthropicAdapter(APIAdapter):
             return
 
         payload = dict(params)
+        payload.update(payload.pop("extra_body", {}))
         payload["stream"] = True
-
-        timeout = httpx.Timeout(
-            float(self.config.timeout),
-            connect=min(float(self.config.timeout), 10.0),
-            read=float(self.config.timeout),
-            write=float(self.config.timeout),
-        )
-        from crabcode_core.api.network import http_options
+        from crabcode_core.api.network import http_options, request_timeout, retry_stream_context
+        timeout = payload.pop("timeout", request_timeout(self.config))
         async with httpx.AsyncClient(timeout=timeout, **http_options(self.config)) as client:
-            async with client.stream(
+            async with retry_stream_context(self.config, lambda: client.stream(
                 "POST",
                 url,
                 headers=self._manual_headers(),
                 json=payload,
-            ) as response:
+            )) as response:
                 content_type = response.headers.get("content-type", "")
                 if response.status_code >= 400:
                     body = await response.aread()
@@ -425,11 +420,24 @@ class AnthropicAdapter(APIAdapter):
                 "budget_tokens": config.thinking_budget,
             }
 
-        if config.reasoning_effort in {"low", "medium", "high", "xhigh", "max"}:
-            params["output_config"] = {"effort": config.reasoning_effort}
+        reasoning_effort = (
+            config.reasoning_effort
+            if config.reasoning_effort is not None
+            else self.config.reasoning_effort
+        )
+        if reasoning_effort == "minimal":
+            reasoning_effort = "low"
+        if reasoning_effort in {"low", "medium", "high", "xhigh", "max"}:
+            params["output_config"] = {"effort": reasoning_effort}
+        elif reasoning_effort == "none":
+            params["thinking"] = {"type": "disabled"}
 
         if config.temperature is not None:
             params["temperature"] = config.temperature
+        if config.stop_sequences is not None:
+            params["stop_sequences"] = safe_utf8_json_tree(config.stop_sequences)
+        if self.config.extra_body:
+            params["extra_body"] = safe_utf8_json_tree(self.config.extra_body)
 
         return params
 
@@ -441,8 +449,9 @@ class AnthropicAdapter(APIAdapter):
         if isinstance(self, (BedrockAdapter, VertexAdapter)):
             return None
         payload = self._request_params(messages, system, tools, config)
-        payload.pop("max_tokens", None)
-        payload.pop("temperature", None)
+        payload.update(payload.pop("extra_body", {}))
+        supported = {"model", "messages", "system", "tools", "tool_choice", "thinking"}
+        payload = {key: value for key, value in payload.items() if key in supported}
         headers = {key: value for key, value in self._manual_headers().items()
                    if key.lower() != "accept"}
         headers["accept"] = "application/json"
@@ -462,6 +471,13 @@ class AnthropicAdapter(APIAdapter):
         transport = self.config.anthropic_stream_transport
         use_httpx_stream = transport == "httpx" or (
             transport == "auto" and bool(self.config.base_url)
+        )
+        # Cloud platforms need their SDK's signing/authentication and URL format.
+        if isinstance(self, (BedrockAdapter, VertexAdapter)):
+            use_httpx_stream = False
+        from crabcode_core.api.network import request_timeout
+        params["timeout"] = request_timeout(
+            config, None if use_httpx_stream else self._sdk, fallback=self.config,
         )
         stream = (
             self._stream_message_httpx(params) if use_httpx_stream
@@ -510,7 +526,8 @@ class AnthropicAdapter(APIAdapter):
         current_block_type = ""
         current_block_id = ""
 
-        async with self.client.messages.stream(**params) as stream:
+        from crabcode_core.api.network import retry_stream_context
+        async with retry_stream_context(self.config, lambda: self.client.messages.stream(**params)) as stream:
             async for event in stream:
                 event_type = getattr(event, "type", "")
 
@@ -633,7 +650,14 @@ class BedrockAdapter(AnthropicAdapter):
     def __init__(self, config: ApiConfig):
         self.config = config
         from crabcode_core.api.network import sdk_options
-        self.client = anthropic.AsyncAnthropicBedrock(**sdk_options(config, self._sdk))
+        kwargs: dict[str, Any] = {}
+        if config.base_url:
+            kwargs["base_url"] = config.base_url
+        if config.http_headers:
+            kwargs["default_headers"] = config.http_headers
+        if config.api_key_env and os.environ.get(config.api_key_env):
+            kwargs["api_key"] = os.environ[config.api_key_env]
+        self.client = anthropic.AsyncAnthropicBedrock(**kwargs, **sdk_options(config, self._sdk))
 
 
 class VertexAdapter(AnthropicAdapter):
@@ -642,8 +666,16 @@ class VertexAdapter(AnthropicAdapter):
     def __init__(self, config: ApiConfig):
         from crabcode_core.api.network import sdk_options
         self.config = config
+        kwargs: dict[str, Any] = {}
+        if config.base_url:
+            kwargs["base_url"] = config.base_url
+        if config.http_headers:
+            kwargs["default_headers"] = config.http_headers
+        if config.api_key_env and os.environ.get(config.api_key_env):
+            kwargs["access_token"] = os.environ[config.api_key_env]
         self.client = anthropic.AsyncAnthropicVertex(
             region=os.environ.get("CLOUD_ML_REGION", "us-east5"),
             project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID"),
+            **kwargs,
             **sdk_options(config, self._sdk),
         )

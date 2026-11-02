@@ -24,8 +24,7 @@ class AzureOpenAIAdapter(OpenAIAdapter):
     """
 
     def __init__(self, config: ApiConfig):
-        # Azure deployment name: env override takes precedence
-        self._deployment_override = os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+        self._deployment_override = config.azure_deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT")
         super().__init__(config)
 
     def _create_client(self, config: ApiConfig) -> Any:
@@ -40,12 +39,12 @@ class AzureOpenAIAdapter(OpenAIAdapter):
             api_key = os.environ.get("AZURE_OPENAI_API_KEY")
 
         # --- Azure endpoint ---
-        azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+        azure_endpoint = config.azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
         if not azure_endpoint and config.base_url:
             azure_endpoint = config.base_url
 
         # --- API version ---
-        api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+        api_version = config.azure_api_version or os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
 
         kwargs: dict[str, Any] = {}
         if api_key:

@@ -1042,7 +1042,7 @@ const MODEL_FIELDS: Array<
     ["model", "模型 ID", "text"],
     ["base_url", "Base URL", "text"],
     ["group", "配置组", "text"],
-    ["format", "API 格式", "text", ["anthropic", "openai", "codex"]],
+    ["format", "API 格式", "text", ["anthropic", "openai", "codex", "ollama", "gemini", "azure"]],
     ["api_key_env", "API Key 环境变量", "text"],
     [
       "reasoning_effort",
@@ -1168,6 +1168,8 @@ async function modelEditor(
             [
               ["", tr("继承")],
               ...choices.map((value) => [value, value] as const),
+              ...(initial && !choices.includes(String(initial))
+                ? [[String(initial), String(initial)] as const] : []),
             ],
             String(initial ?? ""),
             label,

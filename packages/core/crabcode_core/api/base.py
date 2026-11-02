@@ -79,9 +79,9 @@ class ModelConfig:
     thinking_budget: int = 10000
     temperature: float | None = None
     stop_sequences: list[str] | None = None
-    timeout: int = 300  # seconds
+    timeout: int | None = None  # seconds; None inherits the adapter configuration
     context_window: int = 0  # 0 means unknown / not resolved yet
-    reasoning_effort: str | None = None  # call-level override for Responses-style APIs
+    reasoning_effort: str | None = None  # call-level override for the provider's reasoning effort
 
 
 @dataclass

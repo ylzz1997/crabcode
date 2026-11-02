@@ -795,13 +795,15 @@ class CodexAdapter(APIAdapter):
         self,
         params: dict[str, Any],
     ) -> AsyncGenerator[StreamChunk, None]:
+        params = dict(params)
+        from crabcode_core.api.network import http_options, request_timeout
+        timeout = params.pop("timeout", request_timeout(self.config))
         url = f"{self._base_url.rstrip('/')}/responses"
         active_calls: dict[str, dict[str, str]] = {}
         finalized_call_items: set[str] = set()
         saw_terminal_event = False
 
-        from crabcode_core.api.network import http_options, request_timeout
-        async with httpx.AsyncClient(timeout=request_timeout(self.config), **http_options(self.config)) as client:
+        async with httpx.AsyncClient(timeout=timeout, **http_options(self.config)) as client:
             async with self._httpx_stream_with_retry(
                 client,
                 url=url,
@@ -1026,6 +1028,8 @@ class CodexAdapter(APIAdapter):
         tools: list[dict[str, Any]], config: ModelConfig,
     ) -> dict[str, Any]:
         """Share input serialization between generation and server counting."""
+        if config.stop_sequences:
+            raise ValueError("The Responses API does not support stop_sequences")
         model = config.model or self.config.model or "codex-mini-latest"
 
         # Responses API uses 'instructions' for system prompt
@@ -1067,11 +1071,9 @@ class CodexAdapter(APIAdapter):
             else self.config.reasoning_effort
         )
         if reasoning_effort is not None:
-            if reasoning_effort != "none":
-                params["reasoning"] = {
-                    "effort": reasoning_effort,
-                    "summary": "auto",
-                }
+            params["reasoning"] = {"effort": reasoning_effort}
+            if reasoning_effort != "none" and config.thinking_enabled:
+                params["reasoning"]["summary"] = "auto"
         elif config.thinking_enabled:
             # Backward-compatible mapping from thinking_budget to reasoning effort
             budget = config.thinking_budget
@@ -1120,6 +1122,9 @@ class CodexAdapter(APIAdapter):
         sdk_params = self._request_params(messages, system, tools, config)
         raw_params = dict(sdk_params)
         raw_params.update(raw_params.pop("extra_body", {}))
+        from crabcode_core.api.network import request_timeout
+        sdk_params["timeout"] = request_timeout(config, getattr(self, "_sdk", None), fallback=self.config)
+        raw_params["timeout"] = request_timeout(config, fallback=self.config)
 
         if self._using_codex_oauth:
             # The Codex OAuth endpoint does not support server-side response

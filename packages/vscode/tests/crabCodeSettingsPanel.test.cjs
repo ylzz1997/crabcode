@@ -185,6 +185,25 @@ test("model editor saves only changes and never writes redacted credentials back
   h.dom.window.close();
 });
 
+for (const format of ["gemini", "ollama", "azure", "future-format"]) {
+  test(`model editor preserves ${format} format when editing another parameter`, async () => {
+    const h = harness({ section: "models" });
+    h.state.models.models[0].configured.format = format;
+    await h.settle();
+    h.click("编辑");
+    await h.settle();
+    assert.equal(h.doc.querySelector('[aria-label="API 格式"]').value, format);
+    h.change("超时（秒）", "43", "input");
+    h.click("保存");
+    await h.settle();
+    const mutation = h.requests.filter(item => item.body).at(-1).body;
+    assert.equal(mutation.config.timeout, 43);
+    assert.equal(mutation.config.format, undefined);
+    assert.ok(!mutation.remove_fields.includes("format"));
+    h.dom.window.close();
+  });
+}
+
 test("model deletion targets a layer that actually contains the entry", async () => {
   const h = harness({ section: "models" });
   await h.settle();

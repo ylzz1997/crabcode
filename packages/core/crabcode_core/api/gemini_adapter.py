@@ -12,8 +12,8 @@ class GeminiAdapter(OpenAIAdapter):
     Google Gemini has provided an OpenAI-compatible endpoint since late 2024
     (``https://generativelanguage.googleapis.com/v1beta/openai/``), so we
     simply inherit from :class:`OpenAIAdapter` and pre-fill the base URL,
-    API key environment variable, and disable thinking (not supported on the
-    OpenAI-compatible surface).
+    and API key environment variable. The shared adapter forwards reasoning
+    effort and requests thought summaries through Google's extra_body extension.
     """
 
     def __init__(self, config: ApiConfig):
@@ -21,6 +21,4 @@ class GeminiAdapter(OpenAIAdapter):
             config = config.model_copy(update={"base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"})
         if not config.api_key_env:
             config = config.model_copy(update={"api_key_env": "GEMINI_API_KEY"})
-        if config.thinking_enabled is True:
-            config = config.model_copy(update={"thinking_enabled": False})
         super().__init__(config)

@@ -1,8 +1,11 @@
 """Shared HTTP routing policy. Never fall back from a proxy to direct access."""
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 import ssl
-from typing import Any
+import sys
+from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -26,8 +29,9 @@ def http_options(config: Any) -> dict[str, Any]:
     return {"trust_env": False, "proxy": proxy}
 
 
-def request_timeout(config: Any, sdk: Any = None) -> Any:
-    timeout = float(getattr(config, "timeout", 300))
+def request_timeout(config: Any, sdk: Any = None, *, fallback: Any = None) -> Any:
+    value = getattr(config, "timeout", None)
+    timeout = float(value if value is not None else getattr(fallback, "timeout", 300))
     # SDK exports follow their supported transport (httpx or httpx2).
     timeout_type = sdk.Timeout if sdk is not None else httpx.Timeout
     return timeout_type(timeout, connect=min(timeout, 10.0))
@@ -39,12 +43,84 @@ def sdk_http_client(config: Any, sdk: Any = None) -> Any:
 
 
 def sdk_options(config: Any, sdk: Any) -> dict[str, Any]:
-    # The query loop owns retry budgets; nested SDK retries hide progress.
+    # Adapters own request retries; the query loop owns stream reconnects.
+    # Disable SDK retries so they do not multiply those budgets.
     options: dict[str, Any] = {"max_retries": 0, "timeout": request_timeout(config, sdk)}
     routing = http_options(config)
     if routing:
         options["http_client"] = sdk_http_client(config, sdk)
     return options
+
+
+_T = TypeVar("_T")
+
+
+def request_error_is_retryable(exc: BaseException) -> bool:
+    """Only transport failures and 5xx belong to the request retry budget."""
+    if certificate_failure(exc):
+        return False
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, httpx.TransportError):
+            return True
+        status = getattr(current, "status_code", None)
+        if isinstance(status, int) and status >= 500:
+            return True
+        pending.extend(item for item in (current.__cause__, current.__context__) if item is not None)
+    return False
+
+
+def request_retry_limit(config: Any) -> int:
+    from crabcode_core.query.retry import MAX_REQUEST_RETRIES
+    return min(max(0, int(getattr(config, "request_max_retries", 4))), MAX_REQUEST_RETRIES)
+
+
+async def retry_request(config: Any, request: Callable[[], Awaitable[_T]]) -> _T:
+    """Retry opening a request, never reading/replaying a started stream."""
+    from crabcode_core.query.retry import request_retry_backoff
+    limit = request_retry_limit(config)
+    for attempt in range(limit + 1):
+        try:
+            return await request()
+        except Exception as exc:
+            if attempt >= limit or not request_error_is_retryable(exc):
+                raise
+            await asyncio.sleep(request_retry_backoff(attempt + 1))
+    raise RuntimeError("unreachable request retry state")
+
+
+@asynccontextmanager
+async def retry_stream_context(config: Any, factory: Callable[[], Any]) -> AsyncIterator[Any]:
+    """Open an SDK/HTTP stream with retries and always close its context."""
+    from crabcode_core.query.retry import request_retry_backoff
+    limit = request_retry_limit(config)
+    for attempt in range(limit + 1):
+        manager = factory()
+        try:
+            stream = await manager.__aenter__()
+        except Exception as exc:
+            if attempt >= limit or not request_error_is_retryable(exc):
+                raise
+        else:
+            # Raw HTTP returns error responses; SDKs raise on context entry.
+            # Return the final response intact for provider error diagnostics.
+            status = getattr(stream, "status_code", 0)
+            if not isinstance(status, int) or status < 500 or attempt >= limit:
+                break
+            await manager.__aexit__(None, None, None)
+        await asyncio.sleep(request_retry_backoff(attempt + 1))
+    try:
+        yield stream
+    except BaseException:
+        if not await manager.__aexit__(*sys.exc_info()):
+            raise
+    else:
+        await manager.__aexit__(None, None, None)
 
 
 def certificate_failure(exc: BaseException) -> bool:
