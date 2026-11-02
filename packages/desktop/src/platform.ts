@@ -1,3 +1,8 @@
+export function isMacOSPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Macintosh|MacIntel|MacPPC|Mac68K/i.test(`${navigator.platform || ""} ${navigator.userAgent || ""}`);
+}
+
 export function isWindowsPlatform(): boolean {
   if (typeof navigator === "undefined") return false;
   const value = `${navigator.platform || ""} ${navigator.userAgent || ""}`;

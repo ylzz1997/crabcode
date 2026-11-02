@@ -15,6 +15,21 @@ pub fn run() {
         .manage(GatewayProcesses::default())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            // Configure the native frame before showing the window so it opens
+            // directly with the same integrated titlebar used by the frontend.
+            let window =
+                tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?;
+            #[cfg(target_os = "macos")]
+            let window = window
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .traffic_light_position(tauri::LogicalPosition::new(16.0, 19.0));
+            #[cfg(target_os = "windows")]
+            let window = window.decorations(false);
+            window.build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             computer_use::computer_use_capabilities,
             computer_use::computer_use_execute,

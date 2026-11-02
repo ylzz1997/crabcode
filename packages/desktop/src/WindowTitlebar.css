@@ -1,0 +1,182 @@
+:root {
+  --window-chrome-height: 0px;
+}
+
+html[data-window-platform="macos"],
+html[data-window-platform="windows"] {
+  --window-chrome-height: 36px;
+}
+
+html[data-window-platform="macos"][data-window-fullscreen="true"] {
+  --window-chrome-height: 0px;
+}
+
+.app-shell {
+  position: relative;
+}
+
+/* Transparent controls sit above the continuous sidebar and workspace surfaces. */
+.window-titlebar {
+  display: none;
+}
+
+html[data-window-platform="macos"] .window-titlebar,
+html[data-window-platform="windows"] .window-titlebar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 3000;
+  display: flex;
+  height: var(--window-chrome-height);
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+.window-titlebar-spacer {
+  flex: 1;
+}
+
+.sidebar-content {
+  padding-top: var(--window-chrome-height);
+}
+
+.main-panel {
+  --workspace-top-inset: var(--window-chrome-height);
+  padding-top: var(--workspace-top-inset);
+}
+
+.settings-main {
+  padding-top: var(--window-chrome-height);
+}
+
+.settings-sidebar {
+  padding-top: calc(var(--window-chrome-height) + 18px);
+}
+
+.settings-content {
+  padding-top: 36px;
+}
+
+.workspace-brand {
+  flex: 0 0 66px;
+  min-width: 0;
+  height: 66px;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.workspace-brand-lockup {
+  flex: 1;
+  gap: 8px;
+}
+
+.workspace-brand .top-brand-mark {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 9px;
+}
+
+.workspace-brand-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-brand > .icon-button {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 28px;
+  color: var(--muted);
+}
+
+.workspace-connections {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 12px 12px;
+}
+
+.workspace-connections .tab-strip {
+  flex: 1;
+}
+
+.workspace-connections .gateway-tab {
+  height: 30px;
+  min-width: 0;
+  flex: 0 0 auto;
+  max-width: 180px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.sidebar-expand-button {
+  position: absolute;
+  top: calc(var(--window-chrome-height) + 6px);
+  left: 14px;
+  z-index: 20;
+}
+
+.workbench.sidebar-collapsed .main-panel {
+  --workspace-top-inset: calc(var(--window-chrome-height) + 40px);
+}
+
+.project-files-floating-toggle {
+  top: calc(var(--workspace-top-inset) + 12px);
+}
+
+.project-files-workspace.drawer,
+.project-files-drawer-backdrop {
+  top: var(--workspace-top-inset);
+}
+
+.window-controls {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.window-control {
+  display: grid;
+  width: 46px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.window-control svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+
+.window-titlebar[data-focused="false"] .window-control {
+  color: var(--muted);
+}
+
+.window-control:hover {
+  background: var(--surface-hover);
+}
+
+.window-control:active {
+  background: var(--surface-active);
+}
+
+.window-control:focus-visible {
+  outline-offset: -3px;
+}
+
+.window-titlebar .window-control-close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.window-titlebar .window-control-close:active {
+  background: #a82418;
+  color: #fff;
+}

@@ -46,6 +46,7 @@ describe("application startup feedback", () => {
     vi.mocked(ensureLocalGateway).mockImplementation(() => new Promise((_resolve, reject) => { rejectInstall = reject; }));
     await act(async () => root.render(<App />));
     expect(container.querySelector(".desktop-status-bar")?.textContent).toContain("正在读取桌面配置");
+    expect(container.querySelectorAll(".window-titlebar")).toHaveLength(1);
 
     await act(async () => resolveSettings(normalizeSettings({
       schema_version: 4,
@@ -59,9 +60,19 @@ describe("application startup feedback", () => {
     act(() => onProgress({ connectionId: "local", operationId: "test", stage: "installing", detail: "正在安装 CrabCode、Browser 和 Chromium，首次启动可能需要几分钟" }));
     expect(container.querySelector(".desktop-status-bar")?.textContent).toContain("正在安装 CrabCode、Browser 和 Chromium");
     expect(container.querySelector<HTMLButtonElement>('button[title="重新连接"]')?.disabled).toBe(true);
+    expect(container.querySelector(".workspace-brand .sidebar-toggle")).not.toBeNull();
+    expect(container.querySelectorAll(".workspace-brand-copy strong")).toHaveLength(1);
+    expect(container.querySelector(".workspace-connections .gateway-tab")?.textContent).toBe("Local");
+    await act(async () => container.querySelector<HTMLButtonElement>('button[title="隐藏侧栏"]')!.click());
+    expect(container.querySelector(".sidebar.closed")).not.toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('button[title="显示侧栏"]')!.click());
+    expect(container.querySelector(".sidebar.open")).not.toBeNull();
 
     await act(async () => container.querySelector<HTMLButtonElement>(".workspace-settings-button")!.click());
     expect(container.querySelector(".settings-shell")).not.toBeNull();
+    expect(container.querySelectorAll(".window-titlebar")).toHaveLength(1);
+    expect(container.querySelector(".window-titlebar")?.textContent).toBe("");
+    expect(container.querySelector(".settings-sidebar .settings-back")).not.toBeNull();
     expect(container.querySelector(".desktop-status-bar")?.textContent).toContain("正在安装 CrabCode、Browser 和 Chromium");
 
     await act(async () => rejectInstall(new Error("安装失败：无法下载依赖")));

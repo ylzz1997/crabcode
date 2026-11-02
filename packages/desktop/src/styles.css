@@ -15133,7 +15133,7 @@ html[data-theme="light"] .conversation-view-indicator {
   overflow: hidden;
 }
 
-.app-shell>:not(.theme-visuals):not(.modal-backdrop):not(.toast) {
+.app-shell>:not(.theme-visuals):not(.modal-backdrop):not(.toast):not(.window-titlebar) {
   position: relative;
   z-index: 1;
 }

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "katex/dist/katex.min.css";
 import "./styles.css";
+import "./WindowTitlebar.css";
 import { applyLanguage } from "./i18n";
 
 applyLanguage();

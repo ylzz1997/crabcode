@@ -134,6 +134,7 @@ import { changeReviewTurns, type ChangeReviewSelection } from "./ChangeReview";
 import { ALL_EDITS } from "./reviewHistory";
 import { gatewayEnvironmentLog, gatewayLogAddress, updateGatewayStartup, type GatewayStartupState } from "./gatewayStartup";
 import { StatusBar } from "./StatusBar";
+import { WindowTitlebar } from "./WindowTitlebar";
 import { setSessionTaskbarProgress } from "./taskbarProgress";
 import { diffSessionNotifications, sessionInteractions, sessionNotificationName, showSessionNotification, type SessionNotifySnapshot } from "./sessionNotifications";
 import { SettingsView, type SettingsSectionId } from "./SettingsView";
@@ -3565,6 +3566,7 @@ function App() {
   if (!settings) {
     return (
       <div className="app-shell">
+        <WindowTitlebar />
         <div className="boot">
           {globalError ? <><AlertTriangle />{tr("无法加载桌面配置")}</> : <><LoaderCircle className="spin" />{tr("正在加载 Crab Desktop")}</>}
         </div>
@@ -3653,6 +3655,7 @@ function App() {
   return (
     <div className="app-shell">
       <ThemeDecorations theme={activeTheme} />
+      <WindowTitlebar />
       {settingsOpen ? (
         <SettingsView
           settings={settings}
@@ -3901,56 +3904,14 @@ function App() {
         />
       ) : (
         <>
-          <header className="gateway-tabs">
-            <button
-              className="icon-button sidebar-toggle"
-              title={sidebarOpen ? tr("隐藏侧栏") : tr("显示侧栏")}
-              onClick={() => setSidebarOpen((value) => !value)}
-            >
-              {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
-            </button>
-            <div className="top-brand" aria-label={tr("Crab Desktop 工作台")}>
-              <span className={`top-brand-mark ${activeGateway?.status === "online" ? "online" : ""}`}><Code2 /></span>
-              <span className="top-brand-name">Crab Desktop</span>
-              <span className="top-brand-mode">{tr("工作台")}</span>
-            </div>
-            <div className="tab-strip">
-              {settings.connection_order.map((id) => {
-                const connection = settings.connections.find((item) => item.id === id);
-                if (!connection) return null;
-                const gateway = gateways[id];
-                const connectionSessions = Object.entries(sessions)
-                  .filter(([key]) => key.startsWith(`${id}:`))
-                  .map(([, value]) => value);
-                const running = connectionSessions.filter((item) => item.busy).length;
-                const pending = connectionSessions.flatMap((item) => item.items)
-                  .filter((item) => item.status === "pending" && (item.kind === "permission" || item.kind === "choice"))
-                  .length;
-                return (
-                  <button
-                    key={id}
-                    className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
-                    onClick={() => switchConnection(id)}
-                    onDoubleClick={() => {
-                      const name = window.prompt(tr("连接名称"), connection.name)?.trim();
-                      if (name) updateConnection(id, (current) => ({ ...current, name }));
-                    }}
-                    title={`${connection.name}\n${connection.base_url}`}
-                  >
-                    <ConnectionDot status={gateway?.status ?? "connecting"} />
-                    <span>{connection.name}</span>
-                    {running > 0 && <span className="tab-count running">{running}</span>}
-                    {pending > 0 && <span className="tab-count pending">{pending}</span>}
-                  </button>
-                );
-              })}
-            </div>
-            <button className="icon-button" title={tr("连接 Gateway")} onClick={() => setConnectionModal("new")}>
-              <Plus />
-            </button>
-          </header>
-
           <div className={`workbench ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+            {!sidebarOpen && (
+              <button
+                className="icon-button sidebar-expand-button"
+                title={tr("显示侧栏")}
+                onClick={() => setSidebarOpen(true)}
+              ><PanelLeftOpen /></button>
+            )}
             <aside
               className={`sidebar ${sidebarOpen ? "open" : "closed"}`}
               style={{ width: sidebarOpen ? settings.sidebar_width : 0 }}
@@ -3959,20 +3920,57 @@ function App() {
             >
               <div className="sidebar-content" style={{ width: settings.sidebar_width }}>
                 <div className="workspace-brand">
+                  <button
+                    className="icon-button small sidebar-toggle"
+                    title={tr("隐藏侧栏")}
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <PanelLeftClose />
+                  </button>
                   <div className="workspace-brand-lockup" title={activeProject?.path ?? activeConnection?.base_url}>
+                    <span className={`top-brand-mark ${activeGateway?.status === "online" ? "online" : ""}`}><Code2 /></span>
                     <span className="workspace-brand-copy">
                       <strong>Crab Desktop</strong>
-                      <small>{activeProject?.name ?? tr("工作区")}</small>
+                      <small>{activeProject?.name ?? tr("工作台")}</small>
                     </span>
                   </div>
-                  <div className="workspace-brand-actions">
-                    <button
-                      className="icon-button small"
-                      title={tr("已安排")}
-                      onClick={() => setWorkspaceView("scheduled")}
-                    >
-                      <Clock />
-                    </button>
+                  <button className="icon-button small workspace-connect" title={tr("连接 Gateway")} onClick={() => setConnectionModal("new")}>
+                    <Plus />
+                  </button>
+                </div>
+                {settings.connection_order.length > 0 && (
+                  <div className="workspace-connections">
+                    <div className="tab-strip">
+                      {settings.connection_order.map((id) => {
+                        const connection = settings.connections.find((item) => item.id === id);
+                        if (!connection) return null;
+                        const gateway = gateways[id];
+                        const connectionSessions = Object.entries(sessions)
+                          .filter(([key]) => key.startsWith(`${id}:`))
+                          .map(([, value]) => value);
+                        const running = connectionSessions.filter((item) => item.busy).length;
+                        const pending = connectionSessions.flatMap((item) => item.items)
+                          .filter((item) => item.status === "pending" && (item.kind === "permission" || item.kind === "choice"))
+                          .length;
+                        return (
+                          <button
+                            key={id}
+                            className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
+                            onClick={() => switchConnection(id)}
+                            onDoubleClick={() => {
+                              const name = window.prompt(tr("连接名称"), connection.name)?.trim();
+                              if (name) updateConnection(id, (current) => ({ ...current, name }));
+                            }}
+                            title={`${connection.name}\n${connection.base_url}`}
+                          >
+                            <ConnectionDot status={gateway?.status ?? "connecting"} />
+                            <span>{connection.name}</span>
+                            {running > 0 && <span className="tab-count running">{running}</span>}
+                            {pending > 0 && <span className="tab-count pending">{pending}</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <button
                       className="icon-button small"
                       title={tr("重新连接")}
@@ -3986,7 +3984,7 @@ function App() {
                       <RefreshCw />
                     </button>
                   </div>
-                </div>
+                )}
 
                 {activeGateway?.status === "error" && (
                   <button className="connection-error" onClick={() => setConnectionModal("new")}>
