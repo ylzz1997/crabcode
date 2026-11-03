@@ -45,6 +45,12 @@ html[data-window-platform="macos"] .window-titlebar[data-fullscreen="false"] {
   padding-left: max(90px, calc(var(--titlebar-sidebar-width, 0px) + 12px));
 }
 
+/* Keep the raised Windows sidebar controls outside the titlebar drag overlay. */
+html[data-window-platform="windows"] .window-titlebar {
+  left: var(--titlebar-sidebar-width, 0px);
+  padding-left: 12px;
+}
+
 .window-titlebar-spacer {
   flex: 1;
   min-width: 32px;
@@ -53,6 +59,10 @@ html[data-window-platform="macos"] .window-titlebar[data-fullscreen="false"] {
 
 .sidebar-content {
   padding-top: var(--window-chrome-height);
+}
+
+html[data-window-platform="windows"] .sidebar-content {
+  padding-top: 24px;
 }
 
 .main-panel {
