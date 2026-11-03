@@ -3966,7 +3966,11 @@ function App() {
               aria-hidden={!sidebarOpen}
               {...(!sidebarOpen ? { inert: "" } : {})}
             >
-              <div className="sidebar-content" style={{ width: settings.sidebar_width }}>
+              <div
+                className="sidebar-content"
+                style={{ width: settings.sidebar_width }}
+                data-tauri-drag-region={isDesktopShell() ? true : undefined}
+              >
                 <div className="workspace-brand">
                   <button
                     className="icon-button small sidebar-toggle"

@@ -61,8 +61,12 @@ html[data-window-platform="windows"] .window-titlebar {
   padding-top: var(--window-chrome-height);
 }
 
+html[data-window-platform="macos"] .sidebar-content {
+  padding-top: min(24px, var(--window-chrome-height));
+}
+
 html[data-window-platform="windows"] .sidebar-content {
-  padding-top: 24px;
+  padding-top: 15px;
 }
 
 .main-panel {
@@ -77,7 +81,7 @@ html .main-panel:has(> .conversation-header, > .document-workspace) {
   background-repeat: no-repeat;
 }
 
-html .main-panel > .conversation-header,
+html .main-panel>.conversation-header,
 html .main-panel .document-toolbar {
   border-top: 0;
   background: var(--panel);
@@ -122,7 +126,7 @@ html .main-panel .document-toolbar {
   white-space: nowrap;
 }
 
-.workspace-brand > .icon-button {
+.workspace-brand>.icon-button {
   flex: 0 0 26px;
   width: 26px;
   height: 28px;
@@ -143,7 +147,7 @@ html .main-panel .document-toolbar {
   flex: 0 1 auto;
 }
 
-.workspace-connections > .icon-button {
+.workspace-connections>.icon-button {
   flex: 0 0 26px;
   width: 26px;
   height: 28px;
