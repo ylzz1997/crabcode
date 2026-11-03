@@ -70,6 +70,14 @@ describe("application startup feedback", () => {
     await act(async () => container.querySelector<HTMLButtonElement>('button[title="显示侧栏"]')!.click());
     expect(container.querySelector(".sidebar.open")).not.toBeNull();
 
+    const prompt = vi.spyOn(window, "prompt");
+    act(() => container.querySelector(".gateway-tab")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    expect(prompt).not.toHaveBeenCalled();
+    await act(async () => container.querySelector<HTMLButtonElement>(".status-connection")!.click());
+    expect(container.querySelector(".modal-divider")?.textContent).toBe("新建远程连接");
+    expect(container.querySelector('.saved-connection-row [title="编辑连接"]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('.modal button[title="关闭"]')!.click());
+
     await act(async () => container.querySelector<HTMLButtonElement>(".workspace-settings-button")!.click());
     expect(container.querySelector(".settings-shell")).not.toBeNull();
     expect(container.querySelectorAll(".window-titlebar")).toHaveLength(1);

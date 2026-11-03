@@ -1926,7 +1926,7 @@ export function SettingsView({
                               <ArrowRightLeft />
                             </button>
                           )}
-                          <button
+                          {connection.id !== "local" && <button
                             className="icon-button small"
                             type="button"
                             title={tr("编辑 {0}", { 0: connection.name })}
@@ -1934,7 +1934,7 @@ export function SettingsView({
                             onClick={() => onEditConnection(connection.id)}
                           >
                             <Pencil />
-                          </button>
+                          </button>}
                           {connection.id !== "local" && (
                             <button
                               className="icon-button small danger-icon-button"

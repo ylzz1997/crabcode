@@ -323,6 +323,7 @@
   "JSON 文件过大": "JSON file too large",
   "JSON 里没有提示词模版": "There is no prompttemplate in JSON",
   "JSON 需要是模版对象、模版数组，或包含 templates 的对象": "JSON needs to be a template object, a template array, or an object containing templates",
+  "Local 是内置连接，不能修改": "Local is a built-in connection and cannot be modified",
   "Lume 只能由桌面应用安装": "Lume can only be installed by the desktop app",
   "Lume 存储位置": "Lume storage location",
   "Lume 存储名称": "Lume storage name",

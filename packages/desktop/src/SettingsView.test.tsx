@@ -986,7 +986,7 @@ describe("SettingsView", () => {
     expect(command.querySelector("button")).toBeNull();
   });
 
-  it("exposes connection actions but never offers to delete the local connection", () => {
+  it("exposes remote connection actions but never offers to edit or delete Local", () => {
     const handlers = callbacks();
     act(() => root.render(
       <SettingsView
@@ -1001,6 +1001,7 @@ describe("SettingsView", () => {
     ));
 
     expect(container.querySelector('[aria-label="删除 Local"]')).toBeNull();
+    expect(container.querySelector('[aria-label="编辑 Local"]')).toBeNull();
     const editRemote = container.querySelector<HTMLButtonElement>('[aria-label="编辑 Build Server"]')!;
     const deleteRemote = container.querySelector<HTMLButtonElement>('[aria-label="删除 Build Server"]')!;
     act(() => editRemote.click());

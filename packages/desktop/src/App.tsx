@@ -3676,6 +3676,7 @@ function App() {
                     className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
                     onClick={() => switchConnection(id)}
                     onDoubleClick={() => {
+                      if (id === "local") return;
                       const name = window.prompt(tr("连接名称"), connection.name)?.trim();
                       if (name) updateConnection(id, (current) => ({ ...current, name }));
                     }}
@@ -3814,7 +3815,7 @@ function App() {
           }}
           onActivateConnection={switchConnection}
           onNewConnection={() => setConnectionModal("new")}
-          onEditConnection={setConnectionModal}
+          onEditConnection={(id) => { if (id !== "local") setConnectionModal(id); }}
           onDeleteConnection={(id) => void deleteConnection(id)}
           modelSettings={activeModelSettingsState?.data ?? null}
           modelSettingsLoading={activeModelSettingsState?.loading ?? false}
@@ -4726,7 +4727,7 @@ function App() {
               : lumeInstaller.busy
                 ? lumeInstaller.progress?.detail ?? tr("正在安装 Lume…")
                 : null}
-        onConnections={() => setConnectionModal(activeConnection?.id ?? "new")}
+        onConnections={() => setConnectionModal("new")}
         onRetry={activeConnection ? () => void connectGateway(activeConnection, settings.python_path) : undefined}
       />
 
@@ -4741,6 +4742,9 @@ function App() {
             setConnectionModal(null);
           }}
           onSave={async (connection, password) => {
+            if (connection.id === "local") {
+              throw new Error(tr("Local 是内置连接，不能修改"));
+            }
             if (isInsecureRemoteUrl(connection.base_url) && !connection.allow_insecure_remote) {
               throw new Error(tr("远程 HTTP 会明文传输密码，请确认不安全连接后再保存"));
             }
@@ -7060,7 +7064,7 @@ export function ChatItemView({ presentation, item, now, showTurnDuration, showFi
   return null;
 }
 
-function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClose, onActivate, onSave }: {
+export function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClose, onActivate, onSave }: {
   settings: DesktopSettings;
   activeConnectionId: string;
   initialEditingId?: string | null;
@@ -7068,7 +7072,7 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
   onActivate: (id: string) => void;
   onSave: (connection: ConnectionPreset, password: string) => Promise<void>;
 }) {
-  const initialConnection = settings.connections.find((connection) => connection.id === initialEditingId) ?? null;
+  const initialConnection = settings.connections.find((connection) => connection.id === initialEditingId && connection.id !== "local") ?? null;
   const [name, setName] = useState(initialConnection?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(initialConnection?.base_url ?? "https://");
   const [password, setPassword] = useState("");
@@ -7078,6 +7082,7 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
   const [error, setError] = useState<string | null>(null);
   const editingConnection = settings.connections.find((connection) => connection.id === editingId) ?? null;
   const editConnection = (connection: ConnectionPreset) => {
+    if (connection.id === "local") return;
     setEditingId(connection.id);
     setName(connection.name);
     setBaseUrl(connection.base_url);
@@ -7106,9 +7111,9 @@ function ConnectionModal({ settings, activeConnectionId, initialEditingId, onClo
               <span><strong>{connection.name}</strong><small>{connection.base_url}</small></span>
               <ChevronRight />
             </button>
-            <button className="icon-button" title={tr("编辑连接")} onClick={() => editConnection(connection)}>
+            {connection.id !== "local" && <button className="icon-button" title={tr("编辑连接")} onClick={() => editConnection(connection)}>
               <Settings />
-            </button>
+            </button>}
           </div>
         ))}
       </div>

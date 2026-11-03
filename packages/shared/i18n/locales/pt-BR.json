@@ -323,6 +323,7 @@
   "JSON 文件过大": "Arquivo JSON muito grande",
   "JSON 里没有提示词模版": "Não há modelo de prompt em JSON",
   "JSON 需要是模版对象、模版数组，或包含 templates 的对象": "JSON precisa ser um objeto de modelo, uma matriz de modelos ou um objeto contendo modelos",
+  "Local 是内置连接，不能修改": "Local é uma conexão integrada e não pode ser modificada",
   "Lume 只能由桌面应用安装": "Lume só pode ser instalado pelo aplicativo de desktop",
   "Lume 存储位置": "Local de armazenamento Lume",
   "Lume 存储名称": "Nome de armazenamento Lume",

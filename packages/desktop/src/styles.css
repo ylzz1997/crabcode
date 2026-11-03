@@ -3138,7 +3138,7 @@ button.primary:hover,
   font-weight: 600;
 }
 
-.form-grid input,
+.form-grid input:not([type="checkbox"]):not([type="radio"]),
 .directory-toolbar>input {
   width: 100%;
   height: 34px;
@@ -3189,6 +3189,7 @@ button.primary:hover,
 .warning-check {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 8px;
   padding: 9px;
   border: 1px solid color-mix(in srgb, var(--orange) 35%, var(--border));
@@ -3197,8 +3198,21 @@ button.primary:hover,
   color: var(--orange);
 }
 
+.warning-check>input[type="checkbox"] {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--orange);
+}
+
 .warning-check span {
+  min-width: 0;
+  flex: 1;
   color: inherit !important;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .form-error {
@@ -4385,7 +4399,7 @@ html[data-theme="light"] .settings-connections>div {
   border-color: #d5dfdb;
 }
 
-html[data-theme="light"] .form-grid input,
+html[data-theme="light"] .form-grid input:not([type="checkbox"]):not([type="radio"]),
 html[data-theme="light"] .directory-toolbar>input,
 html[data-theme="light"] .directory-list,
 html[data-theme="light"] .project-name-field,
@@ -4757,7 +4771,7 @@ body {
   border-color: rgba(255, 255, 255, .07);
 }
 
-.form-grid input,
+.form-grid input:not([type="checkbox"]):not([type="radio"]),
 .directory-toolbar>input,
 .directory-list {
   border-color: rgba(255, 255, 255, .09);
@@ -4765,7 +4779,7 @@ body {
   transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
 
-.form-grid input:focus,
+.form-grid input:not([type="checkbox"]):not([type="radio"]):focus,
 .directory-toolbar>input:focus {
   border-color: rgba(255, 255, 255, .2);
   background: rgba(27, 30, 28, .7);

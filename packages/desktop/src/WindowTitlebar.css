@@ -29,7 +29,8 @@ html[data-window-platform="windows"] .window-titlebar,
 .window-titlebar[data-has-content="true"] {
   position: absolute;
   inset: 0 0 auto;
-  z-index: 3000;
+  /* Stay above the workbench (1) and below modal backdrops (150). */
+  z-index: 100;
   display: flex;
   align-items: center;
   gap: 8px;
