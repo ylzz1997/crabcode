@@ -354,8 +354,12 @@ describe("SettingsView", () => {
     expect(install.disabled).toBe(true);
     expect(suite.querySelector('[aria-busy="true"]')).not.toBeNull();
     await act(async () => finishProbe(["search", "browser"]));
-    expect(install.disabled).toBe(false);
+    expect(install.disabled).toBe(true);
     expect(suite.querySelector<HTMLInputElement>('input[aria-label="Search"]')!.disabled).toBe(true);
+    act(() => install.click());
+    expect(handlers.onInstallGatewaySuite).toHaveBeenCalledTimes(1);
+    act(() => suite.querySelector<HTMLInputElement>('input[aria-label="Debugger"]')!.click());
+    expect(install.disabled).toBe(false);
   });
 
   it("keeps failed detection locked and lets the user retry", async () => {
@@ -441,6 +445,10 @@ describe("SettingsView", () => {
     expect(search.closest("label")?.className).toContain("is-installed");
     expect(container.textContent).toContain("已安装 · 语义代码搜索");
     expect(container.textContent).toContain("已安装 · 网页浏览");
+    const install = container.querySelector<HTMLButtonElement>('.gateway-suite-actions .primary')!;
+    expect(install.disabled).toBe(true);
+    act(() => install.click());
+    expect(handlers.onInstallGatewaySuite).not.toHaveBeenCalled();
     act(() => {
       search.click();
       debuggerOption.click();
@@ -454,6 +462,43 @@ describe("SettingsView", () => {
     });
 
     expect(handlers.onInstallGatewaySuite).toHaveBeenCalledWith(["search", "debugger", "browser"], null);
+  });
+
+  it("shows an inert installed button when every suite feature is already installed", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    vi.mocked(installedGatewayFeatures).mockResolvedValue(["search", "debugger", "browser"]);
+    const handlers = callbacks();
+    await act(async () => root.render(
+      <SettingsView {...handlers} settings={settings} gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]} activeProject={settings.connections[0].projects[0]}
+        activeSection="general" onSectionChange={vi.fn()} />,
+    ));
+
+    const suite = container.querySelector('.gateway-suite-install')!;
+    const install = suite.querySelector<HTMLButtonElement>('.gateway-suite-actions .settings-command')!;
+    expect(install.textContent).toBe("已安装");
+    expect(install.disabled).toBe(true);
+    expect(install.classList.contains("primary")).toBe(false);
+    expect(Array.from(suite.querySelectorAll<HTMLInputElement>('input')).every((input) => input.checked && input.disabled)).toBe(true);
+    act(() => { install.click(); install.click(); });
+    expect(handlers.onInstallGatewaySuite).not.toHaveBeenCalled();
+  });
+
+  it("keeps the base Gateway install available when no optional features are detected or selected", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const handlers = callbacks();
+    await act(async () => root.render(
+      <SettingsView {...handlers} settings={settings} gateways={{ local: onlineGateway }}
+        activeConnection={settings.connections[0]} activeProject={settings.connections[0].projects[0]}
+        activeSection="general" onSectionChange={vi.fn()} />,
+    ));
+
+    const suite = container.querySelector('.gateway-suite-install')!;
+    act(() => suite.querySelector<HTMLInputElement>('input[aria-label="Search"]')!.click());
+    const install = suite.querySelector<HTMLButtonElement>('.gateway-suite-actions .primary')!;
+    expect(install.disabled).toBe(false);
+    await act(async () => install.click());
+    expect(handlers.onInstallGatewaySuite).toHaveBeenCalledWith([], null);
   });
 
   it("installs Ripgrep from the separate system tools section", async () => {

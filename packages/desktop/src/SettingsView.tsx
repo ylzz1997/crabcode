@@ -669,6 +669,9 @@ export function SettingsView({
   const selectedGatewayFeatures = GATEWAY_INSTALL_FEATURES.filter((feature) => (
     installedFeatures?.includes(feature) || gatewayFeatures.includes(feature)
   ));
+  const gatewaySuiteInstalled = GATEWAY_INSTALL_FEATURES.every((feature) => installedFeatures?.includes(feature));
+  const gatewaySuiteNeedsInstallation = installedFeatures?.length === 0
+    || selectedGatewayFeatures.some((feature) => !installedFeatures?.includes(feature));
 
   useEffect(() => {
     setPythonPath(settings.python_path ?? "");
@@ -729,7 +732,7 @@ export function SettingsView({
   };
 
   const installSelectedGatewaySuite = async () => {
-    if (!onInstallGatewaySuite || gatewayFeaturesLocked) return;
+    if (!onInstallGatewaySuite || gatewayFeaturesLocked || !gatewaySuiteNeedsInstallation) return;
     const normalizedPythonPath = pythonPath.trim();
     setPythonPath(normalizedPythonPath);
     if (normalizedPythonPath !== (settings.python_path ?? "")) {
@@ -1053,13 +1056,13 @@ export function SettingsView({
                               ><RotateCcw /><span>{tr("重新检测")}</span></button>
                             )}
                             <button
-                              className="settings-command primary"
+                              className={gatewaySuiteInstalled ? "settings-command" : "settings-command primary"}
                               type="button"
-                              disabled={gatewayFeaturesLocked || !onInstallGatewaySuite}
+                              disabled={gatewayFeaturesLocked || !gatewaySuiteNeedsInstallation || !onInstallGatewaySuite}
                               onClick={() => void installSelectedGatewaySuite()}
                             >
-                              {gatewaySuiteBusy || gatewayFeaturesLoading ? <LoaderCircle className="spin" /> : <Download />}
-                              <span>{gatewaySuiteBusy ? tr("正在安装") : gatewayFeaturesLoading ? tr("正在检测") : tr("安装套件")}</span>
+                              {gatewaySuiteBusy || gatewayFeaturesLoading ? <LoaderCircle className="spin" /> : gatewaySuiteInstalled ? <Check /> : <Download />}
+                              <span>{gatewaySuiteBusy ? tr("正在安装") : gatewayFeaturesLoading ? tr("正在检测") : gatewaySuiteInstalled ? tr("已安装") : tr("安装套件")}</span>
                             </button>
                           </div>
                           {gatewaySuiteBusy && gatewaySuiteProgress && (
