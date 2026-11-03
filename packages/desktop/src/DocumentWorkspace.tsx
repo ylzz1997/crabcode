@@ -276,6 +276,7 @@ export function BlogPreview({ api, workspace, markdown }: { api: GatewayApi; wor
 }
 
 interface DocumentWorkspaceProps {
+  sidebarControl?: ReactNode;
   api: GatewayApi;
   connectionId: string;
   project: ProjectPreset;
@@ -1432,6 +1433,7 @@ function AnnotationSidebar({
 }
 
 export default function DocumentWorkspace({
+  sidebarControl,
   api,
   connectionId,
   project,
@@ -2292,9 +2294,12 @@ export default function DocumentWorkspace({
   return (
     <section className="document-workspace" aria-label={tr("{0} 文档工作区", { 0: project.name })}>
       <header className="document-toolbar">
-        <div className="document-title" title={manifest?.source.name}>
-          <FileText />
-          <span><strong>{project.name}</strong><small>{manifest?.source.name ?? tr("正在读取文档")}</small></span>
+        <div className="document-heading">
+          {sidebarControl}
+          <div className="document-title" title={manifest?.source.name}>
+            <FileText />
+            <span><strong>{project.name}</strong><small>{manifest?.source.name ?? tr("正在读取文档")}</small></span>
+          </div>
         </div>
         <DocumentViewTabs activeView={filesView ?? view} filesAvailable={Boolean(filesWorkspace)}
           changeCount={filesWorkspace?.changeCount ?? 0} onViewChange={(nextView) => {

@@ -35,6 +35,7 @@ describe("document file workspace", () => {
   let root: Root;
   let api: GatewayApi;
   const onDocumentViewState = vi.fn();
+  const onShowSidebar = vi.fn();
   const file: WorkspaceFileEntry = { path: "/paper/Blog.md", name: "Blog.md", size: 10, hidden: false, is_symlink: false };
   const project: ProjectPreset = { id: "paper", name: "paper", kind: "document", path: "/paper", directories: ["/paper"], last_session_id: null };
   const turns = [{ id: "edit", summary: { added: 1, removed: 1, files: [
@@ -88,6 +89,7 @@ describe("document file workspace", () => {
       />,
     };
     return <DocumentWorkspace
+      sidebarControl={<button type="button" aria-label="显示侧栏" onClick={onShowSidebar}>显示侧栏</button>}
       api={api} connectionId="local" project={project} agentWidth={400} agentCollapsed={false} showOriginalText={false}
       translationConcurrency={1} translationBatchSize={1} sessionBusy={false} sessionError={null} selectionTranslationEvent={null}
       onAgentWidth={vi.fn()} onAgentCollapsed={vi.fn()} onDocumentViewState={onDocumentViewState}
@@ -114,6 +116,11 @@ describe("document file workspace", () => {
 
   it("embeds files and changes in the document workspace and preserves the reader while hidden", async () => {
     await render();
+    const heading = container.querySelector(".document-heading")!;
+    expect(heading.firstElementChild?.getAttribute("aria-label")).toBe("显示侧栏");
+    expect(heading.lastElementChild?.classList.contains("document-title")).toBe(true);
+    act(() => heading.querySelector<HTMLButtonElement>('button[aria-label="显示侧栏"]')!.click());
+    expect(onShowSidebar).toHaveBeenCalledOnce();
     expect(Array.from(container.querySelectorAll('.document-view-tabs [role="tab"]')).map((tab) => tab.textContent)).toEqual(["文档", "Blog"]);
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="切换工作区视图"]')!.click());
     expect(Array.from(document.querySelectorAll('.document-view-menu-item')).map((item) => item.textContent)).toEqual(["Blog", "文件", "变更"]);

@@ -121,6 +121,72 @@ html .main-panel .document-toolbar {
   border-radius: 9px;
 }
 
+.workspace-brand .sidebar-toggle {
+  padding: 0;
+  cursor: pointer;
+}
+
+.sidebar-toggle svg {
+  grid-area: 1 / 1;
+  transition: opacity 140ms ease;
+}
+
+.sidebar-toggle .sidebar-collapse-icon,
+.sidebar-toggle:hover .sidebar-brand-icon,
+.sidebar-toggle:focus-visible .sidebar-brand-icon {
+  opacity: 0;
+}
+
+.sidebar-toggle:hover .sidebar-collapse-icon,
+.sidebar-toggle:focus-visible .sidebar-collapse-icon {
+  opacity: 1;
+}
+
+.workspace-nav-primary {
+  position: relative;
+}
+
+.workspace-nav-primary .workspace-nav-item {
+  padding-right: 38px;
+}
+
+.workspace-nav-collapse {
+  position: absolute;
+  inset: 0 7px 0 auto;
+  width: 24px;
+  height: 24px;
+  margin: auto 0;
+  opacity: 0;
+}
+
+.workspace-nav-collapse[aria-expanded="false"] {
+  opacity: .4;
+}
+
+.workspace-nav-primary:hover .workspace-nav-collapse,
+.workspace-nav-primary:focus-within .workspace-nav-collapse {
+  opacity: 1;
+}
+
+.workspace-nav-collapse[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.workspace-nav-secondary {
+  display: grid;
+  gap: inherit;
+}
+
+.workspace-nav-secondary[hidden] {
+  display: none;
+}
+
+@media (hover: none) {
+  .workspace-nav-collapse {
+    opacity: .6;
+  }
+}
+
 .workspace-brand-copy strong {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -164,14 +230,37 @@ html .main-panel .document-toolbar {
 }
 
 .sidebar-expand-button {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+}
+
+.sidebar-restore-floating {
   position: absolute;
-  top: calc(var(--window-chrome-height) + 6px);
+  top: calc(var(--workspace-top-inset) + 10px);
   left: 14px;
   z-index: 20;
 }
 
-.workbench.sidebar-collapsed .main-panel {
-  --workspace-top-inset: calc(var(--window-chrome-height) + 40px);
+.conversation-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: min(52%, 620px);
+}
+
+.conversation-heading>.conversation-title {
+  max-width: none;
+}
+
+.document-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .project-files-floating-toggle {

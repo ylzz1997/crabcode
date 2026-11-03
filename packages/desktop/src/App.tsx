@@ -844,6 +844,7 @@ function App() {
   const [sessions, setSessions] = useState<SessionMap>({});
   const [activeSessions, setActiveSessions] = useState<Record<string, string | null>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [workspaceNavCollapsed, setWorkspaceNavCollapsed] = useState(false);
   const [projectFilesWidth, setProjectFilesWidth] = useState(640);
   const [wideProjectFilesLayout, setWideProjectFilesLayout] = useState(() => shouldUseWideProjectFilesLayout(window.innerWidth));
   const [projectFilesOpen, setProjectFilesOpen] = useState(false);
@@ -3576,6 +3577,17 @@ function App() {
   }
 
   const activeTheme = resolveActiveTheme(settings);
+  const hasDocumentWorkspace = documentMode && activeProject && activeConnection
+    && Boolean(apiRef.current.get(activeConnection.id));
+  const sidebarRestoreControl = !sidebarOpen ? (
+    <button
+      className="icon-button sidebar-expand-button"
+      type="button"
+      title={tr("显示侧栏")}
+      aria-label={tr("显示侧栏")}
+      onClick={() => setSidebarOpen(true)}
+    ><PanelLeftOpen /></button>
+  ) : null;
 
   const activeModelSettingsKey = activeConnection
     ? `${activeConnection.id}\u0000${activeProject?.path ?? ""}`
@@ -3953,14 +3965,7 @@ function App() {
         />
       ) : (
         <>
-          <div className={`workbench ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-            {!sidebarOpen && (
-              <button
-                className="icon-button sidebar-expand-button"
-                title={tr("显示侧栏")}
-                onClick={() => setSidebarOpen(true)}
-              ><PanelLeftOpen /></button>
-            )}
+          <div className={`workbench ${sidebarOpen ? "" : "sidebar-collapsed"}`} data-sidebar-mode={!sidebarOpen ? "hidden" : workspaceNavCollapsed ? "compact" : "full"}>
             <aside
               className={`sidebar ${sidebarOpen ? "open" : "closed"}`}
               style={{ width: sidebarOpen ? settings.sidebar_width : 0 }}
@@ -3973,15 +3978,17 @@ function App() {
                 data-tauri-drag-region={isDesktopShell() ? true : undefined}
               >
                 <div className="workspace-brand">
-                  <button
-                    className="icon-button small sidebar-toggle"
-                    title={tr("隐藏侧栏")}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    <PanelLeftClose />
-                  </button>
                   <div className="workspace-brand-lockup" title={activeProject?.path ?? activeConnection?.base_url}>
-                    <span className={`top-brand-mark ${activeGateway?.status === "online" ? "online" : ""}`}><Code2 /></span>
+                    <button
+                      className={`top-brand-mark sidebar-toggle ${activeGateway?.status === "online" ? "online" : ""}`}
+                      type="button"
+                      title={tr("隐藏侧栏")}
+                      aria-label={tr("隐藏侧栏")}
+                      onClick={() => setSidebarOpen(false)}
+                    >
+                      <Code2 className="sidebar-brand-icon" />
+                      <PanelLeftClose className="sidebar-collapse-icon" />
+                    </button>
                     <span className="workspace-brand-copy">
                       <strong>Crab Desktop</strong>
                       <small>{activeProject?.name ?? tr("工作台")}</small>
@@ -4000,37 +4007,50 @@ function App() {
                 )}
 
                 <nav className="workspace-nav" aria-label={tr("工作区")}>
-                  <button
-                    className={`workspace-nav-item ${workspaceView === "chat" ? "active" : ""}`}
-                    disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
-                    onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
-                  >
-                    <MessageSquarePlus />
-                    <span>{tr("新会话")}</span>
-                  </button>
-                  <button
-                    className={`workspace-nav-item ${workspaceView === "scheduled" ? "active" : ""}`}
-                    onClick={() => setWorkspaceView("scheduled")}
-                  >
-                    <Clock />
-                    <span>{tr("已安排")}</span>
-                  </button>
-                  <button
-                    className={`workspace-nav-item ${workspaceView === "plugins" ? "active" : ""}`}
-                    onClick={() => setWorkspaceView("plugins")}
-                  >
-                    <Puzzle />
-                    <span>{tr("插件")}</span>
-                  </button>
-                  <button
-                    className={`workspace-nav-item ${workspaceView === "favorites" ? "active" : ""}`}
-                    disabled={!activeConnection || activeGateway?.status !== "online"}
-                    onClick={() => setWorkspaceView("favorites")}
-                  >
-                    <Star />
-                    <span>{tr("收藏")}</span>
-                    {favoriteItemCount > 0 && <span className="workspace-nav-count">{favoriteItemCount}</span>}
-                  </button>
+                  <div className="workspace-nav-primary">
+                    <button
+                      className={`workspace-nav-item ${workspaceView === "chat" ? "active" : ""}`}
+                      disabled={!activeConnection || !activeProject?.directories.length || activeGateway?.status !== "online"}
+                      onClick={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
+                    >
+                      <MessageSquarePlus />
+                      <span>{tr("新会话")}</span>
+                    </button>
+                    <button
+                      className="icon-button workspace-nav-collapse"
+                      type="button"
+                      title={workspaceNavCollapsed ? tr("展开导航") : tr("收起导航")}
+                      aria-label={workspaceNavCollapsed ? tr("展开导航") : tr("收起导航")}
+                      aria-expanded={!workspaceNavCollapsed}
+                      aria-controls="workspace-secondary-nav"
+                      onClick={() => setWorkspaceNavCollapsed((value) => !value)}
+                    ><ChevronDown /></button>
+                  </div>
+                  <div className="workspace-nav-secondary" id="workspace-secondary-nav" hidden={workspaceNavCollapsed}>
+                    <button
+                      className={`workspace-nav-item ${workspaceView === "scheduled" ? "active" : ""}`}
+                      onClick={() => setWorkspaceView("scheduled")}
+                    >
+                      <Clock />
+                      <span>{tr("已安排")}</span>
+                    </button>
+                    <button
+                      className={`workspace-nav-item ${workspaceView === "plugins" ? "active" : ""}`}
+                      onClick={() => setWorkspaceView("plugins")}
+                    >
+                      <Puzzle />
+                      <span>{tr("插件")}</span>
+                    </button>
+                    <button
+                      className={`workspace-nav-item ${workspaceView === "favorites" ? "active" : ""}`}
+                      disabled={!activeConnection || activeGateway?.status !== "online"}
+                      onClick={() => setWorkspaceView("favorites")}
+                    >
+                      <Star />
+                      <span>{tr("收藏")}</span>
+                      {favoriteItemCount > 0 && <span className="workspace-nav-count">{favoriteItemCount}</span>}
+                    </button>
+                  </div>
                 </nav>
 
                 {workspaceView === "chat" && <section className={`sidebar-section projects-section ${projectsCollapsed ? "collapsed" : ""}`}>
@@ -4229,8 +4249,12 @@ function App() {
                 "--project-files-width": `${projectFilesWidth}px`,
               } as CSSProperties : undefined}
             >
+              {!hasDocumentWorkspace && !(workspaceView === "chat" && activeSession) && sidebarRestoreControl && (
+                <div className="sidebar-restore-floating">{sidebarRestoreControl}</div>
+              )}
               {documentMode && activeProject && activeConnection && apiRef.current.get(activeConnection.id) && (
                 <DocumentWorkspace
+                  sidebarControl={sidebarRestoreControl}
                   api={apiRef.current.get(activeConnection.id)!}
                   connectionId={activeConnection.id}
                   project={activeProject}
@@ -4368,15 +4392,18 @@ function App() {
               ) : (
                 <>
                   <div className="conversation-header">
-                    <div className="conversation-title">
-                      <h1 className={activeSession.loading ? "session-loading-title" : undefined}>
-                        {activeSession.loading && <LoaderCircle className="spin" />}
-                        {activeSession.loading ? tr("正在加载会话") : activeSession.title || tr("新会话")}
-                      </h1>
-                      <span>{activeSession.cwd}</span>
-                      {activeForkOrigin && (
-                        <small className="conversation-origin">{tr("来自“")}{activeForkOrigin}{tr("” · 分叉")}</small>
-                      )}
+                    <div className="conversation-heading">
+                      {!hasDocumentWorkspace && sidebarRestoreControl}
+                      <div className="conversation-title">
+                        <h1 className={activeSession.loading ? "session-loading-title" : undefined}>
+                          {activeSession.loading && <LoaderCircle className="spin" />}
+                          {activeSession.loading ? tr("正在加载会话") : activeSession.title || tr("新会话")}
+                        </h1>
+                        <span>{activeSession.cwd}</span>
+                        {activeForkOrigin && (
+                          <small className="conversation-origin">{tr("来自“")}{activeForkOrigin}{tr("” · 分叉")}</small>
+                        )}
+                      </div>
                     </div>
                     <div className="conversation-view-tabs" role="tablist" aria-label={tr("会话视图")}>
                       <SlidingTabIndicator activeKey={activeConversationView} className="conversation-view-indicator" />
