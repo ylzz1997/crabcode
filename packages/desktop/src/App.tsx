@@ -3655,7 +3655,55 @@ function App() {
   return (
     <div className="app-shell">
       <ThemeDecorations theme={activeTheme} />
-      <WindowTitlebar />
+      <WindowTitlebar sidebarWidth={sidebarOpen ? settings.sidebar_width : 0}>
+        {!settingsOpen && settings.connection_order.length > 0 ? (
+          <div className="workspace-connections">
+            <div className="tab-strip">
+              {settings.connection_order.map((id) => {
+                const connection = settings.connections.find((item) => item.id === id);
+                if (!connection) return null;
+                const gateway = gateways[id];
+                const connectionSessions = Object.entries(sessions)
+                  .filter(([key]) => key.startsWith(`${id}:`))
+                  .map(([, value]) => value);
+                const running = connectionSessions.filter((item) => item.busy).length;
+                const pending = connectionSessions.flatMap((item) => item.items)
+                  .filter((item) => item.status === "pending" && (item.kind === "permission" || item.kind === "choice"))
+                  .length;
+                return (
+                  <button
+                    key={id}
+                    className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
+                    onClick={() => switchConnection(id)}
+                    onDoubleClick={() => {
+                      const name = window.prompt(tr("连接名称"), connection.name)?.trim();
+                      if (name) updateConnection(id, (current) => ({ ...current, name }));
+                    }}
+                    title={`${connection.name}\n${connection.base_url}`}
+                  >
+                    <ConnectionDot status={gateway?.status ?? "connecting"} />
+                    <span>{connection.name}</span>
+                    {running > 0 && <span className="tab-count running">{running}</span>}
+                    {pending > 0 && <span className="tab-count pending">{pending}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              className="icon-button small"
+              title={tr("重新连接")}
+              disabled={activeGateway?.status === "connecting"}
+              onClick={() => {
+                if (!activeConnection) return;
+                connectedRef.current.add(activeConnection.id);
+                void connectGateway(activeConnection, settings.python_path);
+              }}
+            >
+              <RefreshCw />
+            </button>
+          </div>
+        ) : null}
+      </WindowTitlebar>
       {settingsOpen ? (
         <SettingsView
           settings={settings}
@@ -3938,53 +3986,6 @@ function App() {
                     <Plus />
                   </button>
                 </div>
-                {settings.connection_order.length > 0 && (
-                  <div className="workspace-connections">
-                    <div className="tab-strip">
-                      {settings.connection_order.map((id) => {
-                        const connection = settings.connections.find((item) => item.id === id);
-                        if (!connection) return null;
-                        const gateway = gateways[id];
-                        const connectionSessions = Object.entries(sessions)
-                          .filter(([key]) => key.startsWith(`${id}:`))
-                          .map(([, value]) => value);
-                        const running = connectionSessions.filter((item) => item.busy).length;
-                        const pending = connectionSessions.flatMap((item) => item.items)
-                          .filter((item) => item.status === "pending" && (item.kind === "permission" || item.kind === "choice"))
-                          .length;
-                        return (
-                          <button
-                            key={id}
-                            className={`gateway-tab ${activeConnection?.id === id ? "active" : ""}`}
-                            onClick={() => switchConnection(id)}
-                            onDoubleClick={() => {
-                              const name = window.prompt(tr("连接名称"), connection.name)?.trim();
-                              if (name) updateConnection(id, (current) => ({ ...current, name }));
-                            }}
-                            title={`${connection.name}\n${connection.base_url}`}
-                          >
-                            <ConnectionDot status={gateway?.status ?? "connecting"} />
-                            <span>{connection.name}</span>
-                            {running > 0 && <span className="tab-count running">{running}</span>}
-                            {pending > 0 && <span className="tab-count pending">{pending}</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <button
-                      className="icon-button small"
-                      title={tr("重新连接")}
-                      disabled={activeGateway?.status === "connecting"}
-                      onClick={() => {
-                        if (!activeConnection) return;
-                        connectedRef.current.add(activeConnection.id);
-                        void connectGateway(activeConnection, settings.python_path);
-                      }}
-                    >
-                      <RefreshCw />
-                    </button>
-                  </div>
-                )}
 
                 {activeGateway?.status === "error" && (
                   <button className="connection-error" onClick={() => setConnectionModal("new")}>

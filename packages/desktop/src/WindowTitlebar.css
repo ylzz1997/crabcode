@@ -15,25 +15,40 @@ html[data-window-platform="macos"][data-window-fullscreen="true"] {
   position: relative;
 }
 
+.app-shell:has(> .window-titlebar[data-has-content="true"]) {
+  --window-chrome-height: 48px;
+}
+
 /* Transparent controls sit above the continuous sidebar and workspace surfaces. */
 .window-titlebar {
   display: none;
 }
 
 html[data-window-platform="macos"] .window-titlebar,
-html[data-window-platform="windows"] .window-titlebar {
+html[data-window-platform="windows"] .window-titlebar,
+.window-titlebar[data-has-content="true"] {
   position: absolute;
   inset: 0 0 auto;
   z-index: 3000;
   display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   height: var(--window-chrome-height);
+  padding-left: calc(var(--titlebar-sidebar-width, 0px) + 12px);
   overflow: hidden;
   background: transparent;
   user-select: none;
 }
 
+html[data-window-platform="macos"] .window-titlebar[data-fullscreen="false"] {
+  padding-left: max(90px, calc(var(--titlebar-sidebar-width, 0px) + 12px));
+}
+
 .window-titlebar-spacer {
   flex: 1;
+  min-width: 32px;
+  align-self: stretch;
 }
 
 .sidebar-content {
@@ -43,6 +58,20 @@ html[data-window-platform="windows"] .window-titlebar {
 .main-panel {
   --workspace-top-inset: var(--window-chrome-height);
   padding-top: var(--workspace-top-inset);
+}
+
+/* Continue the workspace header surface through the connection row above it. */
+html .main-panel:has(> .conversation-header, > .document-workspace) {
+  background-image: linear-gradient(var(--panel), var(--panel));
+  background-size: 100% var(--workspace-top-inset);
+  background-repeat: no-repeat;
+}
+
+html .main-panel > .conversation-header,
+html .main-panel .document-toolbar {
+  border-top: 0;
+  background: var(--panel);
+  box-shadow: none;
 }
 
 .settings-main {
@@ -95,11 +124,19 @@ html[data-window-platform="windows"] .window-titlebar {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  margin: 0 12px 12px;
+  flex: 0 1 auto;
+  height: 30px;
+  margin: 8px 0;
 }
 
 .workspace-connections .tab-strip {
-  flex: 1;
+  flex: 0 1 auto;
+}
+
+.workspace-connections > .icon-button {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 28px;
 }
 
 .workspace-connections .gateway-tab {
@@ -132,6 +169,7 @@ html[data-window-platform="windows"] .window-titlebar {
 }
 
 .window-controls {
+  align-self: stretch;
   display: flex;
   flex: 0 0 auto;
 }

@@ -1,10 +1,10 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { t as tr } from "./i18n";
 import { isDesktopShell } from "./native";
 import { isMacOSPlatform, isWindowsPlatform } from "./platform";
 
-export function WindowTitlebar() {
+export function WindowTitlebar({ children, sidebarWidth = 0 }: { children?: ReactNode; sidebarWidth?: number }) {
   const platform = !isDesktopShell() ? "browser"
     : isMacOSPlatform() ? "macos"
       : isWindowsPlatform() ? "windows" : "native";
@@ -70,11 +70,14 @@ export function WindowTitlebar() {
   return (
     <header
       className="window-titlebar"
+      style={{ "--titlebar-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       data-platform={platform}
       data-fullscreen={fullscreen}
       data-focused={focused}
+      data-has-content={Boolean(children)}
       data-tauri-drag-region={integrated ? true : undefined}
     >
+      {children}
       <div className="window-titlebar-spacer" data-tauri-drag-region={integrated ? true : undefined} />
       {platform === "windows" && (
         <div className="window-controls">

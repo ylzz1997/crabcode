@@ -62,9 +62,11 @@ describe("application startup feedback", () => {
     expect(container.querySelector<HTMLButtonElement>('button[title="重新连接"]')?.disabled).toBe(true);
     expect(container.querySelector(".workspace-brand .sidebar-toggle")).not.toBeNull();
     expect(container.querySelectorAll(".workspace-brand-copy strong")).toHaveLength(1);
-    expect(container.querySelector(".workspace-connections .gateway-tab")?.textContent).toBe("Local");
+    expect(container.querySelector(".window-titlebar .workspace-connections .gateway-tab")?.textContent).toBe("Local");
+    expect(container.querySelector(".sidebar .workspace-connections")).toBeNull();
     await act(async () => container.querySelector<HTMLButtonElement>('button[title="隐藏侧栏"]')!.click());
     expect(container.querySelector(".sidebar.closed")).not.toBeNull();
+    expect(container.querySelector(".window-titlebar .gateway-tab")?.textContent).toBe("Local");
     await act(async () => container.querySelector<HTMLButtonElement>('button[title="显示侧栏"]')!.click());
     expect(container.querySelector(".sidebar.open")).not.toBeNull();
 
