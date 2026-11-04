@@ -3,6 +3,13 @@
 All notable changes to the CrabCode Visual Studio Code extension are documented
 in this file.
 
+## 0.1.10
+
+- Add Ollama, Gemini, and Azure to the model API format picker and preserve
+  existing formats when editing a model.
+- Improve forwarding of reasoning effort, thinking summaries, and other model
+  settings through the shared API adapters used by the Gateway.
+
 ## 0.1.9
 
 - Build client packages when a GitHub Release is published and attach all VSIXs
