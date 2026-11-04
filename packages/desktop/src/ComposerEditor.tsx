@@ -566,14 +566,14 @@ export function ComposerEditor({
         }}
         onClick={handleClick}
         onPaste={(event) => {
-          const imageFiles = [
-            ...Array.from(event.clipboardData.items)
-              .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-              .map((item) => item.getAsFile())
-              .filter((file): file is File => file !== null),
-            ...Array.from(event.clipboardData.files)
-              .filter((file) => file.type.startsWith("image/")),
-          ].filter((file, index, files) => files.findIndex((candidate) => candidate === file) === index);
+          const itemImages = Array.from(event.clipboardData.items)
+            .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => file !== null);
+          // Both APIs expose the same clipboard files, but Windows WebViews can
+          // wrap them in different File objects. Use one list, with a fallback.
+          const imageFiles = itemImages.length > 0 ? itemImages
+            : Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
           if (imageFiles.length > 0 && onImages) {
             event.preventDefault();
             closeMentions();
@@ -583,9 +583,11 @@ export function ComposerEditor({
           }
           event.preventDefault();
           const text = event.clipboardData.getData("text/plain");
+          if (!text) return;
           const selection = window.getSelection();
           if (!selection || selection.rangeCount === 0) return;
           const range = selection.getRangeAt(0);
+          if (!event.currentTarget.contains(range.startContainer) || !event.currentTarget.contains(range.endContainer)) return;
           range.deleteContents();
           const textNode = document.createTextNode(text);
           range.insertNode(textNode);

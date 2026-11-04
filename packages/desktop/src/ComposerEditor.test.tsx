@@ -65,6 +65,20 @@ describe("ComposerEditor mentions", () => {
     return editor;
   }
 
+  function pasteClipboard(
+    items: Array<{ kind: string; type: string; getAsFile: () => File | null }>,
+    files: File[],
+    text = "",
+  ) {
+    const editor = container.querySelector<HTMLElement>(".composer-editor-input")!;
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: { items, files, getData: () => text },
+    });
+    act(() => editor.dispatchEvent(paste));
+    return paste;
+  }
+
   it("opens filtered completion after @ and inserts a capsule", () => {
     const editor = openFileMention();
     const options = container.querySelectorAll<HTMLButtonElement>('.composer-mention-menu [role="option"]');
@@ -117,6 +131,98 @@ describe("ComposerEditor mentions", () => {
 
     expect(paste.defaultPrevented).toBe(true);
     expect(onImages).toHaveBeenCalledWith([image]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("attaches one image when items and files expose different File objects", () => {
+    const image = new File(["image"], "clipboard.png", { type: "image/png", lastModified: 1 });
+    const wrapper = new File([image], image.name, { type: image.type, lastModified: 2 });
+
+    const paste = pasteClipboard([{ kind: "file", type: image.type, getAsFile: () => image }], [wrapper]);
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(onImages).toHaveBeenCalledExactlyOnceWith([image]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("preserves separate images with identical metadata in clipboard order", () => {
+    const options = { type: "image/png", lastModified: 1 };
+    const images = [new File(["first"], "image.png", options), new File(["other"], "image.png", options)];
+    const wrappers = images.map((image) => new File([image], image.name, options));
+
+    pasteClipboard(images.map((image) => ({ kind: "file", type: image.type, getAsFile: () => image })), wrappers);
+
+    expect(onImages).toHaveBeenCalledExactlyOnceWith(images);
+    expect(onImages.mock.calls[0][0][0]).toBe(images[0]);
+    expect(onImages.mock.calls[0][0][1]).toBe(images[1]);
+  });
+
+  it.each([false, true])("falls back to files when readable image items are unavailable (null item: %s)", (nullItem) => {
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    const items = nullItem ? [{ kind: "file", type: image.type, getAsFile: () => null }] : [];
+
+    const paste = pasteClipboard(items, [image]);
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(onImages).toHaveBeenCalledExactlyOnceWith([image]);
+  });
+
+  it("allows the same image to be pasted again in a separate action", () => {
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    for (let i = 0; i < 2; i++) {
+      pasteClipboard([{ kind: "file", type: image.type, getAsFile: () => image }], [image]);
+    }
+
+    expect(onImages).toHaveBeenCalledTimes(2);
+    expect(onImages.mock.calls.map(([files]) => files)).toEqual([[image], [image]]);
+  });
+
+  it("preserves selected draft text when the clipboard has no supported content", () => {
+    const editor = container.querySelector<HTMLElement>(".composer-editor-input")!;
+    editor.textContent = "keep this draft";
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+
+    pasteClipboard([], []);
+
+    expect(extractComposerText(editor)).toBe("keep this draft");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("replaces selected draft text with plain text", () => {
+    const editor = container.querySelector<HTMLElement>(".composer-editor-input")!;
+    editor.textContent = "replace this";
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+
+    const paste = pasteClipboard([], [], "<b>plain text</b>\nnext line");
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(editor.textContent).toBe("<b>plain text</b>\nnext line");
+    expect(editor.querySelector("b")).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith("<b>plain text</b>\nnext line");
+  });
+
+  it.each([false, true])("does not modify a selection outside the composer (crossing boundary: %s)", (crossing) => {
+    const editor = container.querySelector<HTMLElement>(".composer-editor-input")!;
+    editor.textContent = "keep this draft";
+    const outside = document.createElement("p");
+    outside.textContent = "keep this message";
+    container.append(outside);
+    const range = document.createRange();
+    range.selectNodeContents(outside);
+    if (crossing) range.setStart(editor.firstChild!, 0);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+
+    pasteClipboard([], [], "pasted text");
+
+    expect(extractComposerText(editor)).toBe("keep this draft");
+    expect(outside.textContent).toBe("keep this message");
     expect(onChange).not.toHaveBeenCalled();
   });
 });

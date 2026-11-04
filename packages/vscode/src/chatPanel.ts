@@ -11045,22 +11045,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     input.addEventListener('paste', function(e) {
       const items = e.clipboardData && e.clipboardData.items;
-      let handled = false;
+      const files = [];
       for (let i = 0; items && i < items.length; i++) {
         const item = items[i];
-        if (item.kind === 'file') {
+        if (item.kind === 'file' || (item.type && item.type.indexOf('image/') === 0)) {
           const f = item.getAsFile();
-          if (f) {
-            handled = true;
-            addDroppedOrPickedFile(f);
-          }
-        } else if (item.type && item.type.indexOf('image/') === 0) {
-          const f = item.getAsFile();
-          if (f) { handled = true; addImageFile(f); }
+          if (f) files.push(f);
         }
       }
-      if (handled) {
+      // These are two views of the same files. Fall back without adding both.
+      if (files.length === 0 && e.clipboardData) {
+        files.push(...Array.from(e.clipboardData.files || []));
+      }
+      if (files.length > 0) {
         e.preventDefault();
+        files.forEach(addDroppedOrPickedFile);
         return;
       }
       const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
@@ -11069,6 +11068,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const selection = window.getSelection();
       if (!selection || selection.rangeCount === 0) return;
       const range = selection.getRangeAt(0);
+      if (!input.contains(range.startContainer) || !input.contains(range.endContainer)) return;
       range.deleteContents();
       const textNode = document.createTextNode(text);
       range.insertNode(textNode);
