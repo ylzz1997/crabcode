@@ -143,7 +143,7 @@ class StreamModeEvent:
 
 @dataclass
 class StreamRetryEvent:
-    """A retryable model stream failure that has scheduled a reconnect."""
+    """A non-terminal model stream retry or empty-response continuation."""
     message: str
     error: str
     retry_count: int

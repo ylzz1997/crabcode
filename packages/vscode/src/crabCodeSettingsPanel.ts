@@ -30,6 +30,7 @@ const ACTIONS: Record<string, readonly string[]> = {
   runtime: [
     "set_snapshot",
     "set_compaction",
+    "set_auto_continue",
     "set_computer_use_options",
     "add_extra_tool",
     "remove_extra_tool",

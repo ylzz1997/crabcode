@@ -2,6 +2,30 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { harness } = require("./helpers/settingsHarness.cjs");
 
+test("automatic continuation defaults on and saves shared runtime settings by layer", async () => {
+  const h = harness({ section: "context" });
+  await h.settle();
+  assert.equal(h.doc.querySelector('[aria-label="自动继续"]').checked, true);
+  assert.equal(h.doc.querySelector('[aria-label="最多自动继续次数"]').value, "2");
+  h.change("保存到配置层", "localSettings");
+  h.change("自动继续", false);
+  await h.settle();
+  assert.equal(h.requests.at(-1).body.action, "set_auto_continue");
+  assert.equal(h.requests.at(-1).body.source, "localSettings");
+  assert.equal(h.requests.at(-1).body.auto_continue_enabled, false);
+  assert.equal(h.doc.querySelector('[aria-label="自动继续"]').checked, false);
+  h.change("最多自动继续次数", "4");
+  await h.settle();
+  assert.equal(h.requests.at(-1).body.auto_continue_max_attempts, 4);
+  assert.equal(h.requests.at(-1).body.source, "localSettings");
+  const count = h.requests.length;
+  h.change("最多自动继续次数", "11");
+  await h.settle();
+  assert.equal(h.requests.length, count);
+  assert.match(h.doc.querySelector(".status").textContent, /自动继续次数必须是 1–10 的整数/);
+  h.dom.window.close();
+});
+
 test("group discovery previews, filters and imports into the captured settings layer", async () => {
   const h = harness({ section: "models" });
   h.state.models.models[0].group = "shared";

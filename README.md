@@ -1391,6 +1391,28 @@ you want to reuse them. Restart CLI, Gateway and Desktop after changing the
 variable, and ensure each process inherits it. A desktop app launched from the
 system launcher may not inherit variables exported in a terminal.
 
+### Automatic continuation
+
+CLI, VS Code, and Desktop automatically continue the current task when a model
+ends a response without visible text or tool calls. This is enabled by default,
+with at most two continuation attempts per user turn:
+
+```json
+{
+  "auto_continue_enabled": true,
+  "auto_continue_max_attempts": 2
+}
+```
+
+These top-level settings support user, project, and local configuration layers.
+The attempt limit accepts integers from 1 to 10. Set `auto_continue_enabled` to
+`false` to disable recovery. Desktop's runtime settings and VS Code's context
+settings expose both options; changes apply to the next turn. Recovery preserves
+completed tool results and stays in the original turn. Exhausted attempts report
+an error. Normal answers, explicit response limits, and user cancellation do not
+trigger automatic continuation. Unexpected stream endings use the separate
+network retry budget.
+
 ### Ultra Mode
 
 Set the top-level `ultra_mode` field to make the main model proactively split non-trivial work across many sub-agents and run independent tasks in parallel:

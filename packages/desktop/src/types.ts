@@ -607,6 +607,8 @@ export interface RuntimeSettingsResponse {
   snapshot_enabled: boolean;
   snapshot_max_size_mb: number;
   auto_compact_enabled?: boolean;
+  auto_continue_enabled?: boolean;
+  auto_continue_max_attempts?: number;
   compact_buffer_tokens?: number;
   max_context_length?: number | null;
   computer_use_mode?: ComputerUseMode;
@@ -622,6 +624,7 @@ export interface RuntimeSettingsResponse {
 export type RuntimeSettingsMutationAction =
   | "set_snapshot"
   | "set_compaction"
+  | "set_auto_continue"
   | "set_computer_use_mode"
   | "set_computer_use_options"
   | "add_extra_tool"
@@ -638,6 +641,8 @@ export interface RuntimeSettingsMutation {
   snapshot_enabled?: boolean;
   snapshot_max_size_mb?: number;
   auto_compact_enabled?: boolean;
+  auto_continue_enabled?: boolean;
+  auto_continue_max_attempts?: number;
   compact_buffer_tokens?: number;
   max_context_length?: number | null;
   computer_use_mode?: ComputerUseMode;

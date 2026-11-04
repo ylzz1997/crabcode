@@ -468,6 +468,7 @@ def _runtime_settings_from_files(
             for key in (
                 "snapshot", "computer_use", "extra_tools", "permissions",
                 "auto_compact_enabled", "compact_buffer_tokens", "max_context_length",
+                "auto_continue_enabled", "auto_continue_max_attempts",
             )
             if key in raw
         }
@@ -522,6 +523,8 @@ def _runtime_settings_from_files(
         snapshot_enabled=settings.snapshot.enabled,
         snapshot_max_size_mb=settings.snapshot.max_size_mb,
         auto_compact_enabled=settings.auto_compact_enabled,
+        auto_continue_enabled=settings.auto_continue_enabled,
+        auto_continue_max_attempts=settings.auto_continue_max_attempts,
         compact_buffer_tokens=settings.compact_buffer_tokens,
         max_context_length=settings.max_context_length,
         computer_use_mode=settings.computer_use.mode,
@@ -755,7 +758,13 @@ def _mutate_runtime_settings(
     path = _settings_mutation_path(cwd, req.source)
     current = _read_settings_object(path)
 
-    if req.action == "set_compaction":
+    if req.action == "set_auto_continue":
+        if req.auto_continue_enabled is not None:
+            current["auto_continue_enabled"] = req.auto_continue_enabled
+        if req.auto_continue_max_attempts is not None:
+            current["auto_continue_max_attempts"] = req.auto_continue_max_attempts
+        _runtime_settings_from_files(cwd, pending=(req.source, current))
+    elif req.action == "set_compaction":
         if req.auto_compact_enabled is not None:
             current["auto_compact_enabled"] = req.auto_compact_enabled
         if req.compact_buffer_tokens is not None:
@@ -1219,7 +1228,7 @@ async def mutate_runtime_settings(
         lock = asyncio.Lock()
         request.app.state.model_settings_lock = lock
     async with lock:
-        if req.action not in {"set_compaction", "set_computer_use_mode", "set_computer_use_options"}:
+        if req.action not in {"set_compaction", "set_auto_continue", "set_computer_use_mode", "set_computer_use_options"}:
             return _mutate_runtime_settings(request, req)
 
         # Session registration uses this lock too. Keep the file write and
@@ -1233,6 +1242,8 @@ async def mutate_runtime_settings(
                 if session_path and Path(session_path).resolve() == changed_path:
                     if req.action == "set_compaction":
                         session.reload_compaction_settings()
+                    elif req.action == "set_auto_continue":
+                        session.reload_auto_continue_settings()
                     else:
                         session.reload_computer_use_settings()
             return result

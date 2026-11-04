@@ -2593,8 +2593,9 @@ async def run_repl(
                                 streamed_text_for_context[:-discarded]
                             )
                         console.print(f"  [dim yellow]↻ {event.message}[/]")
-                        spinner.start("Reconnecting")
-                        composer.start_activity("Reconnecting")
+                        activity = "Continuing" if event.error == "empty_response" else "Reconnecting"
+                        spinner.start(activity)
+                        composer.start_activity(activity)
 
                     elif isinstance(event, ErrorEvent):
                         await _stop_spinner_with_thinking()

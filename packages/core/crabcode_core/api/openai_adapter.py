@@ -290,6 +290,8 @@ class OpenAIAdapter(APIAdapter):
             params["extra_body"] = extra_body
 
         tool_call_buffers: dict[int, dict[str, str]] = {}
+        terminal_reason = ""
+        completed_tools = False
 
         from crabcode_core.api.network import request_timeout, retry_request
         params["timeout"] = request_timeout(config, getattr(self, "_sdk", None), fallback=self.config)
@@ -316,6 +318,10 @@ class OpenAIAdapter(APIAdapter):
 
             if delta.content:
                 yield StreamChunk(type="text", text=safe_utf8_str(delta.content))
+
+            refusal = getattr(delta, "refusal", None)
+            if refusal:
+                yield StreamChunk(type="text", text=safe_utf8_str(refusal))
 
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -346,6 +352,7 @@ class OpenAIAdapter(APIAdapter):
                             )
 
             if finish_reason == "tool_calls":
+                completed_tools = bool(tool_call_buffers)
                 for buf in tool_call_buffers.values():
                     yield StreamChunk(
                         type="tool_use_end",
@@ -356,6 +363,7 @@ class OpenAIAdapter(APIAdapter):
                 tool_call_buffers.clear()
 
             if finish_reason:
+                terminal_reason = finish_reason
                 # In particular, length is a completed but truncated response.
                 # Preserve it so the query loop reports output_limit instead
                 # of mistaking the end of the iterator for a successful turn.
@@ -369,6 +377,22 @@ class OpenAIAdapter(APIAdapter):
                     usage=usage,
                     model_id=str(getattr(chunk, "model", "") or ""),
                 )
+
+        if not terminal_reason:
+            yield StreamChunk(
+                type="error",
+                error="OpenAI-compatible stream ended before finish_reason (incomplete response)",
+                retryable=True,
+            )
+        elif (
+            (terminal_reason == "tool_calls" and not completed_tools)
+            or (terminal_reason == "stop" and tool_call_buffers)
+        ):
+            yield StreamChunk(
+                type="error",
+                error="OpenAI-compatible stream ended with an incomplete tool call",
+                retryable=True,
+            )
 
     async def count_tokens(
         self,

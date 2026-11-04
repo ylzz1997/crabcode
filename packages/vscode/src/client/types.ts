@@ -353,12 +353,14 @@ export interface ModelSettingsMutationRequest {
 
 /** A focused mutation for runtime, Computer Use, and extra-tool settings. */
 export interface RuntimeSettingsMutationRequest {
-  action: "set_snapshot" | "set_compaction" | "set_computer_use_mode" | "set_computer_use_options" | "add_extra_tool" | "remove_extra_tool";
+  action: "set_snapshot" | "set_compaction" | "set_auto_continue" | "set_computer_use_mode" | "set_computer_use_options" | "add_extra_tool" | "remove_extra_tool";
   source?: "userSettings" | "projectSettings" | "localSettings";
   cwd?: string | null;
   snapshot_enabled?: boolean | null;
   snapshot_max_size_mb?: number | null;
   auto_compact_enabled?: boolean | null;
+  auto_continue_enabled?: boolean | null;
+  auto_continue_max_attempts?: number | null;
   compact_buffer_tokens?: number | null;
   max_context_length?: number | null;
   computer_use_mode?: "background_app" | "foreground_desktop" | null;
@@ -916,6 +918,8 @@ export interface RuntimeSettingsResponse {
   snapshot_enabled?: boolean;
   snapshot_max_size_mb?: number;
   auto_compact_enabled?: boolean;
+  auto_continue_enabled?: boolean;
+  auto_continue_max_attempts?: number;
   compact_buffer_tokens?: number;
   max_context_length?: number | null;
   computer_use_mode?: "background_app" | "foreground_desktop";

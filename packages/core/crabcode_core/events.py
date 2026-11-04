@@ -3298,6 +3298,10 @@ class CoreSession:
         except Exception:
             logger.warning("Failed to reload compaction settings", exc_info=True)
         try:
+            self.reload_auto_continue_settings()
+        except Exception:
+            logger.warning("Failed to reload automatic continuation settings", exc_info=True)
+        try:
             self.reload_prompt_settings()
         except Exception:
             logger.warning("Failed to reload prompt settings", exc_info=True)
@@ -3379,6 +3383,8 @@ class CoreSession:
             ai_reviewer=self._ai_reviewer,
             tool_call_timeout=self.settings.tool_call_timeout,
             auto_compact_enabled=self.settings.auto_compact_enabled,
+            auto_continue_enabled=self.settings.auto_continue_enabled,
+            auto_continue_max_attempts=self.settings.auto_continue_max_attempts,
             compact_buffer_tokens=self.settings.compact_buffer_tokens,
             compact_threshold=self.settings.max_context_length,
             compact_prompt=resolve_compact_prompt(profile),
@@ -4352,6 +4358,14 @@ class CoreSession:
         self.settings.auto_compact_enabled = merged.auto_compact_enabled
         self.settings.compact_buffer_tokens = merged.compact_buffer_tokens
         self.settings.max_context_length = merged.max_context_length
+
+    def reload_auto_continue_settings(self) -> None:
+        """Apply response recovery edits to subsequent turns."""
+        from crabcode_core.config.manager import ConfigManager
+
+        merged = self._merge_project_settings(ConfigManager(cwd=self.cwd).load())
+        self.settings.auto_continue_enabled = merged.auto_continue_enabled
+        self.settings.auto_continue_max_attempts = merged.auto_continue_max_attempts
 
     def reload_prompt_settings(self) -> None:
         """Apply prompt template and user-append edits without rebuilding the session."""

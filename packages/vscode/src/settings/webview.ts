@@ -808,17 +808,19 @@ function runtimeControl(
   const state = data.runtime as RuntimeSettingsResponse;
   const current =
     state[key] ??
-    (key === "auto_compact_enabled" || key === "snapshot_enabled"
+    (key === "auto_compact_enabled" || key === "auto_continue_enabled" || key === "snapshot_enabled"
       ? true
-      : key === "compact_buffer_tokens"
-        ? 20000
-        : key === "snapshot_max_size_mb"
-          ? 10
-          : key === "computer_use_target_scope"
-            ? "app_window"
-            : key === "computer_use_delivery_policy"
-              ? "allow_foreground"
-              : null);
+      : key === "auto_continue_max_attempts"
+        ? 2
+        : key === "compact_buffer_tokens"
+          ? 20000
+          : key === "snapshot_max_size_mb"
+            ? 10
+            : key === "computer_use_target_scope"
+              ? "app_window"
+              : key === "computer_use_delivery_policy"
+                ? "allow_foreground"
+                : null);
   const control =
     typeof current === "boolean"
       ? input("", title, "checkbox")
@@ -833,6 +835,7 @@ function runtimeControl(
   if (control instanceof HTMLInputElement && control.type === "number") {
     control.min = key === "compact_buffer_tokens" ? "0" : "1";
     control.step = "1";
+    if (key === "auto_continue_max_attempts") control.max = "10";
     if (nullable) control.placeholder = tr("自动");
   }
   control.disabled = !(state.editable_sources ?? []).some(
@@ -859,9 +862,12 @@ function runtimeControl(
       value !== null &&
       (!control.value.trim() ||
         !Number.isSafeInteger(value) ||
-        Number(value) < (key === "compact_buffer_tokens" ? 0 : 1))
+        Number(value) < (key === "compact_buffer_tokens" ? 0 : 1) ||
+        (key === "auto_continue_max_attempts" && Number(value) > 10))
     ) {
-      notice(tr("请输入有效整数；自动阈值可以留空。"), true);
+      notice(key === "auto_continue_max_attempts"
+        ? tr("自动继续次数必须是 1–10 的整数")
+        : tr("请输入有效整数；自动阈值可以留空。"), true);
       return;
     }
     control.disabled = true;
@@ -891,6 +897,21 @@ function renderRuntime(section: "tools" | "context"): void {
   const canEdit = sourcePicker(page, "runtime");
   const runtime = data.runtime as RuntimeSettingsResponse;
   if (section === "context") {
+    const recovery = group(
+      page,
+      tr("自动继续"),
+      tr("保存后从下一轮对话生效，正在运行的一轮沿用原设置。"),
+    );
+    runtimeControl(
+      recovery, section, tr("自动继续"),
+      tr("模型未返回正文或工具调用时，自动继续当前任务。"),
+      "auto_continue_enabled", "set_auto_continue",
+    );
+    runtimeControl(
+      recovery, section, tr("最多自动继续次数"),
+      tr("每轮对话最多自动继续 1–10 次，默认 2 次。"),
+      "auto_continue_max_attempts", "set_auto_continue",
+    );
     const card = group(
       page,
       tr("自动压缩"),
@@ -1945,6 +1966,8 @@ const SEARCH_ITEMS: Array<[Section, string, string, string]> = localized([
         string,
       ],
   ),
+  ["context", "自动继续", "模型未返回正文或工具调用时，自动继续当前任务。", "auto_continue_enabled"],
+  ["context", "最多自动继续次数", "每轮对话最多自动继续 1–10 次，默认 2 次。", "auto_continue_max_attempts"],
   ["context", "自动压缩", "上下文 压缩 compact", "auto_compact_enabled"],
   ["context", "压缩预留 token", "buffer 上下文", "compact_buffer_tokens"],
   ["context", "提前触发阈值", "上下文 上限", "max_context_length"],

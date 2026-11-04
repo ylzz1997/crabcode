@@ -63,6 +63,7 @@ export function RuntimeSettingsPanel({
   const [snapshotSizeDraft, setSnapshotSizeDraft] = useState("");
   const [compactBufferDraft, setCompactBufferDraft] = useState("");
   const [compactLimitDraft, setCompactLimitDraft] = useState("");
+  const [autoContinueAttemptsDraft, setAutoContinueAttemptsDraft] = useState("");
   const [toolPath, setToolPath] = useState("");
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [mutationBusy, setMutationBusy] = useState(false);
@@ -83,6 +84,10 @@ export function RuntimeSettingsPanel({
     setCompactBufferDraft(String(data?.compact_buffer_tokens ?? 20_000));
     setCompactLimitDraft(data?.max_context_length == null ? "" : String(data.max_context_length));
   }, [data?.cwd, data?.compact_buffer_tokens, data?.max_context_length]);
+
+  useEffect(() => {
+    setAutoContinueAttemptsDraft(String(data?.auto_continue_max_attempts ?? 2));
+  }, [data?.cwd, data?.auto_continue_max_attempts]);
 
   useEffect(() => {
     if (writableSources.length > 0 && !writableSources.some((item) => item.id === source)) {
@@ -124,6 +129,28 @@ export function RuntimeSettingsPanel({
     const current = field === "compact_buffer_tokens" ? data?.compact_buffer_tokens ?? 20_000 : data?.max_context_length ?? null;
     setMutationError(null);
     if (next !== current) void saveCompaction({ [field]: next });
+  };
+
+  const saveAutoContinue = async (
+    changes: Pick<RuntimeSettingsMutation, "auto_continue_enabled" | "auto_continue_max_attempts">,
+  ) => {
+    try {
+      await mutate({ action: "set_auto_continue", source, cwd: activeProject?.path, ...changes });
+    } catch {
+      // Keep the draft available for retry; the banner shows the error.
+    }
+  };
+
+  const saveAutoContinueAttempts = () => {
+    const next = Number(autoContinueAttemptsDraft);
+    if (!autoContinueAttemptsDraft.trim() || !Number.isSafeInteger(next) || next < 1 || next > 10) {
+      setMutationError(tr("自动继续次数必须是 1–10 的整数"));
+      return;
+    }
+    setMutationError(null);
+    if (next !== (data?.auto_continue_max_attempts ?? 2)) {
+      void saveAutoContinue({ auto_continue_max_attempts: next });
+    }
   };
 
   const saveSnapshot = async (
@@ -224,6 +251,33 @@ export function RuntimeSettingsPanel({
       )}
 
       {online && loading && !data && <div className="model-settings-loading"><LoaderCircle className="spin" />{tr("正在读取运行设置")}</div>}
+
+      {online && !loading && !error && data && (
+        <section className="runtime-settings-group settings-group" aria-labelledby="auto-continue-settings-title">
+          <div className="settings-subsection-heading">
+            <div>
+              <h3 id="auto-continue-settings-title">{tr("自动继续")}</h3>
+              <p>{tr("保存后从下一轮对话生效；正在运行的一轮沿用原设置。")}</p>
+            </div>
+          </div>
+          <div className="settings-row compact">
+            <div className="settings-row-copy"><strong>{tr("自动继续")}</strong><span>{tr("模型未返回正文或工具调用时，自动继续当前任务。")}</span></div>
+            <button className={`settings-switch ${data.auto_continue_enabled !== false ? "on" : ""}`} type="button" role="switch"
+              aria-label={tr("自动继续")} aria-checked={data.auto_continue_enabled !== false} disabled={!canEdit || mutationBusy}
+              onClick={() => void saveAutoContinue({ auto_continue_enabled: data.auto_continue_enabled === false })}><span /></button>
+          </div>
+          <div className="settings-row compact">
+            <div className="settings-row-copy"><strong>{tr("最多自动继续次数")}</strong><span>{tr("每轮对话最多自动继续 1–10 次，默认 2 次。")}</span></div>
+            <input className="settings-number-input" aria-label={tr("最多自动继续次数")} type="number" min={1} max={10} step={1}
+              value={autoContinueAttemptsDraft} disabled={!canEdit || mutationBusy}
+              onChange={(event) => setAutoContinueAttemptsDraft(event.target.value)} onBlur={saveAutoContinueAttempts}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") setAutoContinueAttemptsDraft(String(data.auto_continue_max_attempts ?? 2));
+              }} />
+          </div>
+        </section>
+      )}
 
       {online && !loading && !error && data && (
         <section className="runtime-settings-group settings-group" aria-labelledby="compaction-settings-title">

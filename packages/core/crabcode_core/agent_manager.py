@@ -1519,6 +1519,8 @@ class AgentManager:
                     ),
                     tool_call_timeout=settings.tool_call_timeout,
                     auto_compact_enabled=settings.auto_compact_enabled,
+                    auto_continue_enabled=settings.auto_continue_enabled,
+                    auto_continue_max_attempts=settings.auto_continue_max_attempts,
                     compact_buffer_tokens=settings.compact_buffer_tokens,
                     compact_threshold=settings.max_context_length,
                     compact_prompt=resolve_compact_prompt(

@@ -31,7 +31,7 @@ from crabcode_core.prompts.blocks import SystemPrompt
 from crabcode_core.tools.loading import ToolCatalog, ToolLoadingState
 from crabcode_core.query.retry import ResponsesStreamRetryState, StreamRetry
 from crabcode_core.query.computer_use_history import project_computer_use_history
-from crabcode_core.types.config import ApiConfig, ToolLoadingSettings
+from crabcode_core.types.config import DEFAULT_AUTO_CONTINUE_MAX_ATTEMPTS, ApiConfig, ToolLoadingSettings
 from crabcode_core.types.event import (
     CompactEvent,
     CoreEvent,
@@ -413,6 +413,8 @@ class QueryParams:
     ai_reviewer: AiPermissionReviewer | None = None
     tool_call_timeout: float | None = None  # seconds; None means no timeout
     auto_compact_enabled: bool = True
+    auto_continue_enabled: bool = True
+    auto_continue_max_attempts: int = DEFAULT_AUTO_CONTINUE_MAX_ATTEMPTS
     compact_buffer_tokens: int = DEFAULT_COMPACT_BUFFER_TOKENS
     compact_threshold: int | None = None
     compact_prompt: str | None = None
@@ -1035,10 +1037,11 @@ _COMPACT_RESUME_PROMPT = (
     "without asking the user to repeat anything.]"
 )
 
-_COMPACT_EMPTY_RESPONSE_RETRY_PROMPT = (
-    "[The previous attempt returned no content after compaction. "
-    "Resume immediately from the compacted summary and latest context. "
-    "Either continue the task or make the next tool call now.]"
+_EMPTY_RESPONSE_CONTINUE_PROMPT = (
+    "The previous response ended without a visible answer or a tool call. "
+    "Continue the current task from the latest context and completed tool results. "
+    "Do not repeat operations that already succeeded. Make the next necessary tool call, "
+    "provide the final answer if the task is complete, or ask the user if input is required."
 )
 
 
@@ -1084,8 +1087,8 @@ async def query_loop(
     turn_count = 0
     _context_retries = 0
     _MAX_CONTEXT_RETRIES = 1
-    _compact_resume_retries = 0
-    _MAX_COMPACT_RESUME_RETRIES = 1
+    _auto_continue_attempts = 0
+    _auto_continue_requested = False
     stream_retry_state = ResponsesStreamRetryState()
     pending_stream_retry: StreamRetry | None = None
     _awaiting_compact_resume = False
@@ -1195,7 +1198,7 @@ async def query_loop(
             )
             if request_reasoning_effort is None:
                 request_reasoning_effort = "low"
-            if _compact_resume_retries > 0:
+            if _auto_continue_requested:
                 request_thinking = False
                 request_thinking_budget = 0
             elif request_thinking:
@@ -1247,7 +1250,7 @@ async def query_loop(
         *,
         trigger: str,
     ) -> CompactEvent | None:
-        nonlocal _awaiting_compact_resume, _compact_resume_retries
+        nonlocal _awaiting_compact_resume
 
         old_count = len(messages)
         source_messages = list(messages)
@@ -1287,7 +1290,6 @@ async def query_loop(
         messages[:] = result
         token_tracker.reset()
         _awaiting_compact_resume = True
-        _compact_resume_retries = 0
         params.tool_context.messages = messages
 
         if params.hook_manager:
@@ -1374,6 +1376,12 @@ async def query_loop(
         full_system = _append_system_context(
             params.system_prompt, params.system_context
         )
+        if _auto_continue_requested:
+            # Request-only guidance: keep recovery inside the original user turn
+            # without adding a synthetic user message to any client's history.
+            full_system = _append_system_context(full_system, {
+                "autoContinue": _EMPTY_RESPONSE_CONTINUE_PROMPT,
+            })
         messages_for_api = _messages_for_model(messages, params)
 
         plan_mode_active = _plan_mode_is_active(params)
@@ -2016,7 +2024,8 @@ async def query_loop(
             assistant_content.append(TextBlock(text=current_text))
 
         has_visible_or_actionable_output = any(
-            isinstance(block, (TextBlock, ToolUseBlock))
+            isinstance(block, ToolUseBlock)
+            or (isinstance(block, TextBlock) and bool(block.text.strip()))
             for block in assistant_content
         )
         response_limit_error = None
@@ -2055,36 +2064,48 @@ async def query_loop(
             # preserve this committed prefix without duplicating its text.
             params.messages[:] = messages
             _awaiting_compact_resume = False
+            _auto_continue_requested = False
         else:
             if _retry_after_completed_items:
-                continue
-            if _awaiting_compact_resume and _compact_resume_retries < _MAX_COMPACT_RESUME_RETRIES:
-                _compact_resume_retries += 1
-                logger.warning(
-                    "Empty response after compact, retrying (%d/%d)",
-                    _compact_resume_retries, _MAX_COMPACT_RESUME_RETRIES,
-                )
-                messages.append(
-                    create_user_message(content=_COMPACT_EMPTY_RESPONSE_RETRY_PROMPT)
-                )
-                params.messages[:] = messages
-                turn_count -= 1
                 continue
             if response_limit_error is not None:
                 yield response_limit_error
                 yield _turn_complete_event(provider_stop_reason, messages)
                 params.messages[:] = messages
                 return
-            logger.warning("Empty response, ending turn (awaiting_resume=%s)", _awaiting_compact_resume)
-            if _awaiting_compact_resume:
-                yield ErrorEvent(
-                    message=(
-                        "Model returned no visible content after emergency compact; "
-                        "the compacted context was preserved."
-                    ),
-                    recoverable=True,
-                    error_type="empty_response",
+            if (
+                params.auto_continue_enabled
+                and _auto_continue_attempts < params.auto_continue_max_attempts
+                and provider_stop_reason in {"", "end_turn", "stop"}
+                and not current_tool
+            ):
+                _auto_continue_attempts += 1
+                _auto_continue_requested = True
+                logger.warning(
+                    "Empty response, automatically continuing: session=%s, attempt=%d/%d, "
+                    "stop_reason=%r, awaiting_compact_resume=%s",
+                    params.tool_context.session_id, _auto_continue_attempts,
+                    params.auto_continue_max_attempts, provider_stop_reason, _awaiting_compact_resume,
                 )
+                yield StreamRetryEvent(
+                    message=f"模型未返回结果，正在继续（{_auto_continue_attempts}/{params.auto_continue_max_attempts}）",
+                    error="empty_response",
+                    retry_count=_auto_continue_attempts,
+                    max_retries=params.auto_continue_max_attempts,
+                    delay_seconds=0.0,
+                )
+                turn_count -= 1
+                continue
+            logger.warning("Empty response, ending turn (awaiting_resume=%s)", _awaiting_compact_resume)
+            yield ErrorEvent(
+                message=(
+                    "Model returned no visible content or tool calls"
+                    + (f" after {_auto_continue_attempts} automatic continuation attempts" if _auto_continue_attempts else "")
+                    + f" (stop_reason={provider_stop_reason!r}); the conversation was preserved."
+                ),
+                recoverable=True,
+                error_type="empty_response",
+            )
             yield _turn_complete_event("empty_response", messages)
             params.messages[:] = messages
             return

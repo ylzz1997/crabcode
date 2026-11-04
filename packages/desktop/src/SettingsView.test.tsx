@@ -856,6 +856,25 @@ describe("SettingsView", () => {
       />,
     ));
 
+    const autoContinue = container.querySelector<HTMLButtonElement>('[aria-label="自动继续"]')!;
+    expect(autoContinue.getAttribute("aria-checked")).toBe("true");
+    await act(async () => autoContinue.click());
+    const attempts = container.querySelector<HTMLInputElement>('[aria-label="最多自动继续次数"]')!;
+    expect(attempts.value).toBe("2");
+    act(() => changeInput(attempts, "4"));
+    await act(async () => attempts.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({
+      action: "set_auto_continue", auto_continue_enabled: false, source: "projectSettings",
+    }));
+    expect(handlers.onMutateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({
+      action: "set_auto_continue", auto_continue_max_attempts: 4, source: "projectSettings",
+    }));
+    const recoveryCalls = handlers.onMutateRuntimeSettings.mock.calls.length;
+    act(() => changeInput(attempts, "11"));
+    await act(async () => attempts.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    expect(handlers.onMutateRuntimeSettings.mock.calls.length).toBe(recoveryCalls);
+    expect(container.textContent).toContain("自动继续次数必须是 1–10 的整数");
+
     const autoCompact = container.querySelector<HTMLButtonElement>('[aria-label="自动压缩"]')!;
     expect(autoCompact.disabled).toBe(false);
     await act(async () => autoCompact.click());

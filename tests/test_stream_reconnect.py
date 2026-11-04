@@ -29,6 +29,7 @@ class ScriptedAdapter:
     def __init__(self, responses, *, max_retries=2, unbounded=False):
         self.responses = responses
         self.requests = []
+        self.systems = []
         self.config = ApiConfig(
             model="test",
             thinking_enabled=False,
@@ -39,6 +40,7 @@ class ScriptedAdapter:
 
     async def stream_message(self, messages, system, tools, config):
         self.requests.append([message.model_copy(deep=True) for message in messages])
+        self.systems.append(list(system))
         response = self.responses[min(len(self.requests) - 1, len(self.responses) - 1)]
         for item in response:
             if isinstance(item, BaseException):
@@ -66,7 +68,7 @@ class CountingTool(Tool):
         return ToolResult(result_for_model=f"call {self.calls}")
 
 
-def run(adapter, *, tools=None):
+def run(adapter, *, tools=None, **options):
     messages = [create_user_message("hello")]
     params = QueryParams(
         messages=messages,
@@ -78,6 +80,7 @@ def run(adapter, *, tools=None):
         api_adapter=adapter,
         api_config=adapter.config,
         auto_compact_enabled=False,
+        **options,
     )
 
     async def collect():
@@ -734,3 +737,144 @@ def test_retry_closes_failed_stream_before_starting_next_request():
     events, _ = run(adapter)
     assert adapter.closed == 2
     assert not any(isinstance(event, ErrorEvent) for event in events)
+
+
+@pytest.mark.parametrize("prefix", [
+    [],
+    [StreamChunk(type="text", text=" \n\t")],
+    [StreamChunk(type="thinking", text="Still considering the task")],
+])
+def test_empty_response_continues_in_the_same_turn_without_history_pollution(prefix):
+    adapter = ScriptedAdapter([
+        [*prefix, StreamChunk(type="message_stop", stop_reason="end_turn")],
+        [*completed_text("finished"), StreamChunk(type="message_stop", stop_reason="end_turn")],
+    ])
+    events, messages = run(adapter)
+    assert len(adapter.requests) == 2
+    assert len(messages) == 2
+    assert messages[-1].text_content == "finished"
+    assert [message.uuid for message in adapter.requests[0]] == [message.uuid for message in adapter.requests[1]]
+    assert adapter.systems[0] == []
+    assert "Continue the current task" in adapter.systems[1][-1]
+    retries = [event for event in events if isinstance(event, StreamRetryEvent)]
+    assert len(retries) == 1
+    assert retries[0].error == "empty_response"
+    assert retries[0].max_retries == 2
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+    assert len([event for event in events if isinstance(event, TurnCompleteEvent)]) == 1
+    assert events[-1].reason == "end_turn"
+
+
+def test_automatic_continuation_can_be_disabled():
+    adapter = ScriptedAdapter([[StreamChunk(type="message_stop", stop_reason="end_turn")]])
+    events, messages = run(adapter, auto_continue_enabled=False)
+    assert len(adapter.requests) == 1
+    assert len(messages) == 1
+    assert not any(isinstance(event, StreamRetryEvent) for event in events)
+    assert any(isinstance(event, ErrorEvent) and event.error_type == "empty_response" for event in events)
+    assert events[-1].reason == "empty_response"
+
+
+@pytest.mark.parametrize("attempts", [1, 2, 4])
+def test_empty_response_exhausts_its_own_configured_budget(attempts):
+    adapter = ScriptedAdapter([[StreamChunk(type="message_stop", stop_reason="end_turn")]], unbounded=True)
+    events, _ = run(adapter, auto_continue_max_attempts=attempts)
+    assert len(adapter.requests) == attempts + 1
+    assert len([event for event in events if isinstance(event, StreamRetryEvent)]) == attempts
+    assert len([event for event in events if isinstance(event, ErrorEvent)]) == 1
+    assert events[-1].reason == "empty_response"
+
+
+def test_continuation_keeps_tool_results_and_does_not_reset_budget_after_progress():
+    empty = [StreamChunk(type="message_stop", stop_reason="end_turn")]
+    tool_response = [
+        StreamChunk(type="tool_use_end", tool_use_id="call-1", tool_name="Count", tool_input_json="{}"),
+        StreamChunk(type="response_item_done", item_type="function_call", item_id="call-1"),
+        StreamChunk(type="message_stop", stop_reason="tool_use"),
+    ]
+    adapter = ScriptedAdapter([tool_response, empty, tool_response, empty, empty])
+    tool = CountingTool()
+    events, messages = run(adapter, tools=[tool])
+    assert len(adapter.requests) == 5
+    assert tool.calls == 1
+    assert len([event for event in events if isinstance(event, StreamRetryEvent)]) == 2
+    results = [block for message in adapter.requests[2] if isinstance(message.content, list)
+               for block in message.content if isinstance(block, ToolResultBlock)]
+    assert len(results) == 1
+    assert results[0].content == "call 1"
+    assert "autoContinue" in adapter.systems[2][-1]
+    assert adapter.systems[3] == []
+    assert events[-1].reason == "empty_response"
+
+
+@pytest.mark.parametrize("reason", ["max_tokens", "length", "model_context_window_exceeded", "content_filter"])
+def test_explicit_response_limits_and_filters_do_not_auto_continue(reason):
+    adapter = ScriptedAdapter([[StreamChunk(type="message_stop", stop_reason=reason)]])
+    events, _ = run(adapter)
+    assert len(adapter.requests) == 1
+    assert not any(isinstance(event, StreamRetryEvent) for event in events)
+    assert any(isinstance(event, ErrorEvent) for event in events)
+
+
+def test_normal_final_answer_does_not_auto_continue():
+    adapter = ScriptedAdapter([[*completed_text("done"), StreamChunk(type="message_stop", stop_reason="end_turn")]])
+    events, _ = run(adapter)
+    assert len(adapter.requests) == 1
+    assert not any(isinstance(event, StreamRetryEvent) for event in events)
+    assert events[-1].reason == "end_turn"
+
+
+def test_cancellation_at_auto_continue_boundary_makes_no_further_request():
+    adapter = ScriptedAdapter([[StreamChunk(type="message_stop", stop_reason="end_turn")]])
+
+    async def collect():
+        messages = [create_user_message("hello")]
+        stream = query_loop(QueryParams(
+            messages=messages, system_prompt=[], user_context={}, system_context={}, tools=[],
+            tool_context=ToolContext(messages=messages), api_adapter=adapter, api_config=adapter.config,
+            auto_compact_enabled=False,
+        ))
+        async for event in stream:
+            if isinstance(event, StreamRetryEvent):
+                await stream.aclose()
+                break
+
+    asyncio.run(collect())
+    assert len(adapter.requests) == 1
+
+
+@pytest.mark.parametrize("prefix", [
+    {}, {"content": "unfinished"}, {"reasoning_content": "thinking"},
+    {"tool_calls": [{"index": 0, "id": "partial", "type": "function",
+                     "function": {"name": "Count", "arguments": '{"partial":'}}]},
+])
+def test_openai_silent_eof_is_retried_without_executing_partial_tools(monkeypatch, prefix):
+    from openai.types.chat import ChatCompletionChunk
+
+    requests = []
+
+    async def create(**kwargs):
+        requests.append(kwargs)
+        response = [(prefix, None)] if len(requests) == 1 else [({"content": "done"}, "stop")]
+
+        async def stream():
+            for delta, reason in response:
+                yield ChatCompletionChunk(
+                    id="chunk", created=0, model="test", object="chat.completion.chunk",
+                    choices=[{"index": 0, "delta": delta, "finish_reason": reason}],
+                )
+        return stream()
+
+    monkeypatch.setattr(OpenAIAdapter, "_create_client", lambda *_: SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+    ))
+    adapter = OpenAIAdapter(ApiConfig(model="test", max_retries=1))
+    tool = CountingTool()
+    events, messages = run(adapter, tools=[tool])
+    assert len(requests) == 2
+    assert tool.calls == 0
+    assert messages[-1].text_content == "done"
+    retry = next(event for event in events if isinstance(event, StreamRetryEvent))
+    assert "before finish_reason" in retry.error
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+    assert events[-1].reason == "end_turn"
