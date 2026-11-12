@@ -69,7 +69,8 @@ function ProcessTurnView({ turn, sessionKey, enabled, showDuration, showToolCall
         .find((node) => node.getBoundingClientRect().bottom > top && node.getBoundingClientRect().height > 0
           && !(collapsed && root.current?.contains(node) && node.hasAttribute("data-process-content"))) ?? null;
       scrollSnapshot.current = { container, top: container.scrollTop,
-        bottom: container.scrollHeight - container.scrollTop - container.clientHeight <= 24,
+        bottom: container.dataset.followingOutput !== "false"
+          && container.scrollHeight - container.scrollTop - container.clientHeight <= 24,
         anchor, offset: anchor ? anchor.getBoundingClientRect().top : 0 };
     }
   }

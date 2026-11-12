@@ -15,6 +15,7 @@ import { t as tr } from "./i18n";
 import * as vscode from "vscode";
 import { createSlashCommands } from "../../shared/slashCommands.js";
 import { createTurnProcessPolicy } from "../../shared/turnProcess.js";
+import { bindChatScroll } from "../../shared/chatScroll.js";
 import * as os from "os";
 import * as path from "path";
 import type { CrabCodeConnection, SessionLaunchOverrides } from "./connection";
@@ -4811,15 +4812,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       overscroll-behavior: contain;
       scrollbar-gutter: stable;
       padding: 12px 10px 16px;
+    }
+    #messages[data-following-output="true"] {
+      overflow-anchor: none;
+    }
+    #message-content {
+      min-height: 100%;
       display: flex;
       flex-direction: column;
       gap: 8px;
     }
-    #messages > * {
+    #message-content > * {
+      flex-shrink: 0;
       max-width: 100%;
       min-width: 0;
     }
-    #messages:empty::before {
+    #message-content:empty::before {
       content: '开始和 CrabCode 聊天吧';
       display: block;
       margin: auto;
@@ -6020,6 +6028,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     #composer-wrap.drag-hover #composer-card {
       outline: 1.5px dashed var(--accent);
       outline-offset: 2px;
+    }
+    #chat-scroll-bottom {
+      display: none;
+      position: absolute;
+      inset-inline-start: 50%;
+      bottom: calc(100% + 6px);
+      translate: -50% 0;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      padding: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 50%;
+      background: var(--surface-elevated);
+      color: var(--vscode-foreground);
+      box-shadow: var(--shadow-md);
+      cursor: pointer;
+    }
+    #messages[data-following-output="false"] ~ #composer-wrap #chat-scroll-bottom {
+      display: grid;
+    }
+    #chat-scroll-bottom:hover,
+    #chat-scroll-bottom:focus-visible {
+      border-color: var(--accent);
     }
     #composer-card {
       border-radius: var(--radius-lg);
@@ -7423,13 +7455,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       </button>
     </div>
   </div>
-  <div id="messages"></div>
+  <div id="messages" tabindex="-1"><div id="message-content"></div></div>
   <div id="busy-indicator">
     <span class="busy-dots"><span></span><span></span><span></span></span>
     <span class="busy-label">CrabCode 正在处理</span>
   </div>
   <div id="pending-edits-bar" class="pending-edits hidden"></div>
   <div id="composer-wrap">
+    <button type="button" id="chat-scroll-bottom" title="回到底部" aria-label="回到底部">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14m-7-7 7 7 7-7"/></svg>
+    </button>
     <div id="steering-queue-preview" aria-label="后续消息队列" aria-live="polite"></div>
     <div id="composer-card">
       <div class="composer-meta">
@@ -7564,6 +7599,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       try {
         const vscode = acquireVsCodeApi();
         const msgContainer = document.getElementById('messages');
+        const msgContent = document.getElementById('message-content');
         const input = document.getElementById('input');
         const sendBtn = document.getElementById('send-btn');
         const stopBtn = document.getElementById('stop-btn');
@@ -7634,7 +7670,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const rootEl = document.documentElement;
     let isBusy = false;
     let retryActivityLabel = null;
-    let stickToBottom = true;
+    const chatScroll = (${bindChatScroll.toString()})(msgContainer, msgContent);
+    document.getElementById('chat-scroll-bottom').addEventListener('click', () => {
+      msgContainer.focus({ preventScroll: true });
+      chatScroll.jumpToBottom();
+    });
     let hasReceivedOptions = false;
     let currentModelValue = '';
     let currentModelList = [];
@@ -7687,14 +7727,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function preserveProcessScroll(change, hiding) {
-      const bottom = isNearBottom();
+      if (chatScroll.isFollowing() || replayingHistory) {
+        change();
+        return;
+      }
       const top = msgContainer.getBoundingClientRect().top;
       const anchor = [...msgContainer.querySelectorAll('[data-process-id]')].find(el =>
         !hiding.has(el) && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().bottom > top);
       const offset = anchor?.getBoundingClientRect().top;
       change();
-      if (bottom) msgContainer.scrollTop = msgContainer.scrollHeight;
-      else if (anchor && offset !== undefined) {
+      if (anchor && offset !== undefined) {
         const delta = anchor.getBoundingClientRect().top - offset;
         msgContainer.scrollTop += delta;
       }
@@ -8014,28 +8056,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    function isNearBottom() {
-      return msgContainer.scrollHeight - msgContainer.scrollTop - msgContainer.clientHeight <= 24;
-    }
-
-    function scrollMessagesToBottom(force = false) {
-      if (!force && !stickToBottom) return;
-      requestAnimationFrame(() => {
-        msgContainer.scrollTop = msgContainer.scrollHeight;
-      });
-    }
-
-    function captureScrollAnchor() {
-      return isNearBottom();
-    }
-
-    function restoreScrollAnchor(shouldStick) {
-      stickToBottom = shouldStick;
-      if (shouldStick) {
-        scrollMessagesToBottom(true);
-      }
-    }
-
     function normalizePendingEditsVisibleFiles(value) {
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return 5;
@@ -8165,7 +8185,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function createTurn(startTime, stableId) {
-      const shouldStick = captureScrollAnchor();
       const turn = {
         id: stableId || 'turn-' + (++turnCounter),
         sessionKey: processSessionKey || currentSessionId || 'new',
@@ -8202,11 +8221,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       turn.rootEl.appendChild(turn.summaryEl);
       turn.rootEl.appendChild(turn.contentEl);
-      msgContainer.appendChild(turn.rootEl);
+      msgContent.appendChild(turn.rootEl);
       turns.push(turn);
       activeTurn = turn;
       updateTurnSummary(turn);
-      restoreScrollAnchor(shouldStick);
       return turn;
     }
 
@@ -8228,7 +8246,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           updateTurnSummary(turn);
         }
       } else {
-        msgContainer.appendChild(el);
+        msgContent.appendChild(el);
       }
     }
 
@@ -8247,7 +8265,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         el.classList.add('turn-detail-item');
         updateTurnSummary(turn);
       } else {
-        msgContainer.appendChild(el);
+        msgContent.appendChild(el);
       }
     }
 
@@ -8288,10 +8306,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       else if (width <= 420) mode = 'compact';
       rootEl.dataset.panelWidth = mode;
     }
-
-    msgContainer.addEventListener('scroll', () => {
-      stickToBottom = isNearBottom();
-    });
 
     let imagePreviewReturnFocus = null;
 
@@ -8376,9 +8390,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!plusMenu.classList.contains('hidden')) {
         positionPlusMenu();
       }
-      if (stickToBottom) {
-        scrollMessagesToBottom(true);
-      }
     });
 
     if (typeof ResizeObserver !== 'undefined') {
@@ -8386,9 +8397,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         updatePanelWidthMode();
         if (!plusMenu.classList.contains('hidden')) {
           positionPlusMenu();
-        }
-        if (stickToBottom) {
-          scrollMessagesToBottom(true);
         }
       }).observe(document.body);
     }
@@ -8525,7 +8533,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function addMessageEl(msg) {
-      const shouldStick = captureScrollAnchor();
       const div = document.createElement('div');
       const copyable = msg.copyLabel || (msg.role === 'assistant' && (msg.text || msg.turnDetails));
       div.className = 'msg ' + msg.role + (copyable ? ' copyable-inline' : '');
@@ -8562,14 +8569,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       } else {
         appendToTurnContent(getCurrentTurn(), div, processItem);
       }
-      restoreScrollAnchor(shouldStick);
     }
 
     function renderToolCard(card) {
       const existing = document.getElementById('tool-' + card.id);
       if (existing) { updateToolCard(existing, card); return existing; }
 
-      const shouldStick = captureScrollAnchor();
       const el = document.createElement('div');
       const presentation = getToolPresentation(card.toolName, card.input || {});
       el.className = 'tool-card tool-kind-' + presentation.kind + (card.isError ? ' is-error' : '');
@@ -8580,7 +8585,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         toolCardTurns.set(card.id, turn.id);
       }
       appendToTurnDetails(turn, el, { toolId: card.id });
-      restoreScrollAnchor(shouldStick);
 
       el.querySelector('.tool-card-header').addEventListener('click', () => {
         vscode.postMessage({ type: 'toggleToolCard', id: card.id });
@@ -8980,7 +8984,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function addFileChangePill(payload) {
-      const shouldStick = captureScrollAnchor();
       const div = document.createElement('div');
       div.className = 'file-change';
       const actionClass = payload.action; // create | modify | delete
@@ -8989,7 +8992,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         '<span class="action ' + actionClass + '">' + escapeHtml(payload.action) + '</span>' +
         '<span class="path" data-path="' + escapeHtml(payload.path) + '" title="' + escapeHtml(payload.path) + '">' + escapeHtml(shortPath) + '</span>';
       appendToTurnContent(getCurrentTurn(), div, { id: 'file-change-' + (++turnCounter), kind: 'file_change' });
-      restoreScrollAnchor(shouldStick);
 
       div.querySelector('.path').addEventListener('click', () => {
         vscode.postMessage({ type: 'openFile', path: payload.path });
@@ -9020,13 +9022,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const existing = document.getElementById('choice-' + card.id);
       if (existing) { updateChoiceCard(existing, card); return existing; }
 
-      const shouldStick = captureScrollAnchor();
       const el = document.createElement('div');
       el.className = 'request-card';
       el.id = 'choice-' + card.id;
       el.innerHTML = buildChoiceCardHtml(card);
       appendToTurnContent(getCurrentTurn(), el, { id: card.id, kind: 'choice' });
-      restoreScrollAnchor(shouldStick);
       bindChoiceCardEvents(el, card);
       choiceCards.set(card.id, card);
       return el;
@@ -9115,13 +9115,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const existing = document.getElementById('plan-' + card.id);
       if (existing) { updatePlanCard(existing, card); return existing; }
 
-      const shouldStick = captureScrollAnchor();
       const el = document.createElement('div');
       el.className = 'request-card plan';
       el.id = 'plan-' + card.id;
       el.innerHTML = buildPlanCardHtml(card);
       appendToTurnContent(getCurrentTurn(), el, { id: card.id, kind: 'plan' });
-      restoreScrollAnchor(shouldStick);
       bindPlanCardEvents(el, card);
       planCards.set(card.id, card);
       return el;
@@ -9197,13 +9195,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const existing = document.getElementById('permission-' + card.id);
       if (existing) { updatePermissionCard(existing, card); return existing; }
 
-      const shouldStick = captureScrollAnchor();
       const el = document.createElement('div');
       el.className = 'request-card permission';
       el.id = 'permission-' + card.id;
       el.innerHTML = buildPermissionCardHtml(card);
       appendToTurnContent(getCurrentTurn(), el, { id: card.id, kind: 'permission' });
-      restoreScrollAnchor(shouldStick);
       bindPermissionCardEvents(el, card);
       permissionCards.set(card.id, card);
       return el;
@@ -9309,7 +9305,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const existing = document.getElementById('thinking-' + card.id);
       if (existing) { updateThinkingCard(existing, card); return; }
 
-      const shouldStick = captureScrollAnchor();
       const el = document.createElement('div');
       el.className = 'thinking-card';
       el.id = 'thinking-' + card.id;
@@ -9319,7 +9314,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         thinkingCardTurns.set(card.id, turn.id);
       }
       appendToTurnDetails(turn, el, { thinkingId: card.id, forceExpanded: !card.collapsed });
-      restoreScrollAnchor(shouldStick);
 
       el.querySelector('.thinking-card-header').addEventListener('click', () => {
         vscode.postMessage({ type: 'toggleThinkingCard', id: card.id });
@@ -11232,14 +11226,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             } else if (textEl) {
               textEl.textContent += msg.chunk;
             }
-            scrollMessagesToBottom();
           }
           break;
         }
-        case 'history':
+        case 'history': {
+          const sessionKey = msg.processSessionKey || currentSessionId || 'new';
+          const keepReadingPosition = sessionKey === processSessionKey && !chatScroll.isFollowing();
+          const previousTop = msgContainer.scrollTop;
           retryActivityLabel = null;
           closeTurnDetails();
-          msgContainer.innerHTML = '';
+          msgContent.innerHTML = '';
           toolCards.clear();
           toolCardTurns.clear();
           thinkingCards.clear();
@@ -11250,7 +11246,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           turns.length = 0;
           activeTurn = null;
           turnCounter = 0;
-          processSessionKey = msg.processSessionKey || currentSessionId || 'new';
+          processSessionKey = sessionKey;
           if (typeof msg.autoCollapseProcess === 'boolean') autoCollapseProcess = msg.autoCollapseProcess;
           if (typeof msg.showToolCallCount === 'boolean') showToolCallCount = msg.showToolCallCount;
           replayingHistory = true;
@@ -11259,8 +11255,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           replayingHistory = false;
           updateBusyLabel();
           updateAllTurnSummaries();
-          scrollMessagesToBottom(true);
+          if (keepReadingPosition) msgContainer.scrollTop = previousTop;
+          else chatScroll.jumpToBottom();
           break;
+        }
         case 'restoreFollowUp':
           setInputText([getInputText(), msg.text].filter(Boolean).join('\\n\\n'));
           (msg.images || []).forEach(function(img) {
@@ -11332,10 +11330,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'toolResult': {
-          const el = renderToolCard(msg.card);
-          if (msg.card && msg.card.isError && el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          }
+          renderToolCard(msg.card);
           const turn = getTurnById(toolCardTurns.get(msg.card ? msg.card.id : undefined));
           if (turn) {
             updateTurnSummary(turn);
@@ -11371,7 +11366,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               const body = el.querySelector('.thinking-card-body pre');
               if (body) body.textContent += msg.chunk;
             }
-            scrollMessagesToBottom();
           }
           updateBusyLabel();
           updateAllTurnSummaries();

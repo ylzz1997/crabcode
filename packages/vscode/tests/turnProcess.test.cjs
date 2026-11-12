@@ -81,6 +81,47 @@ test('webview defaults to folding the completed process while final text and act
   } finally { w.dom.window.close(); }
 });
 
+test('reading history survives live tools and a refresh until the reader jumps to the bottom', () => {
+  const w = webview();
+  try {
+    const viewport = w.doc.getElementById('messages');
+    const button = w.doc.getElementById('chat-scroll-bottom');
+    const visible = () => w.dom.window.getComputedStyle(button).display !== 'none';
+    let top = 0;
+    Object.defineProperties(viewport, {
+      clientHeight: { value: 100 },
+      scrollHeight: { value: 600 },
+      scrollTop: { get: () => top, set: value => { top = Math.min(value, 500); } },
+    });
+    let toolScrolls = 0;
+    w.dom.window.HTMLElement.prototype.scrollIntoView = () => { toolScrolls++; };
+    w.replay();
+    assert.equal(top, 500);
+    assert.equal(visible(), false);
+
+    viewport.scrollTop = 200;
+    viewport.dispatchEvent(new w.dom.window.Event('scroll'));
+    assert.equal(visible(), true);
+    w.send({ type: 'toolResult', card: tool({ isError: true }).card });
+    w.replay();
+    assert.equal(toolScrolls, 0);
+    assert.equal(top, 200);
+    assert.equal(visible(), true);
+
+    button.click();
+    assert.equal(top, 500);
+    assert.equal(visible(), false);
+    assert.equal(w.doc.activeElement, viewport);
+
+    viewport.scrollTop = 200;
+    viewport.dispatchEvent(new w.dom.window.Event('scroll'));
+    w.replay(history(), { processSessionKey: 'gateway:b' });
+    assert.equal(top, 500);
+    assert.equal(visible(), false);
+    assert.deepEqual(w.errors, []);
+  } finally { w.dom.window.close(); }
+});
+
 for (const source of ['history', 'live']) {
   test(`screenshots and read images fold with the process and survive expansion (${source})`, () => {
     const w = webview();

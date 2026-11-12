@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createSlashCommands } from "../packages/shared/slashCommands.js";
 import { createI18n } from "../packages/shared/i18n/runtime.js";
 import { createTurnProcessPolicy } from "../packages/shared/turnProcess.js";
+import { bindChatScroll } from "../packages/shared/chatScroll.js";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -61,7 +62,10 @@ if (functionStart < 0 || literalStart < 0 || literalEnd < "</html>`".length) {
   throw new Error("VS Code Webview template was not found");
 }
 const templateLiteral = chatPanel.slice(literalStart, literalEnd);
-const html = Function("nonce", "markdownScript", "createSlashCommands", "createTurnProcessPolicy", "trHtml", "getLocale", "webviewLocaleData", "createI18n", `return ${templateLiteral}`)("audit-nonce", "chatMarkdown.js", createSlashCommands, createTurnProcessPolicy, value => value, () => "zh-CN", () => JSON.stringify({ locale: "zh-CN", dictionaries: {} }), createI18n);
+const render = Function("nonce", "markdownScript", "createSlashCommands", "createTurnProcessPolicy", "bindChatScroll",
+  "trHtml", "getLocale", "webviewLocaleData", "createI18n", `return ${templateLiteral}`);
+const html = render("audit-nonce", "chatMarkdown.js", createSlashCommands, createTurnProcessPolicy, bindChatScroll,
+  value => value, () => "zh-CN", () => JSON.stringify({ locale: "zh-CN", dictionaries: {} }), createI18n);
 const webviewScripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match => match[1]).filter(script => script.trim());
 if (!webviewScripts.length) throw new Error("VS Code Webview script was not found");
 for (const script of webviewScripts) Function(script);

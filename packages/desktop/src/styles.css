@@ -564,6 +564,14 @@ svg {
   scroll-padding-bottom: 180px;
 }
 
+.messages[data-following-output="true"] {
+  overflow-anchor: none;
+}
+
+.message-content {
+  display: flow-root;
+}
+
 .message {
   width: 100%;
   line-height: 1.58;
@@ -2289,6 +2297,38 @@ button.primary:hover,
   right: max(24px, calc((100% - 760px) / 2));
   bottom: 18px;
   z-index: 4;
+}
+
+.chat-scroll-bottom {
+  display: none;
+  position: absolute;
+  inset-inline-start: 50%;
+  bottom: calc(100% + 8px);
+  translate: -50% 0;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .18);
+  cursor: pointer;
+}
+
+.messages[data-following-output="false"] ~ .composer-wrap .chat-scroll-bottom {
+  display: grid;
+}
+
+.chat-scroll-bottom:hover,
+.chat-scroll-bottom:focus-visible {
+  border-color: var(--accent);
+}
+
+.chat-scroll-bottom svg {
+  width: 18px;
+  height: 18px;
 }
 
 .composer-context {

@@ -1,6 +1,7 @@
 import { getLocale } from "./i18n";
 import { t as tr, html as trHtml, localized, applyLanguage, useLocale } from "./i18n";
 import { createSlashCommands, type SlashCommandAction } from "../../shared/slashCommands.js";
+import { bindChatScroll, type ChatScroll } from "../../shared/chatScroll.js";
 import { executeAdditionalDesktopAction, followDesktopLog } from "./desktopSlashCommands";
 import type { SessionLaunchOverrides } from "./gateway";
 import { normalizeVmConfig, vmHostId, manageVirtualMachine } from "./virtualMachine";
@@ -8,6 +9,7 @@ import { permissionPolicyText } from "./permissionPresentation";
 import {
   AlertTriangle,
   Activity,
+  ArrowDown,
   ArrowUpRight,
   Bot,
   Boxes,
@@ -947,7 +949,9 @@ function App() {
   const focusedSessionRef = useRef<FocusedSessionSnapshot | null>(null);
   const approvalShortcutTargetRef = useRef<ReturnType<typeof uniquePendingApproval>>(null);
   const approvalShortcutSentRef = useRef<string | null>(null);
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const messageContentRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<ChatScroll | null>(null);
   const settingsRef = useRef<DesktopSettings | null>(null);
   const documentAgentTransitionTimerRef = useRef<number | null>(null);
   settingsRef.current = settings;
@@ -1075,6 +1079,8 @@ function App() {
   }, [hasPendingApproval, settingsOpen, approvalShortcuts.enabled, approvalShortcuts.approve, approvalShortcuts.deny, approvalShortcuts.always_allow]);
 
   const activeConversationView = activeSessionKey ? conversationViews[activeSessionKey] ?? "chat" : "chat";
+  const visibleChatSession = !settingsOpen && workspaceView === "chat"
+    && activeConversationView === "chat" && activeSession && !activeSession.loading ? activeSessionKey : null;
   const selectedProjectFile = projectFileTabs.files.find(
     (file) => projectFileTabs.activePath !== null
       && projectPathKey(file.path) === projectPathKey(projectFileTabs.activePath),
@@ -2287,9 +2293,15 @@ function App() {
     workspaceView,
   ]);
 
-  useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ block: "end" });
-  }, [activeSession?.items.length, activeSession?.items.at(-1)?.text]);
+  useLayoutEffect(() => {
+    if (!visibleChatSession || !messagesRef.current || !messageContentRef.current) return;
+    const scroll = bindChatScroll(messagesRef.current, messageContentRef.current);
+    chatScrollRef.current = scroll;
+    return () => {
+      scroll.dispose();
+      chatScrollRef.current = null;
+    };
+  }, [visibleChatSession]);
 
   useEffect(() => {
     if (!settingsOpen || connectionModal !== null || projectModal !== null) return;
@@ -4509,66 +4521,77 @@ function App() {
                     </div>
                   ) : activeConversationView === "trajectory" ? (
                     <TrajectoryView items={activeSession.items} now={runClock} />
-                  ) : <div className="messages">
-                    {activeSession.items.length === 0 && (
-                      <div className="conversation-empty">
-                        <Bot />
-                        <h2>{tr("在 ")}{activeProject?.name ?? tr("项目")}{tr(" 中构建什么？")}</h2>
-                      </div>
-                    )}
-                    <ConversationTurns
-                      items={withClientTurnDetails(activeSession.items, activeSession.id, activeSession.busy)}
-                      busy={activeSession.busy} sessionKey={activeSessionKey ?? activeSession.id}
-                      enabled={settings.auto_collapse_process !== false}
-                      showToolCallCount={settings.show_tool_call_count === true}
-                      showDuration={settings.show_turn_duration} durationFormat={settings.turn_duration_format}
-                      renderItem={(item, presentation) => (
-                      <ChatItemView
-                        presentation={presentation}
-                        key={item.id}
-                        item={item}
-                        now={runClock}
-                        showTurnDuration={settings.show_turn_duration}
-                        showFileEditSummary={settings.show_file_edit_summary}
-                        turnDurationFormat={settings.turn_duration_format}
-                        onPermission={resolvePermission}
-                        approvalShortcuts={settings.approval_shortcuts}
-                        onToggleChoice={toggleChoice}
-                        onSubmitChoice={submitChoice}
-                        onPlan={(action) => activeChannel?.planAction(
-                          action,
-                          item.detail && typeof item.detail === "object" ? item.detail as Record<string, unknown> : undefined,
-                        )}
-                        onFork={forkSessionFromMessage}
-                        forkDisabled={activeSession.busy}
-                        onUndoFileEdits={!activeSession.busy && item.id === latestFileEditSummaryId(activeSession.items)
-                          ? undoLatestFileEdits
-                          : undefined}
-                        onOpenFileEdits={(request) => openFileChanges({
-                          summaryId: item.id,
-                          path: request.path,
-                          showAll: request.all,
-                        })}
-                        onCompatibilityRetry={item.kind === "document_job" && item.engine === "precise" && item.status === "failed"
-                          ? () => startDocumentAction("translate", {
-                            locale: item.locale,
-                            translation_concurrency: settings.document_translation_concurrency,
-                            translation_batch_size: settings.document_translation_batch_size,
-                            translation_engine: "legacy",
-                          })
-                          : undefined}
-                      />
-                    )} />
-                    {activeSession.busy && (
-                      <ExecutionStatusBar
-                        startedAt={activeSession.runStartedAt ?? runClock}
-                        currentStep={activeSession.currentStep ?? null}
-                        now={runClock}
-                      />
-                    )}
-                    <div ref={messageEndRef} />
+                  ) : <div className="messages" ref={messagesRef} tabIndex={-1}>
+                    <div className="message-content" ref={messageContentRef}>
+                      {activeSession.items.length === 0 && (
+                        <div className="conversation-empty">
+                          <Bot />
+                          <h2>{tr("在 ")}{activeProject?.name ?? tr("项目")}{tr(" 中构建什么？")}</h2>
+                        </div>
+                      )}
+                      <ConversationTurns
+                        items={withClientTurnDetails(activeSession.items, activeSession.id, activeSession.busy)}
+                        busy={activeSession.busy} sessionKey={activeSessionKey ?? activeSession.id}
+                        enabled={settings.auto_collapse_process !== false}
+                        showToolCallCount={settings.show_tool_call_count === true}
+                        showDuration={settings.show_turn_duration} durationFormat={settings.turn_duration_format}
+                        renderItem={(item, presentation) => (
+                        <ChatItemView
+                          presentation={presentation}
+                          key={item.id}
+                          item={item}
+                          now={runClock}
+                          showTurnDuration={settings.show_turn_duration}
+                          showFileEditSummary={settings.show_file_edit_summary}
+                          turnDurationFormat={settings.turn_duration_format}
+                          onPermission={resolvePermission}
+                          approvalShortcuts={settings.approval_shortcuts}
+                          onToggleChoice={toggleChoice}
+                          onSubmitChoice={submitChoice}
+                          onPlan={(action) => activeChannel?.planAction(
+                            action,
+                            item.detail && typeof item.detail === "object" ? item.detail as Record<string, unknown> : undefined,
+                          )}
+                          onFork={forkSessionFromMessage}
+                          forkDisabled={activeSession.busy}
+                          onUndoFileEdits={!activeSession.busy && item.id === latestFileEditSummaryId(activeSession.items)
+                            ? undoLatestFileEdits
+                            : undefined}
+                          onOpenFileEdits={(request) => openFileChanges({
+                            summaryId: item.id,
+                            path: request.path,
+                            showAll: request.all,
+                          })}
+                          onCompatibilityRetry={item.kind === "document_job" && item.engine === "precise" && item.status === "failed"
+                            ? () => startDocumentAction("translate", {
+                              locale: item.locale,
+                              translation_concurrency: settings.document_translation_concurrency,
+                              translation_batch_size: settings.document_translation_batch_size,
+                              translation_engine: "legacy",
+                            })
+                            : undefined}
+                        />
+                      )} />
+                      {activeSession.busy && (
+                        <ExecutionStatusBar
+                          startedAt={activeSession.runStartedAt ?? runClock}
+                          currentStep={activeSession.currentStep ?? null}
+                          now={runClock}
+                        />
+                      )}
+                    </div>
                   </div>}
                   <div className="composer-wrap">
+                    {visibleChatSession && <button
+                      type="button"
+                      className="chat-scroll-bottom"
+                      title={tr("回到底部")}
+                      aria-label={tr("回到底部")}
+                      onClick={() => {
+                        messagesRef.current?.focus({ preventScroll: true });
+                        chatScrollRef.current?.jumpToBottom();
+                      }}
+                    ><ArrowDown aria-hidden="true" /></button>}
                     <FollowUpQueue
                       key={activeSessionKey}
                       messages={activeSession.pendingFollowUps ?? []}

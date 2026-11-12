@@ -1014,6 +1014,7 @@
   "命令提示": "command prompt",
   "命令结果": "command result",
   "四": "Four",
+  "回到底部": "Scroll to bottom",
   "回复": "reply",
   "回滚会话": "Rollback session",
   "回滚失败：{0}": "Rollback failed: {0}",
