@@ -84,6 +84,14 @@ interface GatewayModelInfo {
   group?: string;
 }
 
+const IMAGE_MEDIA_TYPES = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+]);
+
 function uniqNonEmpty(values: Array<string | null | undefined>): string[] {
   const result: string[] = [];
   const seen = new Set<string>();
@@ -642,6 +650,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "pickFiles":
           void this.pickFilesForChat();
           break;
+        case "attachDroppedResources":
+          if (Array.isArray(msg.uris)) void this.attachDroppedResources(msg.uris);
+          break;
         case "pickIdeReferences":
           void this.pickIdeReferencesForChat();
           break;
@@ -660,7 +671,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (typeof msg.path === "string") {
             const uri = vscode.Uri.file(msg.path);
             if (vscode.workspace.getWorkspaceFolder(uri)) {
-              void this.attachTextFilesForChat([uri]);
+              void this.attachFilesForChat([uri]);
             }
           }
           break;
@@ -2313,13 +2324,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!rawPaths.length) return;
     const images: Array<ImageAttachment & { name: string }> = [];
     const maxBytes = 20 * 1024 * 1024;
-    const imageExts: Record<string, string> = {
-      png: "image/png",
-      jpg: "image/jpeg",
-      jpeg: "image/jpeg",
-      gif: "image/gif",
-      webp: "image/webp",
-    };
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const errors: string[] = [];
     for (const rawPath of rawPaths) {
@@ -2339,7 +2343,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         const base = path.basename(filePath);
         const ext = path.extname(base).slice(1).toLowerCase();
-        const mediaType = imageExts[ext];
+        const mediaType = IMAGE_MEDIA_TYPES.get(ext);
         if (!mediaType) {
           errors.push(tr("{0} 不是支持的图片格式", { 0: trimmed }));
           continue;
@@ -3168,7 +3172,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    await this.attachTextFilesForChat(picked);
+    await this.attachFilesForChat(picked);
   }
 
   private async pickIdeReferencesForChat(): Promise<void> {
@@ -3301,27 +3305,52 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async attachTextFilesForChat(uris: vscode.Uri[]): Promise<void> {
+  private async attachDroppedResources(values: unknown[]): Promise<void> {
+    const uris = new Map<string, vscode.Uri>();
+    for (const value of values) {
+      if (typeof value !== "string") continue;
+      try {
+        const parsed = vscode.Uri.parse(value, true);
+        if (parsed.scheme !== "file" && parsed.scheme !== "vscode-remote") continue;
+        const uri = parsed.scheme === "file"
+          ? vscode.Uri.file(path.normalize(parsed.fsPath))
+          : parsed.with({ path: path.posix.normalize(parsed.path), query: "", fragment: "" });
+        if (vscode.workspace.getWorkspaceFolder(uri)) uris.set(uri.toString(), uri);
+      } catch {
+        // Ignore malformed URI entries without dropping the other files.
+      }
+    }
+    if (uris.size) await this.attachFilesForChat([...uris.values()], true);
+  }
+
+  private async attachFilesForChat(uris: vscode.Uri[], includeImages = false): Promise<void> {
+    const images: Array<ImageAttachment & { name: string }> = [];
     const textSnippets: { name: string; text: string; path: string }[] = [];
     const maxSizeMb = normalizeFileUploadMaxSizeMb(
       vscode.workspace.getConfiguration("crabcode").get<number>("fileUploadMaxSizeMb", 5),
     );
-    const maxBytes = maxSizeMb * 1024 * 1024;
     const maxTextChars = 200_000;
 
     for (const uri of uris) {
       try {
+        const base = path.basename(uri.fsPath) || "file";
+        const ext = path.extname(base).slice(1).toLowerCase();
+        const mediaType = includeImages && IMAGE_MEDIA_TYPES.get(ext);
+        const sizeLimitMb = mediaType ? 20 : maxSizeMb;
         const stat = await vscode.workspace.fs.stat(uri);
         if ((stat.type & vscode.FileType.File) === 0) {
           void vscode.window.showWarningMessage(tr("CrabCode：已跳过非文件\n{0}", { 0: uri.fsPath }));
           continue;
         }
-        if (stat.size > maxBytes) {
-          void vscode.window.showWarningMessage(tr("CrabCode：已跳过过大文件（>{0}MB）\n{1}", { 0: maxSizeMb, 1: uri.fsPath }));
+        if (stat.size > sizeLimitMb * 1024 * 1024) {
+          void vscode.window.showWarningMessage(tr("CrabCode：已跳过过大文件（>{0}MB）\n{1}", { 0: sizeLimitMb, 1: uri.fsPath }));
           continue;
         }
         const buf = await vscode.workspace.fs.readFile(uri);
-        const base = path.basename(uri.fsPath) || "file";
+        if (mediaType) {
+          images.push({ name: base, media_type: mediaType, data: Buffer.from(buf).toString("base64") });
+          continue;
+        }
         const decoder = new TextDecoder("utf-8", { fatal: false });
         let text = decoder.decode(buf);
         if (text.length > maxTextChars) {
@@ -3333,8 +3362,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    if (textSnippets.length > 0) {
-      this.postMessage({ type: "addAttachments", images: [], textSnippets });
+    if (images.length || textSnippets.length) {
+      this.postMessage({ type: "addAttachments", images, textSnippets });
     }
   }
 
@@ -11021,10 +11050,37 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // ── Drag & drop on composer ─────────────────────────────────
 
+    const RESOURCE_URI_LIST = 'application/vnd.code.uri-list';
+    const RESOURCE_URLS = 'resourceurls';
+    const URI_LIST = 'text/uri-list';
+
+    function hasDroppedFiles(transfer) {
+      return transfer && transfer.types.some(type =>
+        ['files', RESOURCE_URI_LIST, RESOURCE_URLS, URI_LIST].includes(type.toLowerCase())
+      );
+    }
+
+    function droppedResourceUris(transfer) {
+      const isFileUri = value => typeof value === 'string' && /^(file|vscode-remote):/i.test(value);
+      const parseUriList = value => value.split(/\\r?\\n/).map(line => line.trim()).filter(isFileUri);
+      const internalUris = parseUriList(transfer.getData(RESOURCE_URI_LIST));
+      if (internalUris.length) return internalUris;
+      try {
+        const urls = JSON.parse(transfer.getData(RESOURCE_URLS));
+        const resourceUris = Array.isArray(urls) ? urls.filter(isFileUri) : [];
+        if (resourceUris.length) return resourceUris;
+      } catch {
+        // The standard URI list can still be available.
+      }
+      return parseUriList(transfer.getData(URI_LIST));
+    }
+
     ;['dragenter', 'dragover'].forEach(function(ev) {
       composerWrap.addEventListener(ev, function(e) {
+        if (!hasDroppedFiles(e.dataTransfer)) return;
         e.preventDefault();
         e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
         composerWrap.classList.add('drag-hover');
       });
     });
@@ -11034,11 +11090,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!rel || !composerWrap.contains(rel)) composerWrap.classList.remove('drag-hover');
     });
     composerWrap.addEventListener('drop', function(e) {
+      composerWrap.classList.remove('drag-hover');
+      const transfer = e.dataTransfer;
+      if (!hasDroppedFiles(transfer)) return;
       e.preventDefault();
       e.stopPropagation();
-      composerWrap.classList.remove('drag-hover');
-      const files = e.dataTransfer && e.dataTransfer.files;
-      if (files && files.length) Array.from(files).forEach(addDroppedOrPickedFile);
+      const files = Array.from(transfer.files || []);
+      if (!files.length) {
+        for (const item of transfer.items || []) {
+          const file = item.kind === 'file' && item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length) files.forEach(addDroppedOrPickedFile);
+      else {
+        const uris = droppedResourceUris(transfer);
+        if (uris.length) vscode.postMessage({ type: 'attachDroppedResources', uris });
+      }
     });
 
     // ── Paste: images + files ───────────────────────────────────

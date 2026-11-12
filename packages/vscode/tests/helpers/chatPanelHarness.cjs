@@ -1,6 +1,7 @@
 const { buildSync } = require('esbuild');
 const vm = require('node:vm');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const markdownSource = buildSync({
   entryPoints: [path.join(__dirname, '../../src/chat/markdown.ts')],
@@ -14,7 +15,11 @@ function loadPanel(fetch, initialWorkspaceState = []) {
   const config = { serverUrl: 'ws://localhost:4096/ws' };
   const workspaceRoot = path.join(path.parse(process.cwd()).root, 'workspace');
   const workspacePath = (...segments) => path.join(workspaceRoot, ...segments);
-  const uriFor = fsPath => ({ fsPath: path.normalize(fsPath), scheme: 'file' });
+  const uriFor = fsPath => ({
+    fsPath: path.normalize(fsPath),
+    scheme: 'file',
+    toString: () => pathToFileURL(fsPath).href,
+  });
   const workspaceFolder = { name: 'workspace', uri: uriFor(workspaceRoot) };
   const belongsToWorkspace = fsPath => {
     const relative = path.relative(workspaceRoot, path.normalize(fsPath));
@@ -58,7 +63,7 @@ function loadPanel(fetch, initialWorkspaceState = []) {
       },
     },
   };
-  vm.runInNewContext(source, { module, exports: module.exports, require: name => name === 'vscode' ? vscode : require(name), URL, AbortSignal, fetch, setTimeout, clearTimeout, console, process, Buffer });
+  vm.runInNewContext(source, { module, exports: module.exports, require: name => name === 'vscode' ? vscode : require(name), URL, AbortSignal, TextDecoder, fetch, setTimeout, clearTimeout, console, process, Buffer });
   const listeners = {};
   const sent = [];
   const connection = { sessionId: 'a', connected: true, on: (name, fn) => { listeners[name] = fn; }, ensureSession() {}, send: (text, options) => { sent.push({ text, ...options }); return 'operation'; } };

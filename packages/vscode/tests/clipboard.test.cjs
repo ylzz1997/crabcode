@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 const { test } = require('node:test');
 const { JSDOM, VirtualConsole } = require('jsdom');
 const { loadPanel } = require('./helpers/chatPanelHarness.cjs');
@@ -38,13 +39,19 @@ function webview(t) {
     input.dispatchEvent(event);
     return event;
   }
+  function drag(type, transfer) {
+    const event = new dom.window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: transfer });
+    input.dispatchEvent(event);
+    return event;
+  }
   function select(node) {
     const range = doc.createRange();
     range.selectNodeContents(node);
     dom.window.getSelection().removeAllRanges();
     dom.window.getSelection().addRange(range);
   }
-  return { window: dom.window, doc, input, reads, sent, paste, select };
+  return { window: dom.window, doc, input, reads, sent, paste, drag, select };
 }
 
 for (const nullItem of [false, true]) {
@@ -129,4 +136,62 @@ test('paste does not modify a selection outside the composer or crossing its bou
 
   assert.equal(view.input.textContent, 'keep this draft');
   assert.equal(outside.textContent, 'keep this message');
+});
+
+test('dropping system files attaches the image and text without changing the draft', async t => {
+  const view = webview(t);
+  view.input.textContent = 'draft';
+  const files = [
+    new view.window.File(['image'], 'drop.png', { type: 'image/png' }),
+    new view.window.File(['notes'], 'drop.txt', { type: 'text/plain' }),
+  ];
+  const transfer = { types: ['Files'], files };
+  const composer = view.doc.getElementById('composer-wrap');
+
+  assert.equal(view.drag('dragover', transfer).defaultPrevented, true);
+  assert.equal(composer.classList.contains('drag-hover'), true);
+  assert.equal(view.drag('drop', transfer).defaultPrevented, true);
+  await Promise.all(view.reads);
+  assert.equal(composer.classList.contains('drag-hover'), false);
+  assert.equal(view.doc.querySelectorAll('.attachment-thumb').length, 1);
+  assert.equal(view.doc.querySelectorAll('.text-file-chip').length, 1);
+  assert.equal(view.input.textContent, 'draft');
+});
+
+test('workspace URI drops attach files through the extension host', async t => {
+  const view = webview(t);
+  const host = loadPanel();
+  const textPath = host.workspacePath('drop notes.txt');
+  const imagePath = host.workspacePath('drop.png');
+  const outsideUri = pathToFileURL(host.workspacePath('..', 'outside.txt')).href;
+  const uris = [pathToFileURL(textPath).href, pathToFileURL(imagePath).href, outsideUri];
+  const uriType = 'application/vnd.code.uri-list';
+  view.drag('drop', {
+    types: [uriType, 'text/uri-list'],
+    files: [],
+    getData: type => type === uriType ? uris.join('\r\n') : uris[0],
+  });
+  const request = view.sent.find(message => message.type === 'attachDroppedResources');
+  assert.deepEqual(Array.from(request.uris), uris);
+
+  host.vscode.Uri.parse = value => host.vscode.Uri.file(fileURLToPath(value));
+  const reads = [];
+  host.vscode.workspace.fs.readFile = async uri => {
+    reads.push(uri.fsPath);
+    return Buffer.from(uri.fsPath === textPath ? 'notes' : 'image');
+  };
+  let receiveMessage;
+  host.panel.resolveWebviewView({
+    visible: true,
+    webview: { onDidReceiveMessage: listener => { receiveMessage = listener; } },
+    onDidChangeVisibility: () => ({ dispose() {} }),
+  });
+  receiveMessage(request);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(reads, [textPath, imagePath]);
+  const message = host.messages.find(message => message.type === 'addAttachments');
+  assert.equal(message.textSnippets[0].text, 'notes');
+  assert.equal(message.images[0].media_type, 'image/png');
+  assert.equal(message.images[0].data, Buffer.from('image').toString('base64'));
 });

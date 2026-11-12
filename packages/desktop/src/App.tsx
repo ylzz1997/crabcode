@@ -881,6 +881,17 @@ function App() {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [pendingFolders, setPendingFolders] = useState<string[]>([]);
   const [pendingDocumentReferences, setPendingDocumentReferences] = useState<DocumentReference[]>([]);
+  const [composerDragOver, setComposerDragOver] = useState(false);
+  useEffect(() => {
+    // The webview handles drops once Tauri's native drag handler is disabled.
+    // A drop outside an attachment target must not navigate away from the app.
+    const preventFileNavigation = (event: DragEvent) => {
+      if (event.target instanceof HTMLInputElement && event.target.type === "file") return;
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+    };
+    window.addEventListener("drop", preventFileNavigation);
+    return () => window.removeEventListener("drop", preventFileNavigation);
+  }, []);
   const restoredFollowUpRef = useRef("");
   const [selectionTranslationEvents, setSelectionTranslationEvents] = useState<Record<string, GatewayEvent | null>>({});
   const [projectModal, setProjectModal] = useState<ProjectPreset | "new" | null>(null);
@@ -2487,31 +2498,31 @@ function App() {
   };
 
   const addImages = async (files: File[]) => {
-    try {
-      const images: PendingImage[] = [];
-      for (const file of files) {
-        if (file.size > 20 * 1024 * 1024) {
-          setGlobalError(tr("{0} 超过 20MB", { 0: file.name }));
-          continue;
-        }
-        images.push(await readImage(file));
+    const images: PendingImage[] = [];
+    for (const file of files) {
+      if (file.size > 20 * 1024 * 1024) {
+        setGlobalError(tr("{0} 超过 20MB", { 0: file.name }));
+        continue;
       }
-      if (images.length > 0) setPendingImages((current) => [...current, ...images]);
-    } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : String(error));
+      try {
+        images.push(await readImage(file));
+      } catch (error) {
+        setGlobalError(error instanceof Error ? error.message : String(error));
+      }
     }
+    if (images.length > 0) setPendingImages((current) => [...current, ...images]);
   };
 
   const addFiles = async (files: File[]) => {
-    try {
-      const attachments: PendingFile[] = [];
-      const maxSizeMb = settings?.file_upload_max_size_mb ?? 5;
-      const maxBytes = maxSizeMb * 1024 * 1024;
-      for (const file of files) {
-        if (file.size > maxBytes) {
-          setGlobalError(tr("{0} 超过 {1}MB", { 0: file.name, 1: maxSizeMb }));
-          continue;
-        }
+    const attachments: PendingFile[] = [];
+    const maxSizeMb = settings?.file_upload_max_size_mb ?? 5;
+    const maxBytes = maxSizeMb * 1024 * 1024;
+    for (const file of files) {
+      if (file.size > maxBytes) {
+        setGlobalError(tr("{0} 超过 {1}MB", { 0: file.name, 1: maxSizeMb }));
+        continue;
+      }
+      try {
         attachments.push({
           id: randomUuid(),
           name: file.name,
@@ -2521,10 +2532,23 @@ function App() {
           size: file.size,
           text: await file.text(),
         });
+      } catch {
+        setGlobalError(tr("CrabCode：无法读取文件\n{0}", { 0: file.name }));
       }
-      if (attachments.length > 0) setPendingFiles((current) => [...current, ...attachments]);
-    } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : String(error));
+    }
+    if (attachments.length > 0) setPendingFiles((current) => [...current, ...attachments]);
+  };
+
+  const addDroppedFiles = (files: File[]) => {
+    const images: File[] = [];
+    const textFiles: File[] = [];
+    for (const file of files) {
+      (file.type.startsWith("image/") ? images : textFiles).push(file);
+    }
+    if (images.length) void addImages(images);
+    if (textFiles.length) {
+      if (settings?.file_upload_mode === "path") setReferencePathModal("file");
+      else void addFiles(textFiles);
     }
   };
 
@@ -4566,7 +4590,25 @@ function App() {
                         </span>
                       )}
                     </div>
-                    <div className={`composer-box ${activeSession.status?.ultra_mode ? "ultra-mode" : ""}`}>
+                    <div
+                      className={`composer-box${activeSession.status?.ultra_mode ? " ultra-mode" : ""}${composerDragOver ? " drag-hover" : ""}`}
+                      onDragOver={(event) => {
+                        if (!event.dataTransfer.types.includes("Files")) return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "copy";
+                        setComposerDragOver(true);
+                      }}
+                      onDragLeave={(event) => {
+                        const next = event.relatedTarget;
+                        if (!(next instanceof Node) || !event.currentTarget.contains(next)) setComposerDragOver(false);
+                      }}
+                      onDrop={(event) => {
+                        setComposerDragOver(false);
+                        if (!event.dataTransfer.types.includes("Files")) return;
+                        event.preventDefault();
+                        addDroppedFiles(Array.from(event.dataTransfer.files));
+                      }}
+                    >
                       {(pendingImages.length > 0 || pendingFiles.length > 0 || pendingFolders.length > 0 || pendingDocumentReferences.length > 0) && (
                         <div className="attachment-strip">
                           {pendingImages.map((image) => (

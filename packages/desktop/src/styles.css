@@ -10317,6 +10317,11 @@ html[data-theme="light"] .model-detail-field > small.default {
   animation: ultra-border-awaken 900ms ease-out both;
 }
 
+.composer-box.drag-hover {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
 .composer-box.ultra-mode::after {
   content: "";
   position: absolute;
