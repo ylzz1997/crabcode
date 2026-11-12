@@ -4526,7 +4526,7 @@ function App() {
                       {activeSession.items.length === 0 && (
                         <div className="conversation-empty">
                           <Bot />
-                          <h2>{tr("在 ")}{activeProject?.name ?? tr("项目")}{tr(" 中构建什么？")}</h2>
+                          <h2>{tr("在 {0} 中构建什么？", { 0: activeProject?.name ?? tr("项目") })}</h2>
                         </div>
                       )}
                       <ConversationTurns
@@ -6179,7 +6179,7 @@ export function SessionDetailModal({
 
         <dl className="session-detail-list">
           <div>
-            <dt>Session ID</dt>
+            <dt>{tr("会话 ID")}</dt>
             <dd className="session-detail-copy-value">
               <code title={info.session_id}>{info.session_id}</code>
               <CopyButton text={info.session_id} label={tr("复制 Session ID")} className="session-detail-copy" />

@@ -140,6 +140,13 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
           this.inlayHintEmitter.fire();
         }
       }),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("crabcode.language")) {
+          this.refreshDecorations();
+          this.codeLensEmitter.fire();
+          this.inlayHintEmitter.fire();
+        }
+      }),
       vscode.commands.registerCommand("crabcode.pendingEdits.undoFile", (changeId: string) => {
         void this.undoFile(changeId);
       }),
@@ -233,31 +240,31 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     const isNativeReview = document.uri.scheme === VIRTUAL_DIFF_SCHEME;
     const lenses = [
       new vscode.CodeLens(top, {
-        title: "‹ File",
+        title: "‹ " + tr("上一个文件"),
         command: canMoveFiles ? "crabcode.pendingEdits.previousFile" : "crabcode.pendingEdits.noop",
         arguments: [change.id],
       }),
       new vscode.CodeLens(top, {
-        title: `File ${fileIndex + 1} of ${Math.max(1, changes.length)}`,
+        title: tr("文件 {0}/{1}", { 0: fileIndex + 1, 1: Math.max(1, changes.length) }),
         command: "crabcode.pendingEdits.noop",
       }),
       new vscode.CodeLens(top, {
-        title: "File ›",
+        title: tr("下一个文件") + " ›",
         command: canMoveFiles ? "crabcode.pendingEdits.nextFile" : "crabcode.pendingEdits.noop",
         arguments: [change.id],
       }),
       new vscode.CodeLens(top, {
-        title: "Undo File",
+        title: tr("撤销文件更改"),
         command: "crabcode.pendingEdits.undoFile",
         arguments: [change.id],
       }),
       new vscode.CodeLens(top, {
-        title: "Keep File",
+        title: tr("保留文件更改"),
         command: "crabcode.pendingEdits.keepFile",
         arguments: [change.id],
       }),
       new vscode.CodeLens(top, {
-        title: isNativeReview ? "Open File" : "Open Diff",
+        title: isNativeReview ? tr("打开文件") : tr("查看变更"),
         command: isNativeReview ? "crabcode.pendingEdits.openFile" : "crabcode.pendingEdits.reviewFile",
         arguments: [change.id],
       }),
@@ -269,26 +276,26 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       const hasManyHunks = change.hunks.length > 1;
       lenses.push(
         new vscode.CodeLens(range, {
-          title: "‹ Block",
+          title: "‹ " + tr("上一处改动"),
           command: hasManyHunks ? "crabcode.pendingEdits.previousHunk" : "crabcode.pendingEdits.noop",
           arguments: [change.id, hunk.id],
         }),
         new vscode.CodeLens(range, {
-          title: `Block ${index + 1} of ${change.hunks.length}`,
+          title: tr("改动 {0}/{1}", { 0: index + 1, 1: change.hunks.length }),
           command: "crabcode.pendingEdits.noop",
         }),
         new vscode.CodeLens(range, {
-          title: "Block ›",
+          title: tr("下一处改动") + " ›",
           command: hasManyHunks ? "crabcode.pendingEdits.nextHunk" : "crabcode.pendingEdits.noop",
           arguments: [change.id, hunk.id],
         }),
         new vscode.CodeLens(range, {
-          title: "Undo Block",
+          title: tr("撤销此处改动"),
           command: "crabcode.pendingEdits.undoHunk",
           arguments: [change.id, hunk.id],
         }),
         new vscode.CodeLens(range, {
-          title: "Keep Block",
+          title: tr("保留此处改动"),
           command: "crabcode.pendingEdits.keepHunk",
           arguments: [change.id, hunk.id],
         }),
@@ -334,19 +341,20 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     const fileIndex = Math.max(0, changes.findIndex((candidate) => candidate.id === change.id));
     const canMoveFiles = changes.length > 1;
     const isNativeReview = document.uri.scheme === VIRTUAL_DIFF_SCHEME;
+    const openLabel = isNativeReview ? tr("打开文件") : tr("查看变更");
     const parts = [
-      textPart(` CrabCode File ${fileIndex + 1}/${Math.max(1, changes.length)} `),
-      commandPart("‹", "Previous file", "crabcode.pendingEdits.previousFile", [change.id], canMoveFiles),
+      textPart(" CrabCode " + tr("文件 {0}/{1}", { 0: fileIndex + 1, 1: Math.max(1, changes.length) }) + " "),
+      commandPart("‹", tr("上一个文件"), "crabcode.pendingEdits.previousFile", [change.id], canMoveFiles),
       textPart(" "),
-      commandPart("›", "Next file", "crabcode.pendingEdits.nextFile", [change.id], canMoveFiles),
+      commandPart("›", tr("下一个文件"), "crabcode.pendingEdits.nextFile", [change.id], canMoveFiles),
       textPart(" | "),
-      commandPart("Undo File", `Undo ${change.shortPath}`, "crabcode.pendingEdits.undoFile", [change.id]),
+      commandPart(tr("撤销文件更改"), tr("撤销 {0} 的更改", { 0: change.shortPath }), "crabcode.pendingEdits.undoFile", [change.id]),
       textPart(" "),
-      commandPart("Keep File", `Keep ${change.shortPath}`, "crabcode.pendingEdits.keepFile", [change.id]),
+      commandPart(tr("保留文件更改"), tr("保留 {0} 的更改", { 0: change.shortPath }), "crabcode.pendingEdits.keepFile", [change.id]),
       textPart(" "),
       commandPart(
-        isNativeReview ? "Open File" : "Open Diff",
-        isNativeReview ? "Open changed file" : "Open VS Code diff",
+        openLabel,
+        openLabel,
         isNativeReview ? "crabcode.pendingEdits.openFile" : "crabcode.pendingEdits.reviewFile",
         [change.id],
       ),
@@ -364,15 +372,17 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
   ): vscode.InlayHint {
     const range = rangeForHunk(document, hunk);
     const hasManyHunks = change.hunks.length > 1;
+    const undoLabel = tr("撤销此处改动");
+    const keepLabel = tr("保留此处改动");
     const parts = [
-      textPart(` Block ${index + 1}/${change.hunks.length} `),
-      commandPart("‹", "Previous block", "crabcode.pendingEdits.previousHunk", [change.id, hunk.id], hasManyHunks),
+      textPart(" " + tr("改动 {0}/{1}", { 0: index + 1, 1: change.hunks.length }) + " "),
+      commandPart("‹", tr("上一处改动"), "crabcode.pendingEdits.previousHunk", [change.id, hunk.id], hasManyHunks),
       textPart(" "),
-      commandPart("›", "Next block", "crabcode.pendingEdits.nextHunk", [change.id, hunk.id], hasManyHunks),
+      commandPart("›", tr("下一处改动"), "crabcode.pendingEdits.nextHunk", [change.id, hunk.id], hasManyHunks),
       textPart(" | "),
-      commandPart("Undo Block", "Undo this block", "crabcode.pendingEdits.undoHunk", [change.id, hunk.id]),
+      commandPart(undoLabel, undoLabel, "crabcode.pendingEdits.undoHunk", [change.id, hunk.id]),
       textPart(" "),
-      commandPart("Keep Block", "Keep this block", "crabcode.pendingEdits.keepHunk", [change.id, hunk.id]),
+      commandPart(keepLabel, keepLabel, "crabcode.pendingEdits.keepHunk", [change.id, hunk.id]),
     ];
     const hint = new vscode.InlayHint(range.start, parts, vscode.InlayHintKind.Parameter);
     hint.paddingRight = true;
@@ -402,25 +412,27 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
         "crabcode.pendingEdits.keepHunk",
       ],
     };
-    md.appendMarkdown(`**CrabCode pending edit**  \n`);
-    md.appendMarkdown(`${escapeMarkdown(change.shortPath)} · File ${fileIndex + 1}/${Math.max(1, changes.length)} · Block ${index + 1}/${change.hunks.length}  \n\n`);
+    const filePosition = tr("文件 {0}/{1}", { 0: fileIndex + 1, 1: Math.max(1, changes.length) });
+    const hunkPosition = tr("改动 {0}/{1}", { 0: index + 1, 1: change.hunks.length });
+    md.appendMarkdown(`**CrabCode · ${escapeMarkdown(tr("文件改动"))}**  \n`);
+    md.appendMarkdown(`${escapeMarkdown(change.shortPath)} · ${escapeMarkdown(filePosition)} · ${escapeMarkdown(hunkPosition)}  \n\n`);
     md.appendMarkdown(
       [
-        `[Undo Block](${commandUri("crabcode.pendingEdits.undoHunk", [change.id, hunk.id])})`,
-        `[Keep Block](${commandUri("crabcode.pendingEdits.keepHunk", [change.id, hunk.id])})`,
-        `[‹ Block](${commandUri("crabcode.pendingEdits.previousHunk", [change.id, hunk.id])})`,
-        `[Block ›](${commandUri("crabcode.pendingEdits.nextHunk", [change.id, hunk.id])})`,
+        `[${escapeMarkdown(tr("撤销此处改动"))}](${commandUri("crabcode.pendingEdits.undoHunk", [change.id, hunk.id])})`,
+        `[${escapeMarkdown(tr("保留此处改动"))}](${commandUri("crabcode.pendingEdits.keepHunk", [change.id, hunk.id])})`,
+        `[‹ ${escapeMarkdown(tr("上一处改动"))}](${commandUri("crabcode.pendingEdits.previousHunk", [change.id, hunk.id])})`,
+        `[${escapeMarkdown(tr("下一处改动"))} ›](${commandUri("crabcode.pendingEdits.nextHunk", [change.id, hunk.id])})`,
       ].join(" · "),
     );
     md.appendMarkdown("\n\n");
     md.appendMarkdown(
       [
-        `[Undo File](${commandUri("crabcode.pendingEdits.undoFile", [change.id])})`,
-        `[Keep File](${commandUri("crabcode.pendingEdits.keepFile", [change.id])})`,
-        `[Open Diff](${commandUri("crabcode.pendingEdits.reviewFile", [change.id])})`,
-        `[Open File](${commandUri("crabcode.pendingEdits.openFile", [change.id])})`,
-        `[‹ File](${commandUri("crabcode.pendingEdits.previousFile", [change.id])})`,
-        `[File ›](${commandUri("crabcode.pendingEdits.nextFile", [change.id])})`,
+        `[${escapeMarkdown(tr("撤销文件更改"))}](${commandUri("crabcode.pendingEdits.undoFile", [change.id])})`,
+        `[${escapeMarkdown(tr("保留文件更改"))}](${commandUri("crabcode.pendingEdits.keepFile", [change.id])})`,
+        `[${escapeMarkdown(tr("查看变更"))}](${commandUri("crabcode.pendingEdits.reviewFile", [change.id])})`,
+        `[${escapeMarkdown(tr("打开文件"))}](${commandUri("crabcode.pendingEdits.openFile", [change.id])})`,
+        `[‹ ${escapeMarkdown(tr("上一个文件"))}](${commandUri("crabcode.pendingEdits.previousFile", [change.id])})`,
+        `[${escapeMarkdown(tr("下一个文件"))} ›](${commandUri("crabcode.pendingEdits.nextFile", [change.id])})`,
       ].join(" · "),
     );
     return md;
@@ -594,7 +606,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
     const picked = await vscode.window.showQuickPick(
       changes.map((change) => ({
         label: change.shortPath,
-        description: change.action === "create" ? "new file" : change.action === "delete" ? "deleted file" : `${formatStats(change.stats)}`,
+        description: change.action === "create" ? tr("已创建") : change.action === "delete" ? tr("已删除") : formatStats(change.stats),
         changeId: change.id,
       })),
       { title: tr("CrabCode：选择要查看的文件 diff") },
@@ -678,7 +690,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
       "vscode.diff",
       beforeUri,
       afterUri,
-      `CrabCode Review: ${change.shortPath}`,
+      tr("CrabCode 文件审查：{0}", { 0: change.shortPath }),
       { preview: true },
     );
 
@@ -967,7 +979,7 @@ export class PendingEditManager implements vscode.Disposable, vscode.CodeLensPro
             });
             const MAX_PREVIEW = 3;
             const preview = hunk.oldLines.slice(0, MAX_PREVIEW).map((l) => l.trim() || "·").join("  │  ");
-            const extra = hunk.oldLines.length > MAX_PREVIEW ? `  [+${hunk.oldLines.length - MAX_PREVIEW} more]` : "";
+            const extra = hunk.oldLines.length > MAX_PREVIEW ? "  [" + tr("另有 {0} 行", { 0: hunk.oldLines.length - MAX_PREVIEW }) + "]" : "";
             deletedOptions.push({
               range: new vscode.Range(line, 0, line, 0),
               renderOptions: {
@@ -1935,12 +1947,12 @@ function formatStats(stats: DiffStats): string {
   if (stats.removed) {
     parts.push(`-${stats.removed}`);
   }
-  return parts.join(" ") || "no line changes";
+  return parts.join(" ") || tr("没有行变更");
 }
 
 function buildDeletedLinesHover(hunk: PendingHunk): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
-  md.appendMarkdown(`**CrabCode: ${hunk.oldLineCount} line(s) deleted here**\n\n`);
+  md.appendMarkdown(`**${escapeMarkdown(tr("CrabCode：此处已删除 {0} 行", { 0: hunk.oldLineCount }))}**\n\n`);
   md.appendCodeblock(hunk.oldLines.join("\n"), "");
   return md;
 }

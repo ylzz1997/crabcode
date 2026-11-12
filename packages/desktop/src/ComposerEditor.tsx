@@ -655,7 +655,7 @@ export function ComposerEditor({
                 <strong>{command.name}</strong>
                 <small>{command.description}</small>
               </span>
-              {command.kind === "skill" && <span className="composer-command-badge">skill</span>}
+              {command.kind === "skill" && <span className="composer-command-badge">{tr("技能")}</span>}
             </button>
           ))}
         </div>

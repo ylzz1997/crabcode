@@ -50,7 +50,7 @@ export function TurnDetailsButton({ details }: { details: TurnDetails }) {
           <header><h2>{tr("本轮详情")}</h2><button className="icon-button" title={tr("关闭")} aria-label={tr("关闭本轮详情")} onClick={() => setOpen(false)}><X /></button></header>
           <div className="modal-body">
             <dl className="session-detail-list">
-              <div><dt>Session ID</dt><dd className="session-detail-copy-value"><code title={details.session_id}>{details.session_id}</code><CopyButton text={details.session_id} label={tr("复制 Session ID")} className="session-detail-copy" /></dd></div>
+              <div><dt>{tr("会话 ID")}</dt><dd className="session-detail-copy-value"><code title={details.session_id}>{details.session_id}</code><CopyButton text={details.session_id} label={tr("复制 Session ID")} className="session-detail-copy" /></dd></div>
               {turnDetailRows(details).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
             </dl>
             <p className="turn-details-note">{tr("次数统计本轮主会话；连续思考内容计为一次。")}{details.source === "history" && tr("此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。")}</p>

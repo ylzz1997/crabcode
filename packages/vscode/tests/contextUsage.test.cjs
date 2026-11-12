@@ -22,7 +22,7 @@ for (const source of ["server", "calibrated", "estimated", undefined]) {
     });
     assert.equal(result.usedTokens, 25000);
     assert.equal(result.usedPercent, 25);
-    assert.equal(result.details.join(" ").includes("Local estimate"), !source || source === "estimated");
+    assert.equal(result.details.join(" ").includes("本地估算"), !source || source === "estimated");
     assert.ok(!result.details.join(" ").includes("计数来源"));
   });
 }

@@ -191,7 +191,7 @@ interface ContextUsageStatus {
 }
 
 function contextEstimateNote(source?: string): string {
-  return !source || source === "estimated" ? " (Local estimate: server-side count not yet available)" : "";
+  return !source || source === "estimated" ? tr("（本地估算，暂未获得服务端计数）") : "";
 }
 
 function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStatus | null {
@@ -199,19 +199,21 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
   const window = Math.max(0, Math.trunc(payload.context_window_tokens ?? 0));
   if (!used && !window) return null;
   if (!window) {
-    const cacheDetail = buildCacheUsageDetail(payload);
     return {
       usedTokens: used,
       windowTokens: 0,
       remainingTokens: 0,
       usedPercent: 0,
       remainingPercent: 0,
-      cacheDetail: cacheDetail ?? undefined,
-      details: [
-        tr("背景信息窗口{0}：", { 0: contextEstimateNote(payload.context_token_source) }),
-        tr("已用 {0} 标记", { 0: formatTokenCount(used) }),
-        cacheDetail ? tr("总量未知 · {0}", { 0: cacheDetail }) : tr("总量未知"),
-      ],
+      get cacheDetail() { return buildCacheUsageDetail(payload) ?? undefined; },
+      get details() {
+        const cacheDetail = this.cacheDetail;
+        return [
+          tr("背景信息窗口{0}：", { 0: contextEstimateNote(payload.context_token_source) }),
+          tr("已用 {0} 标记", { 0: formatTokenCount(used) }),
+          cacheDetail ? tr("总量未知 · {0}", { 0: cacheDetail }) : tr("总量未知"),
+        ];
+      },
     };
   }
 
@@ -224,20 +226,22 @@ function buildContextUsageStatus(payload: TurnCompletePayload): ContextUsageStat
     0,
     Math.trunc(payload.context_remaining_tokens ?? window - used),
   );
-  const tokenDetail = tr("已用 {0} 标记，共 {1}", { 0: formatTokenCount(used), 1: formatTokenCount(window) });
-  const cacheDetail = buildCacheUsageDetail(payload);
   return {
     usedTokens: used,
     windowTokens: window,
     remainingTokens,
     usedPercent,
     remainingPercent,
-    cacheDetail: cacheDetail ?? undefined,
-    details: [
-      tr("背景信息窗口{0}：", { 0: contextEstimateNote(payload.context_token_source) }),
-      tr("{0} 已用（剩余 {1}）", { 0: formatPercent(usedPercent), 1: formatPercent(remainingPercent) }),
-      cacheDetail ? `${tokenDetail} · ${cacheDetail}` : tokenDetail,
-    ],
+    get cacheDetail() { return buildCacheUsageDetail(payload) ?? undefined; },
+    get details() {
+      const tokenDetail = tr("已用 {0} 标记，共 {1}", { 0: formatTokenCount(used), 1: formatTokenCount(window) });
+      const cacheDetail = this.cacheDetail;
+      return [
+        tr("背景信息窗口{0}：", { 0: contextEstimateNote(payload.context_token_source) }),
+        tr("{0} 已用（剩余 {1}）", { 0: formatPercent(usedPercent), 1: formatPercent(remainingPercent) }),
+        cacheDetail ? `${tokenDetail} · ${cacheDetail}` : tokenDetail,
+      ];
+    },
   };
 }
 
@@ -1180,11 +1184,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         remainingTokens,
         usedPercent,
         remainingPercent,
-        details: [
-          tr("背景信息窗口{0}：", { 0: contextEstimateNote(data.context_token_source) }),
-          tr("已用 {0} / {1} 标记", { 0: formatTokenCount(used), 1: formatTokenCount(window) }),
-          tr("剩余 {0}%", { 0: remainingPercent.toFixed(1) }),
-        ],
+        get details() {
+          return [
+            tr("背景信息窗口{0}：", { 0: contextEstimateNote(data.context_token_source) }),
+            tr("已用 {0} / {1} 标记", { 0: formatTokenCount(used), 1: formatTokenCount(window) }),
+            tr("剩余 {0}%", { 0: remainingPercent.toFixed(1) }),
+          ];
+        },
       };
       state.contextUsage = usage;
       this.postMessage({ type: "contextUsage", usage });
@@ -4758,7 +4764,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src data:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CrabCode Chat</title>
+  <title>CrabCode 聊天</title>
   <style nonce="${nonce}">
     :root {
       --font: var(--vscode-font-family);
@@ -4828,7 +4834,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       min-width: 0;
     }
     #message-content:empty::before {
-      content: '开始和 CrabCode 聊天吧';
+      content: attr(data-placeholder);
       display: block;
       margin: auto;
       padding: 16px 14px;
@@ -7455,7 +7461,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       </button>
     </div>
   </div>
-  <div id="messages" tabindex="-1"><div id="message-content"></div></div>
+  <div id="messages" tabindex="-1"><div id="message-content" data-placeholder="开始和 CrabCode 聊天吧"></div></div>
   <div id="busy-indicator">
     <span class="busy-dots"><span></span><span></span><span></span></span>
     <span class="busy-label">CrabCode 正在处理</span>
@@ -8473,7 +8479,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       ];
       const overlay = document.createElement('div');
       overlay.className = 'turn-details-overlay';
-      overlay.innerHTML = trHtml("<section class=\\"turn-details-dialog\\" role=\\"dialog\\" aria-modal=\\"true\\" aria-label=\\"本轮详情\\" tabindex=\\"-1\\"><header><h2>本轮详情</h2><button class=\\"turn-details-close\\" type=\\"button\\" aria-label=\\"关闭本轮详情\\">×</button></header><dl><div><dt>Session ID</dt><dd><code>") + escapeHtml(details.session_id || '') + '</code>' + copyButtonHtml(details.session_id, tr("复制 Session ID")) + '</dd></div>' + rows.map(row => '<div><dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd></div>').join('') + trHtml("</dl><p>次数统计本轮主会话；连续思考内容计为一次。") + (details.source === 'history' ? tr("此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。") : '') + '</p></section>';
+      overlay.innerHTML = trHtml("<section class=\\"turn-details-dialog\\" role=\\"dialog\\" aria-modal=\\"true\\" aria-label=\\"本轮详情\\" tabindex=\\"-1\\"><header><h2>本轮详情</h2><button class=\\"turn-details-close\\" type=\\"button\\" aria-label=\\"关闭本轮详情\\">×</button></header><dl><div><dt>会话 ID</dt><dd><code>") + escapeHtml(details.session_id || '') + '</code>' + copyButtonHtml(details.session_id, tr("复制 Session ID")) + '</dd></div>' + rows.map(row => '<div><dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd></div>').join('') + trHtml("</dl><p>次数统计本轮主会话；连续思考内容计为一次。") + (details.source === 'history' ? tr("此轮未完整记录，时间和次数按可用历史恢复；缺失项标为未记录。") : '') + '</p></section>';
       turnDetailsOverlay = overlay;
       turnDetailsReturnFocus = trigger;
       turnDetailsPreviousOverflow = document.body.style.overflow;
@@ -8816,7 +8822,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           (field.variant === 'path' ? ' class="path" data-path="' + escapeAttr(field.value) + '"' : '') + '>' + escapeHtml(field.value) + '</code></div>';
       }).join('');
       return '<section class="tool-card-section copyable-content">' +
-        '<div class="timeline-meta">input</div>' +
+        trHtml('<div class="timeline-meta">工具输入</div>') +
         (presentation.action ? '<span class="tool-action-badge">' + escapeHtml(presentation.action) + '</span>' : '') +
         '<div class="tool-detail-list">' + fields + '</div>' +
         copyButtonHtml(formatToolInput(toolName, input), tr("复制参数"), 'tool-copy-button') +
@@ -8857,7 +8863,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function renderChecklistPanel(data) {
-      const title = escapeHtml(data.title || 'Checklist');
+      const title = escapeHtml(data.title || tr("任务清单"));
       const subtitle = data.subtitle ? '<div class="checklist-panel-subtitle">' + escapeHtml(data.subtitle) + '</div>' : '';
       const done = Number.isFinite(data.done) ? data.done : (Array.isArray(data.items) ? data.items.filter(item => item.checked).length : 0);
       const total = Number.isFinite(data.total) ? data.total : (Array.isArray(data.items) ? data.items.length : 0);
@@ -8927,7 +8933,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const panelNeeded = !!input.title || items.length > 0;
       const panel = panelNeeded
         ? renderChecklistPanel({
-            title: input.title || 'Checklist',
+            title: input.title,
             subtitle: action === 'create' ? tr("即将创建") : getChecklistActionLabel(action),
             items,
             done: 0,
@@ -8948,20 +8954,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return renderChecklistResult(text, copyLabel);
       }
       if (text.startsWith('---') || text.startsWith('diff --git') || text.includes('\\n+++')) {
-        return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + text.split('\\n').map(line => {
+        return trHtml('<div class="copyable-content tool-result-shell"><div class="timeline-meta">执行结果</div><pre>') + text.split('\\n').map(line => {
           if (line.startsWith('+++') || line.startsWith('+')) return '<span class="diff-line-add">' + escapeHtml(line) + '</span>';
           if (line.startsWith('---') || line.startsWith('-')) return '<span class="diff-line-del">' + escapeHtml(line) + '</span>';
           if (line.startsWith('@@')) return '<span class="diff-line-ctx">' + escapeHtml(line) + '</span>';
           return escapeHtml(line);
         }).join('\\n') + '</pre>' + copyButtonHtml(text, copyLabel, 'tool-copy-button') + '</div>';
       }
-      return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel, 'tool-copy-button') + '</div>';
+      return trHtml('<div class="copyable-content tool-result-shell"><div class="timeline-meta">执行结果</div><pre>') + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel, 'tool-copy-button') + '</div>';
     }
 
     function renderChecklistResult(text, copyLabel) {
       const blocks = parseChecklistResultBlocks(text);
       if (blocks.length === 0) {
-        return '<div class="copyable-content tool-result-shell"><div class="timeline-meta">result</div><pre>' + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel || tr("复制执行结果"), 'tool-copy-button') + '</div>';
+        return trHtml('<div class="copyable-content tool-result-shell"><div class="timeline-meta">执行结果</div><pre>') + escapeHtml(text) + '</pre>' + copyButtonHtml(text, copyLabel || tr("复制执行结果"), 'tool-copy-button') + '</div>';
       }
       const firstBlockIndex = String(text).split('\\n').findIndex(line => /^(\\s*)📋\\s+/.test(line));
       const prefix = firstBlockIndex > 0
@@ -8976,7 +8982,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       })).join('');
       return '<div class="copyable-content tool-result-shell"><div class="checklist-stack">' +
         '<div class="checklist-meta-row">' +
-        '<span class="checklist-badge good">Checklist</span>' +
+        trHtml('<span class="checklist-badge good">任务清单</span>') +
         (prefix ? '<span class="checklist-caption">' + escapeHtml(prefix) + '</span>' : '') +
         '</div>' +
         panels +
@@ -8987,9 +8993,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const div = document.createElement('div');
       div.className = 'file-change';
       const actionClass = payload.action; // create | modify | delete
+      const actionLabel = { create: tr("已创建"), modify: tr("已修改"), delete: tr("已删除") }[actionClass] || actionClass;
       const shortPath = payload.path.split('/').pop() || payload.path;
       div.innerHTML =
-        '<span class="action ' + actionClass + '">' + escapeHtml(payload.action) + '</span>' +
+        '<span class="action ' + actionClass + '">' + escapeHtml(actionLabel) + '</span>' +
         '<span class="path" data-path="' + escapeHtml(payload.path) + '" title="' + escapeHtml(payload.path) + '">' + escapeHtml(shortPath) + '</span>';
       appendToTurnContent(getCurrentTurn(), div, { id: 'file-change-' + (++turnCounter), kind: 'file_change' });
 
@@ -9143,7 +9150,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function buildPlanCardHtml(card) {
       const plan = card.plan || {};
-      const title = plan.title || 'Execution Plan';
+      const title = plan.title || tr("实施计划");
       const summary = plan.summary || '';
       const steps = Array.isArray(plan.steps) ? plan.steps : [];
       const statusHtml = card.status === 'pending'
@@ -9167,7 +9174,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         statusHtml +
         '</div>' +
         '<div class="request-card-body">' +
-        '<div class="timeline-meta">execution plan</div>' +
+        trHtml('<div class="timeline-meta">实施计划</div>') +
         (summary ? '<div class="plan-summary">' + escapeHtml(summary) + '</div>' : '') +
         stepHtml +
         '<div class="request-actions">' + actions + '</div>' +
@@ -9178,13 +9185,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const files = Array.isArray(step.files) ? step.files : [];
       const deps = Array.isArray(step.depends_on) ? step.depends_on : [];
       const chips = [];
-      if (files.length > 0) chips.push('<span class="plan-chip">files: ' + escapeHtml(files.join(', ')) + '</span>');
-      if (deps.length > 0) chips.push('<span class="plan-chip">after: ' + escapeHtml(deps.join(', ')) + '</span>');
+      if (files.length > 0) chips.push('<span class="plan-chip">' + escapeHtml(tr("文件：{0}", { 0: files.join(', ') })) + '</span>');
+      if (deps.length > 0) chips.push('<span class="plan-chip">' + escapeHtml(tr("依赖步骤：{0}", { 0: deps.join(', ') })) + '</span>');
       if (step.subagent_type) chips.push('<span class="plan-chip">' + escapeHtml(String(step.subagent_type)) + '</span>');
       return '<li class="plan-step">' +
         '<span class="plan-step-index">' + (index + 1) + '.</span>' +
         '<div>' +
-        '<div class="plan-step-title">' + escapeHtml(step.title || step.id || ('Step ' + (index + 1))) + '</div>' +
+        '<div class="plan-step-title">' + escapeHtml(step.title || step.id || tr("步骤 {0}", { 0: index + 1 })) + '</div>' +
         (step.description ? '<div class="plan-step-desc">' + escapeHtml(String(step.description)) + '</div>' : '') +
         (chips.length > 0 ? '<div class="plan-step-meta">' + chips.join('') + '</div>' : '') +
         '</div>' +
@@ -9291,7 +9298,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         state +
         '</div>' +
         '<div class="request-card-body">' +
-        '<div class="timeline-meta">' + (isPeerMessage ? 'peer message approval' : 'permission request') + '</div>' +
+        '<div class="timeline-meta">' + escapeHtml(isPeerMessage ? tr("跨会话消息审批") : tr("权限请求")) + '</div>' +
         reason +
         '<pre class="request-pre">' + escapeHtml(formatToolInput(card.toolName, card.input)) + '</pre>' +
         '<div class="request-actions">' + actions + '</div>' +
@@ -9632,7 +9639,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       currentPendingEditSummary = summary;
-      const title = summary.totalFiles + (summary.totalFiles === 1 ? ' File' : ' Files');
+      const title = tr("待审核文件：{0}", { 0: summary.totalFiles });
+      const undoLabel = escapeHtml(tr("撤销更改"));
+      const keepLabel = escapeHtml(tr("保留"));
       const toggleTitle = pendingEditsCollapsed ? tr("展开待审核文件") : tr("折叠待审核文件");
       const rows = files.map(function(file) {
         const stats = '<span>+' + escapeHtml(String(file.added || 0)) + '</span> ' +
@@ -9642,8 +9651,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           '<button type="button" class="pending-edit-name" data-pending-action="reviewFile" data-change-id="' + escapeAttr(file.id) + '" title="' + escapeAttr(file.path) + '">' + escapeHtml(file.shortPath || file.path) + '</button>' +
           '<span class="pending-edit-stats">' + stats + '</span>' +
           '<span class="pending-edit-actions">' +
-            '<button type="button" class="pending-edit-btn" data-pending-action="undoFile" data-change-id="' + escapeAttr(file.id) + '">Undo</button>' +
-            '<button type="button" class="pending-edit-btn primary" data-pending-action="keepFile" data-change-id="' + escapeAttr(file.id) + '">Keep</button>' +
+            '<button type="button" class="pending-edit-btn" data-pending-action="undoFile" data-change-id="' + escapeAttr(file.id) + '">' + undoLabel + '</button>' +
+            '<button type="button" class="pending-edit-btn primary" data-pending-action="keepFile" data-change-id="' + escapeAttr(file.id) + '">' + keepLabel + '</button>' +
           '</span>' +
         '</div>';
       }).join('');
@@ -9653,13 +9662,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pendingEditsBar.style.setProperty('--pending-edit-list-max-height', (pendingEditsVisibleFiles * 28) + 'px');
       pendingEditsBar.innerHTML =
         '<div class="pending-edits-header">' +
-          '<button type="button" class="pending-edits-title" data-pending-toggle aria-expanded="' + (pendingEditsCollapsed ? 'false' : 'true') + '" title="' + toggleTitle + '">' +
-            '<span class="chevron">⌄</span><span>' + title + '</span>' +
+          '<button type="button" class="pending-edits-title" data-pending-toggle aria-expanded="' + (pendingEditsCollapsed ? 'false' : 'true') + '" title="' + escapeAttr(toggleTitle) + '">' +
+            '<span class="chevron">⌄</span><span>' + escapeHtml(title) + '</span>' +
           '</button>' +
           '<div class="pending-edits-actions">' +
-            '<button type="button" class="pending-edit-btn" data-pending-action="undoAll">Undo</button>' +
-            '<button type="button" class="pending-edit-btn primary" data-pending-action="keepAll">Keep</button>' +
-            '<button type="button" class="pending-edit-btn" data-pending-action="reviewAll">Review</button>' +
+            '<button type="button" class="pending-edit-btn" data-pending-action="undoAll">' + undoLabel + '</button>' +
+            '<button type="button" class="pending-edit-btn primary" data-pending-action="keepAll">' + keepLabel + '</button>' +
+            trHtml('<button type="button" class="pending-edit-btn" data-pending-action="reviewAll">查看变更</button>') +
           '</div>' +
         '</div>' +
         '<div class="pending-edits-list">' + rows + '</div>';
@@ -10063,14 +10072,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         });
       }
       if (skills.length > 0) {
-        html += '<div class="slash-popup-section">Skills</div>';
+        html += trHtml('<div class="slash-popup-section">技能列表</div>');
         skills.forEach(function(item, idx) {
           const globalIdx = builtins.length + idx;
           const activeClass = globalIdx === slashActiveIndex ? ' active' : '';
           html += '<div class="slash-item' + activeClass + '" data-index="' + globalIdx + '" role="option">' +
             '<span class="slash-name">' + highlight(item.name, '/' + query) + '</span>' +
             '<span class="slash-desc">' + escapeHtml(item.desc) + '</span>' +
-            '<span class="slash-badge">skill</span>' +
+            trHtml('<span class="slash-badge">技能</span>') +
             '</div>';
         });
       }
