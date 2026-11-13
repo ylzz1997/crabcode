@@ -2296,7 +2296,7 @@ export default function DocumentWorkspace({
       <header className="document-toolbar">
         <div className="document-heading">
           {sidebarControl}
-          <div className="document-title" title={manifest?.source.name}>
+          <div className="document-title" title={[project.name, manifest?.source.name].filter(Boolean).join("\n")}>
             <FileText />
             <span><strong>{project.name}</strong><small>{manifest?.source.name ?? tr("正在读取文档")}</small></span>
           </div>
@@ -2308,88 +2308,95 @@ export default function DocumentWorkspace({
           }} />
         {!filesView && view === "document" && (
           <div className="document-tools">
-            <DocumentToolbarNumberEditor
-              ariaLabel={tr("当前页")}
-              className="document-page-indicator"
-              displayValue={`${currentPage} / ${totalPages || "–"}`}
-              editValue={String(currentPage)}
-              min={1}
-              max={Math.max(1, totalPages)}
-              step={1}
-              suffix={` / ${totalPages || "–"}`}
-              onCommit={goToPage}
-            />
-            <button className="icon-button small" title={tr("缩小 (Alt+-)")} aria-label={tr("缩小")} onClick={() => changeZoom(-DOCUMENT_ZOOM_STEP)}><Minus /></button>
-            <DocumentToolbarNumberEditor
-              ariaLabel={tr("缩放百分比")}
-              className="document-zoom"
-              displayValue={formatDocumentZoom(zoom)}
-              editValue={String(Math.round(zoom * 100))}
-              min={DOCUMENT_ZOOM_MIN * 100}
-              max={DOCUMENT_ZOOM_MAX * 100}
-              step={1}
-              suffix="%"
-              onCommit={setZoomFromInput}
-            />
-            <button className="icon-button small" title={tr("放大 (Alt++)")} aria-label={tr("放大")} onClick={() => changeZoom(DOCUMENT_ZOOM_STEP)}><Plus /></button>
-            <button className="icon-button small" title={tr("顺时针旋转")} onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
-            <DocumentActionsMenu
-              locale={locale}
-              blogLanguage={blogLanguage}
-              sessionBusy={sessionBusy}
-              translating={pendingAction === "translate"}
-              translateLabel={translation?.engine === "legacy" && preciseAvailable ? tr("升级为高精度 PDF") : tr("翻译文档")}
-              clearing={clearingTranslation}
-              generatingBlog={pendingAction === "generate_blog"}
-              translateDisabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
-              clearDisabled={
-                !hasDocumentTranslationCache(manifest, locale)
-                || sessionBusy
-                || clearingTranslation
-              }
-              blogDisabled={!layout || sessionBusy || (showTranslation && !translation)}
-              blogClearDisabled={!blog || sessionBusy || clearingBlog || pendingAction !== null}
-              clearingBlog={clearingBlog}
-              annotationCount={annotations.length}
-              annotationsOpen={annotationsOpen}
-              onLocale={setLocale}
-              onBlogLanguage={setBlogLanguage}
-              onTranslate={() => {
-                setPendingAction("translate");
-                if (!onDocumentAction("translate", {
-                  locale,
-                  translation_concurrency: translationConcurrency,
-                  translation_batch_size: translationBatchSize,
-                  translation_engine: "auto",
-                })) setPendingAction(null);
-              }}
-              onClear={() => setClearTranslationConfirm(true)}
-              onGenerateBlog={() => {
-                setView("blog");
-                filesWorkspace?.onViewChange(null);
-                setBlogView("preview");
-                setPendingAction("generate_blog");
-                if (!onDocumentAction("generate_blog", {
-                  locale,
-                  language: blogLanguage,
-                  source: showTranslation ? "translation" : "original",
-                })) setPendingAction(null);
-              }}
-              onClearBlog={() => setClearBlogConfirm(true)}
-              onToggleAnnotations={() => setAnnotationsOpen((value) => !value)}
-            />
-            <label className={`document-translation-toggle ${translation ? "ready" : ""}`}>
-              <input
-                type="checkbox"
-                checked={showTranslation}
-                disabled={!translation || (translation.engine === "precise" && !precisePdf)}
-                onChange={(event) => {
-                  setSelection(null);
-                  setShowTranslation(event.target.checked);
-                }}
+            <div className="document-pdf-controls">
+              <DocumentToolbarNumberEditor
+                ariaLabel={tr("当前页")}
+                className="document-page-indicator"
+                displayValue={`${currentPage} / ${totalPages || "–"}`}
+                editValue={String(currentPage)}
+                min={1}
+                max={Math.max(1, totalPages)}
+                step={1}
+                suffix={` / ${totalPages || "–"}`}
+                onCommit={goToPage}
               />
-              {documentTranslationToggleLabel(showTranslation)}
-            </label>
+              <button className="icon-button small" title={tr("缩小 (Alt+-)")} aria-label={tr("缩小")} onClick={() => changeZoom(-DOCUMENT_ZOOM_STEP)}><Minus /></button>
+              <DocumentToolbarNumberEditor
+                ariaLabel={tr("缩放百分比")}
+                className="document-zoom"
+                displayValue={formatDocumentZoom(zoom)}
+                editValue={String(Math.round(zoom * 100))}
+                min={DOCUMENT_ZOOM_MIN * 100}
+                max={DOCUMENT_ZOOM_MAX * 100}
+                step={1}
+                suffix="%"
+                onCommit={setZoomFromInput}
+              />
+              <button className="icon-button small" title={tr("放大 (Alt++)")} aria-label={tr("放大")} onClick={() => changeZoom(DOCUMENT_ZOOM_STEP)}><Plus /></button>
+            </div>
+            <div className="document-view-actions">
+              <button className="icon-button small" title={tr("顺时针旋转")} onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw /></button>
+              <DocumentActionsMenu
+                locale={locale}
+                blogLanguage={blogLanguage}
+                sessionBusy={sessionBusy}
+                translating={pendingAction === "translate"}
+                translateLabel={translation?.engine === "legacy" && preciseAvailable ? tr("升级为高精度 PDF") : tr("翻译文档")}
+                clearing={clearingTranslation}
+                generatingBlog={pendingAction === "generate_blog"}
+                translateDisabled={!layout || layout.pages.every((page) => page.blocks.length === 0) || sessionBusy}
+                clearDisabled={
+                  !hasDocumentTranslationCache(manifest, locale)
+                  || sessionBusy
+                  || clearingTranslation
+                }
+                blogDisabled={!layout || sessionBusy || (showTranslation && !translation)}
+                blogClearDisabled={!blog || sessionBusy || clearingBlog || pendingAction !== null}
+                clearingBlog={clearingBlog}
+                annotationCount={annotations.length}
+                annotationsOpen={annotationsOpen}
+                onLocale={setLocale}
+                onBlogLanguage={setBlogLanguage}
+                onTranslate={() => {
+                  setPendingAction("translate");
+                  if (!onDocumentAction("translate", {
+                    locale,
+                    translation_concurrency: translationConcurrency,
+                    translation_batch_size: translationBatchSize,
+                    translation_engine: "auto",
+                  })) setPendingAction(null);
+                }}
+                onClear={() => setClearTranslationConfirm(true)}
+                onGenerateBlog={() => {
+                  setView("blog");
+                  filesWorkspace?.onViewChange(null);
+                  setBlogView("preview");
+                  setPendingAction("generate_blog");
+                  if (!onDocumentAction("generate_blog", {
+                    locale,
+                    language: blogLanguage,
+                    source: showTranslation ? "translation" : "original",
+                  })) setPendingAction(null);
+                }}
+                onClearBlog={() => setClearBlogConfirm(true)}
+                onToggleAnnotations={() => setAnnotationsOpen((value) => !value)}
+              />
+              <button
+                className="document-translation-toggle"
+                type="button"
+                aria-label={tr("查看译文")}
+                aria-pressed={showTranslation}
+                title={documentTranslationToggleLabel(showTranslation)}
+                disabled={!translation || (translation.engine === "precise" && !precisePdf)}
+                onClick={() => {
+                  setSelection(null);
+                  setShowTranslation((current) => !current);
+                }}
+              >
+                <Languages aria-hidden="true" />
+                <span>{tr("查看译文")}</span>
+              </button>
+            </div>
           </div>
         )}
         {!filesView && view === "blog" && blog && (
@@ -2399,15 +2406,19 @@ export default function DocumentWorkspace({
               type="button"
               role="tab"
               aria-selected={blogView === "preview"}
+              aria-label={tr("预览")}
+              title={tr("预览")}
               onClick={() => setBlogView("preview")}
-            ><Eye />{tr("预览")}</button>
+            ><Eye aria-hidden="true" /><span>{tr("预览")}</span></button>
             <button
               className={blogView === "raw" ? "active" : ""}
               type="button"
               role="tab"
               aria-selected={blogView === "raw"}
+              aria-label={tr("原文")}
+              title={tr("原文")}
               onClick={() => setBlogView("raw")}
-            ><Code2 />{tr("原文")}</button>
+            ><Code2 aria-hidden="true" /><span>{tr("原文")}</span></button>
           </div>
         )}
       </header>

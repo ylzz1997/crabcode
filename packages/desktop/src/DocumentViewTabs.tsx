@@ -37,11 +37,14 @@ export function DocumentViewTabs({ activeView, filesAvailable, changeCount, onVi
     <div className="document-view-tablist" role="tablist" aria-label={tr("文档视图")}>
       <SlidingTabIndicator activeKey={`${activeView}:${secondaryView}:${changeCount}`} className="document-view-indicator" />
       <button type="button" role="tab" aria-selected={activeView === "document"}
+        aria-label={tr("文档")} title={tr("文档")}
         className={activeView === "document" ? "active" : ""} onClick={() => onViewChange("document")}>
-        <FileText />{tr("文档")}</button>
+        <FileText aria-hidden="true" /><span className="document-view-tab-text">{tr("文档")}</span></button>
       <button type="button" role="tab" aria-selected={activeView !== "document"}
+        aria-label={secondaryView === "changes" && changeCount > 0 ? `${selected.label} (${changeCount})` : selected.label}
+        title={selected.label}
         className={activeView !== "document" ? "active" : ""} onClick={() => choose(secondaryView)}>
-        <span key={secondaryView} className="document-view-tab-label"><SecondaryIcon />{selected.label}</span>
+        <span key={secondaryView} className="document-view-tab-label"><SecondaryIcon aria-hidden="true" /><span className="document-view-tab-text">{selected.label}</span></span>
         {secondaryView === "changes" && changeCount > 0 && <small className="document-change-count">{changeCount}</small>}
       </button>
     </div>

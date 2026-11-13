@@ -35,6 +35,7 @@ import {
   ListTodo,
   LoaderCircle,
   Lock,
+  MessageSquare,
   MessageSquarePlus,
   MoreHorizontal,
   Pause,
@@ -3624,6 +3625,15 @@ function App() {
       onClick={() => setSidebarOpen(true)}
     ><PanelLeftOpen /></button>
   ) : null;
+  const documentAgentCollapseControl = hasDocumentWorkspace && (
+    <button
+      className="icon-button document-agent-collapse"
+      type="button"
+      title={tr("收起 Agent")}
+      aria-label={tr("收起 Agent")}
+      onClick={() => updateDocumentAgentCollapsed(true)}
+    ><PanelRightClose /></button>
+  );
 
   const activeModelSettingsKey = activeConnection
     ? `${activeConnection.id}\u0000${activeProject?.path ?? ""}`
@@ -4278,10 +4288,8 @@ function App() {
             <main
               className={`main-panel ${documentMode ? "document-mode" : ""} ${documentAgentCollapsed ? "document-agent-collapsed" : ""} ${documentMode && documentAgentTransitioning ? "document-agent-transitioning" : ""} ${projectFilesWideLayout ? "project-files-mode" : ""} ${projectFilesWideOpen ? "project-files-open" : ""}`}
               style={documentMode ? {
-                gridTemplateColumns: documentAgentCollapsed
-                  ? "minmax(0, 1fr) 44px"
-                  : `minmax(180px, 1fr) min(${settings.document_agent_width ?? 320}px, calc(100% - 180px))`,
-              } : projectFilesWideLayout ? {
+                "--document-agent-width": `${settings.document_agent_width ?? 320}px`,
+              } as CSSProperties : projectFilesWideLayout ? {
                 "--project-files-width": `${projectFilesWidth}px`,
               } as CSSProperties : undefined}
             >
@@ -4418,20 +4426,26 @@ function App() {
                   )}
                 />
               ) : !activeSession ? (
-                <EmptyWorkspace
-                  connection={activeConnection}
-                  project={activeProject}
-                  gateway={activeGateway}
-                  onNew={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
-                  onConnect={() => setConnectionModal("new")}
-                />
+                <>
+                  {documentAgentCollapseControl}
+                  <EmptyWorkspace
+                    connection={activeConnection}
+                    project={activeProject}
+                    gateway={activeGateway}
+                    onNew={() => activeConnection && activeProject && openSession(activeConnection, activeProject)}
+                    onConnect={() => setConnectionModal("new")}
+                  />
+                </>
               ) : (
                 <>
                   <div className="conversation-header">
                     <div className="conversation-heading">
                       {!hasDocumentWorkspace && sidebarRestoreControl}
                       <div className="conversation-title">
-                        <h1 className={activeSession.loading ? "session-loading-title" : undefined}>
+                        <h1
+                          className={activeSession.loading ? "session-loading-title" : undefined}
+                          title={activeSession.loading ? undefined : activeSession.title || tr("新会话")}
+                        >
                           {activeSession.loading && <LoaderCircle className="spin" />}
                           {activeSession.loading ? tr("正在加载会话") : activeSession.title || tr("新会话")}
                         </h1>
@@ -4447,16 +4461,20 @@ function App() {
                         type="button"
                         role="tab"
                         aria-selected={activeConversationView === "chat"}
+                        aria-label={tr("对话")}
+                        title={tr("对话")}
                         className={activeConversationView === "chat" ? "active" : ""}
                         onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "chat" }))}
-                      >{tr("对话")}</button>
+                      ><MessageSquare aria-hidden="true" /><span>{tr("对话")}</span></button>
                       <button
                         type="button"
                         role="tab"
                         aria-selected={activeConversationView === "trajectory"}
+                        aria-label={tr("轨迹")}
+                        title={tr("轨迹")}
                         className={activeConversationView === "trajectory" ? "active" : ""}
                         onClick={() => activeSessionKey && setConversationViews((current) => ({ ...current, [activeSessionKey]: "trajectory" }))}
-                      >{tr("轨迹")}</button>
+                      ><Activity aria-hidden="true" /><span>{tr("轨迹")}</span></button>
                     </div>
                     <div className="conversation-actions">
                       <div className="conversation-font-size" aria-label={tr("Agent 字号")}>
@@ -4486,17 +4504,7 @@ function App() {
                         onCheckpoint={() => setCheckpointModal(true)}
                         onToggleFavorite={() => activeProject && toggleFavoriteSession(activeProject.id, activeSession.id)}
                       />
-                      {documentMode && (
-                        <button
-                          className="icon-button"
-                          type="button"
-                          title={tr("收起 Agent")}
-                          aria-label={tr("收起 Agent")}
-                          onClick={() => updateDocumentAgentCollapsed(true)}
-                        >
-                          <PanelRightClose />
-                        </button>
-                      )}
+                      {documentAgentCollapseControl}
                       {projectFilesEligible && !documentMode && (
                         <button
                           className={`icon-button ${projectFilesVisible ? "active" : ""}`}
@@ -6329,7 +6337,7 @@ function ModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled || models.length === 0}
-        title={tr("选择模型")}
+        title={`${tr("选择模型")}\n${value || fallback}`}
         onClick={() => setOpen((current) => !current)}
       >
         <span className="picker-trigger-icon"><Bot /></span>
@@ -6388,10 +6396,11 @@ function ReasoningEffortPicker({
       <button
         type="button"
         className="picker-trigger effort-picker-trigger"
+        aria-label={tr("选择思考强度")}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
-        title={tr("选择思考强度")}
+        title={`${tr("选择思考强度")}\n${selected?.label ?? tr("自动")}`}
         onClick={() => setOpen((current) => !current)}
       >
         <Brain />
@@ -6464,6 +6473,7 @@ export function PermissionPicker({
       <button
         type="button"
         className={`picker-trigger permission-picker-trigger ${danger ? "danger" : ""}`}
+        aria-label={tr("权限策略")}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
