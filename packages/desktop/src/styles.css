@@ -2316,6 +2316,8 @@ button.primary:hover,
   background: var(--panel);
   color: var(--text);
   box-shadow: 0 3px 12px rgba(0, 0, 0, .18);
+  opacity: .5;
+  transition: opacity 160ms ease, border-color 160ms ease;
   cursor: pointer;
 }
 
@@ -2325,6 +2327,7 @@ button.primary:hover,
 
 .chat-scroll-bottom:hover,
 .chat-scroll-bottom:focus-visible {
+  opacity: 1;
   border-color: var(--accent);
 }
 

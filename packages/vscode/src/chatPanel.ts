@@ -6050,6 +6050,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       background: var(--surface-elevated);
       color: var(--vscode-foreground);
       box-shadow: var(--shadow-md);
+      opacity: .5;
+      transition: opacity 160ms ease, border-color 160ms ease;
       cursor: pointer;
     }
     #messages[data-following-output="false"] ~ #composer-wrap #chat-scroll-bottom {
@@ -6057,6 +6059,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     #chat-scroll-bottom:hover,
     #chat-scroll-bottom:focus-visible {
+      opacity: 1;
       border-color: var(--accent);
     }
     #composer-card {
@@ -7420,7 +7423,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     @media (prefers-reduced-motion: reduce) {
       #composer-card.ultra-mode, #composer-card.ultra-mode::after { animation: none; }
       #composer-card.ultra-mode::after { content: none; }
-      .runtime-pill, .composer-mode-chip { transition: none; }
+      .runtime-pill, .composer-mode-chip, #chat-scroll-bottom { transition: none; }
     }
   </style>
 </head>
