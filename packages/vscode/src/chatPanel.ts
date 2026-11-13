@@ -6673,8 +6673,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       box-shadow: 0 8px 24px rgba(0,0,0,0.35);
       z-index: 200;
       padding: 6px 0 4px;
-      min-width: 180px;
-      max-width: 280px;
+      min-width: min(180px, calc(100vw - 16px));
+      max-width: min(280px, calc(100vw - 16px));
     }
     .model-menu.hidden { display: none; }
     .model-search-wrap { padding: 0 8px 6px; }
@@ -7029,7 +7029,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .session-origin {
       display: none;
-      max-width: 180px;
+      max-width: min(180px, 40%);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -7062,6 +7062,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .session-hdr-btn:hover { opacity: 1; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
     .session-hdr-btn svg { display: block; }
+    @media (max-width: 340px) {
+      .session-origin.visible { display: none; }
+    }
+    @media (max-width: 220px) {
+      #session-header { flex-wrap: wrap; row-gap: 0; }
+      .session-header-left { flex-basis: 100%; }
+      .session-header-right { margin-inline-start: auto; }
+      .session-hdr-btn { height: 24px; }
+    }
 
     /* ── Session list panel ────────────────────────────────────────── */
     #session-list-panel {
@@ -7300,7 +7309,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     .tb-model-btn { font-weight: 500; }
     .tb-model-btn svg, .runtime-pill svg, .composer-mode-chip svg { width: 14px; height: 14px; flex-shrink: 0; }
-    #effort-btn { flex: 0 0 auto; min-width: 0; }
+    #effort-btn { flex: 0 1 auto; min-width: 0; max-width: 55%; }
     #effort-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .runtime-pill:hover:not(:disabled), .composer-mode-chip:hover:not(:disabled),
     .runtime-pill[aria-expanded="true"] { background: var(--accent-muted); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
@@ -7322,6 +7331,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       .composer-primary-controls { gap: 4px; }
       .composer-primary-controls .tb-model-btn,
       .composer-primary-controls .runtime-pill { padding-inline: 7px; }
+    }
+    @media (max-width: 280px) {
+      .composer-toolbar { flex-wrap: wrap; row-gap: 5px; }
+      .toolbar-left { flex-basis: min(100%, 125px); }
+      .composer-actions { margin-inline-start: auto; }
+      .composer-primary-controls { flex-basis: 90px; min-width: min(100%, 90px); }
+      .model-pill-wrap { flex-grow: 1; }
+      #effort-btn { flex: 0 0 28px; justify-content: center; padding: 0; }
+      #effort-btn > span { display: none; }
     }
     .effort-menu {
       position: fixed; z-index: 220; width: min(210px, calc(100vw - 16px));
@@ -7888,6 +7906,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function setSessionTitle(title) {
       currentSessionTitle = title || tr("新会话");
       if (sessionTitleEl) sessionTitleEl.textContent = currentSessionTitle;
+      updateSessionTitleTooltip();
     }
 
     function setSessionOrigin(origin) {
@@ -7896,6 +7915,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       sessionOriginEl.textContent = value ? tr("· 来自 ") + value : '';
       sessionOriginEl.title = value;
       sessionOriginEl.classList.toggle('visible', !!value);
+      updateSessionTitleTooltip();
+    }
+
+    function updateSessionTitleTooltip() {
+      if (sessionTitleEl) sessionTitleEl.title = [currentSessionTitle, sessionOriginEl?.textContent].filter(Boolean).join('\\n');
     }
 
     function showSessionList() {
@@ -10587,12 +10611,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       runtimeState = state;
       const disabled = !state.ready || !state.connected || state.pending;
       effortBtn.disabled = !state.connected || state.pending;
-      effortBtn.title = state.ready ? tr("选择思考强度") : tr("读取会话设置，点击重试");
       ultraChip.disabled = disabled;
       ultraMenuItem.disabled = disabled;
       effortBtn.setAttribute('aria-busy', state.pending ? 'true' : 'false');
       const selectedEffort = state.reasoning_effort || 'auto';
       effortLabel.textContent = tr("思考 ") + (effortLabels[selectedEffort] || tr("自动"));
+      const effortAction = state.ready ? tr("选择思考强度") : tr("读取会话设置，点击重试");
+      effortBtn.title = effortAction + '\\n' + effortLabel.textContent;
+      effortBtn.setAttribute('aria-label', effortAction + ' · ' + effortLabel.textContent);
       const ultra = state.ultra_mode === true;
       ultraChip.hidden = !ultra;
       ultraMenuItem.setAttribute('aria-checked', String(ultra));
@@ -10867,6 +10893,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     document.addEventListener('click', function() { closeModelMenu(); });
     modelMenu && modelMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+    window.addEventListener('resize', function() {
+      if (modelMenu && !modelMenu.classList.contains('hidden')) positionModelMenu();
+    });
 
     // ── Plus menu & file inputs ─────────────────────────────────
 
